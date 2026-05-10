@@ -1,0 +1,786 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="現場経費">
+<title>現場経費</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+  body {
+    font-family: -apple-system, 'Helvetica Neue', sans-serif;
+    background: #1c1c1e;
+    color: white;
+    min-height: 100vh;
+    min-height: -webkit-fill-available;
+    overflow-x: hidden;
+  }
+
+  /* ── 設定画面 ── */
+  #setupScreen {
+    position: fixed; inset: 0;
+    background: #1c1c1e;
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    padding: 40px 32px;
+    gap: 20px;
+    z-index: 100;
+  }
+  #setupScreen h2 { font-size: 22px; font-weight: 700; }
+  #setupScreen p { font-size: 13px; color: rgba(255,255,255,0.4); text-align: center; line-height: 1.6; }
+  #setupScreen input {
+    width: 100%; padding: 14px 16px;
+    background: rgba(255,255,255,0.07);
+    border: 1px solid rgba(255,255,255,0.15);
+    border-radius: 12px; font-size: 13px; color: white; outline: none;
+    font-family: monospace;
+  }
+  #setupScreen input::placeholder { color: rgba(255,255,255,0.2); }
+  .btn-white {
+    width: 100%; padding: 16px;
+    background: white; color: black;
+    border: none; border-radius: 16px;
+    font-size: 17px; font-weight: 700;
+    cursor: pointer; transition: opacity 0.1s;
+  }
+  .btn-white:active { opacity: 0.8; }
+
+  /* ── 名前選択画面 ── */
+  #buyerScreen {
+    position: fixed; inset: 0;
+    background: #1c1c1e;
+    display: none; flex-direction: column;
+    align-items: center; justify-content: center;
+    padding: 40px 32px; gap: 16px;
+  }
+  #buyerScreen .hint {
+    font-size: 11px; letter-spacing: 0.2em;
+    color: rgba(255,255,255,0.18); text-transform: uppercase;
+    margin-bottom: 8px;
+  }
+  .buyer-btn {
+    width: 100%; max-width: 280px; padding: 44px 0;
+    background: rgba(255,255,255,0.06);
+    border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 24px; color: white;
+    font-size: 26px; font-weight: 700;
+    cursor: pointer; transition: all 0.15s;
+  }
+  .buyer-btn:active { background: rgba(255,255,255,0.12); transform: scale(0.97); }
+  .buyers-row { display: flex; gap: 16px; width: 100%; max-width: 320px; }
+  #recordBtn {
+    position: absolute; top: 56px; right: 24px;
+    font-size: 12px; color: rgba(255,255,255,0.3);
+    background: transparent;
+    border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 20px; padding: 6px 14px; cursor: pointer;
+  }
+  #settingsBtn {
+    position: absolute; top: 56px; left: 24px;
+    font-size: 18px; color: rgba(255,255,255,0.25);
+    background: transparent; border: none; cursor: pointer;
+  }
+
+  /* ── スキャン中 ── */
+  #scanScreen {
+    position: fixed; inset: 0;
+    background: #1c1c1e;
+    display: none; flex-direction: column;
+    align-items: center; justify-content: center;
+    gap: 24px;
+  }
+  #previewImg {
+    width: 180px; height: 240px; object-fit: cover;
+    border-radius: 16px; border: 1px solid rgba(255,255,255,0.08);
+  }
+  .spinner {
+    width: 20px; height: 20px; border-radius: 50%;
+    border: 2px solid rgba(255,255,255,0.4);
+    border-top-color: transparent;
+    animation: spin 0.8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .scan-label { font-size: 13px; color: rgba(255,255,255,0.45); letter-spacing: 0.12em; }
+  .scan-row { display: flex; align-items: center; gap: 10px; }
+
+  /* ── 確認フォーム ── */
+  #confirmScreen {
+    position: fixed; inset: 0;
+    background: rgba(0,0,0,0.5);
+    display: none; flex-direction: column;
+    justify-content: flex-end;
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
+    z-index: 50;
+  }
+  .sheet {
+    background: #212121;
+    border-radius: 24px 24px 0 0;
+    border-top: 1px solid rgba(255,255,255,0.08);
+    max-height: 92vh; overflow-y: auto;
+    padding: 12px 20px 48px;
+  }
+  .handle {
+    width: 36px; height: 4px; border-radius: 2px;
+    background: rgba(255,255,255,0.15);
+    margin: 0 auto 16px;
+  }
+  .sheet-header {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-bottom: 16px;
+  }
+  .sheet-header h3 { font-size: 16px; font-weight: 600; }
+  .retake-btn {
+    font-size: 12px; color: rgba(255,255,255,0.4);
+    background: transparent; border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 20px; padding: 6px 12px; cursor: pointer;
+  }
+  .preview-row { display: flex; gap: 12px; margin-bottom: 16px; }
+  #confirmImg {
+    width: 80px; height: 112px; object-fit: cover;
+    border-radius: 12px; border: 1px solid rgba(255,255,255,0.08);
+    flex-shrink: 0;
+  }
+  .preview-info {
+    flex: 1; background: rgba(255,255,255,0.05);
+    border: 1px solid rgba(255,255,255,0.07);
+    border-radius: 12px; padding: 12px;
+  }
+  .preview-info .amount { font-size: 26px; font-weight: 700; }
+  .preview-info .store { font-size: 13px; color: rgba(255,255,255,0.5); margin-top: 2px; }
+  .preview-info .ai-tags { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 8px; }
+  .tag {
+    font-size: 11px; padding: 2px 8px; border-radius: 10px;
+    background: rgba(59,130,246,0.2); color: #93c5fd;
+    border: 1px solid rgba(59,130,246,0.3);
+  }
+  .tag.green { background: rgba(52,211,153,0.15); color: #6ee7b7; border-color: rgba(52,211,153,0.3); }
+
+  .card {
+    background: rgba(255,255,255,0.04);
+    border: 1px solid rgba(255,255,255,0.07);
+    border-radius: 16px; padding: 14px 16px; margin-bottom: 10px;
+  }
+  .card-title {
+    font-size: 10px; font-weight: 600; letter-spacing: 0.12em;
+    text-transform: uppercase; color: rgba(255,255,255,0.22);
+    margin-bottom: 10px;
+  }
+  .field { margin-bottom: 10px; }
+  .field:last-child { margin-bottom: 0; }
+  .field label { font-size: 11px; color: rgba(255,255,255,0.3); display: block; margin-bottom: 5px; }
+  .field input, .field select {
+    width: 100%; padding: 10px 12px;
+    background: rgba(255,255,255,0.06);
+    border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 10px; font-size: 15px;
+    color: white; outline: none;
+    -webkit-appearance: none; appearance: none;
+  }
+  .field select { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1l5 5 5-5' stroke='rgba(255,255,255,0.3)' stroke-width='1.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E"); background-repeat: no-repeat; background-position: right 12px center; padding-right: 32px; }
+  .field input::placeholder { color: rgba(255,255,255,0.2); }
+  .field input:focus, .field select:focus { border-color: rgba(255,255,255,0.3); }
+
+  .pay-row { display: flex; gap: 8px; }
+  .pay-btn {
+    flex: 1; padding: 10px 0;
+    background: transparent; color: rgba(255,255,255,0.4);
+    border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 10px; font-size: 14px; font-weight: 600;
+    cursor: pointer; transition: all 0.15s;
+  }
+  .pay-btn.active { background: white; color: black; border-color: white; }
+
+  .submit-btn {
+    width: 100%; padding: 16px; margin-top: 12px;
+    background: white; color: black;
+    border: none; border-radius: 16px;
+    font-size: 17px; font-weight: 700;
+    cursor: pointer; transition: opacity 0.1s;
+  }
+  .submit-btn:active { opacity: 0.85; }
+
+  /* ── エラー ── */
+  .err-box {
+    background: rgba(239,68,68,0.1);
+    border: 1px solid rgba(239,68,68,0.25);
+    border-radius: 12px; padding: 10px 14px;
+    font-size: 12px; color: #fca5a5;
+    margin-bottom: 12px; line-height: 1.5;
+    display: none;
+  }
+
+  /* ── 記録一覧 ── */
+  #listScreen {
+    position: fixed; inset: 0;
+    background: #1c1c1e;
+    display: none; flex-direction: column;
+    overflow-y: auto;
+  }
+  .list-header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 56px 20px 16px;
+    position: sticky; top: 0;
+    background: #1c1c1e;
+    border-bottom: 1px solid rgba(255,255,255,0.06);
+  }
+  .back-btn { font-size: 14px; color: rgba(255,255,255,0.4); background: none; border: none; cursor: pointer; }
+  .list-title { font-size: 16px; font-weight: 600; }
+  .csv-btn { font-size: 12px; color: rgba(255,255,255,0.35); background: none; border: none; cursor: pointer; }
+  .list-body { padding: 16px 16px 120px; }
+  .summary-card {
+    background: rgba(255,255,255,0.05);
+    border: 1px solid rgba(255,255,255,0.07);
+    border-radius: 16px; padding: 16px; margin-bottom: 16px;
+  }
+  .summary-label { font-size: 12px; color: rgba(255,255,255,0.3); margin-bottom: 4px; }
+  .summary-amount { font-size: 32px; font-weight: 700; }
+  .summary-count { font-size: 12px; color: rgba(255,255,255,0.22); margin-top: 2px; }
+  .filter-row { display: flex; gap: 8px; margin-bottom: 16px; }
+  .filter-row select {
+    flex: 1; padding: 8px 10px;
+    background: rgba(255,255,255,0.06);
+    border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 10px; font-size: 13px; color: white; outline: none;
+    -webkit-appearance: none; appearance: none;
+  }
+  .record-card {
+    background: rgba(255,255,255,0.04);
+    border: 1px solid rgba(255,255,255,0.07);
+    border-radius: 16px; padding: 14px 16px; margin-bottom: 8px;
+    display: flex; align-items: flex-start; justify-content: space-between;
+  }
+  .record-info { flex: 1; min-width: 0; }
+  .record-date { font-size: 12px; color: rgba(255,255,255,0.25); margin-bottom: 4px; }
+  .record-amount { font-size: 20px; font-weight: 700; }
+  .record-store { font-size: 13px; color: rgba(255,255,255,0.45); margin-top: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .record-meta { font-size: 11px; color: rgba(255,255,255,0.25); margin-top: 6px; }
+  .del-btn { font-size: 20px; color: rgba(255,255,255,0.12); background: none; border: none; cursor: pointer; padding: 0 0 0 12px; }
+  .list-add-btn {
+    position: fixed; bottom: 0; left: 0; right: 0;
+    padding: 12px 16px 32px;
+    background: linear-gradient(to top, #1c1c1e 60%, transparent);
+  }
+  .empty { text-align: center; padding: 80px 0; color: rgba(255,255,255,0.2); }
+  .empty div { font-size: 48px; margin-bottom: 12px; opacity: 0.3; }
+
+  /* ── 現場管理 ── */
+  .sites-card {
+    background: rgba(255,255,255,0.04);
+    border: 1px solid rgba(255,255,255,0.07);
+    border-radius: 16px; margin-bottom: 16px; overflow: hidden;
+  }
+  .sites-toggle {
+    width: 100%; padding: 12px 16px;
+    display: flex; justify-content: space-between; align-items: center;
+    background: none; border: none; color: white; cursor: pointer;
+    font-size: 11px; font-weight: 600; letter-spacing: 0.1em;
+    text-transform: uppercase; color: rgba(255,255,255,0.25);
+  }
+  .site-row {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 10px 16px; border-top: 1px solid rgba(255,255,255,0.05);
+  }
+  .site-name { font-size: 14px; color: rgba(255,255,255,0.6); }
+  .site-del { font-size: 12px; color: rgba(239,68,68,0.45); background: none; border: none; cursor: pointer; }
+</style>
+</head>
+<body>
+
+<!-- ══ 設定画面 ══ -->
+<div id="setupScreen">
+  <h2>初期設定</h2>
+  <p>Claude APIキーを入力してください<br>一度入力すると次回から不要です</p>
+  <input type="password" id="apiKeyInput" placeholder="sk-ant-api03-..." autocomplete="off" autocorrect="off" spellcheck="false">
+  <button class="btn-white" onclick="saveSetup()">保存して始める</button>
+</div>
+
+<!-- ══ 名前選択 ══ -->
+<div id="buyerScreen">
+  <button id="settingsBtn" onclick="showSetup()">⚙️</button>
+  <button id="recordBtn" onclick="showList()">記録 <span id="recordCount">0</span>件</button>
+  <p class="hint">タップでカメラ起動</p>
+  <div class="buyers-row">
+    <button class="buyer-btn" onclick="pickBuyer('小西')">小西</button>
+    <button class="buyer-btn" onclick="pickBuyer('名取')">名取</button>
+  </div>
+  <input type="file" id="fileInput" accept="image/*" capture="environment" style="display:none" onchange="handleFile(this)">
+</div>
+
+<!-- ══ スキャン中 ══ -->
+<div id="scanScreen">
+  <img id="previewImg" src="" alt="">
+  <div class="scan-row">
+    <div class="spinner"></div>
+    <span class="scan-label">読み取り中…</span>
+  </div>
+</div>
+
+<!-- ══ 確認フォーム ══ -->
+<div id="confirmScreen">
+  <div class="sheet">
+    <div class="handle"></div>
+    <div class="sheet-header">
+      <h3>内容を確認</h3>
+      <button class="retake-btn" onclick="retake()">📷 撮り直す</button>
+    </div>
+    <div id="errBox" class="err-box"></div>
+
+    <div class="preview-row">
+      <img id="confirmImg" src="" alt="">
+      <div class="preview-info">
+        <div class="amount">¥<span id="previewAmount">0</span></div>
+        <div class="store" id="previewStore">店舗名</div>
+        <div class="ai-tags" id="previewTags"></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">基本情報</div>
+      <div class="field"><label>購入日</label><input type="date" id="fDate"></div>
+      <div class="field"><label>金額（円）</label><input type="number" id="fTotal" placeholder="0"></div>
+      <div class="field"><label>店舗名</label><input type="text" id="fStore" placeholder="例：コメリ"></div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">現場</div>
+      <div class="field">
+        <select id="fSite" onchange="onSiteChange()">
+          <option value="">-- 現場を選択 --</option>
+        </select>
+      </div>
+      <div class="field" id="newSiteField" style="display:none">
+        <input type="text" id="fNewSite" placeholder="現場名を入力">
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">分類</div>
+      <div class="field">
+        <label>費目</label>
+        <select id="fCat">
+          <option>材料費</option>
+          <option>接待交際費</option>
+          <option>ガソリン代</option>
+          <option>駐車場代</option>
+          <option>工具・備品</option>
+          <option>外注費</option>
+          <option>その他</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>工種</label>
+        <select id="fWork">
+          <option>水道</option>
+          <option>電気</option>
+          <option>木工</option>
+          <option>塗装</option>
+          <option>左官</option>
+          <option>内装</option>
+          <option>外構</option>
+          <option>解体</option>
+          <option>設備</option>
+          <option>その他</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>支払方法</label>
+        <div class="pay-row">
+          <button class="pay-btn active" onclick="setPay(this,'現金')">現金</button>
+          <button class="pay-btn" onclick="setPay(this,'カード')">カード</button>
+          <button class="pay-btn" onclick="setPay(this,'振込')">振込</button>
+        </div>
+      </div>
+    </div>
+
+    <button class="submit-btn" onclick="submitRecord()">登録する</button>
+  </div>
+</div>
+
+<!-- ══ 記録一覧 ══ -->
+<div id="listScreen">
+  <div class="list-header">
+    <button class="back-btn" onclick="showBuyer()">← 戻る</button>
+    <span class="list-title">経費記録</span>
+    <button class="csv-btn" onclick="downloadCSV()">CSV</button>
+  </div>
+  <div class="list-body">
+    <div class="summary-card">
+      <div class="summary-label" id="summaryLabel">全現場 合計</div>
+      <div class="summary-amount">¥<span id="summaryTotal">0</span></div>
+      <div class="summary-count" id="summaryCount">0件</div>
+    </div>
+    <div class="filter-row">
+      <select id="filterSite" onchange="renderList()">
+        <option value="all">全現場</option>
+      </select>
+    </div>
+    <div class="sites-card">
+      <button class="sites-toggle" onclick="toggleSites()">
+        <span>現場管理</span><span id="sitesArrow">▼</span>
+      </button>
+      <div id="sitesList" style="display:none"></div>
+    </div>
+    <div id="recordList"></div>
+  </div>
+  <div class="list-add-btn">
+    <button class="btn-white" onclick="showBuyer()">＋ 領収書を追加</button>
+  </div>
+</div>
+
+<script>
+// ── 状態 ──────────────────────────────────────────────────────────────────
+const API_URL = "https://api.anthropic.com/v1/messages";
+const GAS_URL = "https://script.google.com/macros/s/AKfycbzX024aMxodtgyUMbtCBjmVhv6SiRlCW5wqksePB2pqoBeGWDLC0zI3WudDBRuUd4P2zg/exec";
+
+let currentBuyer = "";
+let currentImgUrl = "";
+let currentPayment = "現金";
+let records = JSON.parse(localStorage.getItem("records") || "[]");
+let sites = JSON.parse(localStorage.getItem("sites") || '["西新井焼肉屋","宇佐美別荘","倉庫改装","共通"]');
+let sitesOpen = false;
+
+// ── 初期化 ────────────────────────────────────────────────────────────────
+window.onload = () => {
+  const key = localStorage.getItem("apiKey");
+  if (key) {
+    showBuyer();
+  } else {
+    show("setupScreen");
+  }
+};
+
+function saveSetup() {
+  const key = document.getElementById("apiKeyInput").value.trim();
+  if (!key.startsWith("sk-ant-")) { alert("APIキーが正しくありません"); return; }
+  localStorage.setItem("apiKey", key);
+  showBuyer();
+}
+
+function showSetup() {
+  document.getElementById("apiKeyInput").value = localStorage.getItem("apiKey") || "";
+  show("setupScreen");
+}
+
+// ── 画面切替 ──────────────────────────────────────────────────────────────
+function show(id) {
+  ["setupScreen","buyerScreen","scanScreen","confirmScreen","listScreen"].forEach(s => {
+    document.getElementById(s).style.display = "none";
+  });
+  document.getElementById(id).style.display = "flex";
+}
+
+function showBuyer() {
+  updateSiteSelects();
+  document.getElementById("recordCount").textContent = records.length;
+  show("buyerScreen");
+}
+
+function showList() {
+  renderList();
+  show("listScreen");
+}
+
+// ── 名前選択 → カメラ ────────────────────────────────────────────────────
+function pickBuyer(name) {
+  currentBuyer = name;
+  document.getElementById("fileInput").click();
+}
+
+function retake() {
+  document.getElementById("fileInput").click();
+}
+
+// ── ファイル処理 ──────────────────────────────────────────────────────────
+async function handleFile(input) {
+  const file = input.files[0];
+  if (!file) return;
+  input.value = "";
+
+  // プレビュー
+  if (currentImgUrl) URL.revokeObjectURL(currentImgUrl);
+  currentImgUrl = URL.createObjectURL(file);
+  document.getElementById("previewImg").src = currentImgUrl;
+  document.getElementById("confirmImg").src = currentImgUrl;
+  show("scanScreen");
+
+  // 画像をCanvasで縮小
+  let b64;
+  try {
+    b64 = await resizeImage(file, 1200);
+  } catch(e) {
+    showConfirm({}, "画像の読み込みに失敗しました: " + e.message);
+    return;
+  }
+
+  // Claude API呼び出し
+  const apiKey = localStorage.getItem("apiKey");
+  let parsed = {}, errMsg = "";
+  try {
+    const res = await fetch(API_URL, {
+      method: "POST",
+      headers: {
+        "x-api-key": apiKey,
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json",
+        "anthropic-dangerous-direct-browser-access": "true"
+      },
+      body: JSON.stringify({
+        model: "claude-haiku-4-5-20251001",
+        max_tokens: 512,
+        messages: [{
+          role: "user",
+          content: [
+            { type: "image", source: { type: "base64", media_type: "image/jpeg", data: b64 } },
+            { type: "text", text: `領収書・レシートを読み取りJSONのみ返してください。説明不要。\n{"date":"${today()}","store":"","total":0,"category":"材料費 or 接待交際費 or ガソリン代 or 駐車場代 or 工具・備品 or 外注費 or その他","workType":"水道 or 電気 or 木工 or 塗装 or 左官 or 内装 or 外構 or 解体 or 設備 or その他","site":"${sites.join(" or ")}から最も近い現場名または空文字"}` }
+          ]
+        }]
+      })
+    });
+
+    if (!res.ok) {
+      const e = await res.json().catch(()=>({}));
+      throw new Error(`API ${res.status}: ${e?.error?.message||""}`);
+    }
+    const data = await res.json();
+    const text = (data.content||[]).filter(c=>c.type==="text").map(c=>c.text).join("");
+    const s = text.indexOf("{"), e = text.lastIndexOf("}");
+    if (s>=0 && e>s) parsed = JSON.parse(text.slice(s, e+1));
+    else throw new Error("読み取れませんでした");
+  } catch(e) {
+    errMsg = e.message;
+  }
+
+  showConfirm(parsed, errMsg);
+}
+
+function showConfirm(parsed, errMsg) {
+  // フォームにセット
+  document.getElementById("fDate").value = parsed.date || today();
+  document.getElementById("fTotal").value = parsed.total || "";
+  document.getElementById("fStore").value = parsed.store || "";
+  document.getElementById("fCat").value = parsed.category || "材料費";
+  document.getElementById("fWork").value = parsed.workType || "その他";
+
+  // 現場
+  updateSiteSelects();
+  if (parsed.site && sites.includes(parsed.site)) {
+    document.getElementById("fSite").value = parsed.site;
+  } else {
+    document.getElementById("fSite").value = "";
+  }
+  document.getElementById("newSiteField").style.display = "none";
+
+  // 支払
+  setPay(null, "現金");
+
+  // プレビュー
+  document.getElementById("previewAmount").textContent = (parsed.total||0).toLocaleString();
+  document.getElementById("previewStore").textContent = parsed.store || "店舗名";
+
+  const tags = document.getElementById("previewTags");
+  tags.innerHTML = "";
+  if (parsed.category) tags.innerHTML += `<span class="tag">${parsed.category}</span>`;
+  if (parsed.workType && parsed.workType !== "その他") tags.innerHTML += `<span class="tag green">${parsed.workType}</span>`;
+  if (parsed.site) tags.innerHTML += `<span class="tag">📍${parsed.site}</span>`;
+
+  // エラー
+  const errBox = document.getElementById("errBox");
+  if (errMsg) {
+    errBox.textContent = "⚠️ AI読み取りに失敗しました。手動で入力してください。";
+    errBox.style.display = "block";
+  } else {
+    errBox.style.display = "none";
+  }
+
+  show("confirmScreen");
+
+  // 合計欄をリアルタイム更新
+  document.getElementById("fTotal").oninput = function() {
+    document.getElementById("previewAmount").textContent = (Number(this.value)||0).toLocaleString();
+  };
+  document.getElementById("fStore").oninput = function() {
+    document.getElementById("previewStore").textContent = this.value || "店舗名";
+  };
+}
+
+// ── 支払ボタン ────────────────────────────────────────────────────────────
+function setPay(btn, val) {
+  currentPayment = val;
+  document.querySelectorAll(".pay-btn").forEach(b => {
+    b.classList.toggle("active", b.textContent === val);
+  });
+}
+
+// ── 現場セレクト ──────────────────────────────────────────────────────────
+function updateSiteSelects() {
+  ["fSite", "filterSite"].forEach(id => {
+    const sel = document.getElementById(id);
+    if (!sel) return;
+    const isFilter = id === "filterSite";
+    sel.innerHTML = isFilter
+      ? '<option value="all">全現場</option>'
+      : '<option value="">-- 現場を選択 --</option>';
+    sites.forEach(s => {
+      const o = document.createElement("option");
+      o.value = s; o.textContent = s;
+      sel.appendChild(o);
+    });
+    if (!isFilter) {
+      const o = document.createElement("option");
+      o.value = "__new__"; o.textContent = "＋ 新しい現場を追加";
+      sel.appendChild(o);
+    }
+  });
+}
+
+function onSiteChange() {
+  const v = document.getElementById("fSite").value;
+  document.getElementById("newSiteField").style.display = v === "__new__" ? "block" : "none";
+}
+
+// ── 登録 ─────────────────────────────────────────────────────────────────
+async function submitRecord() {
+  let site = document.getElementById("fSite").value;
+  if (site === "__new__") {
+    site = document.getElementById("fNewSite").value.trim();
+    if (!site) { alert("現場名を入力してください"); return; }
+    if (!sites.includes(site)) {
+      sites.push(site);
+      localStorage.setItem("sites", JSON.stringify(sites));
+    }
+  }
+  if (!site) { alert("現場を選んでください"); return; }
+
+  const record = {
+    id: Date.now(),
+    date: document.getElementById("fDate").value,
+    store: document.getElementById("fStore").value,
+    total: Number(document.getElementById("fTotal").value) || 0,
+    category: document.getElementById("fCat").value,
+    workType: document.getElementById("fWork").value,
+    payment: currentPayment,
+    buyer: currentBuyer,
+    site,
+    memo: ""
+  };
+
+  // ローカルに保存
+  records.unshift(record);
+  localStorage.setItem("records", JSON.stringify(records));
+
+  // Googleスプレッドシートに送信（失敗しても登録は成功扱い）
+  fetch(GAS_URL, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(record)
+  }).catch(()=>{});
+
+  showBuyer();
+}
+
+// ── 記録一覧 ──────────────────────────────────────────────────────────────
+function renderList() {
+  const fSite = document.getElementById("filterSite").value;
+  const filtered = fSite === "all" ? records : records.filter(r => r.site === fSite);
+  const total = filtered.reduce((s,r) => s+(r.total||0), 0);
+
+  document.getElementById("summaryLabel").textContent = (fSite==="all"?"全現場":fSite) + " 合計";
+  document.getElementById("summaryTotal").textContent = total.toLocaleString();
+  document.getElementById("summaryCount").textContent = filtered.length + "件";
+
+  const list = document.getElementById("recordList");
+  if (filtered.length === 0) {
+    list.innerHTML = '<div class="empty"><div>📋</div>記録がありません</div>';
+    return;
+  }
+  list.innerHTML = filtered.map(r => `
+    <div class="record-card">
+      <div class="record-info">
+        <div class="record-date">${fmtDate(r.date)}</div>
+        <div class="record-amount">¥${(r.total||0).toLocaleString()}</div>
+        <div class="record-store">${r.store||"—"}</div>
+        <div class="record-meta">📍${r.site} &nbsp;💳${r.payment} &nbsp;👤${r.buyer} &nbsp;${r.category}</div>
+      </div>
+      <button class="del-btn" onclick="deleteRecord(${r.id})">×</button>
+    </div>
+  `).join("");
+
+  // 現場管理
+  renderSitesList();
+  updateSiteSelects();
+}
+
+function renderSitesList() {
+  document.getElementById("sitesList").innerHTML = sites.map(s => `
+    <div class="site-row">
+      <span class="site-name">${s}</span>
+      <button class="site-del" onclick="deleteSite('${s}')">完了・削除</button>
+    </div>
+  `).join("");
+}
+
+function toggleSites() {
+  sitesOpen = !sitesOpen;
+  document.getElementById("sitesList").style.display = sitesOpen ? "block" : "none";
+  document.getElementById("sitesArrow").textContent = sitesOpen ? "▲" : "▼";
+}
+
+function deleteSite(name) {
+  if (!confirm(`「${name}」を削除しますか？`)) return;
+  sites = sites.filter(s => s !== name);
+  localStorage.setItem("sites", JSON.stringify(sites));
+  renderList();
+}
+
+function deleteRecord(id) {
+  if (!confirm("削除しますか？")) return;
+  records = records.filter(r => r.id !== id);
+  localStorage.setItem("records", JSON.stringify(records));
+  renderList();
+}
+
+// ── CSV ───────────────────────────────────────────────────────────────────
+function downloadCSV() {
+  const h = ["購入日","現場名","店舗名","金額","費目","工種","支払方法","購入者"].join(",");
+  const rows = records.map(r =>
+    [r.date,`"${r.site}"`,`"${r.store}"`,r.total,r.category,r.workType,r.payment,r.buyer].join(",")
+  );
+  const blob = new Blob(["\uFEFF"+[h,...rows].join("\n")], {type:"text/csv"});
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = `経費_${today()}.csv`;
+  a.click();
+}
+
+// ── ユーティリティ ────────────────────────────────────────────────────────
+function today() {
+  return new Date().toISOString().slice(0,10);
+}
+function fmtDate(d) {
+  return d ? d.replace(/-/g,"/") : "";
+}
+
+function resizeImage(file, maxSize) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+    img.onload = () => {
+      const ratio = Math.min(maxSize/img.width, maxSize/img.height, 1);
+      const w = Math.round(img.width * ratio);
+      const h = Math.round(img.height * ratio);
+      const canvas = document.createElement("canvas");
+      canvas.width = w; canvas.height = h;
+      canvas.getContext("2d").drawImage(img, 0, 0, w, h);
+      URL.revokeObjectURL(url);
+      resolve(canvas.toDataURL("image/jpeg", 0.85).split(",")[1]);
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error("画像読込失敗")); };
+    img.src = url;
+  });
+}
+</script>
+</body>
+</html>
