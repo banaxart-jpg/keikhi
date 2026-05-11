@@ -1,5 +1,6 @@
 {
   "hosting": {
+    "site": "static-epigram-496002-v8",
     "public": "server/public",
     "ignore": [
       "firebase.json",
