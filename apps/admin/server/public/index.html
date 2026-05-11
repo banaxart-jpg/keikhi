@@ -123,6 +123,7 @@
       </svg>
       Sign in with Google
     </button>
+    <div id="signinStatus" style="color: var(--text2); font-size: 11px; margin-top: 14px; min-height: 14px; font-family: ui-monospace, monospace;"></div>
     <div class="signin-err" id="signinErr"></div>
   </div>
 </div>
@@ -196,6 +197,20 @@ function showErr(msg) {
   const el = $("signinErr");
   if (el) el.textContent = msg;
 }
+function setStatus(msg) {
+  console.log("[admin][status]", msg);
+  const el = $("signinStatus");
+  if (el) el.textContent = msg;
+}
+
+window.addEventListener("error", (ev) => {
+  showErr("JS error: " + (ev.message || ev.error?.message || "unknown"));
+});
+window.addEventListener("unhandledrejection", (ev) => {
+  showErr("promise rejected: " + (ev.reason?.message || String(ev.reason)));
+});
+
+setStatus("init: " + location.host);
 
 async function getFirebaseConfig() {
   // When served from Firebase Hosting, __/firebase/init.json is auto-served.
@@ -212,7 +227,9 @@ async function getFirebaseConfig() {
   throw new Error("Not served from Firebase Hosting");
 }
 
+setStatus("loading Firebase config...");
 const cfg = await getFirebaseConfig();
+setStatus("init Firebase app...");
 const fbApp = initializeApp(cfg);
 const fbAuth = getAuth(fbApp);
 
@@ -223,28 +240,34 @@ const provider = new GoogleAuthProvider();
 provider.setCustomParameters({ prompt: "select_account" });
 
 // Resolve any pending redirect first; only AFTER that, hook the auth listener.
-// This avoids the listener firing with null and showing the sign-in screen
-// before the redirect result has been processed.
+setStatus("checking redirect result...");
 try {
   const result = await getRedirectResult(fbAuth);
-  if (result) console.log("[admin] redirect signed in:", result.user.email);
+  if (result) {
+    setStatus("redirect OK: " + result.user.email);
+  } else {
+    setStatus("ready (tap button)");
+  }
 } catch (e) {
   showErr(`redirect: ${e.code || ""} ${e.message}`);
 }
 
 window.doSignIn = async () => {
   showErr("");
-  // Try popup first (works on modern iOS Safari and avoids cross-site cookie issues).
-  // Fall back to redirect if the popup is blocked or otherwise fails.
+  setStatus("tapped → opening popup");
+  // Try popup first.
   try {
-    await signInWithPopup(fbAuth, provider);
+    const r = await signInWithPopup(fbAuth, provider);
+    setStatus("popup OK: " + r.user.email);
   } catch (e) {
+    setStatus("popup failed: " + (e.code || e.message));
     if (
       e.code === "auth/popup-blocked" ||
       e.code === "auth/popup-closed-by-user" ||
       e.code === "auth/cancelled-popup-request" ||
       e.code === "auth/operation-not-supported-in-this-environment"
     ) {
+      setStatus("falling back to redirect...");
       try {
         await signInWithRedirect(fbAuth, provider);
         return;
