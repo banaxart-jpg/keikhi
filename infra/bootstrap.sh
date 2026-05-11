@@ -167,6 +167,16 @@ for APP_DIR in "$ROOT_DIR"/apps/*/; do
       --condition=None --quiet >/dev/null
   done
 
+  # App-specific extra roles (declared in app.yaml as EXTRA_ROLES)
+  if [[ -n "${APP_EXTRA_ROLES:-}" ]]; then
+    sub "extra roles: ${APP_EXTRA_ROLES}"
+    for ROLE in $APP_EXTRA_ROLES; do
+      gcloud projects add-iam-policy-binding "$PROJECT_ID" \
+        --member="serviceAccount:${SA_EMAIL}" --role="$ROLE" \
+        --condition=None --quiet >/dev/null || true
+    done
+  fi
+
   sub "Cloud Build trigger ${SERVICE}-deploy"
   if gcloud builds triggers describe "${SERVICE}-deploy" --region="$REGION" >/dev/null 2>&1; then
     sub "  trigger already exists"

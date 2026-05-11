@@ -1,0 +1,12 @@
+# admin : 管理ダッシュボード
+# - Cloud Run / Cloud SQL / Cloud Storage の状態確認
+# - GCP 課金画面・各種コンソールへのディープリンク
+# - Gemini API 使用量（keihi 等のアプリが書き出したログ集計）
+name: admin
+display_name: 管理ダッシュボード
+SERVICE: keikhi-admin
+SA: admin-run
+HAS_DB: "false"
+HAS_BUCKET: "false"
+CLOUDBUILD: apps/admin/cloudbuild.yaml
+EXTRA_ROLES: "roles/run.viewer roles/cloudsql.viewer roles/storage.objectViewer roles/cloudbuild.builds.viewer"
