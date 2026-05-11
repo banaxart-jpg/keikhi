@@ -1,0 +1,37 @@
+{
+  "hosting": {
+    "public": "server/public",
+    "ignore": [
+      "firebase.json",
+      "**/.*",
+      "**/node_modules/**",
+      "**/Dockerfile",
+      "**/package.json",
+      "**/index.js"
+    ],
+    "rewrites": [
+      {
+        "source": "/api/**",
+        "run": {
+          "serviceId": "keikhi-admin",
+          "region": "asia-northeast1"
+        }
+      },
+      {
+        "source": "/health",
+        "run": {
+          "serviceId": "keikhi-admin",
+          "region": "asia-northeast1"
+        }
+      }
+    ],
+    "headers": [
+      {
+        "source": "**/*.@(js|css)",
+        "headers": [
+          { "key": "Cache-Control", "value": "public, max-age=300" }
+        ]
+      }
+    ]
+  }
+}

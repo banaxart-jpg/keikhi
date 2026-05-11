@@ -42,7 +42,11 @@ gcloud services enable \
   generativelanguage.googleapis.com \
   aiplatform.googleapis.com \
   vision.googleapis.com \
-  documentai.googleapis.com
+  documentai.googleapis.com \
+  firebase.googleapis.com \
+  firebasehosting.googleapis.com \
+  identitytoolkit.googleapis.com \
+  firestore.googleapis.com
 
 step "Artifact Registry repo: ${REPO_NAME}"
 gcloud artifacts repositories describe "$REPO_NAME" --location="$REGION" >/dev/null 2>&1 || \
@@ -86,13 +90,25 @@ for SA in "$CB_SA_LEGACY" "$CB_SA_COMPUTE"; do
     roles/secretmanager.secretAccessor \
     roles/cloudsql.client \
     roles/storage.objectViewer \
-    roles/logging.logWriter
+    roles/logging.logWriter \
+    roles/firebasehosting.admin \
+    roles/firebase.admin
   do
     gcloud projects add-iam-policy-binding "$PROJECT_ID" \
       --member="serviceAccount:${SA}" --role="$ROLE" \
       --condition=None --quiet >/dev/null 2>&1 || true
   done
 done
+
+step "Grant Firebase Hosting SA invoker on Cloud Run admin"
+# Firebase Hosting's service identity needs invoker permission to rewrite
+# requests to Cloud Run. The admin service must exist for this to succeed.
+HOSTING_SA="service-${PROJECT_NUMBER}@gcp-sa-firebasehosting.iam.gserviceaccount.com"
+gcloud run services add-iam-policy-binding keikhi-admin \
+  --region="$REGION" \
+  --member="serviceAccount:${HOSTING_SA}" \
+  --role=roles/run.invoker --quiet >/dev/null 2>&1 || \
+  sub "  (skipped: keikhi-admin service doesn't exist yet — re-run after first deploy)"
 
 # ────────────────────────────────────────────────────────────
 # Per-app loop

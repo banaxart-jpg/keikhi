@@ -1,28 +1,81 @@
 import express from "express";
 import { GoogleAuth } from "google-auth-library";
-import fs from "node:fs";
+import { initializeApp, applicationDefault } from "firebase-admin/app";
+import { getAuth as getFirebaseAuth } from "firebase-admin/auth";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(__dirname, "public");
 
-const { GCP_PROJECT, GCP_REGION = "asia-northeast1", PORT = 8080 } = process.env;
+const {
+  GCP_PROJECT,
+  GCP_REGION = "asia-northeast1",
+  PORT = 8080,
+  ALLOWED_EMAILS = "",
+} = process.env;
+
+initializeApp({ credential: applicationDefault(), projectId: GCP_PROJECT });
+
+const allowedEmails = new Set(
+  ALLOWED_EMAILS.split(",").map((s) => s.trim().toLowerCase()).filter(Boolean)
+);
 
 const app = express();
 app.use(express.json());
 
 const auth = new GoogleAuth({ scopes: "https://www.googleapis.com/auth/cloud-platform" });
-
 async function gapi(url) {
   const client = await auth.getClient();
   const res = await client.request({ url });
   return res.data;
 }
 
-app.get("/health", (req, res) => res.json({ ok: true, project: GCP_PROJECT, region: GCP_REGION }));
+// --- Firebase ID token verification middleware ---
+async function requireAuth(req, res, next) {
+  const header = req.headers.authorization || "";
+  if (!header.startsWith("Bearer ")) {
+    return res.status(401).json({ error: "missing Bearer token" });
+  }
+  try {
+    const decoded = await getFirebaseAuth().verifyIdToken(header.slice(7));
+    if (allowedEmails.size > 0) {
+      const email = (decoded.email || "").toLowerCase();
+      if (!allowedEmails.has(email)) {
+        return res.status(403).json({ error: `email not allowed: ${email}` });
+      }
+    }
+    req.user = decoded;
+    next();
+  } catch (e) {
+    return res.status(401).json({ error: `invalid token: ${e.message}` });
+  }
+}
 
-// --- Cloud Run services ---
+// --- Public endpoints (no auth) ---
+app.get("/health", (req, res) =>
+  res.json({ ok: true, project: GCP_PROJECT, region: GCP_REGION })
+);
+
+app.get("/api/config", (req, res) => {
+  // Hosted from Firebase Hosting? The init.json is auto-served.
+  // This endpoint is a fallback for direct Cloud Run access during dev.
+  res.json({
+    projectId: GCP_PROJECT,
+    region: GCP_REGION,
+    allowedEmails: allowedEmails.size > 0 ? [...allowedEmails] : null,
+  });
+});
+
+// --- Protected endpoints ---
+app.use("/api", (req, res, next) => {
+  // /api/config and /health already handled above
+  if (req.path === "/config") return next();
+  return requireAuth(req, res, next);
+});
+
+app.get("/api/me", (req, res) => res.json({ email: req.user.email, uid: req.user.uid }));
+
 app.get("/api/services", async (req, res) => {
   try {
     const data = await gapi(
@@ -37,12 +90,9 @@ app.get("/api/services", async (req, res) => {
       image: s.template?.containers?.[0]?.image,
     }));
     res.json({ services });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// --- Cloud SQL instances ---
 app.get("/api/sql", async (req, res) => {
   try {
     const data = await gapi(
@@ -58,12 +108,9 @@ app.get("/api/sql", async (req, res) => {
       activationPolicy: i.settings?.activationPolicy,
     }));
     res.json({ instances });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// --- Cloud Storage buckets ---
 app.get("/api/buckets", async (req, res) => {
   try {
     const data = await gapi(
@@ -76,12 +123,9 @@ app.get("/api/buckets", async (req, res) => {
       created: b.timeCreated,
     }));
     res.json({ buckets });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// --- Recent builds ---
 app.get("/api/builds", async (req, res) => {
   try {
     const data = await gapi(
@@ -97,12 +141,9 @@ app.get("/api/builds", async (req, res) => {
       sourceArchive: b.source?.storageSource?.object,
     }));
     res.json({ builds });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// --- Curated deeplinks to GCP console ---
 app.get("/api/links", (req, res) => {
   const P = GCP_PROJECT;
   res.json({
@@ -119,6 +160,7 @@ app.get("/api/links", (req, res) => {
       secretManager: `https://console.cloud.google.com/security/secret-manager?project=${P}`,
       artifactRegistry: `https://console.cloud.google.com/artifacts?project=${P}`,
       logs: `https://console.cloud.google.com/logs/query?project=${P}`,
+      firebase: `https://console.firebase.google.com/project/${P}`,
     },
     ai: {
       aiStudio: `https://aistudio.google.com/apikey`,
@@ -127,7 +169,7 @@ app.get("/api/links", (req, res) => {
   });
 });
 
-// --- Static files ---
+// --- Static files (fallback if accessed directly) ---
 app.use(express.static(PUBLIC_DIR));
 app.get("/", (req, res) => res.sendFile(path.join(PUBLIC_DIR, "index.html")));
 
