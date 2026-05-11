@@ -1,0 +1,13 @@
+# keihi : 経費管理アプリ
+# Consumed by infra/bootstrap.sh to provision per-app resources.
+name: keihi
+display_name: 経費管理
+SERVICE: keihi-api
+SA: keihi-run
+DB_NAME: keihi
+DB_USER: keihi
+DB_PW_SECRET: keihi-db-password
+BUCKET: ""          # leave empty → defaults to ${PROJECT_ID}-keihi-receipts
+HAS_DB: "true"
+HAS_BUCKET: "true"
+CLOUDBUILD: apps/keihi/cloudbuild.yaml

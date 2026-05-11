@@ -1,0 +1,13 @@
+# denki-zumen : 電気図面作成アプリ (placeholder)
+# Resources won't be provisioned until HAS_DB / HAS_BUCKET flip to "true"
+# and a cloudbuild.yaml + server/ exist.
+name: denki-zumen
+display_name: 電気図面作成
+SERVICE: denki-zumen-api
+SA: denki-zumen-run
+DB_NAME: denki_zumen
+DB_USER: denki_zumen
+DB_PW_SECRET: denki-zumen-db-password
+HAS_DB: "false"
+HAS_BUCKET: "false"
+CLOUDBUILD: apps/denki-zumen/cloudbuild.yaml
