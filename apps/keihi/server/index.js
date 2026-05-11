@@ -3,6 +3,11 @@ import { GoogleGenerativeAI } from "@google/generative-ai";
 import { Storage } from "@google-cloud/storage";
 import pg from "pg";
 import crypto from "node:crypto";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const PUBLIC_DIR = path.join(__dirname, "public");
 
 const {
   GEMINI_API_KEY,
@@ -18,7 +23,6 @@ const {
 const app = express();
 app.use(express.json({ limit: "20mb" }));
 
-// --- CORS (sandbox: open to all; tighten later) ---
 app.use((req, res, next) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET,POST,DELETE,OPTIONS");
@@ -27,7 +31,6 @@ app.use((req, res, next) => {
   next();
 });
 
-// --- Lazy clients ---
 const genAI = GEMINI_API_KEY ? new GoogleGenerativeAI(GEMINI_API_KEY) : null;
 const storage = RECEIPTS_BUCKET ? new Storage() : null;
 
@@ -54,7 +57,53 @@ app.get("/health", (req, res) => {
   });
 });
 
-// --- Receipt scan: parse with Gemini, optionally upload to GCS ---
+// ─────────────────────────────
+// Sites
+// ─────────────────────────────
+app.get("/api/sites", async (req, res) => {
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  try {
+    const { rows } = await p.query("SELECT id, name FROM sites ORDER BY id ASC");
+    res.json(rows);
+  } catch (err) {
+    console.error("sites list", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post("/api/sites", async (req, res) => {
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  const name = (req.body?.name || "").trim();
+  if (!name) return res.status(400).json({ error: "name required" });
+  try {
+    const { rows } = await p.query(
+      "INSERT INTO sites (name) VALUES ($1) ON CONFLICT (name) DO UPDATE SET name=EXCLUDED.name RETURNING id, name",
+      [name]
+    );
+    res.status(201).json(rows[0]);
+  } catch (err) {
+    console.error("sites insert", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete("/api/sites/:id", async (req, res) => {
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  try {
+    await p.query("DELETE FROM sites WHERE id = $1", [req.params.id]);
+    res.status(204).end();
+  } catch (err) {
+    console.error("sites delete", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─────────────────────────────
+// Receipt scan (Gemini + GCS upload)
+// ─────────────────────────────
 app.post("/api/scan", async (req, res) => {
   try {
     if (!genAI) return res.status(503).json({ error: "GEMINI_API_KEY not configured" });
@@ -90,13 +139,19 @@ app.post("/api/scan", async (req, res) => {
   }
 });
 
-// --- Records CRUD ---
+// ─────────────────────────────
+// Records
+// ─────────────────────────────
 app.get("/api/records", async (req, res) => {
   const p = getPool();
   if (!p) return res.status(503).json({ error: "DB not configured" });
   try {
     const { rows } = await p.query(
-      "SELECT id, date, store, total, category, work_type AS \"workType\", payment, buyer, site, memo, image_url AS \"imageUrl\", created_at AS \"createdAt\" FROM records ORDER BY date DESC, id DESC LIMIT 500"
+      `SELECT id, date::text AS date, store, total, category,
+              work_type AS "workType", payment, buyer, site, memo,
+              image_url AS "imageUrl", created_at AS "createdAt"
+         FROM records
+        ORDER BY date DESC, id DESC LIMIT 1000`
     );
     res.json(rows);
   } catch (err) {
@@ -135,4 +190,10 @@ app.delete("/api/records/:id", async (req, res) => {
   }
 });
 
-app.listen(PORT, () => console.log(`keikhi-api listening on ${PORT}`));
+// ─────────────────────────────
+// Static
+// ─────────────────────────────
+app.use(express.static(PUBLIC_DIR));
+app.get("/", (req, res) => res.sendFile(path.join(PUBLIC_DIR, "index.html")));
+
+app.listen(PORT, () => console.log(`keihi-api listening on ${PORT}`));
