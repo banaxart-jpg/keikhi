@@ -101,6 +101,11 @@ for SA in "$CB_SA_LEGACY" "$CB_SA_COMPUTE"; do
 done
 
 step "Grant Firebase Hosting SA invoker on Cloud Run admin"
+# Force creation of the Firebase Hosting service identity. By default it's
+# created lazily (only when Hosting first uses it), so the IAM binding below
+# can fail with "does not exist" on a fresh project.
+gcloud beta services identity create --service=firebasehosting.googleapis.com >/dev/null 2>&1 || true
+
 # Firebase Hosting's service identity needs invoker permission to rewrite
 # requests to Cloud Run. The admin service must exist for this to succeed.
 HOSTING_SA="service-${PROJECT_NUMBER}@gcp-sa-firebasehosting.iam.gserviceaccount.com"
@@ -108,7 +113,7 @@ gcloud run services add-iam-policy-binding keikhi-admin \
   --region="$REGION" \
   --member="serviceAccount:${HOSTING_SA}" \
   --role=roles/run.invoker --quiet >/dev/null 2>&1 || \
-  sub "  (skipped: keikhi-admin service doesn't exist yet — re-run after first deploy)"
+  sub "  (skipped: keikhi-admin service or Hosting SA doesn't exist yet — re-run after first deploy)"
 
 # ────────────────────────────────────────────────────────────
 # Per-app loop
