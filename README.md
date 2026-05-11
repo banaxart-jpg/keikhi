@@ -43,6 +43,19 @@ cd keikhi
 CLI ではできない。ブラウザでこのリンクを開いて `banaxart-jpg/keikhi` を接続:
 👉 <https://console.cloud.google.com/cloud-build/triggers/connect>
 
+### 3.5 (任意) API を先に手動で enable
+
+bootstrap が自動で叩くけど、先に通しておきたいなら：
+
+```bash
+gcloud services enable \
+  run.googleapis.com cloudbuild.googleapis.com secretmanager.googleapis.com \
+  sqladmin.googleapis.com storage.googleapis.com artifactregistry.googleapis.com \
+  iam.googleapis.com \
+  generativelanguage.googleapis.com aiplatform.googleapis.com \
+  vision.googleapis.com documentai.googleapis.com
+```
+
 ### 4. ワンショット bootstrap を実行
 
 ```bash

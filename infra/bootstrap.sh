@@ -39,7 +39,10 @@ gcloud services enable \
   storage.googleapis.com \
   artifactregistry.googleapis.com \
   iam.googleapis.com \
-  generativelanguage.googleapis.com
+  generativelanguage.googleapis.com \
+  aiplatform.googleapis.com \
+  vision.googleapis.com \
+  documentai.googleapis.com
 
 step "Artifact Registry repo: ${REPO_NAME}"
 gcloud artifacts repositories describe "$REPO_NAME" --location="$REGION" >/dev/null 2>&1 || \
