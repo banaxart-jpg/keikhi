@@ -1,7 +1,5 @@
 import express from "express";
 import { GoogleAuth } from "google-auth-library";
-import { initializeApp, applicationDefault } from "firebase-admin/app";
-import { getAuth as getFirebaseAuth } from "firebase-admin/auth";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -12,14 +10,7 @@ const {
   GCP_PROJECT,
   GCP_REGION = "asia-northeast1",
   PORT = 8080,
-  ALLOWED_EMAILS = "",
 } = process.env;
-
-initializeApp({ credential: applicationDefault(), projectId: GCP_PROJECT });
-
-const allowedEmails = new Set(
-  ALLOWED_EMAILS.split(",").map((s) => s.trim().toLowerCase()).filter(Boolean)
-);
 
 const app = express();
 app.use(express.json());
@@ -31,50 +22,13 @@ async function gapi(url) {
   return res.data;
 }
 
-// --- Firebase ID token verification middleware ---
-async function requireAuth(req, res, next) {
-  const header = req.headers.authorization || "";
-  if (!header.startsWith("Bearer ")) {
-    return res.status(401).json({ error: "missing Bearer token" });
-  }
-  try {
-    const decoded = await getFirebaseAuth().verifyIdToken(header.slice(7));
-    if (allowedEmails.size > 0) {
-      const email = (decoded.email || "").toLowerCase();
-      if (!allowedEmails.has(email)) {
-        return res.status(403).json({ error: `email not allowed: ${email}` });
-      }
-    }
-    req.user = decoded;
-    next();
-  } catch (e) {
-    return res.status(401).json({ error: `invalid token: ${e.message}` });
-  }
-}
-
-// --- Public endpoints (no auth) ---
 app.get("/health", (req, res) =>
   res.json({ ok: true, project: GCP_PROJECT, region: GCP_REGION })
 );
 
 app.get("/api/config", (req, res) => {
-  // Hosted from Firebase Hosting? The init.json is auto-served.
-  // This endpoint is a fallback for direct Cloud Run access during dev.
-  res.json({
-    projectId: GCP_PROJECT,
-    region: GCP_REGION,
-    allowedEmails: allowedEmails.size > 0 ? [...allowedEmails] : null,
-  });
+  res.json({ projectId: GCP_PROJECT, region: GCP_REGION });
 });
-
-// --- Protected endpoints ---
-app.use("/api", (req, res, next) => {
-  // /api/config and /health already handled above
-  if (req.path === "/config") return next();
-  return requireAuth(req, res, next);
-});
-
-app.get("/api/me", (req, res) => res.json({ email: req.user.email, uid: req.user.uid }));
 
 app.get("/api/services", async (req, res) => {
   try {
@@ -169,7 +123,6 @@ app.get("/api/links", (req, res) => {
   });
 });
 
-// --- Static files (fallback if accessed directly) ---
 app.use(express.static(PUBLIC_DIR));
 app.get("/", (req, res) => res.sendFile(path.join(PUBLIC_DIR, "index.html")));
 

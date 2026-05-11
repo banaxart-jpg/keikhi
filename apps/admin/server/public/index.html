@@ -29,8 +29,6 @@
   header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 24px; gap: 12px; }
   h1 { font-size: 18px; font-weight: 700; letter-spacing: -0.3px; }
   .project { font-size: 11px; color: var(--text3); font-family: ui-monospace, "SF Mono", Menlo, monospace; }
-  .user-pill { display: flex; align-items: center; gap: 8px; }
-  .user-email { font-size: 11px; color: var(--text2); }
   .btn {
     background: var(--surface2); color: var(--text); border: 1px solid var(--border);
     padding: 7px 14px; border-radius: 999px; font-size: 12px; font-weight: 600;
@@ -84,68 +82,21 @@
 
   a { color: var(--accent); text-decoration: none; }
   a:active { opacity: 0.7; }
-
-  /* ── Sign-in overlay ── */
-  .signin-overlay {
-    position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
-    background: var(--bg); z-index: 100; padding: 24px; text-align: center;
-  }
-  .signin-card {
-    background: var(--surface); border: 1px solid var(--border);
-    border-radius: 20px; padding: 36px 28px; max-width: 360px; width: 100%;
-  }
-  .signin-title { font-size: 20px; font-weight: 700; margin-bottom: 8px; }
-  .signin-sub { font-size: 13px; color: var(--text2); margin-bottom: 24px; }
-  .google-btn {
-    display: inline-flex; align-items: center; gap: 10px;
-    background: white; color: #1f1f1f; border: none;
-    padding: 12px 22px; border-radius: 12px; font-size: 14px; font-weight: 600;
-    cursor: pointer; font-family: inherit;
-  }
-  .google-btn:active { transform: scale(0.97); }
-  .google-icn { width: 18px; height: 18px; }
-  .signin-err { color: var(--err); font-size: 12px; margin-top: 16px; }
 </style>
 </head>
 <body>
-
-<!-- Sign-in overlay (shown when not authenticated) -->
-<div class="signin-overlay" id="signinOverlay" style="display:none">
-  <div class="signin-card">
-    <div class="signin-title">keikhi 管理</div>
-    <div class="signin-sub">Googleアカウントでログイン</div>
-    <button class="google-btn" onclick="window.doSignIn()">
-      <svg class="google-icn" viewBox="0 0 18 18" xmlns="http://www.w3.org/2000/svg">
-        <path d="M17.64 9.2c0-.64-.06-1.25-.17-1.84H9v3.48h4.84a4.14 4.14 0 0 1-1.8 2.72v2.26h2.92c1.7-1.57 2.68-3.88 2.68-6.62z" fill="#4285F4"/>
-        <path d="M9 18c2.43 0 4.47-.8 5.96-2.18l-2.92-2.26c-.8.54-1.83.86-3.04.86-2.34 0-4.32-1.58-5.03-3.7H.96v2.33A8.997 8.997 0 0 0 9 18z" fill="#34A853"/>
-        <path d="M3.97 10.71A5.4 5.4 0 0 1 3.68 9c0-.6.1-1.18.29-1.71V4.96H.96A9.003 9.003 0 0 0 0 9c0 1.45.35 2.82.96 4.04l3.01-2.33z" fill="#FBBC05"/>
-        <path d="M9 3.58c1.32 0 2.5.45 3.44 1.35l2.58-2.58A8.962 8.962 0 0 0 9 0 8.997 8.997 0 0 0 .96 4.96L3.97 7.29C4.68 5.17 6.66 3.58 9 3.58z" fill="#EA4335"/>
-      </svg>
-      Sign in with Google
-    </button>
-    <div id="signinStatus" style="color: var(--text2); font-size: 11px; margin-top: 14px; min-height: 14px; font-family: ui-monospace, monospace;"></div>
-    <div class="signin-err" id="signinErr"></div>
-  </div>
-</div>
-
-<main id="appMain" style="display:none">
+<main>
 
 <header>
   <div>
     <h1>keikhi 管理</h1>
     <div class="project" id="projectTag">…</div>
   </div>
-  <div class="user-pill">
-    <div class="user-email" id="userEmail"></div>
-    <button class="btn" onclick="window.doSignOut()">ログアウト</button>
-  </div>
+  <button class="btn" onclick="loadAll()">更新</button>
 </header>
 
 <section>
-  <div class="row" style="margin-bottom: 10px;">
-    <div class="section-title" style="margin-bottom:0">Cloud Run サービス</div>
-    <button class="btn" onclick="loadAll()">更新</button>
-  </div>
+  <div class="section-title">Cloud Run サービス</div>
   <div id="services"><div class="card empty">読み込み中…</div></div>
 </section>
 
@@ -181,132 +132,17 @@
 
 </main>
 
-<script type="module">
-import { initializeApp } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js";
-import {
-  getAuth, GoogleAuthProvider,
-  signInWithPopup, signInWithRedirect, getRedirectResult,
-  setPersistence, browserLocalPersistence,
-  onAuthStateChanged, signOut,
-} from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
-
+<script>
 const $ = (id) => document.getElementById(id);
 
-function showErr(msg) {
-  console.error("[admin]", msg);
-  const el = $("signinErr");
-  if (el) el.textContent = msg;
-}
-function setStatus(msg) {
-  console.log("[admin][status]", msg);
-  const el = $("signinStatus");
-  if (el) el.textContent = msg;
-}
-
-window.addEventListener("error", (ev) => {
-  showErr("JS error: " + (ev.message || ev.error?.message || "unknown"));
-});
-window.addEventListener("unhandledrejection", (ev) => {
-  showErr("promise rejected: " + (ev.reason?.message || String(ev.reason)));
-});
-
-setStatus("init: " + location.host);
-
-async function getFirebaseConfig() {
-  // When served from Firebase Hosting, __/firebase/init.json is auto-served.
-  // If accessed directly via Cloud Run URL, this returns 404; fall back to /api/config.
-  try {
-    const r = await fetch("/__/firebase/init.json");
-    if (r.ok) return await r.json();
-  } catch {}
-  const cfg = await fetch("/api/config").then((r) => r.json());
-  alert(
-    "Firebase Hosting 経由ではない URL でアクセスしています。\n" +
-      "ログインは Firebase Hosting (https://" + cfg.projectId + ".web.app) からどうぞ。"
-  );
-  throw new Error("Not served from Firebase Hosting");
-}
-
-setStatus("loading Firebase config...");
-const cfg = await getFirebaseConfig();
-setStatus("init Firebase app...");
-const fbApp = initializeApp(cfg);
-const fbAuth = getAuth(fbApp);
-
-// Persist across page reloads / redirect round-trips.
-try { await setPersistence(fbAuth, browserLocalPersistence); } catch (e) { showErr("persistence: " + e.message); }
-
-const provider = new GoogleAuthProvider();
-provider.setCustomParameters({ prompt: "select_account" });
-
-// Resolve any pending redirect first; only AFTER that, hook the auth listener.
-setStatus("checking redirect result...");
-try {
-  const result = await getRedirectResult(fbAuth);
-  if (result) {
-    setStatus("redirect OK: " + result.user.email);
-  } else {
-    setStatus("ready (tap button)");
-  }
-} catch (e) {
-  showErr(`redirect: ${e.code || ""} ${e.message}`);
-}
-
-window.doSignIn = async () => {
-  showErr("");
-  setStatus("tapped → opening popup");
-  // Try popup first.
-  try {
-    const r = await signInWithPopup(fbAuth, provider);
-    setStatus("popup OK: " + r.user.email);
-  } catch (e) {
-    setStatus("popup failed: " + (e.code || e.message));
-    if (
-      e.code === "auth/popup-blocked" ||
-      e.code === "auth/popup-closed-by-user" ||
-      e.code === "auth/cancelled-popup-request" ||
-      e.code === "auth/operation-not-supported-in-this-environment"
-    ) {
-      setStatus("falling back to redirect...");
-      try {
-        await signInWithRedirect(fbAuth, provider);
-        return;
-      } catch (e2) {
-        showErr(`redirect: ${e2.code || ""} ${e2.message}`);
-        return;
-      }
-    }
-    showErr(`${e.code || ""} ${e.message}`);
-  }
-};
-
-window.doSignOut = async () => {
-  await signOut(fbAuth);
-};
-
-onAuthStateChanged(fbAuth, (user) => {
-  console.log("[admin] auth state:", user?.email || "(none)");
-  if (user) {
-    $("signinOverlay").style.display = "none";
-    $("appMain").style.display = "block";
-    $("userEmail").textContent = user.email || "";
-    loadAll();
-  } else {
-    $("signinOverlay").style.display = "flex";
-    $("appMain").style.display = "none";
-  }
-});
-
-async function authFetch(url) {
-  const token = await fbAuth.currentUser.getIdToken();
-  const r = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+async function getJson(url) {
+  const r = await fetch(url);
   if (!r.ok) {
     const body = await r.text();
-    throw new Error(`${url} → ${r.status} ${body.slice(0, 120)}`);
+    throw new Error(`${url} → ${r.status} ${body.slice(0, 160)}`);
   }
   return r.json();
 }
-window.authFetch = authFetch;
 
 function fmtTime(iso) {
   if (!iso) return "—";
@@ -327,7 +163,7 @@ function badge(state) {
 async function loadServices() {
   const el = $("services");
   try {
-    const { services } = await authFetch("/api/services");
+    const { services } = await getJson("/api/services");
     if (!services.length) return (el.innerHTML = `<div class="card empty">サービスなし</div>`);
     el.innerHTML = services.map((s) => `
       <div class="card">
@@ -348,7 +184,7 @@ async function loadServices() {
 async function loadSql() {
   const el = $("sql");
   try {
-    const { instances } = await authFetch("/api/sql");
+    const { instances } = await getJson("/api/sql");
     if (!instances.length) return (el.innerHTML = `<div class="card empty">インスタンスなし</div>`);
     el.innerHTML = instances.map((i) => `
       <div class="card">
@@ -368,7 +204,7 @@ async function loadSql() {
 async function loadBuckets() {
   const el = $("buckets");
   try {
-    const { buckets } = await authFetch("/api/buckets");
+    const { buckets } = await getJson("/api/buckets");
     if (!buckets.length) return (el.innerHTML = `<div class="card empty">バケットなし</div>`);
     el.innerHTML = buckets.map((b) => `
       <div class="card">
@@ -387,7 +223,7 @@ async function loadBuckets() {
 async function loadBuilds() {
   const el = $("builds");
   try {
-    const { builds } = await authFetch("/api/builds");
+    const { builds } = await getJson("/api/builds");
     if (!builds.length) return (el.innerHTML = `<div class="card empty">ビルド履歴なし</div>`);
     el.innerHTML = builds.map((b) => `
       <div class="card">
@@ -406,7 +242,7 @@ async function loadBuilds() {
 
 async function loadLinks() {
   try {
-    const links = await authFetch("/api/links");
+    const links = await getJson("/api/links");
     $("billingLinks").innerHTML = `
       <a class="link accent" href="${links.billing.report}" target="_blank"><span class="icn">📊</span>レポート</a>
       <a class="link accent" href="${links.billing.budgets}" target="_blank"><span class="icn">🔔</span>予算</a>
@@ -431,14 +267,16 @@ async function loadLinks() {
 
 async function loadHealth() {
   try {
-    const h = await fetch("/health").then((r) => r.json());
+    const h = await getJson("/health");
     $("projectTag").textContent = `${h.project} / ${h.region}`;
   } catch { $("projectTag").textContent = "—"; }
 }
 
-window.loadAll = () => {
+function loadAll() {
   loadHealth(); loadServices(); loadSql(); loadBuckets(); loadBuilds(); loadLinks();
-};
+}
+
+loadAll();
 </script>
 </body>
 </html>
