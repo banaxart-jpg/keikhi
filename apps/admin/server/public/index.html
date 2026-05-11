@@ -185,10 +185,17 @@ import { initializeApp } from "https://www.gstatic.com/firebasejs/10.14.1/fireba
 import {
   getAuth, GoogleAuthProvider,
   signInWithPopup, signInWithRedirect, getRedirectResult,
+  setPersistence, browserLocalPersistence,
   onAuthStateChanged, signOut,
 } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
 
 const $ = (id) => document.getElementById(id);
+
+function showErr(msg) {
+  console.error("[admin]", msg);
+  const el = $("signinErr");
+  if (el) el.textContent = msg;
+}
 
 async function getFirebaseConfig() {
   // When served from Firebase Hosting, __/firebase/init.json is auto-served.
@@ -209,16 +216,44 @@ const cfg = await getFirebaseConfig();
 const fbApp = initializeApp(cfg);
 const fbAuth = getAuth(fbApp);
 
+// Persist across page reloads / redirect round-trips.
+try { await setPersistence(fbAuth, browserLocalPersistence); } catch (e) { showErr("persistence: " + e.message); }
+
 const provider = new GoogleAuthProvider();
-const isMobile = /android|iphone|ipad|ipod/i.test(navigator.userAgent);
+provider.setCustomParameters({ prompt: "select_account" });
+
+// Resolve any pending redirect first; only AFTER that, hook the auth listener.
+// This avoids the listener firing with null and showing the sign-in screen
+// before the redirect result has been processed.
+try {
+  const result = await getRedirectResult(fbAuth);
+  if (result) console.log("[admin] redirect signed in:", result.user.email);
+} catch (e) {
+  showErr(`redirect: ${e.code || ""} ${e.message}`);
+}
 
 window.doSignIn = async () => {
-  $("signinErr").textContent = "";
+  showErr("");
+  // Try popup first (works on modern iOS Safari and avoids cross-site cookie issues).
+  // Fall back to redirect if the popup is blocked or otherwise fails.
   try {
-    if (isMobile) await signInWithRedirect(fbAuth, provider);
-    else await signInWithPopup(fbAuth, provider);
+    await signInWithPopup(fbAuth, provider);
   } catch (e) {
-    $("signinErr").textContent = e.message;
+    if (
+      e.code === "auth/popup-blocked" ||
+      e.code === "auth/popup-closed-by-user" ||
+      e.code === "auth/cancelled-popup-request" ||
+      e.code === "auth/operation-not-supported-in-this-environment"
+    ) {
+      try {
+        await signInWithRedirect(fbAuth, provider);
+        return;
+      } catch (e2) {
+        showErr(`redirect: ${e2.code || ""} ${e2.message}`);
+        return;
+      }
+    }
+    showErr(`${e.code || ""} ${e.message}`);
   }
 };
 
@@ -226,10 +261,8 @@ window.doSignOut = async () => {
   await signOut(fbAuth);
 };
 
-// Pick up redirect result on mobile flow
-getRedirectResult(fbAuth).catch((e) => { $("signinErr").textContent = e.message; });
-
 onAuthStateChanged(fbAuth, (user) => {
+  console.log("[admin] auth state:", user?.email || "(none)");
   if (user) {
     $("signinOverlay").style.display = "none";
     $("appMain").style.display = "block";
