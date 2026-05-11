@@ -74,16 +74,24 @@ if ! gcloud sql instances describe "$DB_INSTANCE" >/dev/null 2>&1; then
 fi
 
 step "Grant Cloud Build SA the roles it needs"
-for ROLE in \
-  roles/run.admin \
-  roles/iam.serviceAccountUser \
-  roles/artifactregistry.writer \
-  roles/secretmanager.secretAccessor \
-  roles/cloudsql.client
-do
-  gcloud projects add-iam-policy-binding "$PROJECT_ID" \
-    --member="serviceAccount:${CB_SA}" --role="$ROLE" \
-    --condition=None --quiet >/dev/null
+# Newer GCP projects (post-2024-04-29) default to the Compute SA for Cloud Build.
+# Older projects use the dedicated Cloud Build SA. Grant to both so it works either way.
+CB_SA_LEGACY="${PROJECT_NUMBER}@cloudbuild.gserviceaccount.com"
+CB_SA_COMPUTE="${PROJECT_NUMBER}-compute@developer.gserviceaccount.com"
+for SA in "$CB_SA_LEGACY" "$CB_SA_COMPUTE"; do
+  for ROLE in \
+    roles/run.admin \
+    roles/iam.serviceAccountUser \
+    roles/artifactregistry.writer \
+    roles/secretmanager.secretAccessor \
+    roles/cloudsql.client \
+    roles/storage.objectViewer \
+    roles/logging.logWriter
+  do
+    gcloud projects add-iam-policy-binding "$PROJECT_ID" \
+      --member="serviceAccount:${SA}" --role="$ROLE" \
+      --condition=None --quiet >/dev/null 2>&1 || true
+  done
 done
 
 # ────────────────────────────────────────────────────────────
