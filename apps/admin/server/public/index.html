@@ -78,7 +78,7 @@
   .link.accent .icn { color: var(--accent); }
 
   .empty { color: var(--text3); font-size: 13px; padding: 8px 4px; }
-  .err-box { color: var(--err); font-size: 12px; padding: 4px; }
+  .err-box { color: var(--err); font-size: 11px; padding: 4px; word-break: break-word; white-space: pre-wrap; line-height: 1.4; }
 
   a { color: var(--accent); text-decoration: none; }
   a:active { opacity: 0.7; }
@@ -139,7 +139,7 @@ async function getJson(url) {
   const r = await fetch(url);
   if (!r.ok) {
     const body = await r.text();
-    throw new Error(`${url} → ${r.status} ${body.slice(0, 160)}`);
+    throw new Error(`${url} → ${r.status}\n${body.slice(0, 600)}`);
   }
   return r.json();
 }
