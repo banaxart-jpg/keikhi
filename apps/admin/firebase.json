@@ -1,30 +1,11 @@
 {
   "hosting": {
     "site": "static-epigram-496002-v8",
-    "public": "server/public",
+    "public": "web",
     "ignore": [
       "firebase.json",
       "**/.*",
-      "**/node_modules/**",
-      "**/Dockerfile",
-      "**/package.json",
-      "**/index.js"
-    ],
-    "rewrites": [
-      {
-        "source": "/api/**",
-        "run": {
-          "serviceId": "keikhi-admin",
-          "region": "asia-northeast1"
-        }
-      },
-      {
-        "source": "/health",
-        "run": {
-          "serviceId": "keikhi-admin",
-          "region": "asia-northeast1"
-        }
-      }
+      "**/node_modules/**"
     ],
     "headers": [
       {
