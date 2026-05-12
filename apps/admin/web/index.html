@@ -249,12 +249,17 @@ window.doSignOut = async () => {
 };
 
 onAuthStateChanged(fbAuth, (user) => {
-  if (user) {
+  if (user && accessToken) {
     $("signinOverlay").style.display = "none";
     $("appMain").style.display = "block";
     $("userEmail").textContent = user.email || "";
     $("projectTag").textContent = `${PROJECT} / ${REGION}`;
     loadAll();
+  } else if (user && !accessToken) {
+    // Signed in but no GCP scope (e.g. tab reopened, sessionStorage gone, or previous login lacked the scope).
+    $("signinOverlay").style.display = "flex";
+    $("appMain").style.display = "none";
+    setStatus(`signed in as ${user.email} — tap to authorize GCP access`);
   } else {
     $("signinOverlay").style.display = "flex";
     $("appMain").style.display = "none";
