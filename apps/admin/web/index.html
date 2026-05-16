@@ -194,7 +194,7 @@ try { await setPersistence(fbAuth, browserLocalPersistence); } catch (e) { showE
 
 const provider = new GoogleAuthProvider();
 provider.addScope(SCOPE);
-provider.setCustomParameters({ prompt: "select_account" });
+provider.setCustomParameters({ prompt: "consent" });
 
 // OAuth access token for GCP APIs (NOT the Firebase ID token).
 let accessToken = sessionStorage.getItem("gcp_access_token") || null;
@@ -208,7 +208,7 @@ try {
       accessToken = cred.accessToken;
       sessionStorage.setItem("gcp_access_token", accessToken);
     }
-    setStatus("redirect OK: " + result.user.email);
+    setStatus("redirect OK: " + (cred?.accessToken ? "token取得" : "tokenなし"));
   } else {
     setStatus("ready");
   }
@@ -224,8 +224,13 @@ window.doSignIn = async () => {
     if (cred?.accessToken) {
       accessToken = cred.accessToken;
       sessionStorage.setItem("gcp_access_token", accessToken);
+      setStatus("popup OK + token: " + result.user.email);
+    } else {
+      showErr(
+        "サインインは成功したが GCP access token が取得できませんでした。\n" +
+        "OAuth 同意画面に cloud-platform.read-only スコープが登録されてない可能性があります。"
+      );
     }
-    setStatus("popup OK: " + result.user.email);
   } catch (e) {
     setStatus("popup failed: " + (e.code || e.message));
     if (
