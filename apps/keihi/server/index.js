@@ -178,6 +178,26 @@ app.post("/api/records", async (req, res) => {
   }
 });
 
+app.put("/api/records/:id", async (req, res) => {
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  try {
+    const r = req.body || {};
+    const { rowCount } = await p.query(
+      `UPDATE records SET
+         date=$1, store=$2, total=$3, category=$4, work_type=$5,
+         payment=$6, buyer=$7, site=$8, memo=$9
+       WHERE id=$10`,
+      [r.date, r.store, r.total, r.category, r.workType, r.payment, r.buyer, r.site, r.memo || "", req.params.id]
+    );
+    if (!rowCount) return res.status(404).json({ error: "not found" });
+    res.json({ ok: true });
+  } catch (err) {
+    console.error("update error", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.delete("/api/records/:id", async (req, res) => {
   const p = getPool();
   if (!p) return res.status(503).json({ error: "DB not configured" });
@@ -186,6 +206,28 @@ app.delete("/api/records/:id", async (req, res) => {
     res.status(204).end();
   } catch (err) {
     console.error("delete error", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Signed URL for viewing a receipt image (gs:// → temporary https)
+app.get("/api/records/:id/image", async (req, res) => {
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  if (!storage) return res.status(503).json({ error: "Storage not configured" });
+  try {
+    const { rows } = await p.query("SELECT image_url FROM records WHERE id=$1", [req.params.id]);
+    const gs = rows[0]?.image_url;
+    if (!gs || !gs.startsWith("gs://")) return res.status(404).json({ error: "no image" });
+    const [, , bucket, ...rest] = gs.split("/");
+    const objectPath = rest.join("/");
+    const [url] = await storage
+      .bucket(bucket)
+      .file(objectPath)
+      .getSignedUrl({ action: "read", expires: Date.now() + 10 * 60 * 1000 });
+    res.json({ url });
+  } catch (err) {
+    console.error("image url error", err);
     res.status(500).json({ error: err.message });
   }
 });

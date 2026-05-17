@@ -188,6 +188,13 @@ for APP_DIR in "$ROOT_DIR"/apps/*/; do
       --condition=None --quiet >/dev/null
   done
 
+  # Allow the SA to sign GCS URLs (getSignedUrl v4 uses the IAM SignBlob API
+  # when running on Cloud Run without a private key).
+  gcloud iam service-accounts add-iam-policy-binding "$SA_EMAIL" \
+    --member="serviceAccount:${SA_EMAIL}" \
+    --role=roles/iam.serviceAccountTokenCreator \
+    --quiet >/dev/null 2>&1 || true
+
   # App-specific extra roles (declared in app.yaml as EXTRA_ROLES)
   if [[ -n "${APP_EXTRA_ROLES:-}" ]]; then
     sub "extra roles: ${APP_EXTRA_ROLES}"
