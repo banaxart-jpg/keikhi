@@ -285,6 +285,15 @@ let fbAuth = null;
       }
     } catch (e) { sErr("redirect: " + e.message); }
 
+    let entered = false;
+    async function enterApp() {
+      if (entered) return;
+      entered = true;
+      document.getElementById("signinOverlay").style.display = "none";
+      try { await loadData(); } catch {}
+      showBuyer();
+    }
+
     document.getElementById("signinBtn").addEventListener("click", async () => {
       sErr(""); sStatus("opening popup...");
       try {
@@ -294,6 +303,7 @@ let fbAuth = null;
           accessToken = c.accessToken;
           sessionStorage.setItem("gcp_token", accessToken);
           sStatus("OK: " + res.user.email);
+          await enterApp();
         } else {
           sErr("token が取得できませんでした");
         }
@@ -307,12 +317,12 @@ let fbAuth = null;
 
     onAuthStateChanged(fbAuth, async (user) => {
       if (user && accessToken) {
-        document.getElementById("signinOverlay").style.display = "none";
-        try { await loadData(); } catch {}
-        showBuyer();
+        await enterApp();
+      } else if (user && !accessToken) {
+        document.getElementById("signinOverlay").style.display = "flex";
+        sStatus(`${user.email}: 「Sign in with Google」をタップして GCP 認可を`);
       } else {
         document.getElementById("signinOverlay").style.display = "flex";
-        if (user && !accessToken) sStatus(`${user.email}: GCP認可が必要、再ログインを`);
       }
     });
   } catch (e) {
