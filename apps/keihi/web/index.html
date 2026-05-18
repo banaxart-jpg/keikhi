@@ -126,6 +126,14 @@ select.nm-field option { background: #e4e6ee; color: #42455e; }
 
 <div class="toast" id="toast">✅ 登録しました！</div>
 
+<div id="signinOverlay" style="display:none;position:fixed;inset:0;z-index:400;background:var(--bg);flex-direction:column;align-items:center;justify-content:center;padding:32px;text-align:center;gap:18px;">
+  <div style="font-size:24px;font-weight:800;">現場経費</div>
+  <div id="signinSub" style="font-size:13px;color:var(--text2);line-height:1.7;">Google アカウントでログイン</div>
+  <button class="submit-btn" id="signinBtn" type="button" style="max-width:280px;">Sign in with Google</button>
+  <div id="signinStatus" style="font-size:11px;color:var(--text3);font-family:monospace;min-height:14px;"></div>
+  <div id="signinErr" style="font-size:12px;color:#b04040;word-break:break-word;max-width:320px;"></div>
+</div>
+
 <div id="imgOverlay" style="display:none;position:fixed;inset:0;z-index:300;background:rgba(20,22,32,0.92);align-items:center;justify-content:center;flex-direction:column;gap:16px;padding:24px;">
   <img id="imgOverlayImg" src="" alt="" style="max-width:100%;max-height:80vh;border-radius:14px;object-fit:contain;">
   <button class="pill-btn" id="imgOverlayClose" type="button">閉じる</button>
@@ -242,8 +250,83 @@ select.nm-field option { background: #e4e6ee; color: #42455e; }
   </div>
 </div>
 
-<script>
-"use strict";
+<script src="/config.js"></script>
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js";
+import {
+  getAuth, GoogleAuthProvider,
+  signInWithPopup, signInWithRedirect, getRedirectResult,
+  setPersistence, browserLocalPersistence,
+  onAuthStateChanged, signOut,
+} from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
+
+// ───────── Config / Auth ─────────
+const API_BASE = (window.API_BASE || "").replace(/\/$/, ""); // Cloud Run URL injected at build
+let accessToken = sessionStorage.getItem("gcp_token") || null;
+
+const sStatus = (m) => { const e = document.getElementById("signinStatus"); if (e) e.textContent = m; };
+const sErr = (m) => { const e = document.getElementById("signinErr"); if (e) e.textContent = m; };
+
+let fbAuth = null;
+(async function initAuth() {
+  try {
+    const cfg = await fetch("/__/firebase/init.json").then((r) => r.json());
+    fbAuth = getAuth(initializeApp(cfg));
+    await setPersistence(fbAuth, browserLocalPersistence);
+    const provider = new GoogleAuthProvider();
+    provider.addScope("https://www.googleapis.com/auth/cloud-platform");
+    provider.setCustomParameters({ prompt: "consent" });
+
+    try {
+      const rr = await getRedirectResult(fbAuth);
+      if (rr) {
+        const c = GoogleAuthProvider.credentialFromResult(rr);
+        if (c?.accessToken) { accessToken = c.accessToken; sessionStorage.setItem("gcp_token", accessToken); }
+      }
+    } catch (e) { sErr("redirect: " + e.message); }
+
+    document.getElementById("signinBtn").addEventListener("click", async () => {
+      sErr(""); sStatus("opening popup...");
+      try {
+        const res = await signInWithPopup(fbAuth, provider);
+        const c = GoogleAuthProvider.credentialFromResult(res);
+        if (c?.accessToken) {
+          accessToken = c.accessToken;
+          sessionStorage.setItem("gcp_token", accessToken);
+          sStatus("OK: " + res.user.email);
+        } else {
+          sErr("token が取得できませんでした");
+        }
+      } catch (e) {
+        sStatus("popup失敗: " + (e.code || ""));
+        if (["auth/popup-blocked","auth/popup-closed-by-user","auth/cancelled-popup-request","auth/operation-not-supported-in-this-environment"].includes(e.code)) {
+          try { await signInWithRedirect(fbAuth, provider); } catch (e2) { sErr(e2.message); }
+        } else { sErr((e.code || "") + " " + e.message); }
+      }
+    });
+
+    onAuthStateChanged(fbAuth, async (user) => {
+      if (user && accessToken) {
+        document.getElementById("signinOverlay").style.display = "none";
+        try { await loadData(); } catch {}
+        showBuyer();
+      } else {
+        document.getElementById("signinOverlay").style.display = "flex";
+        if (user && !accessToken) sStatus(`${user.email}: GCP認可が必要、再ログインを`);
+      }
+    });
+  } catch (e) {
+    document.getElementById("signinOverlay").style.display = "flex";
+    sErr("init失敗: " + e.message);
+  }
+})();
+
+window.doSignOut = async () => {
+  sessionStorage.removeItem("gcp_token");
+  accessToken = null;
+  if (fbAuth) await signOut(fbAuth);
+};
+
 // ───────── State ─────────
 let records = [];
 let sites = []; // [{id, name}]
@@ -283,11 +366,19 @@ function toast(msg, isErr = false) {
 // ───────── API helpers ─────────
 async function api(method, url, body) {
   const opts = { method, headers: {} };
+  if (accessToken) opts.headers["Authorization"] = "Bearer " + accessToken;
   if (body !== undefined) {
     opts.headers["content-type"] = "application/json";
     opts.body = JSON.stringify(body);
   }
-  const r = await fetch(url, opts);
+  const r = await fetch(API_BASE + url, opts);
+  if (r.status === 401) {
+    sessionStorage.removeItem("gcp_token");
+    accessToken = null;
+    document.getElementById("signinOverlay").style.display = "flex";
+    sErr("セッション期限切れ。再ログインしてください");
+    throw new Error("401 再ログインが必要");
+  }
   if (!r.ok) {
     let msg = `${method} ${url} → ${r.status}`;
     try {
@@ -768,11 +859,7 @@ function downloadCSV() {
 // ───────── Utils ─────────
 function fmtDate(d) { return d ? String(d).slice(0, 10).replace(/-/g, "/") : ""; }
 
-// ───────── Boot ─────────
-(async () => {
-  try { await loadData(); } catch {}
-  showBuyer();
-})();
+// Boot is driven by onAuthStateChanged in initAuth() above.
 </script>
 </body>
 </html>

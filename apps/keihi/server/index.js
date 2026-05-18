@@ -3,11 +3,6 @@ import { GoogleGenerativeAI } from "@google/generative-ai";
 import { Storage } from "@google-cloud/storage";
 import pg from "pg";
 import crypto from "node:crypto";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const PUBLIC_DIR = path.join(__dirname, "public");
 
 const {
   GEMINI_API_KEY,
@@ -26,7 +21,7 @@ app.use(express.json({ limit: "20mb" }));
 app.use((req, res, next) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET,POST,DELETE,OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "content-type");
+  res.setHeader("Access-Control-Allow-Headers", "content-type,authorization");
   if (req.method === "OPTIONS") return res.sendStatus(204);
   next();
 });
@@ -232,10 +227,9 @@ app.get("/api/records/:id/image", async (req, res) => {
   }
 });
 
-// ─────────────────────────────
-// Static
-// ─────────────────────────────
-app.use(express.static(PUBLIC_DIR));
-app.get("/", (req, res) => res.sendFile(path.join(PUBLIC_DIR, "index.html")));
+// Frontend is served by Firebase Hosting (apps/keihi/web). This service is API-only.
+app.get("/", (req, res) =>
+  res.json({ service: "keihi-api", ui: "served by Firebase Hosting" })
+);
 
 app.listen(PORT, () => console.log(`keihi-api listening on ${PORT}`));
