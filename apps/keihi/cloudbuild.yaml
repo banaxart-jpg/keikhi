@@ -62,10 +62,9 @@ steps:
           --region=${_REGION} \
           --member=${_INVOKER} \
           --role=roles/run.invoker --quiet
-        # Write the Cloud Run URL into the static frontend config.
-        URL=$(gcloud run services describe ${_SERVICE} --region=${_REGION} --format='value(status.url)')
-        echo "window.API_BASE='$URL';" > apps/${_APP}/web/config.js
-        echo "API_BASE = $URL"
+        URL=$$(gcloud run services describe ${_SERVICE} --region=${_REGION} --format='value(status.url)')
+        echo "window.API_BASE='$$URL';" > apps/${_APP}/web/config.js
+        echo "API_BASE = $$URL"
 
   - id: ensure-hosting-site
     name: gcr.io/google.com/cloudsdktool/cloud-sdk
@@ -73,9 +72,9 @@ steps:
     args:
       - -c
       - |
-        TOKEN=$(gcloud auth print-access-token)
+        TOKEN=$$(gcloud auth print-access-token)
         curl -s -X POST \
-          -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+          -H "Authorization: Bearer $$TOKEN" -H "Content-Type: application/json" \
           "https://firebasehosting.googleapis.com/v1beta1/projects/$PROJECT_ID/sites?siteId=${_HOSTING_SITE}" \
           -d '{}' || true
         echo "hosting site ensured: ${_HOSTING_SITE}"
