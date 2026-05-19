@@ -140,6 +140,38 @@ app.delete("/api/sites/:id", async (req, res) => {
 // ─────────────────────────────
 // Receipt scan (Gemini + GCS upload)
 // ─────────────────────────────
+// 503/UNAVAILABLE 等の過渡的エラーで指数バックオフ→別モデルへフォールバック。
+// Gemini Flash は時々スパイクで詰まるので、ユーザーが「Retry」を押す前に
+// サーバ側で吸収する。
+async function callGeminiWithFallback(content) {
+  const fallbackChain = [
+    ...new Set([GEMINI_MODEL, "gemini-2.5-flash-lite", "gemini-flash-latest"]),
+  ];
+  let lastErr;
+  for (const name of fallbackChain) {
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        const m = genAI.getGenerativeModel({ model: name });
+        const r = await m.generateContent(content);
+        return { result: r, modelUsed: name, attempts: attempt };
+      } catch (e) {
+        lastErr = e;
+        const msg = String(e?.message || e);
+        const transient = /\b(503|429|500)\b|UNAVAILABLE|overload|high demand|rate limit/i.test(msg);
+        if (!transient) throw e;
+        if (attempt < 3) {
+          const wait = 500 * 2 ** attempt; // 1s, 2s, 4s
+          console.warn(`[scan] ${name} attempt ${attempt} transient (${wait}ms backoff): ${msg.slice(0, 120)}`);
+          await new Promise((r) => setTimeout(r, wait));
+        } else {
+          console.warn(`[scan] ${name} exhausted, falling back`);
+        }
+      }
+    }
+  }
+  throw lastErr;
+}
+
 app.post("/api/scan", async (req, res) => {
   try {
     if (!genAI) return res.status(503).json({ error: "GEMINI_API_KEY not configured" });
@@ -157,9 +189,8 @@ app.post("/api/scan", async (req, res) => {
     }
 
     const today = new Date().toISOString().slice(0, 10);
-    const model = genAI.getGenerativeModel({ model: GEMINI_MODEL });
     const prompt = `領収書を読み取りJSONのみ返してください。\n{"date":"${today}","store":"","total":0,"category":"材料費 or 接待交際費 or ガソリン代 or 駐車場代 or 工具・備品 or 外注費 or その他","workType":"水道 or 電気 or 木工 or 塗装 or 左官 or 内装 or 外構 or 解体 or 設備 or その他","site":"${sites.join(" or ")}から最も近いものまたは空文字"}`;
-    const result = await model.generateContent([
+    const { result, modelUsed } = await callGeminiWithFallback([
       prompt,
       { inlineData: { data: image, mimeType } },
     ]);
@@ -168,10 +199,16 @@ app.post("/api/scan", async (req, res) => {
     const e = text.lastIndexOf("}");
     if (s < 0 || e <= s) throw new Error("AI response did not contain JSON");
     const parsed = JSON.parse(text.slice(s, e + 1));
-    res.json({ ...parsed, imageUrl });
+    res.json({ ...parsed, imageUrl, modelUsed });
   } catch (err) {
     console.error("scan error", err);
-    res.status(500).json({ error: err.message });
+    const msg = String(err?.message || err);
+    const isTransient = /\b(503|429|500)\b|UNAVAILABLE|overload|high demand/i.test(msg);
+    res.status(isTransient ? 503 : 500).json({
+      error: isTransient
+        ? `Gemini が混雑中です（フォールバックも失敗）。少し待って再実行してください: ${msg.slice(0, 200)}`
+        : msg,
+    });
   }
 });
 
