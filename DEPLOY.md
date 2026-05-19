@@ -10,12 +10,18 @@
 ## 0. 一言まとめ
 
 ```
-Claude が push  →  Cloud Build トリガが発火  →  自動ビルド&デプロイ  →  ユーザーはURLを開くだけ
+Claude が作業ブランチで作業 → main に push → トリガ発火 → 自動ビルド&デプロイ → ユーザーはURLを開くだけ
 ```
 
-トリガ定義は `infra/bootstrap.sh`（208–223行）に既に書かれている。
-`main` と `claude/*` ブランチへの push で自動発火する設定。
-**初回だけ** GitHub リポジトリを Cloud Build に接続する認可が必要（後述・スマホでタップ可）。
+**トリガは作成済み**（手動でコンソール作成。`infra/bootstrap.sh` も同等の定義を持つ）：
+
+| トリガ名 | リージョン | 発火条件 | 実行 |
+|---------|-----------|---------|------|
+| `keihi-api-deploy` | `global`（第1世代 GitHub App） | **`main` への push** で `apps/keihi/**` が変更 | keihi の build+deploy |
+
+ブランチは **`main` のみ**（`^main$`）。Claude は作業ブランチ
+`claude/development-session-*` で作業し、完了したら **`main` に push（fast-forward）して
+リリース**する。ユーザーは GitHub も main も触らない。
 
 ---
 
@@ -117,31 +123,31 @@ Cloud Run は組織ポリシーで `allUsers` 公開不可。だから：
 
 ## 3. 自動デプロイ（Cloud Build トリガ）の仕組み
 
-### 既にコード化されている
+### 作成済みトリガ（`keihi-api-deploy`）
 
-`infra/bootstrap.sh` の per-app ループ内（208–223行）が、各アプリにつき
-トリガ `<service>-deploy` を冪等に作成する：
+GitHub 接続は**第1世代 GitHub App**。第1世代トリガは **`global`** リージョンに作られる
+（`asia-northeast1` 等のリージョン指定だと `INVALID_ARGUMENT` で失敗するので注意）。
+コンソールで作成済み。`infra/bootstrap.sh` も同等の定義を持つ：
 
 ```
 gcloud builds triggers create github \
-  --name="${SERVICE}-deploy" \
+  --name="keihi-api-deploy" \
   --repo-owner="banaxart-jpg" --repo-name="keikhi" \
-  --branch-pattern='^(main|claude/.*)$' \
-  --build-config="apps/${APP}/cloudbuild.yaml" \
-  --included-files="apps/${APP}/**" \
-  --region="asia-northeast1"
+  --branch-pattern='^main$' \
+  --build-config="apps/keihi/cloudbuild.yaml" \
+  --included-files="apps/keihi/**"
+  # --region は付けない（第1世代＝global）
 ```
 
-つまり：
+| トリガ名 | リージョン | 発火条件 | 実行 |
+|---------|-----------|---------|------|
+| `keihi-api-deploy` | `global` | **`main` への push** で `apps/keihi/**` が変更 | keihi の build+deploy |
 
-| トリガ名 | 発火条件 | 実行 |
-|---------|---------|------|
-| `keihi-api-deploy` | `main` または `claude/*` への push で **`apps/keihi/**` が変更** | keihi の build+deploy |
-| `keikhi-admin-deploy` | 同上で **`apps/admin/**` が変更** | admin の Hosting deploy |
-
-- `--included-files` 指定により、関係するアプリのファイルが変わった時だけ発火（無駄ビルドなし）
-- `claude/*` を含むので **Claude が作業ブランチに push しただけで自動デプロイ**される
-- `README.md` などリポジトリ直下の変更ではデプロイは走らない（意図通り）
+- ビルド実行SA = `734350696397-compute@developer.gserviceaccount.com`
+  （bootstrap.sh が必要ロールを付与済み：run.admin / artifactregistry.writer /
+  firebasehosting.admin / firebase.admin / iam.serviceAccountUser ほか）
+- `--included-files` により `apps/keihi/**` が変わった時だけ発火（無駄ビルドなし）
+- ブランチは **`main` のみ**。`README.md` 等リポジトリ直下の変更ではデプロイは走らない
 
 ### 足りない唯一のもの：GitHub↔Cloud Build 初回接続
 
@@ -157,24 +163,26 @@ Cloud Build に**接続済み**である必要がある。未接続だと bootst
 > 3. `banaxart-jpg/keikhi` を選んで承認
 > 4. 完了。以後トリガは自動作成可能になる
 
-接続後、トリガ自体は次回 `bootstrap.sh` 実行時に自動作成される。
-（あるいは接続画面の続きでそのままトリガを画面作成してもよい — どちらもターミナル不要）
+**接続・トリガとも作成済み。** トリガはコンソールで手動作成した
+（`keihi-api-deploy` / global / `^main$` / `apps/keihi/cloudbuild.yaml`）。
 
-### 接続が済めば運用はこうなる
+### 運用フロー（確定版）
 
 ```
-Claude がコード修正 → git push (claude/development-session-XXX)
+1. ユーザーが要望を伝える
+2. Claude が claude/development-session-* で作業 → commit → そのブランチに push
+3. Claude が main を作業ブランチ HEAD に fast-forward → main に push
                           ↓ 自動
-                  Cloud Build トリガ発火
+4. keihi-api-deploy トリガ発火（main への push かつ apps/keihi/** 変更時）
                           ↓ 自動
-              apps/keihi/cloudbuild.yaml 実行
-                          ↓ 自動
-        Cloud Run + Firebase Hosting に反映
+5. apps/keihi/cloudbuild.yaml 実行（Docker→Cloud Run→Hosting）
                           ↓
-   ユーザー：https://keihi-496002.web.app を開くだけ
+6. ユーザー：https://keihi-496002.web.app を開くだけ
 ```
 
-ユーザーがターミナルを開く場面は**ゼロ**になる。
+- main は作業ブランチの祖先なので **fast-forward 可能＝履歴破壊なし・安全**
+- ユーザーが GitHub / main / ターミナルを触る場面は**ゼロ**
+- Claude は「main に push したらリリースされる」と認識して作業すること
 
 ---
 

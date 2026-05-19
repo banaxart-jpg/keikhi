@@ -69,44 +69,78 @@ curl -H "Authorization: Bearer $TOKEN" "https://keihi-api-jmzsz44nvq-an.a.run.ap
 | DB          | Cloud SQL Postgres 15 (`keikhi-db`, 全アプリで共有・DBは別) |
 | Storage     | Cloud Storage (アプリ毎に `<project>-<app>-receipts`) |
 | Registry    | Artifact Registry (`keikhi`)                     |
-| CI/CD       | Cloud Build (`gcloud builds submit` で手動)       |
+| CI/CD       | Cloud Build トリガ（`main` への push で自動デプロイ・設定済み） |
 
 ---
 
-## 🚀 デプロイ
+## 🚀 デプロイ方法（詳細）
 
-### 全アプリ共通
+> 📘 構造の全詳細・図・誤解整理は **[DEPLOY.md](DEPLOY.md)** に集約。ここは要点。
 
-```bash
-gcloud builds submit \
-  --config=apps/<アプリ名>/cloudbuild.yaml \
-  --region=asia-northeast1 \
-  .
+### 仕組み（自動デプロイ・これが通常運用）
+
+Cloud Build トリガ `keihi-api-deploy` が **設定済み**：
+
+| 項目 | 値 |
+|------|----|
+| トリガ名 | `keihi-api-deploy` |
+| リージョン | `global`（第1世代 GitHub App） |
+| 発火条件 | **`main` への push** かつ `apps/keihi/**` の変更 |
+| 実行 | `apps/keihi/cloudbuild.yaml`（Docker→Cloud Run→Firebase Hosting） |
+| ビルドSA | `734350696397-compute@developer.gserviceaccount.com` |
+
+```
+Claude が claude/development-session-* で作業 → commit → そのブランチに push
+        → main を作業ブランチに fast-forward → main に push
+              ↓ 自動（keihi-api-deploy 発火）
+        Cloud Build が apps/keihi/cloudbuild.yaml を実行
+              ↓ 自動
+        Cloud Run (keihi-api) + Firebase Hosting (keihi-496002) に反映
+              ↓
+        ユーザー： https://keihi-496002.web.app を開くだけ
 ```
 
-### keihi (経費)
+**ブランチは `main` のみ**（`^main$`）。Claude は作業完了後 `main` に
+push してリリースする（main は作業ブランチの祖先＝fast-forward・履歴破壊なし）。
+ユーザーが GitHub / main / ターミナルを触る必要はない。
+
+### デプロイ状況の確認（スマホ・ブラウザで可）
+
+ビルド履歴：
+<https://console.cloud.google.com/cloud-build/builds?project=static-epigram-496002-v8>
+
+最新ビルドが緑（成功）になったら反映完了。アプリ：
+<https://keihi-496002.web.app>
+
+### 手動デプロイ（フォールバック・通常は不要）
+
+トリガが壊れた時や緊急時のみ。Cloud Shell で：
 
 ```bash
 gcloud builds submit --config=apps/keihi/cloudbuild.yaml --region=asia-northeast1 .
+gcloud builds list --region=asia-northeast1 --limit=5   # 状況確認
 ```
 
-### admin (ダッシュボード)
-
-ログイン許可するメール指定 (`,` 区切りで複数可):
+admin（Hosting のみ・トリガ未設定なので必要時手動）：
 
 ```bash
-gcloud builds submit \
-  --config=apps/admin/cloudbuild.yaml \
-  --region=asia-northeast1 \
-  --substitutions=_ALLOWED_EMAILS=info@banax.tokyo \
-  .
+gcloud builds submit --config=apps/admin/cloudbuild.yaml --region=asia-northeast1 .
 ```
 
-### ビルド状況確認
+### トリガを作り直す場合（参考）
+
+第1世代 GitHub App 接続。**`--region` は付けない（global）**：
 
 ```bash
-gcloud builds list --region=asia-northeast1 --limit=5
+gcloud builds triggers create github \
+  --name=keihi-api-deploy \
+  --repo-owner=banaxart-jpg --repo-name=keikhi \
+  --branch-pattern='^main$' \
+  --build-config=apps/keihi/cloudbuild.yaml \
+  --included-files='apps/keihi/**'
 ```
+
+`infra/bootstrap.sh`（208行付近）も同じ定義を冪等に再作成する。
 
 ログを覗く：
 ```bash

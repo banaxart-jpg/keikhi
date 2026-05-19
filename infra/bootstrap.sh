@@ -205,21 +205,23 @@ for APP_DIR in "$ROOT_DIR"/apps/*/; do
     done
   fi
 
-  sub "Cloud Build trigger ${SERVICE}-deploy"
-  if gcloud builds triggers describe "${SERVICE}-deploy" --region="$REGION" >/dev/null 2>&1; then
+  # 1st-gen GitHub App triggers live in the global region. Deploy fires on
+  # push to main only (Claude pushes its work branch up to main to release).
+  sub "Cloud Build trigger ${SERVICE}-deploy (global, main only)"
+  if gcloud builds triggers describe "${SERVICE}-deploy" >/dev/null 2>&1; then
     sub "  trigger already exists"
   else
     gcloud builds triggers create github \
       --name="${SERVICE}-deploy" \
       --repo-owner="$GITHUB_OWNER" \
       --repo-name="$GITHUB_REPO" \
-      --branch-pattern='^(main|claude/.*)$' \
+      --branch-pattern='^main$' \
       --build-config="$CLOUDBUILD" \
-      --included-files="apps/${APP}/**" \
-      --region="$REGION" 2>/dev/null || \
+      --included-files="apps/${APP}/**" 2>/dev/null || {
       sub "  ⚠ skipped — connect the GitHub repo to Cloud Build first:"
       sub "    https://console.cloud.google.com/cloud-build/triggers/connect?project=${PROJECT_ID}"
       sub "    then re-run this script."
+    }
   fi
 done
 
