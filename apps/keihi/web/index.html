@@ -106,17 +106,8 @@ function renderGrid() {
 }
 
 // ───────── 共通ログイン（全ミニアプリで共有） ─────────
-// トークンは localStorage に保存。同一オリジンなので各 /<app>/ から再利用される。
-function saveToken(t) {
-  localStorage.setItem("gcp_token", t);
-  localStorage.setItem("gcp_token_at", String(Date.now()));
-}
-function clearToken() {
-  localStorage.removeItem("gcp_token");
-  localStorage.removeItem("gcp_token_at");
-  sessionStorage.removeItem("gcp_token");
-}
-
+// Firebase セッションは browserLocalPersistence で永続化され、同一オリジンの
+// 各 /<app>/ で共有される。API 認証は各アプリ側で getIdToken() を使用。
 const sStatus = (m) => { document.getElementById("signinStatus").textContent = m; };
 const sErr = (m) => { document.getElementById("signinErr").textContent = m; };
 let fbAuth = null;
@@ -127,16 +118,10 @@ let fbAuth = null;
     fbAuth = getAuth(initializeApp(cfg));
     await setPersistence(fbAuth, browserLocalPersistence);
     const provider = new GoogleAuthProvider();
-    provider.addScope("https://www.googleapis.com/auth/cloud-platform");
     provider.setCustomParameters({ prompt: "select_account" });
 
-    try {
-      const rr = await getRedirectResult(fbAuth);
-      if (rr) {
-        const c = GoogleAuthProvider.credentialFromResult(rr);
-        if (c?.accessToken) saveToken(c.accessToken);
-      }
-    } catch (e) { sErr("redirect: " + e.message); }
+    try { await getRedirectResult(fbAuth); }
+    catch (e) { sErr("redirect: " + e.message); }
 
     let entered = false;
     function enterApp(user) {
@@ -152,12 +137,8 @@ let fbAuth = null;
       sErr(""); sStatus("opening popup...");
       try {
         const res = await signInWithPopup(fbAuth, provider);
-        const c = GoogleAuthProvider.credentialFromResult(res);
-        if (c?.accessToken) {
-          saveToken(c.accessToken);
-          sStatus("OK: " + res.user.email);
-          enterApp(res.user);
-        } else { sErr("token が取得できませんでした"); }
+        sStatus("OK: " + res.user.email);
+        enterApp(res.user);
       } catch (e) {
         sStatus("popup失敗: " + (e.code || ""));
         if (["auth/popup-blocked","auth/popup-closed-by-user","auth/cancelled-popup-request","auth/operation-not-supported-in-this-environment"].includes(e.code)) {
@@ -167,15 +148,8 @@ let fbAuth = null;
     });
 
     onAuthStateChanged(fbAuth, (user) => {
-      const token = localStorage.getItem("gcp_token");
-      if (user && token) {
-        enterApp(user);
-      } else if (user && !token) {
-        document.getElementById("signinOverlay").style.display = "flex";
-        sStatus(`${user.email}: 「Sign in with Google」をタップして GCP 認可を`);
-      } else {
-        document.getElementById("signinOverlay").style.display = "flex";
-      }
+      if (user) enterApp(user);
+      else document.getElementById("signinOverlay").style.display = "flex";
     });
   } catch (e) {
     document.getElementById("signinOverlay").style.display = "flex";
@@ -184,7 +158,6 @@ let fbAuth = null;
 })();
 
 window.doSignOut = async () => {
-  clearToken();
   if (fbAuth) await signOut(fbAuth);
   location.reload();
 };

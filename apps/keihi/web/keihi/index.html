@@ -120,7 +120,7 @@ select.nm-field option { background: #e4e6ee; color: #42455e; }
 .empty-text { color: var(--text3); font-size: 14px; font-weight: 700; }
 
 .toast { position: fixed; top: 64px; left: 50%; transform: translateX(-50%); padding: 12px 26px; border-radius: 30px; font-size: 14px; font-weight: 800; z-index: 200; display: none; white-space: nowrap; color: white; font-family: 'Outfit', sans-serif; background: linear-gradient(135deg, #60c88a, #38a86a); box-shadow: 6px 6px 18px rgba(40,140,80,0.35), -3px -3px 10px rgba(180,255,200,0.3); }
-.toast.err { background: linear-gradient(135deg, #d88080, #b04040); }
+.toast.err { background: linear-gradient(135deg, #d88080, #b04040); white-space: pre-wrap; word-break: break-all; border-radius: 16px; max-width: 86vw; font-size: 12px; font-weight: 600; text-align: left; max-height: 60vh; overflow: auto; }
 </style>
 </head>
 <body>
@@ -262,41 +262,29 @@ import {
 } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
 
 // ───────── Config / Auth ─────────
-const API_BASE = (window.API_BASE || "").replace(/\/$/, ""); // Cloud Run URL injected at build
-let accessToken = localStorage.getItem("gcp_token") || sessionStorage.getItem("gcp_token") || null;
-function saveToken(t) {
-  accessToken = t;
-  localStorage.setItem("gcp_token", t);
-  localStorage.setItem("gcp_token_at", String(Date.now()));
-}
-function clearToken() {
-  accessToken = null;
-  localStorage.removeItem("gcp_token");
-  localStorage.removeItem("gcp_token_at");
-  sessionStorage.removeItem("gcp_token");
-}
+// API は Firebase Hosting の rewrite で同一オリジン (/api/**) → Cloud Run。
+// 認証は Firebase ID トークン（getIdToken が自動更新するのでログイン保持される）。
+const API_BASE = (window.API_BASE || "").replace(/\/$/, ""); // "" = same-origin
 
 const sStatus = (m) => { const e = document.getElementById("signinStatus"); if (e) e.textContent = m; };
 const sErr = (m) => { const e = document.getElementById("signinErr"); if (e) e.textContent = m; };
 
 let fbAuth = null;
+async function idToken() {
+  const u = fbAuth?.currentUser;
+  return u ? await u.getIdToken() : null;
+}
+
 (async function initAuth() {
   try {
     const cfg = await fetch("/__/firebase/init.json").then((r) => r.json());
     fbAuth = getAuth(initializeApp(cfg));
     await setPersistence(fbAuth, browserLocalPersistence);
     const provider = new GoogleAuthProvider();
-    provider.addScope("https://www.googleapis.com/auth/cloud-platform");
-    // 同意は初回のみ（毎回 consent を強制しない＝ログイン保持）
     provider.setCustomParameters({ prompt: "select_account" });
 
-    try {
-      const rr = await getRedirectResult(fbAuth);
-      if (rr) {
-        const c = GoogleAuthProvider.credentialFromResult(rr);
-        if (c?.accessToken) saveToken(c.accessToken);
-      }
-    } catch (e) { sErr("redirect: " + e.message); }
+    try { await getRedirectResult(fbAuth); }
+    catch (e) { sErr("redirect: " + e.message); }
 
     let entered = false;
     async function enterApp() {
@@ -311,14 +299,8 @@ let fbAuth = null;
       sErr(""); sStatus("opening popup...");
       try {
         const res = await signInWithPopup(fbAuth, provider);
-        const c = GoogleAuthProvider.credentialFromResult(res);
-        if (c?.accessToken) {
-          saveToken(c.accessToken);
-          sStatus("OK: " + res.user.email);
-          await enterApp();
-        } else {
-          sErr("token が取得できませんでした");
-        }
+        sStatus("OK: " + res.user.email);
+        await enterApp();
       } catch (e) {
         sStatus("popup失敗: " + (e.code || ""));
         if (["auth/popup-blocked","auth/popup-closed-by-user","auth/cancelled-popup-request","auth/operation-not-supported-in-this-environment"].includes(e.code)) {
@@ -328,14 +310,8 @@ let fbAuth = null;
     });
 
     onAuthStateChanged(fbAuth, async (user) => {
-      if (user && accessToken) {
-        await enterApp();
-      } else if (user && !accessToken) {
-        document.getElementById("signinOverlay").style.display = "flex";
-        sStatus(`${user.email}: 「Sign in with Google」をタップして GCP 認可を`);
-      } else {
-        document.getElementById("signinOverlay").style.display = "flex";
-      }
+      if (user) await enterApp();
+      else document.getElementById("signinOverlay").style.display = "flex";
     });
   } catch (e) {
     document.getElementById("signinOverlay").style.display = "flex";
@@ -344,8 +320,8 @@ let fbAuth = null;
 })();
 
 window.doSignOut = async () => {
-  clearToken();
   if (fbAuth) await signOut(fbAuth);
+  location.reload();
 };
 
 // ───────── State ─────────
@@ -376,12 +352,22 @@ function show(id) {
   }
 }
 
+let _toastTimer = null;
 function toast(msg, isErr = false) {
   const t = $("toast");
-  t.textContent = msg;
+  t.textContent = isErr ? msg + "\n\n👆 タップで全文コピー" : msg;
   t.classList.toggle("err", !!isErr);
   t.style.display = "block";
-  setTimeout(() => { t.style.display = "none"; }, 2500);
+  t.style.cursor = isErr ? "pointer" : "default";
+  t.onclick = isErr
+    ? () => navigator.clipboard?.writeText(msg).then(
+        () => { t.textContent = "📋 コピーしました"; },
+        () => {}
+      )
+    : null;
+  clearTimeout(_toastTimer);
+  // エラーは長め(15s)に表示。タップでコピーする時間を確保。
+  _toastTimer = setTimeout(() => { t.style.display = "none"; }, isErr ? 15000 : 2500);
 }
 
 // ───────── API helpers ─────────
@@ -389,7 +375,8 @@ let lastApiDiag = "";
 async function api(method, url, body) {
   const target = API_BASE + url;
   const opts = { method, headers: {} };
-  if (accessToken) opts.headers["Authorization"] = "Bearer " + accessToken;
+  const tok = await idToken();
+  if (tok) opts.headers["Authorization"] = "Bearer " + tok;
   if (body !== undefined) {
     opts.headers["content-type"] = "application/json";
     opts.body = JSON.stringify(body);
@@ -415,10 +402,8 @@ async function api(method, url, body) {
       `実URL = ${target}`,
       `送信量 = ${bodyKB}KB / 経過 = ${ms}ms`,
       `例外 = ${e?.name || "?"}: ${e?.message || e}`,
-      `token = ${accessToken ? "あり(" + accessToken.length + "字)" : "なし"}`,
-      !API_BASE
-        ? "→ 原因濃厚: API_BASE が空。ビルドで config.js が書かれていない。"
-        : "→ 原因候補: Cloud Run のIAM拒否(403)でCORSヘッダ無し / CORS / DNS / 接続不可。",
+      `token = ${tok ? "あり(IDトークン)" : "なし(未ログイン)"}`,
+      "→ 同一オリジン(/api) のはず。失敗時は Hosting rewrite 未反映 / デプロイ中の可能性。",
     ].join("\n");
     lastApiDiag = diag;
     console.error("[api]", diag, e);
@@ -428,7 +413,6 @@ async function api(method, url, body) {
   const ms = Date.now() - t0;
 
   if (r.status === 401) {
-    clearToken();
     document.getElementById("signinOverlay").style.display = "flex";
     sErr("セッション期限切れ。再ログインしてください");
     throw new Error("401 再ログインが必要");

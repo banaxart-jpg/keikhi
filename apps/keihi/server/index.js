@@ -1,6 +1,7 @@
 import express from "express";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import { Storage } from "@google-cloud/storage";
+import admin from "firebase-admin";
 import pg from "pg";
 import crypto from "node:crypto";
 
@@ -12,18 +13,41 @@ const {
   DB_PASSWORD,
   DB_NAME,
   DB_INSTANCE_CONNECTION_NAME,
+  FIREBASE_PROJECT_ID,
+  ALLOWED_EMAILS = "",
   PORT = 8080,
 } = process.env;
+
+admin.initializeApp({ projectId: FIREBASE_PROJECT_ID || undefined });
+const allowList = ALLOWED_EMAILS.split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);
 
 const app = express();
 app.use(express.json({ limit: "20mb" }));
 
 app.use((req, res, next) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Methods", "GET,POST,DELETE,OPTIONS");
+  res.setHeader("Access-Control-Allow-Methods", "GET,POST,PUT,DELETE,OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "content-type,authorization");
   if (req.method === "OPTIONS") return res.sendStatus(204);
   next();
+});
+
+// Gate /api/* with a Firebase ID token. The browser calls this service
+// same-origin via Firebase Hosting rewrite, so no CORS/OAuth token is
+// involved — auth is a verified Firebase ID token instead.
+app.use("/api", async (req, res, next) => {
+  try {
+    const m = /^Bearer (.+)$/.exec(req.headers.authorization || "");
+    if (!m) return res.status(401).json({ error: "ログインが必要です (no token)" });
+    const decoded = await admin.auth().verifyIdToken(m[1]);
+    if (allowList.length && !allowList.includes((decoded.email || "").toLowerCase())) {
+      return res.status(403).json({ error: `権限がありません (${decoded.email || "?"})` });
+    }
+    req.user = decoded;
+    next();
+  } catch (e) {
+    res.status(401).json({ error: "認証に失敗しました: " + (e.code || e.message) });
+  }
 });
 
 const genAI = GEMINI_API_KEY ? new GoogleGenerativeAI(GEMINI_API_KEY) : null;
