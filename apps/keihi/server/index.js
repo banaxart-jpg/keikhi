@@ -13,8 +13,12 @@ const {
   DB_PASSWORD,
   DB_NAME,
   DB_INSTANCE_CONNECTION_NAME,
+  DB_HOST,
+  DB_PORT = 5432,
   FIREBASE_PROJECT_ID,
   ALLOWED_EMAILS = "",
+  DEV,
+  FIREBASE_INIT_JSON,
   PORT = 8080,
 } = process.env;
 
@@ -56,6 +60,15 @@ const storage = RECEIPTS_BUCKET ? new Storage() : null;
 let pool = null;
 function getPool() {
   if (pool) return pool;
+  // Local/dev: TCP via cloud-sql-proxy (DB_HOST=127.0.0.1).
+  // Prod: Cloud Run unix socket /cloudsql/<instance>.
+  if (DB_HOST) {
+    pool = new pg.Pool({
+      user: DB_USER, password: DB_PASSWORD, database: DB_NAME,
+      host: DB_HOST, port: Number(DB_PORT), max: 5,
+    });
+    return pool;
+  }
   if (!DB_INSTANCE_CONNECTION_NAME) return null;
   pool = new pg.Pool({
     user: DB_USER,
@@ -251,9 +264,31 @@ app.get("/api/records/:id/image", async (req, res) => {
   }
 });
 
-// Frontend is served by Firebase Hosting (apps/keihi/web). This service is API-only.
-app.get("/", (req, res) =>
-  res.json({ service: "keihi-api", ui: "served by Firebase Hosting" })
-);
+if (DEV) {
+  // Cloud Shell 即プレビュー用：本番(Firebase Hosting)と同じ構成を1プロセスで再現。
+  //  - /api/**         → 上で定義済み（本番の Hosting rewrite と同一オリジン）
+  //  - /__/firebase/init.json → 本番Hostingが配る Firebase 設定をローカルでも提供
+  //  - それ以外        → apps/keihi/web 配下の静的ファイル（ランチャー & 各ミニアプリ）
+  const { readFileSync } = await import("node:fs");
+  const path = await import("node:path");
+  const { fileURLToPath } = await import("node:url");
+  const webDir = path.resolve(
+    path.dirname(fileURLToPath(import.meta.url)), "../web"
+  );
+  app.get("/__/firebase/init.json", (req, res) => {
+    try {
+      res.type("application/json").send(readFileSync(FIREBASE_INIT_JSON, "utf8"));
+    } catch (e) {
+      res.status(500).json({ error: "FIREBASE_INIT_JSON 未設定: " + e.message });
+    }
+  });
+  app.use(express.static(webDir, { extensions: ["html"] }));
+  console.log(`[DEV] serving frontend from ${webDir}`);
+} else {
+  // 本番: フロントは Firebase Hosting が配信。本サービスは API 専用。
+  app.get("/", (req, res) =>
+    res.json({ service: "keihi-api", ui: "served by Firebase Hosting" })
+  );
+}
 
-app.listen(PORT, () => console.log(`keihi-api listening on ${PORT}`));
+app.listen(PORT, () => console.log(`keihi-api listening on ${PORT} (DEV=${!!DEV})`));
