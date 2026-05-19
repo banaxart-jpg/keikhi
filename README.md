@@ -24,6 +24,45 @@
 
 ---
 
+## 📁 ミニアプリ構造（ランチャー方式）
+
+`https://keihi-496002.web.app` を **アプリランチャー（トップ＝アプリ選択画面）** とし、
+ミニアプリをその下に **1アプリ1ディレクトリ** で量産していく。
+
+```
+apps/keihi/web/                ← Hosting 公開ルート（site: keihi-496002）
+├── index.html                 ← ランチャー（トップ。アプリ選択 + 共通Googleログイン）
+├── config.js                  ← Cloud Run URL（ビルド時に自動注入・/config.js で共有）
+├── keihi/
+│   └── index.html             ← 経費アプリ        → /keihi/
+└── <新アプリID>/
+    └── index.html             ← 新ミニアプリ      → /<新アプリID>/
+```
+
+| URL | 中身 |
+|-----|------|
+| `keihi-496002.web.app/` | ランチャー（アプリ選択画面） |
+| `keihi-496002.web.app/keihi/` | 経費アプリ（領収書AI読取・Cloud Run `keihi-api` 連携） |
+| `keihi-496002.web.app/<id>/` | 今後追加するミニアプリ |
+
+### 新しいミニアプリの追加手順
+
+1. `apps/keihi/web/<id>/index.html` を作る（**1アプリ＝1ディレクトリ**）
+2. ランチャー `apps/keihi/web/index.html` の `APPS` 配列に1行追加
+   （`{ id, name, icon, desc, path:"/<id>/" }`。`soon:true` で「準備中」表示）
+3. main に push → 自動デプロイ → `keihi-496002.web.app/<id>/` で公開
+
+### ルール
+
+- **共通ログイン**：ランチャーで1回 Google ログイン → トークンは `localStorage`
+  に保存され、同一オリジンの全ミニアプリで共有（各アプリは再ログイン不要）
+- **バックエンドが要るアプリ**：必要なら専用 Cloud Run サービスを持てる
+  （経費は `keihi-api`）。要らないアプリは静的のみでOK
+- Hosting 公開ルートは現状 `apps/keihi/web/`（既存URL流用のため）。
+  ディレクトリ名 `keihi` は歴史的経緯。新アプリは必ず自分の `<id>/` 配下に置く
+
+---
+
 ## 🌐 本番 URL
 
 | アプリ | URL | アクセス方法 |

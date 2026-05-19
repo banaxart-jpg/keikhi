@@ -1,0 +1,940 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="経費">
+<title>経費</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+:root {
+  --bg: #e4e6ee; --bg2: #d8dae4; --bg3: #ededf3;
+  --sl: rgba(255,255,255,1); --sd: rgba(168,172,192,0.75); --sd2: rgba(148,152,176,0.55);
+  --text: #42455e; --text2: rgba(66,69,94,0.42); --text3: rgba(66,69,94,0.22);
+  --bulb: #ffb940; --bulb2: #ff9a10;
+  --bulb-glow: rgba(255,170,40,0.55); --bulb-glow2: rgba(255,140,20,0.25); --bulb-glow3: rgba(255,200,80,0.12);
+}
+body { font-family: 'Outfit', -apple-system, sans-serif; font-weight: 400; background: var(--bg); color: var(--text); min-height: 100vh; overflow-x: hidden; }
+
+#buyerScreen { position: fixed; inset: 0; display: none; flex-direction: column; align-items: center; justify-content: center; background: var(--bg); gap: 28px; padding: 24px; }
+.top-bar { position: absolute; top: 0; left: 0; right: 0; display: flex; justify-content: space-between; align-items: center; padding: 54px 20px 0; }
+.pill-btn { padding: 9px 18px; border-radius: 30px; font-size: 12px; font-weight: 700; cursor: pointer; border: none; color: var(--text2); font-family: 'Outfit', sans-serif; background: var(--bg); box-shadow: 5px 5px 12px var(--sd), -5px -5px 12px var(--sl), 2px 2px 4px var(--sd2); transition: all 0.12s; }
+.pill-btn:active { box-shadow: inset 3px 3px 8px var(--sd), inset -3px -3px 8px var(--sl); transform: scale(0.96); }
+.hint-text { font-size: 11px; letter-spacing: 0.24em; color: var(--text3); text-transform: uppercase; font-weight: 700; }
+.buyers-row { display: flex; flex-direction: row; gap: 16px; width: 100%; max-width: 300px; }
+.buyer-btn { flex: 1; padding: 22px 0; border-radius: 20px; font-size: 22px; font-weight: 600; color: var(--text); letter-spacing: 0.5px; border: none; cursor: pointer; font-family: 'Outfit', sans-serif; background: var(--bg); position: relative; overflow: hidden; box-shadow: 10px 10px 24px var(--sd), -8px -8px 20px var(--sl), 4px 4px 8px var(--sd2), -2px -2px 6px rgba(255,255,255,0.7); transition: box-shadow 0.2s, transform 0.15s, color 0.25s; }
+.buyer-btn::before { content: ""; position: absolute; top: 0; left: 8%; right: 8%; height: 44%; background: linear-gradient(180deg, rgba(255,255,255,0.55) 0%, rgba(255,255,255,0) 100%); border-radius: 30px 30px 50% 50%; pointer-events: none; }
+.buyer-btn.pressed { box-shadow: inset 7px 7px 18px var(--sd), inset -5px -5px 14px var(--sl), inset 2px 2px 6px var(--sd2); transform: scale(0.96); color: var(--bulb2); text-shadow: 0 0 16px var(--bulb-glow), 0 0 32px var(--bulb-glow2); }
+
+#scanScreen { position: fixed; inset: 0; display: none; flex-direction: column; align-items: center; justify-content: center; background: var(--bg); gap: 28px; }
+#previewImg { width: 185px; height: 248px; object-fit: cover; border-radius: 26px; box-shadow: 10px 10px 28px var(--sd), -6px -6px 18px var(--sl), 4px 4px 10px var(--sd2); }
+.scan-pill { display: flex; align-items: center; gap: 12px; padding: 14px 28px; border-radius: 40px; background: var(--bg); box-shadow: 6px 6px 16px var(--sd), -6px -6px 16px var(--sl), 2px 2px 5px var(--sd2); }
+.spinner { width: 18px; height: 18px; border-radius: 50%; border: 2.5px solid rgba(255,170,40,0.2); border-top-color: var(--bulb); animation: spin 0.75s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.scan-label { font-size: 13px; color: var(--text2); font-weight: 700; }
+
+#confirmScreen { position: fixed; inset: 0; z-index: 40; display: none; flex-direction: column; justify-content: flex-end; background: rgba(180,184,205,0.35); }
+.sheet { background: var(--bg); border-radius: 38px 38px 0 0; box-shadow: -2px -10px 35px rgba(148,152,176,0.35), 0 -2px 8px rgba(148,152,176,0.15); max-height: 92vh; overflow-y: auto; padding: 14px 18px 54px; }
+.handle { width: 46px; height: 5px; border-radius: 3px; background: rgba(100,104,130,0.16); margin: 0 auto 20px; }
+.sheet-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
+.sheet-title { font-size: 20px; font-weight: 700; letter-spacing: -0.4px; }
+.retake-btn { font-size: 12px; font-weight: 800; padding: 8px 16px; border-radius: 20px; cursor: pointer; border: none; color: var(--bulb2); font-family: 'Outfit', sans-serif; background: var(--bg); box-shadow: 4px 4px 10px var(--sd), -4px -4px 10px var(--sl), 2px 2px 4px var(--sd2); transition: all 0.12s; }
+.retake-btn:active { box-shadow: inset 2px 2px 6px var(--sd), inset -2px -2px 6px var(--sl); }
+
+.preview-row { display: flex; gap: 14px; margin-bottom: 16px; }
+#confirmImg { width: 74px; height: 102px; object-fit: cover; border-radius: 20px; flex-shrink: 0; box-shadow: 6px 6px 16px var(--sd), -4px -4px 12px var(--sl), 2px 2px 6px var(--sd2); }
+.preview-info { flex: 1; border-radius: 20px; padding: 13px; background: var(--bg2); box-shadow: inset 4px 4px 10px var(--sd), inset -4px -4px 10px var(--sl); }
+.preview-amount { font-size: 32px; font-weight: 900; letter-spacing: -1.5px; }
+.preview-store { font-size: 13px; color: var(--text2); margin-top: 2px; font-weight: 600; }
+.ai-tags { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 9px; }
+.tag { font-size: 11px; padding: 4px 11px; border-radius: 10px; font-weight: 800; color: var(--bulb2); background: var(--bg); box-shadow: 3px 3px 7px var(--sd), -3px -3px 7px var(--sl); text-shadow: 0 0 8px var(--bulb-glow2); }
+.tag.green { color: #3aaa7a; text-shadow: none; }
+
+.card { border-radius: 24px; padding: 16px; margin-bottom: 12px; background: var(--bg); box-shadow: 7px 7px 18px var(--sd), -7px -7px 18px var(--sl), 3px 3px 7px var(--sd2), -2px -2px 5px rgba(255,255,255,0.6); position: relative; }
+.card::before { content: ""; position: absolute; top: 0; left: 5%; right: 5%; height: 2px; background: linear-gradient(90deg, transparent, rgba(255,255,255,0.8), transparent); border-radius: 2px; pointer-events: none; }
+.card-title { font-size: 10px; font-weight: 800; letter-spacing: 0.16em; text-transform: uppercase; color: var(--text3); margin-bottom: 14px; }
+.field { margin-bottom: 12px; }
+.field:last-child { margin-bottom: 0; }
+.field label { font-size: 11px; color: var(--text2); display: block; margin-bottom: 6px; font-weight: 700; }
+.nm-field { width: 100%; padding: 12px 14px; font-size: 15px; color: var(--text); outline: none; border: none; border-radius: 14px; font-family: 'Outfit', sans-serif; font-weight: 600; background: var(--bg2); box-shadow: inset 4px 4px 10px var(--sd), inset -4px -4px 10px var(--sl), inset 1px 1px 3px var(--sd2); -webkit-appearance: none; appearance: none; }
+.nm-field::placeholder { color: var(--text3); }
+textarea.nm-field { resize: vertical; min-height: 60px; font-family: 'Outfit', sans-serif; }
+select.nm-field { background: var(--bg2) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1l5 5 5-5' stroke='rgba(66,69,94,0.3)' stroke-width='2' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") no-repeat right 14px center; padding-right: 36px; }
+select.nm-field option { background: #e4e6ee; color: #42455e; }
+
+.site-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.site-btn { padding: 15px 6px; border-radius: 18px; font-size: 13px; font-weight: 600; color: var(--text2); cursor: pointer; border: none; text-align: center; font-family: 'Outfit', sans-serif; background: var(--bg); position: relative; overflow: hidden; box-shadow: 6px 6px 15px var(--sd), -6px -6px 15px var(--sl), 3px 3px 6px var(--sd2); transition: box-shadow 0.18s, transform 0.14s, color 0.22s; white-space: nowrap; text-overflow: ellipsis; }
+.site-btn.selected { box-shadow: inset 5px 5px 13px var(--sd), inset -5px -5px 13px var(--sl), inset 2px 2px 5px var(--sd2); transform: scale(0.975); color: var(--bulb2); text-shadow: 0 0 10px var(--bulb-glow), 0 0 22px var(--bulb-glow2); }
+.site-add-btn { padding: 15px 6px; border-radius: 18px; font-size: 13px; font-weight: 800; color: var(--bulb2); cursor: pointer; background: var(--bg); border: none; font-family: 'Outfit', sans-serif; box-shadow: 6px 6px 15px var(--sd), -6px -6px 15px var(--sl), 3px 3px 6px var(--sd2); text-shadow: 0 0 8px var(--bulb-glow2); transition: all 0.12s; }
+.site-add-btn:active { box-shadow: inset 3px 3px 8px var(--sd), inset -3px -3px 8px var(--sl); transform: scale(0.97); }
+
+.pay-row { display: flex; gap: 10px; }
+.pay-btn { flex: 1; padding: 13px 0; border-radius: 15px; font-size: 14px; font-weight: 600; cursor: pointer; border: none; color: var(--text2); font-family: 'Outfit', sans-serif; background: var(--bg); box-shadow: 5px 5px 13px var(--sd), -5px -5px 13px var(--sl), 2px 2px 5px var(--sd2); transition: all 0.18s; }
+.pay-btn.active { box-shadow: inset 4px 4px 11px var(--sd), inset -4px -4px 11px var(--sl), inset 2px 2px 4px var(--sd2); color: var(--bulb2); text-shadow: 0 0 12px var(--bulb-glow), 0 0 24px var(--bulb-glow2); }
+
+.submit-btn { width: 100%; padding: 18px; margin-top: 14px; border: none; border-radius: 24px; cursor: pointer; font-size: 17px; font-weight: 900; color: white; letter-spacing: 0.3px; font-family: 'Outfit', sans-serif; background: linear-gradient(145deg, #ffb940, #e08800); box-shadow: 8px 8px 22px rgba(190,120,0,0.45), -4px -4px 14px rgba(255,230,140,0.55), 0 0 30px rgba(255,160,20,0.2), inset 0 1px 0 rgba(255,240,180,0.35); transition: all 0.15s; position: relative; overflow: hidden; }
+.submit-btn:active { transform: scale(0.97); }
+.submit-btn:disabled { opacity: 0.5; cursor: wait; }
+
+.err-box { border-radius: 16px; padding: 12px 15px; font-size: 11px; color: #b04040; margin-bottom: 12px; line-height: 1.5; display: none; font-weight: 600; background: var(--bg); box-shadow: inset 4px 4px 10px rgba(180,140,140,0.4), inset -4px -4px 10px rgba(255,255,255,0.85); white-space: pre-wrap; word-break: break-all; max-height: 240px; overflow: auto; font-family: ui-monospace, Menlo, monospace; }
+.err-copy { margin-top: 8px; font-size: 11px; font-weight: 700; color: #b04040; text-decoration: underline; cursor: pointer; }
+
+#listScreen { position: fixed; inset: 0; display: none; flex-direction: column; overflow-y: auto; background: var(--bg); }
+.list-header { display: flex; align-items: center; justify-content: space-between; padding: 56px 20px 18px; position: sticky; top: 0; background: var(--bg); box-shadow: 0 6px 20px rgba(148,152,176,0.18); z-index: 5; }
+.back-btn, .csv-btn { font-size: 15px; font-weight: 800; color: var(--bulb2); background: none; border: none; cursor: pointer; font-family: 'Outfit', sans-serif; text-shadow: 0 0 8px var(--bulb-glow2); }
+.csv-btn { font-size: 12px; color: var(--text2); text-shadow: none; }
+.list-title { font-size: 20px; font-weight: 700; letter-spacing: -0.4px; }
+.list-body { padding: 16px 16px 120px; }
+
+.summary-card { border-radius: 28px; padding: 24px; margin-bottom: 18px; background: var(--bg); position: relative; overflow: hidden; box-shadow: 9px 9px 24px var(--sd), -9px -9px 24px var(--sl), 4px 4px 10px var(--sd2), -2px -2px 6px rgba(255,255,255,0.65); }
+.summary-glow { position: absolute; top: -30px; right: -30px; width: 130px; height: 130px; border-radius: 50%; background: radial-gradient(circle, rgba(255,185,50,0.18), transparent 70%); pointer-events: none; }
+.summary-label { font-size: 12px; color: var(--text2); margin-bottom: 4px; font-weight: 700; }
+.summary-amount { font-size: 40px; font-weight: 900; letter-spacing: -2px; }
+.summary-count { font-size: 12px; color: var(--text3); margin-top: 3px; font-weight: 600; }
+
+.filter-select { width: 100%; padding: 12px 36px 12px 14px; border-radius: 18px; font-size: 13px; font-weight: 700; color: var(--text); outline: none; margin-bottom: 14px; -webkit-appearance: none; appearance: none; cursor: pointer; border: none; font-family: 'Outfit', sans-serif; background: var(--bg2) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1l5 5 5-5' stroke='rgba(66,69,94,0.3)' stroke-width='2' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") no-repeat right 14px center; box-shadow: inset 4px 4px 10px var(--sd), inset -4px -4px 10px var(--sl); }
+
+.sites-manage-card { border-radius: 24px; margin-bottom: 14px; overflow: hidden; background: var(--bg); box-shadow: 6px 6px 16px var(--sd), -6px -6px 16px var(--sl), 3px 3px 6px var(--sd2); }
+.sites-toggle { width: 100%; padding: 15px 18px; display: flex; justify-content: space-between; align-items: center; background: none; border: none; cursor: pointer; font-size: 10px; font-weight: 800; letter-spacing: 0.16em; text-transform: uppercase; color: var(--text3); font-family: 'Outfit', sans-serif; }
+.site-manage-row { display: flex; align-items: center; justify-content: space-between; padding: 13px 18px; border-top: 1px solid rgba(148,152,176,0.1); }
+.site-manage-name { font-size: 14px; font-weight: 700; }
+.site-del-btn { font-size: 11px; font-weight: 800; color: #b04040; cursor: pointer; border: none; background: var(--bg); border-radius: 12px; padding: 6px 13px; font-family: 'Outfit', sans-serif; box-shadow: 3px 3px 8px var(--sd), -3px -3px 8px var(--sl), 1px 1px 3px var(--sd2); transition: all 0.12s; }
+
+.record-card { border-radius: 24px; padding: 16px 18px; margin-bottom: 10px; display: flex; align-items: flex-start; justify-content: space-between; background: var(--bg); box-shadow: 6px 6px 16px var(--sd), -6px -6px 16px var(--sl), 3px 3px 7px var(--sd2), -1px -1px 4px rgba(255,255,255,0.6); position: relative; }
+.record-info { flex: 1; min-width: 0; }
+.record-date { font-size: 11px; color: var(--text3); margin-bottom: 3px; font-weight: 700; }
+.record-amount { font-size: 26px; font-weight: 700; letter-spacing: -1px; }
+.record-store { font-size: 13px; color: var(--text2); margin-top: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: 600; }
+.record-tags { display: flex; gap: 5px; margin-top: 7px; flex-wrap: wrap; }
+.record-tag { font-size: 10px; padding: 3px 10px; border-radius: 9px; font-weight: 800; color: var(--bulb2); background: var(--bg); box-shadow: 2px 2px 5px var(--sd), -2px -2px 5px var(--sl); text-shadow: 0 0 6px var(--bulb-glow2); }
+.record-meta { font-size: 11px; color: var(--text3); margin-top: 6px; font-weight: 600; }
+.del-btn { font-size: 18px; color: rgba(148,152,176,0.4); background: none; border: none; cursor: pointer; padding: 0 0 0 14px; }
+.list-add-btn { position: fixed; bottom: 0; left: 0; right: 0; padding: 14px 20px 36px; background: linear-gradient(to top, var(--bg) 55%, transparent); }
+.empty { text-align: center; padding: 80px 0; }
+.empty-icon { font-size: 52px; opacity: 0.12; margin-bottom: 12px; }
+.empty-text { color: var(--text3); font-size: 14px; font-weight: 700; }
+
+.toast { position: fixed; top: 64px; left: 50%; transform: translateX(-50%); padding: 12px 26px; border-radius: 30px; font-size: 14px; font-weight: 800; z-index: 200; display: none; white-space: nowrap; color: white; font-family: 'Outfit', sans-serif; background: linear-gradient(135deg, #60c88a, #38a86a); box-shadow: 6px 6px 18px rgba(40,140,80,0.35), -3px -3px 10px rgba(180,255,200,0.3); }
+.toast.err { background: linear-gradient(135deg, #d88080, #b04040); }
+</style>
+</head>
+<body>
+
+<div class="toast" id="toast">✅ 登録しました！</div>
+
+<div id="signinOverlay" style="display:none;position:fixed;inset:0;z-index:400;background:var(--bg);flex-direction:column;align-items:center;justify-content:center;padding:32px;text-align:center;gap:18px;">
+  <div style="font-size:24px;font-weight:800;">経費</div>
+  <div id="signinSub" style="font-size:13px;color:var(--text2);line-height:1.7;">Google アカウントでログイン</div>
+  <button class="submit-btn" id="signinBtn" type="button" style="max-width:280px;">Sign in with Google</button>
+  <div id="signinStatus" style="font-size:11px;color:var(--text3);font-family:monospace;min-height:14px;"></div>
+  <div id="signinErr" style="font-size:12px;color:#b04040;word-break:break-word;max-width:320px;"></div>
+</div>
+
+<div id="imgOverlay" style="display:none;position:fixed;inset:0;z-index:300;background:rgba(20,22,32,0.92);align-items:center;justify-content:center;flex-direction:column;gap:16px;padding:24px;">
+  <img id="imgOverlayImg" src="" alt="" style="max-width:100%;max-height:80vh;border-radius:14px;object-fit:contain;">
+  <button class="pill-btn" id="imgOverlayClose" type="button">閉じる</button>
+</div>
+
+<!-- 名前選択 -->
+<div id="buyerScreen">
+  <div class="top-bar">
+    <span></span>
+    <button class="pill-btn" id="recordBtn" type="button">記録 <span id="recordCount">0</span>件 →</button>
+  </div>
+  <p class="hint-text">Tap to launch camera</p>
+  <div class="buyers-row">
+    <button class="buyer-btn" data-buyer="小西" type="button">小西</button>
+    <button class="buyer-btn" data-buyer="名取" type="button">名取</button>
+  </div>
+  <input type="file" id="fileInput" accept="image/*" capture="environment" style="display:none">
+</div>
+
+<!-- スキャン中 -->
+<div id="scanScreen">
+  <img id="previewImg" src="" alt="">
+  <div class="scan-pill">
+    <div class="spinner"></div>
+    <span class="scan-label">読み取り中…</span>
+  </div>
+</div>
+
+<!-- 確認フォーム -->
+<div id="confirmScreen">
+  <div class="sheet">
+    <div class="handle"></div>
+    <div class="sheet-header">
+      <span class="sheet-title" id="sheetTitle">内容を確認</span>
+      <button class="retake-btn" id="retakeBtn" type="button">📷 撮り直す</button>
+    </div>
+    <div id="errBox" class="err-box"></div>
+    <div class="preview-row">
+      <img id="confirmImg" src="" alt="">
+      <div class="preview-info">
+        <div class="preview-amount">¥<span id="previewAmount">0</span></div>
+        <div class="preview-store" id="previewStore">店舗名</div>
+        <div class="ai-tags" id="previewTags"></div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-title">基本情報</div>
+      <div class="field"><label>購入日</label><input type="date" id="fDate" class="nm-field"></div>
+      <div class="field"><label>金額（円）</label><input type="number" id="fTotal" class="nm-field" placeholder="0"></div>
+      <div class="field"><label>店舗名</label><input type="text" id="fStore" class="nm-field" placeholder="例：コメリ"></div>
+    </div>
+    <div class="card">
+      <div class="card-title">現場</div>
+      <div class="site-grid" id="siteGrid"></div>
+      <div id="newSiteField" style="display:none;margin-top:10px;">
+        <input type="text" id="fNewSite" class="nm-field" placeholder="新しい現場名を入力">
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-title">分類</div>
+      <div class="field"><label>費目</label>
+        <select id="fCat" class="nm-field">
+          <option>材料費</option><option>接待交際費</option><option>ガソリン代</option>
+          <option>駐車場代</option><option>工具・備品</option><option>外注費</option><option>その他</option>
+        </select>
+      </div>
+      <div class="field"><label>工種</label>
+        <select id="fWork" class="nm-field">
+          <option>水道</option><option>電気</option><option>木工</option><option>塗装</option>
+          <option>左官</option><option>内装</option><option>外構</option><option>解体</option><option>設備</option><option>その他</option>
+        </select>
+      </div>
+      <div class="field"><label>支払方法</label>
+        <div class="pay-row">
+          <button class="pay-btn active" data-pay="現金" type="button">現金</button>
+          <button class="pay-btn" data-pay="カード" type="button">カード</button>
+          <button class="pay-btn" data-pay="振込" type="button">振込</button>
+        </div>
+      </div>
+      <div class="field"><label>メモ</label>
+        <textarea id="fMemo" class="nm-field" placeholder="（任意）" rows="2"></textarea>
+      </div>
+    </div>
+    <button class="submit-btn" id="submitBtn" type="button">登録する</button>
+  </div>
+</div>
+
+<!-- 記録一覧 -->
+<div id="listScreen">
+  <div class="list-header">
+    <button class="back-btn" id="backBtn" type="button">← 戻る</button>
+    <span class="list-title">経費記録</span>
+    <button class="csv-btn" id="csvBtn" type="button">CSV</button>
+  </div>
+  <div class="list-body">
+    <div class="summary-card">
+      <div class="summary-glow"></div>
+      <div class="summary-label" id="summaryLabel">全現場 合計</div>
+      <div class="summary-amount">¥<span id="summaryTotal">0</span></div>
+      <div class="summary-count" id="summaryCount">0件</div>
+    </div>
+    <select class="filter-select" id="filterSite"><option value="all">全現場</option></select>
+    <select class="filter-select" id="filterMonth"><option value="all">全期間</option></select>
+    <div class="sites-manage-card">
+      <button class="sites-toggle" id="sitesToggleBtn" type="button">
+        <span>現場を管理・削除</span><span id="sitesArrow">▼</span>
+      </button>
+      <div id="sitesList" style="display:none"></div>
+    </div>
+    <div id="recordList"></div>
+  </div>
+  <div class="list-add-btn">
+    <button class="submit-btn" id="listAddBtn" type="button">＋ 領収書を追加</button>
+  </div>
+</div>
+
+<script src="/config.js"></script>
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js";
+import {
+  getAuth, GoogleAuthProvider,
+  signInWithPopup, signInWithRedirect, getRedirectResult,
+  setPersistence, browserLocalPersistence,
+  onAuthStateChanged, signOut,
+} from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
+
+// ───────── Config / Auth ─────────
+const API_BASE = (window.API_BASE || "").replace(/\/$/, ""); // Cloud Run URL injected at build
+let accessToken = localStorage.getItem("gcp_token") || sessionStorage.getItem("gcp_token") || null;
+function saveToken(t) {
+  accessToken = t;
+  localStorage.setItem("gcp_token", t);
+  localStorage.setItem("gcp_token_at", String(Date.now()));
+}
+function clearToken() {
+  accessToken = null;
+  localStorage.removeItem("gcp_token");
+  localStorage.removeItem("gcp_token_at");
+  sessionStorage.removeItem("gcp_token");
+}
+
+const sStatus = (m) => { const e = document.getElementById("signinStatus"); if (e) e.textContent = m; };
+const sErr = (m) => { const e = document.getElementById("signinErr"); if (e) e.textContent = m; };
+
+let fbAuth = null;
+(async function initAuth() {
+  try {
+    const cfg = await fetch("/__/firebase/init.json").then((r) => r.json());
+    fbAuth = getAuth(initializeApp(cfg));
+    await setPersistence(fbAuth, browserLocalPersistence);
+    const provider = new GoogleAuthProvider();
+    provider.addScope("https://www.googleapis.com/auth/cloud-platform");
+    // 同意は初回のみ（毎回 consent を強制しない＝ログイン保持）
+    provider.setCustomParameters({ prompt: "select_account" });
+
+    try {
+      const rr = await getRedirectResult(fbAuth);
+      if (rr) {
+        const c = GoogleAuthProvider.credentialFromResult(rr);
+        if (c?.accessToken) saveToken(c.accessToken);
+      }
+    } catch (e) { sErr("redirect: " + e.message); }
+
+    let entered = false;
+    async function enterApp() {
+      if (entered) return;
+      entered = true;
+      document.getElementById("signinOverlay").style.display = "none";
+      try { await loadData(); } catch {}
+      showBuyer();
+    }
+
+    document.getElementById("signinBtn").addEventListener("click", async () => {
+      sErr(""); sStatus("opening popup...");
+      try {
+        const res = await signInWithPopup(fbAuth, provider);
+        const c = GoogleAuthProvider.credentialFromResult(res);
+        if (c?.accessToken) {
+          saveToken(c.accessToken);
+          sStatus("OK: " + res.user.email);
+          await enterApp();
+        } else {
+          sErr("token が取得できませんでした");
+        }
+      } catch (e) {
+        sStatus("popup失敗: " + (e.code || ""));
+        if (["auth/popup-blocked","auth/popup-closed-by-user","auth/cancelled-popup-request","auth/operation-not-supported-in-this-environment"].includes(e.code)) {
+          try { await signInWithRedirect(fbAuth, provider); } catch (e2) { sErr(e2.message); }
+        } else { sErr((e.code || "") + " " + e.message); }
+      }
+    });
+
+    onAuthStateChanged(fbAuth, async (user) => {
+      if (user && accessToken) {
+        await enterApp();
+      } else if (user && !accessToken) {
+        document.getElementById("signinOverlay").style.display = "flex";
+        sStatus(`${user.email}: 「Sign in with Google」をタップして GCP 認可を`);
+      } else {
+        document.getElementById("signinOverlay").style.display = "flex";
+      }
+    });
+  } catch (e) {
+    document.getElementById("signinOverlay").style.display = "flex";
+    sErr("init失敗: " + e.message);
+  }
+})();
+
+window.doSignOut = async () => {
+  clearToken();
+  if (fbAuth) await signOut(fbAuth);
+};
+
+// ───────── State ─────────
+let records = [];
+let sites = []; // [{id, name}]
+let buyer = localStorage.getItem("buyer") || "";
+let payment = "現金";
+let selectedSite = "";
+let currentImgUrl = "";
+let scanResult = null;
+let sitesOpen = false;
+let editingId = null; // record id when editing an existing record (null = new)
+
+const $ = (id) => document.getElementById(id);
+
+// ───────── HTML escape (XSS-safe rendering) ─────────
+function esc(s) {
+  return String(s ?? "").replace(/[&<>"']/g, (c) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+  }[c]));
+}
+
+// ───────── Screens ─────────
+const screens = ["buyerScreen", "scanScreen", "confirmScreen", "listScreen"];
+function show(id) {
+  for (const s of screens) {
+    $(s).style.display = s === id ? "flex" : "none";
+  }
+}
+
+function toast(msg, isErr = false) {
+  const t = $("toast");
+  t.textContent = msg;
+  t.classList.toggle("err", !!isErr);
+  t.style.display = "block";
+  setTimeout(() => { t.style.display = "none"; }, 2500);
+}
+
+// ───────── API helpers ─────────
+let lastApiDiag = "";
+async function api(method, url, body) {
+  const target = API_BASE + url;
+  const opts = { method, headers: {} };
+  if (accessToken) opts.headers["Authorization"] = "Bearer " + accessToken;
+  if (body !== undefined) {
+    opts.headers["content-type"] = "application/json";
+    opts.body = JSON.stringify(body);
+  }
+  const bodyKB = opts.body ? Math.round(opts.body.length / 1024) : 0;
+  const t0 = Date.now();
+  const ac = new AbortController();
+  const timeoutMs = 120000;
+  const timer = setTimeout(() => ac.abort(), timeoutMs);
+  opts.signal = ac.signal;
+
+  let r;
+  try {
+    r = await fetch(target, opts);
+  } catch (e) {
+    clearTimeout(timer);
+    const ms = Date.now() - t0;
+    const aborted = e?.name === "AbortError";
+    const diag = [
+      aborted ? `⏱ タイムアウト (${timeoutMs / 1000}s 超過)` : "❌ ネットワーク失敗 (fetch reject)",
+      `${method} ${url}`,
+      `API_BASE = ${API_BASE || "(空! config.js未設定の可能性)"}`,
+      `実URL = ${target}`,
+      `送信量 = ${bodyKB}KB / 経過 = ${ms}ms`,
+      `例外 = ${e?.name || "?"}: ${e?.message || e}`,
+      `token = ${accessToken ? "あり(" + accessToken.length + "字)" : "なし"}`,
+      !API_BASE
+        ? "→ 原因濃厚: API_BASE が空。ビルドで config.js が書かれていない。"
+        : "→ 原因候補: Cloud Run のIAM拒否(403)でCORSヘッダ無し / CORS / DNS / 接続不可。",
+    ].join("\n");
+    lastApiDiag = diag;
+    console.error("[api]", diag, e);
+    throw new Error(diag);
+  }
+  clearTimeout(timer);
+  const ms = Date.now() - t0;
+
+  if (r.status === 401) {
+    clearToken();
+    document.getElementById("signinOverlay").style.display = "flex";
+    sErr("セッション期限切れ。再ログインしてください");
+    throw new Error("401 再ログインが必要");
+  }
+  if (!r.ok) {
+    let raw = "";
+    try { raw = await r.text(); } catch {}
+    let serverMsg = "";
+    try { const j = JSON.parse(raw); if (j.error) serverMsg = j.error; } catch {}
+    const diag = [
+      `❌ HTTP ${r.status} ${r.statusText}`,
+      `${method} ${url}  (${ms}ms)`,
+      `実URL = ${target}`,
+      serverMsg ? `サーバ: ${serverMsg}` : `本文: ${(raw || "(空)").slice(0, 400)}`,
+    ].join("\n");
+    lastApiDiag = diag;
+    console.error("[api]", diag);
+    throw new Error(serverMsg || diag);
+  }
+  if (r.status === 204) return null;
+  return r.json();
+}
+
+async function loadData() {
+  [records, sites] = await Promise.all([
+    api("GET", "/api/records").catch(() => []),
+    api("GET", "/api/sites").catch(() => []),
+  ]);
+}
+
+// ───────── Image utils ─────────
+function resizeImage(file, maxSize) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+    img.onload = () => {
+      const ratio = Math.min(maxSize / img.width, maxSize / img.height, 1);
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.round(img.width * ratio);
+      canvas.height = Math.round(img.height * ratio);
+      canvas.getContext("2d").drawImage(img, 0, 0, canvas.width, canvas.height);
+      URL.revokeObjectURL(url);
+      resolve(canvas.toDataURL("image/jpeg", 0.85).split(",")[1]);
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error("画像読込失敗")); };
+    img.src = url;
+  });
+}
+
+// ───────── Buyer screen ─────────
+$("recordBtn").addEventListener("click", showList);
+document.querySelectorAll(".buyer-btn").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    const name = btn.dataset.buyer;
+    btn.classList.add("pressed");
+    setTimeout(() => {
+      btn.classList.remove("pressed");
+      buyer = name;
+      localStorage.setItem("buyer", buyer);
+      $("fileInput").click();
+    }, 250);
+  });
+});
+$("fileInput").addEventListener("change", (ev) => handleFile(ev.target));
+$("retakeBtn").addEventListener("click", () => {
+  if (editingId != null) {
+    editingId = null;
+    renderList();
+    show("listScreen");
+  } else {
+    $("fileInput").click();
+  }
+});
+
+// ───────── Scan ─────────
+async function handleFile(input) {
+  const file = input.files?.[0];
+  if (!file) return;
+  input.value = "";
+
+  if (currentImgUrl) URL.revokeObjectURL(currentImgUrl);
+  currentImgUrl = URL.createObjectURL(file);
+  $("previewImg").src = currentImgUrl;
+  $("confirmImg").src = currentImgUrl;
+  show("scanScreen");
+
+  let parsed = {}, errMsg = "";
+  try {
+    const b64 = await resizeImage(file, 1200);
+    parsed = await api("POST", "/api/scan", {
+      image: b64,
+      mimeType: "image/jpeg",
+      sites: sites.map((s) => s.name),
+    });
+    scanResult = parsed;
+  } catch (e) {
+    errMsg = e.message;
+    scanResult = null;
+  }
+  showConfirm(parsed, errMsg);
+}
+
+function showConfirm(parsed, errMsg) {
+  editingId = null;
+  $("sheetTitle").textContent = "内容を確認";
+  $("retakeBtn").style.display = "";
+  $("retakeBtn").textContent = "📷 撮り直す";
+  $("confirmImg").style.display = "";
+  const today = new Date().toISOString().slice(0, 10);
+  $("fDate").value = parsed.date || today;
+  $("fTotal").value = parsed.total || "";
+  $("fStore").value = parsed.store || "";
+  $("fCat").value = parsed.category || "材料費";
+  $("fWork").value = parsed.workType || "その他";
+  $("fMemo").value = "";
+  setPay("現金");
+  selectedSite = (parsed.site && sites.some((s) => s.name === parsed.site)) ? parsed.site : "";
+  renderSiteGrid();
+
+  $("previewAmount").textContent = (parsed.total || 0).toLocaleString();
+  $("previewStore").textContent = parsed.store || "店舗名";
+
+  const tags = $("previewTags");
+  tags.innerHTML = "";
+  if (parsed.category) tags.appendChild(makeTag(parsed.category));
+  if (parsed.workType && parsed.workType !== "その他") tags.appendChild(makeTag(parsed.workType, "green"));
+  if (parsed.site) tags.appendChild(makeTag(`📍${parsed.site}`));
+
+  const eb = $("errBox");
+  eb.style.display = errMsg ? "block" : "none";
+  if (errMsg) {
+    const full = `⚠️ 読取エラー\n${errMsg}`;
+    eb.textContent = full;
+    const cp = document.createElement("div");
+    cp.className = "err-copy";
+    cp.textContent = "📋 エラー全文をコピー";
+    cp.onclick = () => {
+      navigator.clipboard?.writeText(full).then(
+        () => toast("コピーしました"),
+        () => toast("コピー失敗", true)
+      );
+    };
+    eb.appendChild(document.createElement("br"));
+    eb.appendChild(cp);
+  }
+
+  show("confirmScreen");
+}
+
+function makeTag(text, cls = "") {
+  const span = document.createElement("span");
+  span.className = "tag" + (cls ? " " + cls : "");
+  span.textContent = text;
+  return span;
+}
+
+// Open the confirm sheet pre-filled to edit an existing record.
+function openEdit(r) {
+  editingId = r.id;
+  scanResult = null;
+  $("sheetTitle").textContent = "記録を編集";
+  $("retakeBtn").style.display = "";
+  $("retakeBtn").textContent = "✕ キャンセル";
+  $("confirmImg").style.display = "none";
+  $("fDate").value = (r.date || "").slice(0, 10);
+  $("fTotal").value = r.total || "";
+  $("fStore").value = r.store || "";
+  $("fCat").value = r.category || "材料費";
+  $("fWork").value = r.workType || "その他";
+  $("fMemo").value = r.memo || "";
+  setPay(r.payment || "現金");
+  selectedSite = r.site || "";
+  renderSiteGrid();
+  $("previewAmount").textContent = (Number(r.total) || 0).toLocaleString();
+  $("previewStore").textContent = r.store || "店舗名";
+  const tags = $("previewTags");
+  tags.innerHTML = "";
+  if (r.category) tags.appendChild(makeTag(r.category));
+  if (r.workType && r.workType !== "その他") tags.appendChild(makeTag(r.workType, "green"));
+  if (r.site) tags.appendChild(makeTag(`📍${r.site}`));
+  $("errBox").style.display = "none";
+  show("confirmScreen");
+}
+
+// Fetch a signed URL and show the receipt full-screen.
+async function viewImage(id) {
+  try {
+    const { url } = await api("GET", `/api/records/${id}/image`);
+    $("imgOverlayImg").src = url;
+    $("imgOverlay").style.display = "flex";
+  } catch (e) {
+    toast(e.message, true);
+  }
+}
+$("imgOverlayClose").addEventListener("click", () => {
+  $("imgOverlay").style.display = "none";
+  $("imgOverlayImg").src = "";
+});
+
+$("fTotal").addEventListener("input", function () {
+  $("previewAmount").textContent = (Number(this.value) || 0).toLocaleString();
+});
+$("fStore").addEventListener("input", function () {
+  $("previewStore").textContent = this.value || "店舗名";
+});
+
+function setPay(val) {
+  payment = val;
+  document.querySelectorAll(".pay-btn").forEach((b) =>
+    b.classList.toggle("active", b.dataset.pay === val)
+  );
+}
+document.querySelectorAll(".pay-btn").forEach((b) =>
+  b.addEventListener("click", () => setPay(b.dataset.pay))
+);
+
+// ───────── Site grid ─────────
+function renderSiteGrid() {
+  const grid = $("siteGrid");
+  grid.textContent = "";
+  for (const s of sites) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "site-btn" + (selectedSite === s.name ? " selected" : "");
+    btn.textContent = s.name;
+    btn.addEventListener("click", () => {
+      selectedSite = s.name;
+      renderSiteGrid();
+    });
+    grid.appendChild(btn);
+  }
+  const add = document.createElement("button");
+  add.type = "button";
+  add.className = "site-add-btn";
+  add.textContent = "＋ 追加";
+  add.addEventListener("click", () => {
+    $("newSiteField").style.display = "block";
+    $("fNewSite").focus();
+  });
+  grid.appendChild(add);
+  $("newSiteField").style.display = "none";
+}
+
+// ───────── Submit ─────────
+$("submitBtn").addEventListener("click", async () => {
+  const btn = $("submitBtn");
+  btn.disabled = true;
+  try {
+    let site = selectedSite;
+    const newName = $("fNewSite").value.trim();
+    if (!site && newName) {
+      const created = await api("POST", "/api/sites", { name: newName });
+      sites.push(created);
+      site = created.name;
+    }
+    if (!site) {
+      toast("現場を選んでください", true);
+      return;
+    }
+    const record = {
+      date: $("fDate").value,
+      store: $("fStore").value,
+      total: Number($("fTotal").value) || 0,
+      category: $("fCat").value,
+      workType: $("fWork").value,
+      payment,
+      buyer,
+      site,
+      memo: $("fMemo").value,
+      imageUrl: scanResult?.imageUrl || null,
+    };
+    if (editingId != null) {
+      await api("PUT", `/api/records/${editingId}`, record);
+      const idx = records.findIndex((x) => x.id === editingId);
+      if (idx >= 0) records[idx] = { ...records[idx], ...record };
+      editingId = null;
+      toast("✅ 更新しました！");
+      renderList();
+      show("listScreen");
+    } else {
+      const saved = await api("POST", "/api/records", record);
+      records.unshift({ ...record, id: saved.id, createdAt: saved.created_at });
+      toast("✅ 登録しました！");
+      showBuyer();
+    }
+  } catch (e) {
+    toast(e.message, true);
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+// ───────── List ─────────
+$("backBtn").addEventListener("click", showBuyer);
+$("listAddBtn").addEventListener("click", showBuyer);
+$("csvBtn").addEventListener("click", downloadCSV);
+$("sitesToggleBtn").addEventListener("click", () => {
+  sitesOpen = !sitesOpen;
+  $("sitesList").style.display = sitesOpen ? "block" : "none";
+  $("sitesArrow").textContent = sitesOpen ? "▲" : "▼";
+});
+$("filterSite").addEventListener("change", renderList);
+$("filterMonth").addEventListener("change", renderList);
+
+function showBuyer() {
+  $("recordCount").textContent = records.length;
+  show("buyerScreen");
+}
+
+async function showList() {
+  await loadData();
+  renderList();
+  show("listScreen");
+}
+
+function renderList() {
+  const fSite = $("filterSite").value;
+  const fMonth = $("filterMonth").value;
+  const filtered = records.filter((r) => {
+    if (fSite !== "all" && r.site !== fSite) return false;
+    if (fMonth !== "all" && String(r.date || "").slice(0, 7) !== fMonth) return false;
+    return true;
+  });
+  const total = filtered.reduce((s, r) => s + (Number(r.total) || 0), 0);
+  const sl = fSite === "all" ? "全現場" : fSite;
+  const ml = fMonth === "all" ? "" : " / " + fMonth.replace("-", "年") + "月";
+  $("summaryLabel").textContent = sl + ml + " 合計";
+  $("summaryTotal").textContent = total.toLocaleString();
+  $("summaryCount").textContent = filtered.length + "件";
+
+  // Site filter dropdown
+  const sel = $("filterSite");
+  const cur = sel.value;
+  sel.textContent = "";
+  const all = document.createElement("option");
+  all.value = "all"; all.textContent = "全現場";
+  sel.appendChild(all);
+  for (const s of sites) {
+    const o = document.createElement("option");
+    o.value = s.name; o.textContent = s.name;
+    sel.appendChild(o);
+  }
+  sel.value = cur;
+
+  // Month filter dropdown (derived from records)
+  const msel = $("filterMonth");
+  const mcur = msel.value;
+  const months = [...new Set(records.map((r) => String(r.date || "").slice(0, 7)).filter(Boolean))].sort().reverse();
+  msel.textContent = "";
+  const mall = document.createElement("option");
+  mall.value = "all"; mall.textContent = "全期間";
+  msel.appendChild(mall);
+  for (const m of months) {
+    const o = document.createElement("option");
+    o.value = m;
+    o.textContent = m.replace("-", "年") + "月";
+    msel.appendChild(o);
+  }
+  msel.value = months.includes(mcur) || mcur === "all" ? mcur : "all";
+
+  // Sites manage
+  const sitesList = $("sitesList");
+  sitesList.textContent = "";
+  for (const s of sites) {
+    const row = document.createElement("div");
+    row.className = "site-manage-row";
+    const name = document.createElement("span");
+    name.className = "site-manage-name";
+    name.textContent = `📍 ${s.name}`;
+    const del = document.createElement("button");
+    del.className = "site-del-btn";
+    del.textContent = "削除";
+    del.addEventListener("click", async () => {
+      if (!confirm(`「${s.name}」を削除しますか？`)) return;
+      try {
+        await api("DELETE", `/api/sites/${s.id}`);
+        sites = sites.filter((x) => x.id !== s.id);
+        renderList();
+      } catch (e) { toast(e.message, true); }
+    });
+    row.appendChild(name);
+    row.appendChild(del);
+    sitesList.appendChild(row);
+  }
+
+  // Records
+  const list = $("recordList");
+  list.textContent = "";
+  if (!filtered.length) {
+    list.innerHTML = `<div class="empty"><div class="empty-icon">💡</div><div class="empty-text">記録がありません</div></div>`;
+    return;
+  }
+  for (const r of filtered) {
+    list.appendChild(makeRecordCard(r));
+  }
+}
+
+function makeRecordCard(r) {
+  const card = document.createElement("div");
+  card.className = "record-card";
+
+  const info = document.createElement("div");
+  info.className = "record-info";
+
+  const date = document.createElement("div");
+  date.className = "record-date";
+  date.textContent = fmtDate(r.date);
+
+  const amount = document.createElement("div");
+  amount.className = "record-amount";
+  amount.textContent = `¥${(Number(r.total) || 0).toLocaleString()}`;
+
+  const store = document.createElement("div");
+  store.className = "record-store";
+  store.textContent = r.store || "—";
+
+  const tags = document.createElement("div");
+  tags.className = "record-tags";
+  if (r.category) {
+    const t = document.createElement("span");
+    t.className = "record-tag";
+    t.textContent = r.category;
+    tags.appendChild(t);
+  }
+  if (r.workType && r.workType !== "その他") {
+    const t = document.createElement("span");
+    t.className = "record-tag";
+    t.textContent = r.workType;
+    tags.appendChild(t);
+  }
+
+  const meta = document.createElement("div");
+  meta.className = "record-meta";
+  meta.textContent = `📍${r.site}  💳${r.payment}  👤${r.buyer || "-"}`;
+
+  info.append(date, amount, store, tags, meta);
+
+  if (r.memo) {
+    const memo = document.createElement("div");
+    memo.className = "record-meta";
+    memo.textContent = `📝 ${r.memo}`;
+    info.appendChild(memo);
+  }
+
+  info.style.cursor = "pointer";
+  info.addEventListener("click", () => openEdit(r));
+  card.appendChild(info);
+
+  const actions = document.createElement("div");
+  actions.style.cssText = "display:flex;flex-direction:column;align-items:center;gap:10px;padding-left:12px;";
+
+  if (r.imageUrl) {
+    const img = document.createElement("button");
+    img.className = "del-btn";
+    img.type = "button";
+    img.textContent = "🧾";
+    img.title = "領収書を見る";
+    img.style.padding = "0";
+    img.addEventListener("click", (e) => { e.stopPropagation(); viewImage(r.id); });
+    actions.appendChild(img);
+  }
+
+  const del = document.createElement("button");
+  del.className = "del-btn";
+  del.type = "button";
+  del.textContent = "×";
+  del.style.padding = "0";
+  del.addEventListener("click", async (e) => {
+    e.stopPropagation();
+    if (!confirm("削除しますか？")) return;
+    try {
+      await api("DELETE", `/api/records/${r.id}`);
+      records = records.filter((x) => x.id !== r.id);
+      renderList();
+    } catch (e) { toast(e.message, true); }
+  });
+  actions.appendChild(del);
+  card.appendChild(actions);
+
+  return card;
+}
+
+// ───────── CSV ─────────
+function csvCell(v) {
+  const s = String(v ?? "");
+  return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+function downloadCSV() {
+  const header = ["購入日", "現場名", "店舗名", "金額", "費目", "工種", "支払方法", "購入者", "メモ"]
+    .map(csvCell).join(",");
+  const rows = records.map((r) =>
+    [r.date, r.site, r.store, r.total, r.category, r.workType, r.payment, r.buyer, r.memo]
+      .map(csvCell).join(",")
+  );
+  const blob = new Blob(["﻿" + [header, ...rows].join("\n")], { type: "text/csv" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = `経費_${new Date().toISOString().slice(0, 10)}.csv`;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+}
+
+// ───────── Utils ─────────
+function fmtDate(d) { return d ? String(d).slice(0, 10).replace(/-/g, "/") : ""; }
+
+// Boot is driven by onAuthStateChanged in initAuth() above.
+</script>
+</body>
+</html>
