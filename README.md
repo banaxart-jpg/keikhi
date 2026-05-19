@@ -5,23 +5,23 @@
 
 ---
 
-## 🎓 このプロジェクトの目的
+## 🛠 このプロジェクトについて
 
-業務アプリ（経費管理など）をスマホで運用しつつ、その横で **「名取」がプログラミングを練習する** ための場所。
-新ミニアプリは `apps/keihi/web/<id>/index.html` を作るだけで増やせる。失敗しても本番経費アプリには影響しない（各ミニアプリは独立）。
+業務に役立つミニアプリをスマホで運用するための社内サンドボックス。
+経費管理 (`/keihi/`)、AIコスト計算 (`/cost/`) を皮切りに、各メンバーが必要なアプリを `apps/keihi/web/<id>/index.html` を1ファイル作るだけで追加できる。
+各ミニアプリは独立してるので、新規追加・実験で他に影響しない。
 
-困ったときは **「小西」(info@banax.tokyo / konishi0221@gmail.com)** に相談する。
-小西はオーナー兼インフラ管理者。
+インフラ・GCP 設定・デプロイ周りは **小西 (info@banax.tokyo / konishi0221@gmail.com)** が管理。
 
 ---
 
-## 👥 名取向けのルール
+## 👥 開発のお約束
 
-### 自由にやっていいこと
-- `apps/keihi/web/<id>/index.html` で自分のミニアプリを作る（HTML/CSS/JS だけ）
-- 自分のミニアプリの機能追加・スタイル変更
-- ランチャー (`apps/keihi/web/index.html`) の `APPS` 配列に自分のアプリ1行追加
-- 写経のお手本：[`/cost/`](apps/keihi/web/cost/index.html)（AIコスト計算）
+### 自由に編集してOK
+- `apps/keihi/web/<id>/index.html` で新ミニアプリ作成（HTML/CSS/JS）
+- 自分が作ったミニアプリの中身・スタイル全般
+- ランチャー (`apps/keihi/web/index.html`) の `APPS` 配列に**自分のエントリを1行追加**
+- 実装の参考：[`/cost/`](apps/keihi/web/cost/index.html)（静的のみで完結）、[`/keihi/`](apps/keihi/web/keihi/index.html)（認証＋API呼び出し）
 
 ### 🆕 AI を使うミニアプリ着手前の必須プロセス
 
@@ -31,9 +31,9 @@ Gemini / GPT / Claude を使うアプリを作る前に、**必ず [/cost/](http
 - **月数千円を超えそうなら小西に相談してから着手**
 - 「作ったあと請求書見て青ざめる」事故を防ぐ
 
-### 小西に依頼すること
+### 小西が担当する範囲（依頼が必要）
 
-以下は GCP 設定変更で、ターミナル / gcloud コマンドが要る。**名取は自分でやろうとせず丸投げでOK**：
+以下は GCP 設定変更でターミナル/gcloud コマンドが要るので、**小西に依頼**：
 
 - 新しい API の有効化（Vision API, Document AI など）
 - Cloud SQL に新しいテーブル / カラム追加
@@ -43,17 +43,14 @@ Gemini / GPT / Claude を使うアプリを作る前に、**必ず [/cost/](http
 - Firestore の初期化・セキュリティルール設定
 - IAM 権限・ロールの変更
 
-**「ターミナル叩く必要が出てきた」「自分じゃ分からなくなった」→ 迷わず小西に依頼**
+### 🔒 インフラ管理ファイル（小西のみ変更）
 
-### 🔒 触っちゃダメなもの（小西のみ変更可）
+デプロイ・GCP 構成と密結合してるので、勝手に変えるとデプロイが止まる：
 
-**名取が変えるとデプロイが止まる**：
-
-- **`README.md`（このファイル）全体**
-- **`DEPLOY.md` 全体**
+- **`README.md`（このファイル）**
+- **`DEPLOY.md`**
 - **`infra/`** 配下すべて（`bootstrap.sh`, `db.sh`, `dev.sh`）
-- 各アプリの `cloudbuild.yaml`
-- 各アプリの `firebase.json`
+- 各アプリの `cloudbuild.yaml` / `firebase.json`
 - 各アプリの `README.md` の「🚨 過去にハマったポイント」セクション
 
 自分のアプリ (`apps/keihi/web/<自分のID>/`) の中身は完全自由。
@@ -66,7 +63,7 @@ Gemini / GPT / Claude を使うアプリを作る前に、**必ず [/cost/](http
 
 ### A. 認証もAPIも要らないアプリ（電卓・チェックリスト等）
 
-`apps/keihi/web/<id>/index.html` を1ファイル書くだけ。お手本は [`/cost/`](apps/keihi/web/cost/index.html)。
+`apps/keihi/web/<id>/index.html` を1ファイル書くだけ。参考実装：[`/cost/`](apps/keihi/web/cost/index.html)。
 
 ```html
 <!DOCTYPE html>
