@@ -51,7 +51,7 @@ steps:
       - --min-instances=0
       - --max-instances=3
 
-  - id: grant-invoker
+  - id: prep-config
     name: gcr.io/google.com/cloudsdktool/cloud-sdk
     entrypoint: bash
     args:
@@ -63,22 +63,6 @@ steps:
           --region=${_REGION} \
           --member=${_INVOKER} \
           --role=roles/run.invoker --quiet
-        # Firebase Hosting's service agent invokes Cloud Run for the
-        # /api/** rewrite. The agent is created lazily, so force-create it
-        # first, then bind (retry for IAM propagation). Non-fatal: a later
-        # build / the Hosting deploy will converge it if it isn't ready yet.
-        HOSTING_SA="service-$PROJECT_NUMBER@gcp-sa-firebasehosting.iam.gserviceaccount.com"
-        gcloud beta services identity create \
-          --service=firebasehosting.googleapis.com --project=$PROJECT_ID || true
-        ok=""
-        for i in 1 2 3 4 5; do
-          if gcloud run services add-iam-policy-binding ${_SERVICE} \
-               --region=${_REGION} \
-               --member="serviceAccount:$$HOSTING_SA" \
-               --role=roles/run.invoker --quiet; then ok=1; break; fi
-          echo "Hosting SA not ready yet, retry $$i ..."; sleep 10
-        done
-        [ -n "$$ok" ] || echo "WARN: Hosting SA invoker binding not applied (will retry next build)"
         # Frontend talks to the API same-origin via the Hosting rewrite.
         echo "window.API_BASE='';" > apps/${_APP}/web/config.js
         echo "API_BASE = (same-origin via Hosting rewrite)"
@@ -97,6 +81,8 @@ steps:
         echo "hosting site ensured: ${_HOSTING_SITE}"
 
   # firebase-tools 同梱イメージ。毎回の npm install -g (40〜60s) を排除。
+  # Hosting デプロイで run rewrite を適用すると、ここで初めて Firebase
+  # Hosting のサービスエージェントが自動生成される（順序が重要）。
   - id: deploy-hosting
     name: andreysenov/firebase-tools:latest
     entrypoint: firebase
@@ -106,6 +92,29 @@ steps:
       - --project=$PROJECT_ID
       - --config=apps/${_APP}/firebase.json
       - --non-interactive
+
+  # Hosting デプロイ後（＝Hosting SA が存在する状態）で invoker を付与。
+  # /api/** rewrite が Cloud Run を呼べるようにする。伝播待ちでリトライ。
+  - id: grant-hosting-invoker
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        HOSTING_SA="service-$PROJECT_NUMBER@gcp-sa-firebasehosting.iam.gserviceaccount.com"
+        ok=""
+        for i in 1 2 3 4 5 6; do
+          if gcloud run services add-iam-policy-binding ${_SERVICE} \
+               --region=${_REGION} \
+               --member="serviceAccount:$$HOSTING_SA" \
+               --role=roles/run.invoker --quiet 2>/dev/null; then ok=1; break; fi
+          echo "Hosting SA not propagated yet, retry $$i ..."; sleep 10
+        done
+        if [ -n "$$ok" ]; then
+          echo "OK: Hosting SA granted run.invoker on ${_SERVICE}"
+        else
+          echo "WARN: not applied yet — 次回ビルドで収束（初回のみ起こりうる）"
+        fi
 
 options:
   logging: CLOUD_LOGGING_ONLY
