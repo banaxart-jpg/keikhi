@@ -132,7 +132,7 @@ select.nm-field option { background: #e4e6ee; color: #42455e; }
   <div id="signinSub" style="font-size:13px;color:var(--text2);line-height:1.7;">トップでログインしてください</div>
   <button class="submit-btn" id="signinBtn" type="button" style="max-width:280px;" onclick="location.href='/'">トップに戻る</button>
   <div id="signinStatus" style="font-size:11px;color:var(--text3);font-family:monospace;min-height:14px;"></div>
-  <div id="signinErr" style="font-size:12px;color:#b04040;word-break:break-word;max-width:320px;"></div>
+  <div id="signinErr" style="font-size:11px;color:#b04040;word-break:break-word;max-width:340px;white-space:pre-wrap;text-align:left;font-family:monospace;"></div>
 </div>
 
 <div id="imgOverlay" style="display:none;position:fixed;inset:0;z-index:300;background:rgba(20,22,32,0.92);align-items:center;justify-content:center;flex-direction:column;gap:16px;padding:24px;">
@@ -413,9 +413,21 @@ async function api(method, url, body) {
   const ms = Date.now() - t0;
 
   if (r.status === 401) {
+    let raw = "";
+    try { raw = await r.text(); } catch {}
+    let serverMsg = "";
+    try { const j = JSON.parse(raw); if (j.error) serverMsg = j.error; } catch {}
+    const diag = [
+      `❌ 401 認証エラー (${ms}ms)`,
+      `${method} ${url}`,
+      serverMsg ? `サーバ: ${serverMsg}` : `本文: ${(raw || "(空)").slice(0, 400)}`,
+      `token = ${tok ? "送信あり(" + tok.length + "B)" : "送信なし"}`,
+    ].join("\n");
+    lastApiDiag = diag;
+    console.error("[api]", diag);
     document.getElementById("signinOverlay").style.display = "flex";
-    sErr("セッション期限切れ。再ログインしてください");
-    throw new Error("401 再ログインが必要");
+    sErr(diag);
+    throw new Error(diag);
   }
   if (!r.ok) {
     let raw = "";
