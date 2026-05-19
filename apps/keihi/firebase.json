@@ -7,6 +7,12 @@
       "**/.*",
       "**/node_modules/**"
     ],
+    "rewrites": [
+      {
+        "source": "/api/**",
+        "run": { "serviceId": "keihi-api", "region": "asia-northeast1" }
+      }
+    ],
     "headers": [
       {
         "source": "**/*.@(js|css)",
