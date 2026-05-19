@@ -81,7 +81,8 @@ select.nm-field option { background: #e4e6ee; color: #42455e; }
 .submit-btn:active { transform: scale(0.97); }
 .submit-btn:disabled { opacity: 0.5; cursor: wait; }
 
-.err-box { border-radius: 16px; padding: 12px 15px; font-size: 12px; color: #b04040; margin-bottom: 12px; line-height: 1.5; display: none; font-weight: 600; background: var(--bg); box-shadow: inset 4px 4px 10px rgba(180,140,140,0.4), inset -4px -4px 10px rgba(255,255,255,0.85); }
+.err-box { border-radius: 16px; padding: 12px 15px; font-size: 11px; color: #b04040; margin-bottom: 12px; line-height: 1.5; display: none; font-weight: 600; background: var(--bg); box-shadow: inset 4px 4px 10px rgba(180,140,140,0.4), inset -4px -4px 10px rgba(255,255,255,0.85); white-space: pre-wrap; word-break: break-all; max-height: 240px; overflow: auto; font-family: ui-monospace, Menlo, monospace; }
+.err-copy { margin-top: 8px; font-size: 11px; font-weight: 700; color: #b04040; text-decoration: underline; cursor: pointer; }
 
 #listScreen { position: fixed; inset: 0; display: none; flex-direction: column; overflow-y: auto; background: var(--bg); }
 .list-header { display: flex; align-items: center; justify-content: space-between; padding: 56px 20px 18px; position: sticky; top: 0; background: var(--bg); box-shadow: 0 6px 20px rgba(148,152,176,0.18); z-index: 5; }
@@ -262,7 +263,18 @@ import {
 
 // ───────── Config / Auth ─────────
 const API_BASE = (window.API_BASE || "").replace(/\/$/, ""); // Cloud Run URL injected at build
-let accessToken = sessionStorage.getItem("gcp_token") || null;
+let accessToken = localStorage.getItem("gcp_token") || sessionStorage.getItem("gcp_token") || null;
+function saveToken(t) {
+  accessToken = t;
+  localStorage.setItem("gcp_token", t);
+  localStorage.setItem("gcp_token_at", String(Date.now()));
+}
+function clearToken() {
+  accessToken = null;
+  localStorage.removeItem("gcp_token");
+  localStorage.removeItem("gcp_token_at");
+  sessionStorage.removeItem("gcp_token");
+}
 
 const sStatus = (m) => { const e = document.getElementById("signinStatus"); if (e) e.textContent = m; };
 const sErr = (m) => { const e = document.getElementById("signinErr"); if (e) e.textContent = m; };
@@ -275,13 +287,14 @@ let fbAuth = null;
     await setPersistence(fbAuth, browserLocalPersistence);
     const provider = new GoogleAuthProvider();
     provider.addScope("https://www.googleapis.com/auth/cloud-platform");
-    provider.setCustomParameters({ prompt: "consent" });
+    // 同意は初回のみ（毎回 consent を強制しない＝ログイン保持）
+    provider.setCustomParameters({ prompt: "select_account" });
 
     try {
       const rr = await getRedirectResult(fbAuth);
       if (rr) {
         const c = GoogleAuthProvider.credentialFromResult(rr);
-        if (c?.accessToken) { accessToken = c.accessToken; sessionStorage.setItem("gcp_token", accessToken); }
+        if (c?.accessToken) saveToken(c.accessToken);
       }
     } catch (e) { sErr("redirect: " + e.message); }
 
@@ -300,8 +313,7 @@ let fbAuth = null;
         const res = await signInWithPopup(fbAuth, provider);
         const c = GoogleAuthProvider.credentialFromResult(res);
         if (c?.accessToken) {
-          accessToken = c.accessToken;
-          sessionStorage.setItem("gcp_token", accessToken);
+          saveToken(c.accessToken);
           sStatus("OK: " + res.user.email);
           await enterApp();
         } else {
@@ -332,8 +344,7 @@ let fbAuth = null;
 })();
 
 window.doSignOut = async () => {
-  sessionStorage.removeItem("gcp_token");
-  accessToken = null;
+  clearToken();
   if (fbAuth) await signOut(fbAuth);
 };
 
@@ -374,28 +385,68 @@ function toast(msg, isErr = false) {
 }
 
 // ───────── API helpers ─────────
+let lastApiDiag = "";
 async function api(method, url, body) {
+  const target = API_BASE + url;
   const opts = { method, headers: {} };
   if (accessToken) opts.headers["Authorization"] = "Bearer " + accessToken;
   if (body !== undefined) {
     opts.headers["content-type"] = "application/json";
     opts.body = JSON.stringify(body);
   }
-  const r = await fetch(API_BASE + url, opts);
+  const bodyKB = opts.body ? Math.round(opts.body.length / 1024) : 0;
+  const t0 = Date.now();
+  const ac = new AbortController();
+  const timeoutMs = 120000;
+  const timer = setTimeout(() => ac.abort(), timeoutMs);
+  opts.signal = ac.signal;
+
+  let r;
+  try {
+    r = await fetch(target, opts);
+  } catch (e) {
+    clearTimeout(timer);
+    const ms = Date.now() - t0;
+    const aborted = e?.name === "AbortError";
+    const diag = [
+      aborted ? `⏱ タイムアウト (${timeoutMs / 1000}s 超過)` : "❌ ネットワーク失敗 (fetch reject)",
+      `${method} ${url}`,
+      `API_BASE = ${API_BASE || "(空! config.js未設定の可能性)"}`,
+      `実URL = ${target}`,
+      `送信量 = ${bodyKB}KB / 経過 = ${ms}ms`,
+      `例外 = ${e?.name || "?"}: ${e?.message || e}`,
+      `token = ${accessToken ? "あり(" + accessToken.length + "字)" : "なし"}`,
+      !API_BASE
+        ? "→ 原因濃厚: API_BASE が空。ビルドで config.js が書かれていない。"
+        : "→ 原因候補: Cloud Run のIAM拒否(403)でCORSヘッダ無し / CORS / DNS / 接続不可。",
+    ].join("\n");
+    lastApiDiag = diag;
+    console.error("[api]", diag, e);
+    throw new Error(diag);
+  }
+  clearTimeout(timer);
+  const ms = Date.now() - t0;
+
   if (r.status === 401) {
-    sessionStorage.removeItem("gcp_token");
-    accessToken = null;
+    clearToken();
     document.getElementById("signinOverlay").style.display = "flex";
     sErr("セッション期限切れ。再ログインしてください");
     throw new Error("401 再ログインが必要");
   }
   if (!r.ok) {
-    let msg = `${method} ${url} → ${r.status}`;
-    try {
-      const j = await r.json();
-      if (j.error) msg = j.error;
-    } catch {}
-    throw new Error(msg);
+    let raw = "";
+    try { raw = await r.text(); } catch {}
+    let serverMsg = "";
+    try { const j = JSON.parse(raw); if (j.error) serverMsg = j.error; } catch {}
+    const diag = [
+      `❌ HTTP ${r.status} ${r.statusText}`,
+      `${method} ${url}  (${ms}ms)`,
+      `実URL = ${target}`,
+      serverMsg ? `サーバ: ${serverMsg}` : `本文: ${(raw || "(空)").slice(0, 400)}`,
+    ].join("\n");
+    lastApiDiag = diag;
+    console.error("[api]", diag);
+    throw new Error(serverMsg || diag);
   }
   if (r.status === 204) return null;
   return r.json();
@@ -508,7 +559,21 @@ function showConfirm(parsed, errMsg) {
 
   const eb = $("errBox");
   eb.style.display = errMsg ? "block" : "none";
-  if (errMsg) eb.textContent = `⚠️ ${errMsg}`;
+  if (errMsg) {
+    const full = `⚠️ 読取エラー\n${errMsg}`;
+    eb.textContent = full;
+    const cp = document.createElement("div");
+    cp.className = "err-copy";
+    cp.textContent = "📋 エラー全文をコピー";
+    cp.onclick = () => {
+      navigator.clipboard?.writeText(full).then(
+        () => toast("コピーしました"),
+        () => toast("コピー失敗", true)
+      );
+    };
+    eb.appendChild(document.createElement("br"));
+    eb.appendChild(cp);
+  }
 
   show("confirmScreen");
 }
