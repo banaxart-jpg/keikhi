@@ -113,6 +113,14 @@ const sErr = (m) => { document.getElementById("signinErr").textContent = m; };
 let fbAuth = null;
 
 (async function initAuth() {
+  // dev プレビュー: cloudshell.dev で Firebase ログイン不可のためスキップ。
+  if (window.DEV_NO_AUTH) {
+    document.getElementById("signinOverlay").style.display = "none";
+    document.getElementById("app").style.display = "block";
+    document.getElementById("who").textContent = "dev@local";
+    renderGrid();
+    return;
+  }
   try {
     const cfg = await fetch("/__/firebase/init.json").then((r) => r.json());
     fbAuth = getAuth(initializeApp(cfg));
