@@ -40,6 +40,10 @@ app.use((req, res, next) => {
 // same-origin via Firebase Hosting rewrite, so no CORS/OAuth token is
 // involved — auth is a verified Firebase ID token instead.
 app.use("/api", async (req, res, next) => {
+  // Cloud Shell プレビューは cloudshell.dev ドメインで Firebase Auth が
+  // 使えない（auth/unauthorized-domain）。DEV のときだけ認証をバイパス。
+  // 本番は DEV 未設定なので常に厳格検証。
+  if (DEV) { req.user = { email: "dev@local" }; return next(); }
   try {
     const m = /^Bearer (.+)$/.exec(req.headers.authorization || "");
     if (!m) return res.status(401).json({ error: "ログインが必要です (no token)" });
@@ -282,6 +286,12 @@ if (DEV) {
       res.status(500).json({ error: "FIREBASE_INIT_JSON 未設定: " + e.message });
     }
   });
+  // dev は cloudshell.dev ドメインで Firebase ログイン不可 → フロントに
+  // ログインスキップを指示（サーバ側 /api も DEV でバイパス済み）。
+  app.get("/config.js", (req, res) =>
+    res.type("application/javascript")
+       .send("window.API_BASE='';window.DEV_NO_AUTH=true;")
+  );
   app.use(express.static(webDir, { extensions: ["html"] }));
   console.log(`[DEV] serving frontend from ${webDir}`);
 } else {

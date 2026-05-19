@@ -276,6 +276,14 @@ async function idToken() {
 }
 
 (async function initAuth() {
+  // dev プレビュー: Firebase ログインを丸ごとスキップ（サーバ /api も DEV
+  // でバイパス）。本番は window.DEV_NO_AUTH 未定義なので通常フロー。
+  if (window.DEV_NO_AUTH) {
+    document.getElementById("signinOverlay").style.display = "none";
+    try { await loadData(); } catch (e) { console.error(e); }
+    showBuyer();
+    return;
+  }
   try {
     const cfg = await fetch("/__/firebase/init.json").then((r) => r.json());
     fbAuth = getAuth(initializeApp(cfg));
