@@ -129,8 +129,8 @@ select.nm-field option { background: #e4e6ee; color: #42455e; }
 
 <div id="signinOverlay" style="display:none;position:fixed;inset:0;z-index:400;background:var(--bg);flex-direction:column;align-items:center;justify-content:center;padding:32px;text-align:center;gap:18px;">
   <div style="font-size:24px;font-weight:800;">経費</div>
-  <div id="signinSub" style="font-size:13px;color:var(--text2);line-height:1.7;">Google アカウントでログイン</div>
-  <button class="submit-btn" id="signinBtn" type="button" style="max-width:280px;">Sign in with Google</button>
+  <div id="signinSub" style="font-size:13px;color:var(--text2);line-height:1.7;">トップでログインしてください</div>
+  <button class="submit-btn" id="signinBtn" type="button" style="max-width:280px;" onclick="location.href='/'">トップに戻る</button>
   <div id="signinStatus" style="font-size:11px;color:var(--text3);font-family:monospace;min-height:14px;"></div>
   <div id="signinErr" style="font-size:12px;color:#b04040;word-break:break-word;max-width:320px;"></div>
 </div>
@@ -284,42 +284,33 @@ async function idToken() {
     showBuyer();
     return;
   }
+  // 経費ページ自身はログインUIを持たない。ログインはトップ(/)に一本化。
+  // 未ログインならトップへ飛ばし、ログイン後に自動で経費へ戻す。
   try {
     const cfg = await fetch("/__/firebase/init.json").then((r) => r.json());
     fbAuth = getAuth(initializeApp(cfg));
     await setPersistence(fbAuth, browserLocalPersistence);
-    const provider = new GoogleAuthProvider();
-    provider.setCustomParameters({ prompt: "select_account" });
-
-    try { await getRedirectResult(fbAuth); }
-    catch (e) { sErr("redirect: " + e.message); }
 
     let entered = false;
     async function enterApp() {
       if (entered) return;
       entered = true;
+      sessionStorage.removeItem("authBounce");
       document.getElementById("signinOverlay").style.display = "none";
-      try { await loadData(); } catch {}
+      try { await loadData(); } catch (e) { console.error(e); }
       showBuyer();
     }
 
-    document.getElementById("signinBtn").addEventListener("click", async () => {
-      sErr(""); sStatus("opening popup...");
-      try {
-        const res = await signInWithPopup(fbAuth, provider);
-        sStatus("OK: " + res.user.email);
-        await enterApp();
-      } catch (e) {
-        sStatus("popup失敗: " + (e.code || ""));
-        if (["auth/popup-blocked","auth/popup-closed-by-user","auth/cancelled-popup-request","auth/operation-not-supported-in-this-environment"].includes(e.code)) {
-          try { await signInWithRedirect(fbAuth, provider); } catch (e2) { sErr(e2.message); }
-        } else { sErr((e.code || "") + " " + e.message); }
-      }
-    });
-
     onAuthStateChanged(fbAuth, async (user) => {
-      if (user) await enterApp();
-      else document.getElementById("signinOverlay").style.display = "flex";
+      if (user) { await enterApp(); return; }
+      // 無限ループ防止: 1回だけトップへバウンスして再試行
+      if (sessionStorage.getItem("authBounce")) {
+        document.getElementById("signinOverlay").style.display = "flex";
+        sErr("ログインが必要です。トップに戻ってログインしてください。");
+        return;
+      }
+      sessionStorage.setItem("authBounce", "1");
+      location.replace("/?next=" + encodeURIComponent("/keihi/"));
     });
   } catch (e) {
     document.getElementById("signinOverlay").style.display = "flex";

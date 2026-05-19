@@ -121,6 +121,10 @@ let fbAuth = null;
     renderGrid();
     return;
   }
+  // 別ミニアプリ(/keihi/ 等)から未ログインで飛ばされてきた場合の戻り先
+  const nextUrl = new URLSearchParams(location.search).get("next");
+  const isMobile = /iphone|ipad|ipod|android/i.test(navigator.userAgent);
+
   try {
     const cfg = await fetch("/__/firebase/init.json").then((r) => r.json());
     fbAuth = getAuth(initializeApp(cfg));
@@ -129,12 +133,14 @@ let fbAuth = null;
     provider.setCustomParameters({ prompt: "select_account" });
 
     try { await getRedirectResult(fbAuth); }
-    catch (e) { sErr("redirect: " + e.message); }
+    catch (e) { sErr("redirect: " + (e.code || e.message)); }
 
-    let entered = false;
-    function enterApp(user) {
-      if (entered) return;
-      entered = true;
+    let done = false;
+    function onAuthed(user) {
+      if (done) return;
+      done = true;
+      // 元のミニアプリへ自動復帰（ログイン後に経費へ戻る等）
+      if (nextUrl && nextUrl.startsWith("/")) { location.replace(nextUrl); return; }
       document.getElementById("signinOverlay").style.display = "none";
       document.getElementById("app").style.display = "block";
       document.getElementById("who").textContent = user?.email || "サインイン済み";
@@ -142,13 +148,17 @@ let fbAuth = null;
     }
 
     document.getElementById("signinBtn").addEventListener("click", async () => {
-      sErr(""); sStatus("opening popup...");
+      sErr(""); sStatus("ログイン中…");
+      // モバイルは popup が不安定なので redirect 一択
+      if (isMobile) {
+        try { await signInWithRedirect(fbAuth, provider); }
+        catch (e) { sErr((e.code || "") + " " + e.message); }
+        return;
+      }
       try {
         const res = await signInWithPopup(fbAuth, provider);
-        sStatus("OK: " + res.user.email);
-        enterApp(res.user);
+        onAuthed(res.user);
       } catch (e) {
-        sStatus("popup失敗: " + (e.code || ""));
         if (["auth/popup-blocked","auth/popup-closed-by-user","auth/cancelled-popup-request","auth/operation-not-supported-in-this-environment"].includes(e.code)) {
           try { await signInWithRedirect(fbAuth, provider); } catch (e2) { sErr(e2.message); }
         } else { sErr((e.code || "") + " " + e.message); }
@@ -156,7 +166,7 @@ let fbAuth = null;
     });
 
     onAuthStateChanged(fbAuth, (user) => {
-      if (user) enterApp(user);
+      if (user) onAuthed(user);
       else document.getElementById("signinOverlay").style.display = "flex";
     });
   } catch (e) {
