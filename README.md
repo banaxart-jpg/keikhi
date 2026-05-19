@@ -16,6 +16,10 @@
 > - ✅ どうしても手動操作が必要な場合は、その必要性をなくす方向（自動化）をまず検討・提案する
 > - ✅ ユーザーへの最終的な動作確認依頼は「このURLを開いて試して」だけにする
 >
+> **🔴 デプロイに関わる作業をする前に、必ず [DEPLOY.md](DEPLOY.md) を最初から最後まで読むこと。**
+> デプロイ構造・自動デプロイの仕組み・トリガ・各アプリの構成は全て DEPLOY.md に書いてある。
+> 読まずにコマンドを案内したり構造を推測で語ることは禁止。
+>
 > 手動コマンドを案内しそうになったら立ち止まり、自動化で代替できないか先に考えること。
 
 ---
@@ -161,12 +165,16 @@ gcloud builds submit --config=apps/admin/cloudbuild.yaml --region=asia-northeast
 
 ## 📱 スマホからの開発フロー
 
-1. **コード編集**: GitHub Web UI (鉛筆アイコン) または Cloud Shell Editor
-2. **commit & push**: GitHub Web から or Cloud Shell で `git push`
-3. **デプロイ**: Cloud Shell で `gcloud builds submit ...` (上のデプロイコマンド)
-4. **確認**: <https://static-epigram-496002-v8.web.app> でダッシュボードを開いてサービス状態確認
+1. ユーザーが要望を伝える
+2. **Claude がコード修正 → commit → push まで完遂**（ユーザーは何もしない）
+3. **Cloud Build トリガが自動でビルド&デプロイ**（`claude/*`・`main` への push で発火）
+4. ユーザーは **<https://keihi-496002.web.app>** を開いて動作確認するだけ
 
-⚠️ Cloud Build トリガ (push → 自動デプロイ) は未接続。完全自動化したい場合は別途 2nd-gen GitHub接続が必要。
+トリガ定義は `infra/bootstrap.sh`（208–223行）に**コード化済み**。
+唯一の前提＝**GitHub↔Cloud Build の初回接続**（ブラウザでスマホ可・1回だけ。
+未接続なら手動 `gcloud builds submit` でフォールバック）。
+
+📘 **デプロイ構造の全詳細は [DEPLOY.md](DEPLOY.md) 参照**（アーキテクチャ図・各ステップ・トリガ仕様・誤解整理を全部記載）。
 
 ---
 
@@ -262,8 +270,8 @@ keikhi/
 
 ## 🛠️ TODO / 残課題
 
-- [ ] Cloud Build トリガ接続 (push → 自動デプロイ)
-- [ ] keihi の `index.html` を Cloud Run `/api/*` に切替 + Firebase Hosting 化
+- [ ] Cloud Build トリガの **GitHub初回接続**（コンソールで1タップ／詳細は [DEPLOY.md](DEPLOY.md) §3）— トリガ定義自体は実装済み
+- [x] keihi を Cloud Run `/api/*` + Firebase Hosting 化（完了）
 - [ ] keihi の XSS脆弱性修正 (renderList の innerHTML エスケープ)
 - [ ] 記録の編集機能・メモ欄
 - [ ] 電気図面アプリの仕様策定
