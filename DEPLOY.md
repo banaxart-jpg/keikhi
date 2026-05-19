@@ -65,11 +65,17 @@ Claude が作業ブランチで作業 → main に push → トリガ発火 → 
 
 ### 2-1. keihi（経費管理）= Cloud Run + Hosting の2段構成
 
-**フロント = Firebase Hosting、バックエンド = Cloud Run**。1回の build で両方デプロイ。
+**フロント = Firebase Hosting（静的のみ）、バックエンド = Cloud Run（ブラウザから直接呼ぶ）**。
+
+通常 Firebase + Cloud Run の構成は `Hosting /api/** → Cloud Run` の rewrite
+で同一オリジンに見せかけるが、**このプロジェクトでは rewrite を使わない**
+（組織ポリシーで Firebase Hosting の Service Agent が IAM 登録できないため。
+詳細は §6 参照）。
 
 | 項目 | 値 |
 |------|----|
-| Cloud Run サービス | `keihi-api`（`--no-allow-unauthenticated`＝直叩き不可） |
+| Cloud Run サービス | `keihi-api`（**`allUsers` で public** 化、認証は Express の `verifyIdToken`） |
+| Cloud Run 直URL | `https://keihi-api-734350696397.asia-northeast1.run.app` |
 | Hosting サイト | `keihi-496002` → **https://keihi-496002.web.app** ←ユーザーが開くURL |
 | ビルド定義 | `apps/keihi/cloudbuild.yaml` |
 | ランタイムSA | `keihi-run@<project>.iam.gserviceaccount.com` |
@@ -79,32 +85,40 @@ Claude が作業ブランチで作業 → main に push → トリガ発火 → 
 
 #### `apps/keihi/cloudbuild.yaml` のステップ詳細
 
-1. **build** — `apps/keihi/server` を Docker build
-   （`node:20-slim`、`npm install --omit=dev`、`CMD node index.js`、port 8080）
-2. **push** — イメージを Artifact Registry (`<region>-docker.pkg.dev/<proj>/keikhi/keihi`) へ push（`:BUILD_ID` と `:latest`）
-3. **deploy** — Cloud Run `keihi-api` にデプロイ
-   - `--no-allow-unauthenticated`（ブラウザ直アクセス不可）
+1. **build** — Kaniko で `apps/keihi/server` を Docker build & push
+   （`node:20-slim`、`npm install --omit=dev`、レイヤキャッシュ有効）
+2. **deploy** — Cloud Run `keihi-api` にデプロイ
+   - `--no-allow-unauthenticated`（IAM 必須）
    - Cloud SQL 接続、Secret 注入（`GEMINI_API_KEY`, `DB_PASSWORD`）
-   - 環境変数（`DB_USER/DB_NAME/DB_INSTANCE_CONNECTION_NAME/RECEIPTS_BUCKET`）
+   - 環境変数（`DB_USER/DB_NAME/DB_INSTANCE_CONNECTION_NAME/RECEIPTS_BUCKET/FIREBASE_PROJECT_ID/ALLOWED_EMAILS`）
    - `--memory=512Mi --cpu=1 --min-instances=0 --max-instances=3`
-4. **grant-invoker** — `user:info@banax.tokyo` に `roles/run.invoker` 付与し、
-   Cloud Run の URL を取得して `apps/keihi/web/config.js` に
-   `window.API_BASE='<url>';` として書き込む（フロントが叩く先）
-5. **ensure-hosting-site** — Hosting サイト `keihi-496002` を冪等に作成
-6. **deploy-hosting** — `firebase deploy --only hosting`（`apps/keihi/web` を配信）
+3. **prep-config** —
+   - `allUsers` + `info@banax.tokyo` に `roles/run.invoker` 付与（冪等）
+   - `gcloud run services describe` で URL 取得 → `apps/keihi/web/config.js` に
+     `window.API_BASE='<url>';` 書き込み（ブラウザはこの URL に直接 fetch する）
+4. **ensure-hosting-site** — Hosting サイト `keihi-496002` を冪等に作成
+5. **deploy-hosting** — `firebase deploy --only hosting`（`apps/keihi/web` を配信）
 
-#### 認証フロー（なぜ2段構成か）
-
-Cloud Run は組織ポリシーで `allUsers` 公開不可。だから：
+#### 認証フロー
 
 ```
-スマホ → Firebase Hosting (UI表示・静的)
-         └ Googleログイン (info@banax.tokyo) で OAuthアクセストークン取得
-           └ Authorization: Bearer <token> を付けて
-             → Cloud Run keihi-api （認証済みリクエストとして実行）
+スマホ → Firebase Hosting              (UI/静的のみ・keihi-496002.web.app)
+            │
+            │ Google ログイン (Firebase Auth)
+            │   ↓ ID トークン取得（localStorage に保存）
+            │
+            ▼ fetch (Cross-Origin)
+         Cloud Run keihi-api           (https://keihi-api-734350696397.asia-northeast1.run.app)
+            ├ Cloud Run IAM = allUsers invoker  ← public（org policy で SA 不可のため）
+            └ Express ミドルウェア
+                ├ Authorization: Bearer <token> を verifyIdToken で検証
+                ├ ALLOWED_EMAILS にあれば通す（空なら全認証ユーザー許可）
+                └ 検証失敗 → 401 "ログインが必要です"
 ```
 
-`info@banax.tokyo` だけが `run.invoker` を持つので、このユーザーのトークンでのみAPIが通る。
+Cloud Run の public 化は「組織ポリシーで Hosting SA を弾く」ことの代替策。
+**Express の `verifyIdToken` が本当の認証ゲート**で、Cloud Run の IAM は単に
+「到達できる経路」を提供するだけ。実質的なセキュリティは下がらない。
 
 ### 2-2. admin（管理ダッシュボード）= Hosting のみ
 
@@ -219,19 +233,87 @@ gcloud builds list --region=asia-northeast1 --limit=5
 
 ---
 
-## 6. よくある誤解の整理
+## 6. 過去にハマったポイント（再発防止メモ）
+
+### 6-1. 組織ポリシー `iam.allowedPolicyMemberDomains` が全ての元凶
+
+このプロジェクトの GCP 組織は `banax.tokyo` 配下にあり、デフォルトで
+`constraints/iam.allowedPolicyMemberDomains` が「`banax.tokyo` 配下のメンバーのみ
+IAM に追加可」という制約を継承していた。
+
+これにより以下が**全部**ブロックされた：
+- `allUsers` を invoker に追加 → `FAILED_PRECONDITION: not a permitted customer`
+- `allAuthenticatedUsers` も同様
+- **Firebase Hosting の Service Agent** `service-<PROJECT_NUMBER>@gcp-sa-firebasehosting.iam.gserviceaccount.com`
+  も `gcp-sa-firebasehosting` ドメインなのでブロックされて、**自動 provision されない**
+
+特に Hosting SA が provision されないせいで Hosting → Cloud Run rewrite が
+完全に死んでいた（リクエストが Cloud Run の IAM 層で 403 を食らう、Google
+標準 HTML エラーページが返る）。`firebase deploy --only hosting` が成功した
+ように見えても実際はバックエンド呼び出しが不可能。
+
+**対策（このプロジェクトでは適用済み）**:
+プロジェクトレベルでポリシーを `allowAll: true` に上書き：
+
+```bash
+cat > /tmp/policy.yaml <<'EOF'
+name: projects/static-epigram-496002-v8/policies/iam.allowedPolicyMemberDomains
+spec:
+  rules:
+    - allowAll: true
+EOF
+gcloud org-policies set-policy /tmp/policy.yaml
+sleep 180   # 反映に最大7分かかる
+```
+
+これは `roles/orgpolicy.policyAdmin` が必要。`info@banax.tokyo` は組織管理者
+ロール持ちなので可能（admin.google.com の super admin である前提）。
+
+### 6-2. Hosting rewrite を捨てて Cloud Run 直叩きに切替えた
+
+§6-1 の通り Hosting SA が IAM 登録できないため、伝統的な
+`Hosting /api/** → Cloud Run` の rewrite は使えない。
+
+そこで：
+- `firebase.json` から `rewrites` を削除
+- Cloud Run を `allUsers` invoker で public 化
+- `cloudbuild.yaml` の `prep-config` で `gcloud run services describe` から
+  URL 取得 → `web/config.js` に `window.API_BASE='<url>';` を注入
+- ブラウザは絶対 URL で Cloud Run を直接 fetch（CORS allow `*`）
+- 認証は Express の `verifyIdToken` ミドルウェアが行う（実質ノーリスク）
+
+### 6-3. iOS Safari ITP で別オリジン authDomain のストレージが消える
+
+**症状**: iPhone でログイン → 経費画面に遷移 → 再ログイン要求
+
+**原因**: Firebase Auth デフォルトの `authDomain = <project>.firebaseapp.com`
+を iOS Safari ITP が「クロスサイトストレージ」と判定して数日で消す。
+
+**対策**: `web/index.html`・`web/keihi/index.html` で
+`cfg.authDomain = location.hostname` を上書き。認証フロー全部を
+`keihi-496002.web.app` 内に閉じる。
+
+**前提**: Cloud Console の OAuth クライアントの「承認済みリダイレクトURI」に
+`https://keihi-496002.web.app/__/auth/handler` を**手動で**追加が必要。
+無いと Google ログイン画面で `redirect_uri_mismatch` で蹴られる。
+
+---
+
+## 7. よくある誤解の整理
 
 | 誤解 | 実際 |
 |------|------|
 | 「Cloud Run にデプロイしてないの？」 | keihi は **Cloud Run と Hosting の両方**に1回でデプロイ |
-| 「Cloud Run の URL を開けばいい」 | 直叩き不可（401）。**Hosting の URL を開く** |
+| 「Hosting の URL を開けば API も同一オリジン」 | **違う**。`/api/**` rewrite は使ってない。ブラウザは Cloud Run の絶対URLを叩く（CORS） |
+| 「Cloud Run の URL を開けばいい」 | 直叩きで開いてもブラウザに Firebase ID Token が無いので 401。**Hosting の URL を開く** |
 | 「push できてないのでは？」 | push 済み。`git ls-remote` で実体確認可能 |
 | 「自動デプロイは未設定」 | トリガ定義は **コード化済み**。GitHub接続だけが未完 |
 | 「毎回コマンドが必要」 | 接続後は **push だけ**で自動。コマンド不要 |
+| 「`/api/*` が 403 returned by Google」 | Cloud Run の `allUsers` invoker が消えた可能性。§6-1 参照 |
 
 ---
 
-## 7. このプロジェクトの開発フロー（あるべき姿）
+## 8. このプロジェクトの開発フロー（あるべき姿）
 
 1. ユーザーが要望を伝える
 2. Claude がコード修正 → コミット → **push まで完遂**

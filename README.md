@@ -67,8 +67,9 @@ apps/keihi/web/                ← Hosting 公開ルート（site: keihi-496002�
 
 | アプリ | URL | アクセス方法 |
 |--------|-----|------------|
+| **keihi 経費アプリ** | <https://keihi-496002.web.app> | スマホブラウザで開く → Google ログイン |
 | **admin ダッシュボード** | <https://static-epigram-496002-v8.web.app> | スマホブラウザで開く → Google ログイン (`info@banax.tokyo`) |
-| keihi API (経費) | <https://keihi-api-jmzsz44nvq-an.a.run.app> | gcloud ID Token 付きで叩く（下記） |
+| keihi API (Cloud Run 直URL) | <https://keihi-api-734350696397.asia-northeast1.run.app> | **public** (`allUsers` invoker)。Firebase IDトークン認証は Express 側で行う |
 | keikhi-admin Cloud Run (直叩き不可) | <https://keikhi-admin-734350696397.asia-northeast1.run.app> | Firebase Hosting 経由のみ |
 | Firebase Console | <https://console.firebase.google.com/project/static-epigram-496002-v8> | 認証・Hosting管理 |
 | GCP Console | <https://console.cloud.google.com/home/dashboard?project=static-epigram-496002-v8> | 全体管理 |
@@ -80,12 +81,17 @@ apps/keihi/web/                ← Hosting 公開ルート（site: keihi-496002�
 2. 「Sign in with Google」→ `info@banax.tokyo` で承認
 3. ダッシュボード表示
 
-### keihi API を curl で叩く（要認証）
+### keihi API を curl で叩く
 
+ヘルスチェック（認証不要）:
 ```bash
-TOKEN=$(gcloud auth print-identity-token)
-curl -H "Authorization: Bearer $TOKEN" "https://keihi-api-jmzsz44nvq-an.a.run.app/health"
+curl https://keihi-api-734350696397.asia-northeast1.run.app/health
 ```
+
+認証必須エンドポイント（`/api/*`）はブラウザ経由が前提。Firebase ID トークン
+（OAuth ID Token ではない）を `Authorization: Bearer <token>` で送る必要が
+あるが、CLI から取るのは面倒なので、デバッグは Cloud Shell の `bash infra/dev.sh keihi`
+で `DEV=1` バイパスを使うのが楽。
 
 ---
 
@@ -93,9 +99,27 @@ curl -H "Authorization: Bearer $TOKEN" "https://keihi-api-jmzsz44nvq-an.a.run.ap
 
 | ディレクトリ              | サービス名        | 内容                              | 状態         |
 |--------------------------|------------------|----------------------------------|--------------|
-| `apps/keihi/`            | `keihi-api`      | 経費管理アプリ (Gemini + Cloud SQL) | 開発中       |
+| `apps/keihi/`            | `keihi-api`      | 経費管理アプリ (Gemini + Cloud SQL) | 稼働中 ✅    |
 | `apps/admin/`            | `keikhi-admin`   | 管理ダッシュボード (Firebase Hosting+Auth) | 稼働中 ✅    |
 | `apps/denki-zumen/`      | `denki-zumen-api`| 電気図面作成アプリ                 | 未着手 (枠)  |
+
+## 🚨 知っておくべき制約・落とし穴
+
+このプロジェクトは普通の Firebase + Cloud Run 構成と**違う点**がいくつかある。
+ハマる前に [`apps/keihi/README.md`](apps/keihi/README.md) §「過去にハマったポイント」と
+[`DEPLOY.md`](DEPLOY.md) §6 を読むこと。要点：
+
+1. **Firebase Hosting `/api/**` rewrite は使えない**。組織ポリシー
+   `iam.allowedPolicyMemberDomains` が Firebase Hosting の Service Agent
+   (`gcp-sa-firebasehosting` ドメイン) を IAM 登録から弾くため。代わりに
+   Cloud Run を `allUsers` で public 化し、ブラウザは Cloud Run の絶対URLを
+   直叩き（CORS）、Express の `verifyIdToken` で実認証
+2. **OAuth リダイレクトURI** に `https://keihi-496002.web.app/__/auth/handler` の
+   登録が Cloud Console で必須（iOS Safari ITP 回避で `authDomain` を Hosting と
+   揃えるため）
+3. **組織ポリシー上書き済**：`iam.allowedPolicyMemberDomains` をプロジェクト
+   レベルで `allowAll` に上書きしている（さもないと `allUsers` も追加できない）。
+   `info@banax.tokyo` の組織ポリシー管理者ロールに依存している
 
 ## 🏗️ 共有スタック
 
