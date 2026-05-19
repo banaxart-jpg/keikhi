@@ -251,6 +251,37 @@ gcloud builds submit --config=apps/admin/cloudbuild.yaml --region=asia-northeast
 
 ---
 
+## ⚡ デプロイ待ちゼロ：Cloud Shell 即プレビュー
+
+UI/挙動の確認はデプロイ不要。**本番と同一コード・同一構成**を Cloud Shell の
+1プロセスで起動し、Web プレビューでスマホからその場で確認できる。
+
+```bash
+bash infra/dev.sh keihi
+```
+
+→ Cloud Shell 上部 **「ウェブでプレビュー」→ ポート 8080** を開く
+→ コード修正後は `Ctrl+C` → 再実行（数秒で再起動）
+
+本番との同一性（`infra/dev.sh` が担保）：
+
+| 要素 | dev (Cloud Shell) | 本番 |
+|------|-------------------|------|
+| API 経路 | 同一オリジン `/api/**` | Firebase Hosting rewrite `/api/**` |
+| 認証 | 本物の Firebase ID トークン検証（同一コード） | 同左 |
+| Firebase設定 | 本番Hostingの `init.json` をそのまま取得 | 同左 |
+| DB | cloud-sql-proxy 経由で**本番と同じ Cloud SQL** | Cloud Run unix socket |
+| Gemini/バケット | **本番と同じ** Secret / バケット | 同左 |
+
+> サーバは `DEV=1` のときだけ静的フロント + `/__/firebase/init.json` も配信し、
+> 本番(Cloud Run, API専用)と1ファイルで両対応。コード分岐は最小。
+
+**フロー：** Claude が修正 push → 確認したい時は `bash infra/dev.sh keihi` で即確認 →
+OK なら main に push（＝Cloud Build トリガで本番反映）。本番デプロイは
+Kaniko レイヤキャッシュで差分のみビルド（[DEPLOY.md](DEPLOY.md)）。
+
+---
+
 ## 🎯 初回セットアップ（既に完了済み・参考用）
 
 新しい GCP プロジェクトで一から立ち上げる場合:
