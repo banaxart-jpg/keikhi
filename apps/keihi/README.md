@@ -215,7 +215,7 @@ Cloud Run のログを確認：
 | 変数 | 用途 |
 |------|------|
 | `GEMINI_API_KEY` | Gemini API キー（Secret Manager `gemini-api-key:latest`） |
-| `GEMINI_MODEL` | デフォルト `gemini-2.0-flash` |
+| `GEMINI_MODEL` | デフォルト `gemini-2.5-flash` |
 | `RECEIPTS_BUCKET` | レシート画像保存先バケット |
 | `DB_USER` / `DB_NAME` / `DB_INSTANCE_CONNECTION_NAME` | Cloud SQL 接続 |
 | `DB_PASSWORD` | Secret Manager `keihi-db-password:latest` |

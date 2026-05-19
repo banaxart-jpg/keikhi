@@ -7,7 +7,7 @@ import crypto from "node:crypto";
 
 const {
   GEMINI_API_KEY,
-  GEMINI_MODEL = "gemini-2.0-flash",
+  GEMINI_MODEL = "gemini-2.5-flash",
   RECEIPTS_BUCKET,
   DB_USER,
   DB_PASSWORD,
