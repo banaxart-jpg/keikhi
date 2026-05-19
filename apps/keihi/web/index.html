@@ -127,7 +127,6 @@ let fbAuth = null;
 
   try {
     const cfg = await fetch("/__/firebase/init.json").then((r) => r.json());
-    cfg.authDomain = location.hostname; // 認証フローを Hosting と同一オリジンに（iOS Safari ITP でセッション喪失するため）
     fbAuth = getAuth(initializeApp(cfg));
     await setPersistence(fbAuth, browserLocalPersistence);
     const provider = new GoogleAuthProvider();
