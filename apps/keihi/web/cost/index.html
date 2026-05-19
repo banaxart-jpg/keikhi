@@ -1,11 +1,11 @@
 <!DOCTYPE html>
 <html lang="ja">
-<!-- AIコスト計算ミニアプリ：Gemini / OpenAI / Claude の API 料金を試算 -->
+<!-- AIコスト累積ダッシュボード：実際の利用件数から累積コストを概算 -->
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <meta name="apple-mobile-web-app-capable" content="yes">
-<title>AIコスト計算</title>
+<title>AIコスト</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
@@ -15,245 +15,313 @@
   --bg: #e4e6ee; --bg2: #d8dae4; --bg3: #ededf3;
   --sl: rgba(255,255,255,1); --sd: rgba(168,172,192,0.75);
   --text: #42455e; --text2: rgba(66,69,94,0.42); --text3: rgba(66,69,94,0.22);
-  --accent: #ff9a10; --accent2: #4d8df0;
+  --accent: #ff9a10;
 }
 body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; }
 
-.top { display: flex; align-items: center; padding: 50px 22px 0; gap: 12px; }
-.back { background: var(--bg); border: none; padding: 10px 16px; border-radius: 24px; font-family: 'Outfit',sans-serif; font-size: 12px; font-weight: 700; color: var(--text2); cursor: pointer; box-shadow: 5px 5px 12px var(--sd), -5px -5px 12px var(--sl); }
-.back:active { box-shadow: inset 3px 3px 8px var(--sd), inset -3px -3px 8px var(--sl); transform: scale(0.96); }
+.top { display: flex; align-items: center; justify-content: space-between; padding: 50px 22px 0; gap: 12px; }
+.back, .refresh { background: var(--bg); border: none; padding: 10px 16px; border-radius: 24px; font-family: 'Outfit',sans-serif; font-size: 12px; font-weight: 700; color: var(--text2); cursor: pointer; box-shadow: 5px 5px 12px var(--sd), -5px -5px 12px var(--sl); }
+.back:active, .refresh:active { box-shadow: inset 3px 3px 8px var(--sd), inset -3px -3px 8px var(--sl); transform: scale(0.96); }
 
 .wrap { padding: 28px 22px 60px; max-width: 540px; margin: 0 auto; }
 .title { font-size: 26px; font-weight: 800; margin-bottom: 6px; }
-.subtitle { font-size: 13px; color: var(--text2); font-weight: 600; margin-bottom: 28px; line-height: 1.6; }
+.subtitle { font-size: 12px; color: var(--text2); font-weight: 600; margin-bottom: 24px; line-height: 1.6; }
 
-.section { background: var(--bg); border-radius: 22px; padding: 22px; margin-bottom: 16px; box-shadow: 10px 10px 24px var(--sd), -8px -8px 20px var(--sl); }
-.section-title { font-size: 11px; font-weight: 800; letter-spacing: 0.18em; text-transform: uppercase; color: var(--text2); margin-bottom: 16px; }
+/* タブ */
+.tabs { display: flex; gap: 8px; margin-bottom: 18px; overflow-x: auto; padding-bottom: 4px; }
+.tabs::-webkit-scrollbar { display: none; }
+.tab { padding: 11px 18px; border-radius: 18px; background: var(--bg); border: none; font-family: 'Outfit', sans-serif; font-size: 13px; font-weight: 700; color: var(--text2); cursor: pointer; box-shadow: 4px 4px 10px var(--sd), -3px -3px 8px var(--sl); white-space: nowrap; flex-shrink: 0; }
+.tab.active { color: var(--accent); box-shadow: inset 3px 3px 8px var(--sd), inset -2px -2px 6px var(--sl); }
+.tab:disabled { opacity: 0.4; cursor: not-allowed; }
+.tab:active:not(:disabled):not(.active) { transform: scale(0.96); }
 
-.row { display: grid; grid-template-columns: 1fr 120px; align-items: center; gap: 14px; margin-bottom: 14px; }
-.row:last-child { margin-bottom: 0; }
-.row label { font-size: 14px; font-weight: 600; color: var(--text); }
-.row .hint { font-size: 10px; color: var(--text3); font-weight: 600; margin-top: 2px; }
-.row input[type="number"] { padding: 12px 14px; border-radius: 12px; border: none; background: var(--bg); box-shadow: inset 4px 4px 10px var(--sd), inset -3px -3px 8px var(--sl); font-family: 'Outfit', sans-serif; font-size: 14px; font-weight: 700; color: var(--text); text-align: right; width: 100%; }
-.row input:focus { outline: none; box-shadow: inset 5px 5px 12px var(--sd), inset -4px -4px 10px var(--sl); }
+/* メインコスト表示 */
+.cost-hero { background: var(--bg); border-radius: 22px; padding: 32px 22px 28px; margin-bottom: 16px; box-shadow: inset 6px 6px 16px var(--sd), inset -5px -5px 14px var(--sl); text-align: center; }
+.cost-hero-label { font-size: 11px; font-weight: 800; letter-spacing: 0.18em; text-transform: uppercase; color: var(--text2); margin-bottom: 10px; }
+.cost-hero-value { font-size: 48px; font-weight: 800; color: var(--accent); line-height: 1; letter-spacing: -0.03em; margin-bottom: 6px; }
+.cost-hero-usd { font-size: 13px; color: var(--text2); font-weight: 700; }
 
-.cost-display { background: var(--bg); border-radius: 22px; padding: 28px 22px; margin-bottom: 16px; box-shadow: inset 6px 6px 16px var(--sd), inset -5px -5px 14px var(--sl); }
-.cost-main { font-size: 42px; font-weight: 800; color: var(--accent); line-height: 1; text-align: center; margin-bottom: 8px; letter-spacing: -0.02em; }
-.cost-sub { font-size: 14px; color: var(--text2); font-weight: 700; text-align: center; }
-.cost-per { font-size: 11px; color: var(--text3); text-align: center; margin-top: 10px; font-weight: 600; line-height: 1.6; }
+/* 統計グリッド */
+.stats-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 16px; }
+.stat-card { background: var(--bg); border-radius: 18px; padding: 18px; box-shadow: 8px 8px 20px var(--sd), -6px -6px 16px var(--sl); }
+.stat-label { font-size: 10px; font-weight: 800; letter-spacing: 0.14em; text-transform: uppercase; color: var(--text2); margin-bottom: 8px; }
+.stat-value { font-size: 24px; font-weight: 800; color: var(--text); line-height: 1; letter-spacing: -0.01em; }
+.stat-unit { font-size: 12px; font-weight: 700; color: var(--text2); margin-left: 2px; }
 
-.compare-table { font-size: 12px; }
-.fam-head { font-size: 11px; font-weight: 800; color: var(--text2); letter-spacing: 0.12em; text-transform: uppercase; padding: 16px 0 8px; }
-.fam-head:first-child { padding-top: 0; }
-.comp-row { display: grid; grid-template-columns: 1fr auto auto; gap: 12px; align-items: center; padding: 8px 0; border-bottom: 1px dashed var(--text3); }
-.comp-row:last-child { border-bottom: none; }
-.comp-name { font-weight: 700; color: var(--text); }
-.comp-jpy, .comp-usd { text-align: right; font-weight: 700; font-variant-numeric: tabular-nums; }
-.comp-jpy { color: var(--text); }
-.comp-usd { color: var(--text2); font-size: 11px; }
-.cheapest .comp-name { color: var(--accent); }
-.cheapest .comp-jpy { color: var(--accent); }
-.cheapest .comp-name::before { content: "👑 "; }
-.current { background: var(--bg3); border-radius: 10px; padding: 8px 12px; margin: 0 -8px; }
+/* セクション */
+.section { background: var(--bg); border-radius: 18px; padding: 20px; margin-bottom: 16px; box-shadow: 8px 8px 20px var(--sd), -6px -6px 16px var(--sl); }
+.section-title { font-size: 11px; font-weight: 800; letter-spacing: 0.16em; text-transform: uppercase; color: var(--text2); margin-bottom: 14px; }
 
-select { -webkit-appearance: none; appearance: none; padding: 12px 36px 12px 14px; border-radius: 12px; border: none; background: var(--bg); box-shadow: 4px 4px 10px var(--sd), -3px -3px 8px var(--sl); font-family: 'Outfit', sans-serif; font-size: 14px; font-weight: 700; color: var(--text); width: 100%; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath fill='%2342455e' d='M0 0l5 6 5-6z' opacity='0.5'/%3E%3C/svg%3E"); background-repeat: no-repeat; background-position: right 14px center; }
+/* 月別履歴 */
+.month-row { display: grid; grid-template-columns: 70px 1fr 90px 60px; align-items: center; gap: 10px; padding: 8px 0; font-size: 13px; }
+.month-row + .month-row { border-top: 1px dashed var(--text3); }
+.month-label { font-weight: 700; color: var(--text); }
+.month-bar { height: 8px; background: var(--bg3); border-radius: 4px; overflow: hidden; box-shadow: inset 2px 2px 4px var(--sd), inset -1px -1px 3px var(--sl); }
+.month-bar-fill { height: 100%; background: var(--accent); border-radius: 4px; transition: width 0.4s; }
+.month-cost { text-align: right; font-weight: 700; color: var(--text); font-variant-numeric: tabular-nums; }
+.month-count { text-align: right; font-size: 11px; color: var(--text2); font-weight: 600; }
 
-.note { font-size: 11px; color: var(--text2); line-height: 1.7; padding: 16px 20px; background: var(--bg3); border-radius: 14px; margin-top: 14px; font-weight: 500; }
-.note a { color: var(--accent); text-decoration: none; font-weight: 700; }
+/* 内訳 */
+.breakdown { font-size: 12px; color: var(--text2); line-height: 1.9; }
+.breakdown strong { color: var(--text); font-weight: 700; }
+.breakdown code { background: var(--bg3); padding: 2px 6px; border-radius: 5px; font-family: 'Outfit', monospace; font-size: 11px; font-weight: 700; }
+
+/* 状態表示 */
+.state { text-align: center; padding: 40px 20px; color: var(--text2); font-size: 13px; font-weight: 600; }
+.state.error { color: #b04040; }
+
+/* サインインオーバーレイ */
+#signinOverlay { display: none; position: fixed; inset: 0; z-index: 400; background: var(--bg); flex-direction: column; align-items: center; justify-content: center; padding: 32px; text-align: center; gap: 18px; }
+#signinOverlay .title { font-size: 24px; }
+.gbtn { padding: 14px 26px; border-radius: 30px; font-size: 14px; font-weight: 700; border: none; cursor: pointer; font-family: 'Outfit', sans-serif; color: var(--text); background: var(--bg); box-shadow: 6px 6px 14px var(--sd), -5px -5px 12px var(--sl); }
+.note { font-size: 11px; color: var(--text2); line-height: 1.7; padding: 14px 18px; background: var(--bg3); border-radius: 12px; font-weight: 500; margin-top: 6px; }
 .note strong { color: var(--text); font-weight: 700; }
-
-.preset-row { display: flex; gap: 8px; flex-wrap: wrap; }
-.preset { padding: 9px 16px; border-radius: 18px; background: var(--bg); border: none; font-family: 'Outfit', sans-serif; font-size: 11px; font-weight: 700; color: var(--text2); cursor: pointer; box-shadow: 4px 4px 10px var(--sd), -3px -3px 8px var(--sl); }
-.preset.active { color: var(--accent); box-shadow: inset 3px 3px 8px var(--sd), inset -2px -2px 6px var(--sl); }
-.preset:active { box-shadow: inset 3px 3px 8px var(--sd), inset -2px -2px 6px var(--sl); transform: scale(0.96); }
 </style>
 </head>
 <body>
 
-<div class="top">
-  <button class="back" onclick="location.href='/'">←  戻る</button>
+<div id="signinOverlay">
+  <div class="title">AIコスト</div>
+  <div class="note">トップでログインしてください</div>
+  <button class="gbtn" onclick="location.href='/'">トップに戻る</button>
 </div>
 
-<div class="wrap">
-  <div class="title">AIコスト計算</div>
-  <div class="subtitle">Gemini / OpenAI / Claude の API を使うといくらかかるか即計算</div>
-
-  <div class="section">
-    <div class="section-title">よくある用途プリセット</div>
-    <div class="preset-row">
-      <button class="preset" data-preset="receipt">領収書OCR 200枚</button>
-      <button class="preset" data-preset="chat">チャット 1000回/月</button>
-      <button class="preset" data-preset="summary">議事録要約 50本/月</button>
-      <button class="preset" data-preset="report">日報要約 30本/月</button>
-    </div>
+<div id="app" style="display:none;">
+  <div class="top">
+    <button class="back" onclick="location.href='/'">←  戻る</button>
+    <button class="refresh" id="refreshBtn">⟳ 更新</button>
   </div>
 
-  <div class="section">
-    <div class="section-title">条件を入力</div>
-    <div class="row">
-      <label>リクエスト回数<br><span class="hint">＝AIに送る回数</span></label>
-      <input type="number" id="requests" value="200" min="0">
-    </div>
-    <div class="row">
-      <label>1回の入力 (トークン数)<br><span class="hint">日本語は1文字≒2トークン目安</span></label>
-      <input type="number" id="inTokens" value="1500" min="0">
-    </div>
-    <div class="row">
-      <label>1回の出力 (トークン数)<br><span class="hint">AIから返ってくる文章量</span></label>
-      <input type="number" id="outTokens" value="300" min="0">
-    </div>
-    <div class="row">
-      <label>1回の画像 (枚)<br><span class="hint">レシート写真など</span></label>
-      <input type="number" id="images" value="1" min="0">
-    </div>
-    <div class="row">
-      <label>為替レート (円/$)</label>
-      <input type="number" id="rate" value="150" min="1">
-    </div>
-  </div>
+  <div class="wrap">
+    <div class="title">AIコスト</div>
+    <div class="subtitle">各ミニアプリの累積 AI 利用コスト（概算）</div>
 
-  <div class="section">
-    <div class="section-title">選択中のモデル</div>
-    <select id="model"></select>
-  </div>
+    <div class="tabs" id="tabs"></div>
 
-  <div class="cost-display">
-    <div class="cost-main" id="costJpy">¥0</div>
-    <div class="cost-sub" id="costUsd">$0.00</div>
-    <div class="cost-per" id="costPer">1リクエストあたり ¥0</div>
-  </div>
-
-  <div class="section">
-    <div class="section-title">全モデル比較（同じ条件で）</div>
-    <div class="compare-table" id="compareBody"></div>
-  </div>
-
-  <div class="note">
-    <strong>注意</strong>：画像はモデルごとに概算（Gemini ≒258トークン/枚、OpenAI ≒765、Claude ≒1500）として計算しているので目安。実際の課金は画像サイズ・解像度で変動。<br><br>
-    最新価格は公式ページで：
-    <a href="https://ai.google.dev/pricing" target="_blank">Gemini</a> /
-    <a href="https://openai.com/api/pricing/" target="_blank">OpenAI</a> /
-    <a href="https://www.anthropic.com/pricing" target="_blank">Claude</a>
+    <div id="content">
+      <div class="state">読み込み中...</div>
+    </div>
   </div>
 </div>
 
-<script>
-// USD per 1M tokens（2026年5月時点の概算・公式価格は変動するので参考値）
-const MODELS = [
-  // Gemini（コスパ最強）
-  { id: "gemini-2.5-flash-lite", name: "Gemini 2.5 Flash-Lite", inPrice: 0.10, outPrice: 0.40,  imgTokens: 258,  family: "Gemini" },
-  { id: "gemini-2.5-flash",      name: "Gemini 2.5 Flash",      inPrice: 0.30, outPrice: 2.50,  imgTokens: 258,  family: "Gemini" },
-  { id: "gemini-2.5-pro",        name: "Gemini 2.5 Pro",        inPrice: 1.25, outPrice: 10.00, imgTokens: 258,  family: "Gemini" },
-  // OpenAI
-  { id: "gpt-4.1-nano",          name: "GPT-4.1 nano",          inPrice: 0.10, outPrice: 0.40,  imgTokens: 765,  family: "OpenAI" },
-  { id: "gpt-4o-mini",           name: "GPT-4o mini",           inPrice: 0.15, outPrice: 0.60,  imgTokens: 765,  family: "OpenAI" },
-  { id: "gpt-4.1-mini",          name: "GPT-4.1 mini",          inPrice: 0.40, outPrice: 1.60,  imgTokens: 765,  family: "OpenAI" },
-  { id: "gpt-4.1",               name: "GPT-4.1",               inPrice: 2.00, outPrice: 8.00,  imgTokens: 765,  family: "OpenAI" },
-  { id: "gpt-4o",                name: "GPT-4o",                inPrice: 2.50, outPrice: 10.00, imgTokens: 765,  family: "OpenAI" },
-  // Claude（品質重視・OCR用途には割高）
-  { id: "claude-haiku-3-5",      name: "Claude Haiku 3.5",      inPrice: 0.80, outPrice: 4.00,  imgTokens: 1500, family: "Claude" },
-  { id: "claude-haiku-4-5",      name: "Claude Haiku 4.5",      inPrice: 1.00, outPrice: 5.00,  imgTokens: 1500, family: "Claude" },
-  { id: "claude-sonnet-4-6",     name: "Claude Sonnet 4.6",     inPrice: 3.00, outPrice: 15.00, imgTokens: 1500, family: "Claude" },
-  { id: "claude-opus-4-7",       name: "Claude Opus 4.7",       inPrice: 15.00, outPrice: 75.00, imgTokens: 1500, family: "Claude" },
+<script src="/config.js"></script>
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js";
+import { getAuth, onAuthStateChanged, setPersistence, browserLocalPersistence } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
+
+// ───────── AI 利用するミニアプリの設定 ─────────
+// 新しいAIアプリを追加するときは、ここに1ブロック足すだけ。
+// 必要なのは: 表示名・データ取得API・1呼出あたりの概算コスト(円)
+const APPS = [
+  {
+    id: "keihi",
+    label: "💴 経費",
+    fetchPath: "/api/records",
+    perCallJpy: 0.18,          // gemini-2.5-flash, 画像+JSON出力の概算
+    perCallBreakdown: {
+      model: "gemini-2.5-flash",
+      inputTokens: 2000,       // 画像 ≒1500-2000 tokens + プロンプト
+      outputTokens: 250,
+      inPriceUsdPerM: 0.30,
+      outPriceUsdPerM: 2.50,
+    },
+    unitName: "レシート",
+    dateField: "createdAt",
+  },
+  // 新アプリ追加例 (コメントアウト):
+  // {
+  //   id: "nippou", label: "📋 日報",
+  //   fetchPath: "/api/nippou",
+  //   perCallJpy: 0.5, perCallBreakdown: {...},
+  //   unitName: "日報", dateField: "createdAt",
+  // },
 ];
 
-const PRESETS = {
-  receipt:  { requests: 200,  inTokens: 1500, outTokens: 300,  images: 1 },
-  chat:     { requests: 1000, inTokens: 500,  outTokens: 400,  images: 0 },
-  summary:  { requests: 50,   inTokens: 8000, outTokens: 1500, images: 0 },
-  report:   { requests: 30,   inTokens: 2000, outTokens: 800,  images: 3 },
-};
-
+const USD_TO_JPY = 150;
 const $ = (id) => document.getElementById(id);
-const num = (id) => Number($(id).value) || 0;
 
-function costOf(m) {
-  const reqs = num("requests");
-  const inAll  = (num("inTokens") + num("images") * m.imgTokens) * reqs;
-  const outAll = num("outTokens") * reqs;
-  return (inAll * m.inPrice + outAll * m.outPrice) / 1_000_000; // USD
-}
+// ───────── Auth ─────────
+let fbAuth = null;
+(async function init() {
+  try {
+    const cfg = await fetch("/__/firebase/init.json").then(r => r.json());
+    cfg.authDomain = location.hostname;
+    fbAuth = getAuth(initializeApp(cfg));
+    await setPersistence(fbAuth, browserLocalPersistence);
 
-const fmtJpy = (n) => "¥" + Math.round(n).toLocaleString();
-const fmtUsd = (n) => "$" + (n < 0.01 ? n.toFixed(5) : n < 1 ? n.toFixed(4) : n.toFixed(2));
-
-function recalc() {
-  const rate = num("rate") || 150;
-  const sel = $("model").value;
-  const cur = MODELS.find(m => m.id === sel) || MODELS[0];
-  const usd = costOf(cur);
-  const jpy = usd * rate;
-  $("costJpy").textContent = fmtJpy(jpy);
-  $("costUsd").textContent = fmtUsd(usd);
-  const reqs = num("requests") || 1;
-  $("costPer").textContent = `1リクエストあたり ${fmtJpy(jpy/reqs)} / ${fmtUsd(usd/reqs)}`;
-
-  // 全モデル比較（家族ごとにグループ化、価格順）
-  const cheapest = Math.min(...MODELS.map(costOf));
-  const byFamily = {};
-  for (const m of MODELS) (byFamily[m.family] ||= []).push(m);
-  let html = "";
-  for (const fam of Object.keys(byFamily)) {
-    html += `<div class="fam-head">${fam}</div>`;
-    const sorted = [...byFamily[fam]].sort((a,b) => costOf(a) - costOf(b));
-    for (const m of sorted) {
-      const u = costOf(m);
-      const cls = [
-        u === cheapest ? "cheapest" : "",
-        m.id === sel ? "current" : "",
-      ].filter(Boolean).join(" ");
-      html += `<div class="comp-row ${cls}">`
-            + `<div class="comp-name">${m.name}</div>`
-            + `<div class="comp-jpy">${fmtJpy(u * rate)}</div>`
-            + `<div class="comp-usd">${fmtUsd(u)}</div>`
-            + `</div>`;
-    }
+    onAuthStateChanged(fbAuth, async (user) => {
+      if (!user) {
+        $("signinOverlay").style.display = "flex";
+        $("app").style.display = "none";
+        return;
+      }
+      $("signinOverlay").style.display = "none";
+      $("app").style.display = "block";
+      renderTabs();
+      switchTo(APPS[0].id);
+    });
+  } catch (e) {
+    $("signinOverlay").style.display = "flex";
+    console.error("init失敗:", e);
   }
-  $("compareBody").innerHTML = html;
-}
+})();
 
-// モデルドロップダウン作成（family ごとに optgroup）
-const sel = $("model");
-const families = {};
-for (const m of MODELS) (families[m.family] ||= []).push(m);
-for (const fam of Object.keys(families)) {
-  const og = document.createElement("optgroup");
-  og.label = fam;
-  for (const m of families[fam]) {
-    const o = document.createElement("option");
-    o.value = m.id;
-    o.textContent = m.name;
-    og.appendChild(o);
+// ───────── タブ ─────────
+let activeAppId = null;
+
+function renderTabs() {
+  const tabs = $("tabs");
+  tabs.innerHTML = "";
+  for (const app of APPS) {
+    const b = document.createElement("button");
+    b.className = "tab";
+    b.textContent = app.label;
+    b.dataset.appId = app.id;
+    b.onclick = () => switchTo(app.id);
+    tabs.appendChild(b);
   }
-  sel.appendChild(og);
+  // 追加用ボタン（無効化、開発者リマインダ）
+  const add = document.createElement("button");
+  add.className = "tab";
+  add.textContent = "+ 追加";
+  add.disabled = true;
+  add.title = "APPS 配列に追加してデプロイ";
+  tabs.appendChild(add);
 }
-sel.value = "gemini-2.5-flash";
 
-// プリセットボタン
-function applyPreset(key) {
-  const p = PRESETS[key];
-  if (!p) return;
-  $("requests").value  = p.requests;
-  $("inTokens").value  = p.inTokens;
-  $("outTokens").value = p.outTokens;
-  $("images").value    = p.images;
-  document.querySelectorAll(".preset").forEach(b => {
-    b.classList.toggle("active", b.dataset.preset === key);
+async function switchTo(appId) {
+  activeAppId = appId;
+  document.querySelectorAll(".tab").forEach(t => {
+    t.classList.toggle("active", t.dataset.appId === appId);
   });
-  recalc();
+  await loadApp(appId);
 }
-document.querySelectorAll(".preset").forEach(b => {
-  b.onclick = () => applyPreset(b.dataset.preset);
-});
 
-// 入力変更の度に再計算
-["requests","inTokens","outTokens","images","rate","model"].forEach(id => {
-  $(id).addEventListener("input", recalc);
-  $(id).addEventListener("change", recalc);
-});
+// ───────── データ取得 + 集計 ─────────
+async function loadApp(appId) {
+  const app = APPS.find(a => a.id === appId);
+  if (!app) return;
+  $("content").innerHTML = `<div class="state">読み込み中...</div>`;
 
-// 初期表示は「領収書OCR 200枚」プリセット
-applyPreset("receipt");
+  try {
+    const token = await fbAuth.currentUser.getIdToken();
+    const res = await fetch(window.API_BASE + app.fetchPath, {
+      headers: { Authorization: "Bearer " + token },
+    });
+    if (!res.ok) {
+      const body = await res.text().catch(() => "");
+      throw new Error(`HTTP ${res.status} ${res.statusText}\n${body.slice(0, 200)}`);
+    }
+    const records = await res.json();
+    render(app, Array.isArray(records) ? records : []);
+  } catch (e) {
+    console.error(e);
+    $("content").innerHTML = `<div class="state error">読み込みエラー<br>${escapeHtml(e.message)}</div>`;
+  }
+}
+
+// ───────── 描画 ─────────
+function fmtJpy(n) { return "¥" + Math.round(n).toLocaleString(); }
+function fmtUsd(n) { return "$" + (n < 0.01 ? n.toFixed(5) : n < 1 ? n.toFixed(4) : n.toFixed(2)); }
+function escapeHtml(s) {
+  return String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+}
+
+function render(app, records) {
+  const totalCount = records.length;
+  const totalJpy = totalCount * app.perCallJpy;
+  const totalUsd = totalJpy / USD_TO_JPY;
+
+  // 月別集計
+  const byMonth = {};   // "YYYY-MM" → count
+  const now = new Date();
+  const thisYm = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,"0")}`;
+  for (const r of records) {
+    const d = r[app.dateField] ? new Date(r[app.dateField]) : null;
+    if (!d || isNaN(d)) continue;
+    const ym = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`;
+    byMonth[ym] = (byMonth[ym] || 0) + 1;
+  }
+  const thisMonthCount = byMonth[thisYm] || 0;
+  const thisMonthJpy = thisMonthCount * app.perCallJpy;
+
+  // 最近6ヶ月のリスト（多い順ではなく時系列で）
+  const months = [];
+  for (let i = 5; i >= 0; i--) {
+    const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+    const ym = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`;
+    months.push({ ym, count: byMonth[ym] || 0 });
+  }
+  const maxCount = Math.max(...months.map(m => m.count), 1);
+
+  const monthHtml = months.map(m => {
+    const cost = m.count * app.perCallJpy;
+    const w = (m.count / maxCount) * 100;
+    return `<div class="month-row">
+      <div class="month-label">${m.ym}</div>
+      <div class="month-bar"><div class="month-bar-fill" style="width:${w}%"></div></div>
+      <div class="month-cost">${fmtJpy(cost)}</div>
+      <div class="month-count">${m.count}件</div>
+    </div>`;
+  }).join("");
+
+  const bd = app.perCallBreakdown;
+  const inUsd = (bd.inputTokens * bd.inPriceUsdPerM) / 1_000_000;
+  const outUsd = (bd.outputTokens * bd.outPriceUsdPerM) / 1_000_000;
+  const perCallUsd = inUsd + outUsd;
+
+  $("content").innerHTML = `
+    <div class="cost-hero">
+      <div class="cost-hero-label">累積コスト</div>
+      <div class="cost-hero-value">${fmtJpy(totalJpy)}</div>
+      <div class="cost-hero-usd">${fmtUsd(totalUsd)}</div>
+    </div>
+
+    <div class="stats-grid">
+      <div class="stat-card">
+        <div class="stat-label">読取総数</div>
+        <div class="stat-value">${totalCount.toLocaleString()}<span class="stat-unit">${app.unitName}</span></div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">1${app.unitName}平均</div>
+        <div class="stat-value">${fmtJpy(app.perCallJpy)}</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">今月</div>
+        <div class="stat-value">${fmtJpy(thisMonthJpy)}</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">今月の件数</div>
+        <div class="stat-value">${thisMonthCount}<span class="stat-unit">${app.unitName}</span></div>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="section-title">月別推移（直近6ヶ月）</div>
+      ${monthHtml}
+    </div>
+
+    <div class="section">
+      <div class="section-title">1${app.unitName}あたりの内訳</div>
+      <div class="breakdown">
+        モデル: <strong>${bd.model}</strong><br>
+        入力: <code>${bd.inputTokens.toLocaleString()} tokens</code> × <code>$${bd.inPriceUsdPerM}/M</code> = ${fmtUsd(inUsd)}<br>
+        出力: <code>${bd.outputTokens.toLocaleString()} tokens</code> × <code>$${bd.outPriceUsdPerM}/M</code> = ${fmtUsd(outUsd)}<br>
+        合計: <strong>${fmtUsd(perCallUsd)}</strong> ≒ <strong>${fmtJpy(perCallUsd * USD_TO_JPY)}</strong>
+      </div>
+    </div>
+
+    <div class="note">
+      <strong>注意</strong>：これは概算値。実際のトークン数は画像サイズや内容で変動するので、厳密な課金額は GCP Billing で確認してください：<br>
+      <a href="https://console.cloud.google.com/billing/01DA00-93CCBF-AB55B7/reports?project=static-epigram-496002-v8" target="_blank" style="color:var(--accent);font-weight:700;text-decoration:none;">課金レポートを開く →</a>
+    </div>
+  `;
+}
+
+// ───────── 更新ボタン ─────────
+$("refreshBtn").addEventListener("click", () => {
+  if (activeAppId) loadApp(activeAppId);
+});
 </script>
 </body>
 </html>
