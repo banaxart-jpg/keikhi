@@ -64,11 +64,21 @@ steps:
           --member=${_INVOKER} \
           --role=roles/run.invoker --quiet
         # Firebase Hosting's service agent invokes Cloud Run for the
-        # /api/** rewrite (browser is same-origin → no CORS/OAuth token).
-        gcloud run services add-iam-policy-binding ${_SERVICE} \
-          --region=${_REGION} \
-          --member=serviceAccount:service-$PROJECT_NUMBER@gcp-sa-firebasehosting.iam.gserviceaccount.com \
-          --role=roles/run.invoker --quiet
+        # /api/** rewrite. The agent is created lazily, so force-create it
+        # first, then bind (retry for IAM propagation). Non-fatal: a later
+        # build / the Hosting deploy will converge it if it isn't ready yet.
+        HOSTING_SA="service-$PROJECT_NUMBER@gcp-sa-firebasehosting.iam.gserviceaccount.com"
+        gcloud beta services identity create \
+          --service=firebasehosting.googleapis.com --project=$PROJECT_ID || true
+        ok=""
+        for i in 1 2 3 4 5; do
+          if gcloud run services add-iam-policy-binding ${_SERVICE} \
+               --region=${_REGION} \
+               --member="serviceAccount:$$HOSTING_SA" \
+               --role=roles/run.invoker --quiet; then ok=1; break; fi
+          echo "Hosting SA not ready yet, retry $$i ..."; sleep 10
+        done
+        [ -n "$$ok" ] || echo "WARN: Hosting SA invoker binding not applied (will retry next build)"
         # Frontend talks to the API same-origin via the Hosting rewrite.
         echo "window.API_BASE='';" > apps/${_APP}/web/config.js
         echo "API_BASE = (same-origin via Hosting rewrite)"
