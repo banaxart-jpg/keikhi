@@ -143,15 +143,18 @@ app.delete("/api/sites/:id", async (req, res) => {
 // 503/UNAVAILABLE 等の過渡的エラーで指数バックオフ→別モデルへフォールバック。
 // Gemini Flash は時々スパイクで詰まるので、ユーザーが「Retry」を押す前に
 // サーバ側で吸収する。
-async function callGeminiWithFallback(content) {
+async function callGeminiWithFallback(content, { primaryModel, maxOutputTokens } = {}) {
   const fallbackChain = [
-    ...new Set([GEMINI_MODEL, "gemini-2.5-flash-lite", "gemini-flash-latest"]),
+    ...new Set([primaryModel || GEMINI_MODEL, "gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-flash-latest"]),
   ];
   let lastErr;
   for (const name of fallbackChain) {
     for (let attempt = 1; attempt <= 3; attempt++) {
       try {
-        const m = genAI.getGenerativeModel({ model: name });
+        const m = genAI.getGenerativeModel({
+          model: name,
+          ...(maxOutputTokens ? { generationConfig: { maxOutputTokens } } : {}),
+        });
         const r = await m.generateContent(content);
         return { result: r, modelUsed: name, attempts: attempt };
       } catch (e) {
@@ -161,10 +164,10 @@ async function callGeminiWithFallback(content) {
         if (!transient) throw e;
         if (attempt < 3) {
           const wait = 500 * 2 ** attempt; // 1s, 2s, 4s
-          console.warn(`[scan] ${name} attempt ${attempt} transient (${wait}ms backoff): ${msg.slice(0, 120)}`);
+          console.warn(`[gemini] ${name} attempt ${attempt} transient (${wait}ms backoff): ${msg.slice(0, 120)}`);
           await new Promise((r) => setTimeout(r, wait));
         } else {
-          console.warn(`[scan] ${name} exhausted, falling back`);
+          console.warn(`[gemini] ${name} exhausted, falling back`);
         }
       }
     }
@@ -223,12 +226,12 @@ app.post("/api/scan", async (req, res) => {
 // ─────────────────────────────
 // speakers: [{ name: "Gemini", provider: "gemini" }, { name: "Claude", provider: "claude" }, ...]
 // 各 provider 用の API キーが入るまで全部 Gemini にフォールバックする。
-// キー入手後は callByProvider() の分岐を埋めれば差し替え完了。
+// 会社方針議論用途のため、3者とも最上位モデル + 出力長め (2000 tokens)。
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
+const DEBATE_MAX_TOKENS = 2000;
 
 async function callByProvider(provider, prompt) {
-  // TODO: ANTHROPIC_API_KEY / OPENAI_API_KEY が入ったら下の分岐を有効化
   if (provider === "claude" && ANTHROPIC_API_KEY) {
     const r = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
@@ -238,8 +241,8 @@ async function callByProvider(provider, prompt) {
         "anthropic-version": "2023-06-01",
       },
       body: JSON.stringify({
-        model: "claude-sonnet-4-6",
-        max_tokens: 400,
+        model: "claude-opus-4-7",
+        max_tokens: DEBATE_MAX_TOKENS,
         messages: [{ role: "user", content: prompt }],
       }),
     });
@@ -255,17 +258,20 @@ async function callByProvider(provider, prompt) {
         authorization: "Bearer " + OPENAI_API_KEY,
       },
       body: JSON.stringify({
-        model: "gpt-4o",
+        model: "gpt-5",
         messages: [{ role: "user", content: prompt }],
-        max_tokens: 400,
+        max_completion_tokens: DEBATE_MAX_TOKENS,
       }),
     });
     if (!r.ok) throw new Error(`openai ${r.status}: ${await r.text()}`);
     const j = await r.json();
     return { text: j.choices?.[0]?.message?.content || "", modelUsed: j.model };
   }
-  // Gemini (本物 or 他 provider のフォールバック)
-  const { result, modelUsed } = await callGeminiWithFallback(prompt);
+  // Gemini (本物 or 他 provider のフォールバック)。会社方針議論なので Pro 固定。
+  const { result, modelUsed } = await callGeminiWithFallback(prompt, {
+    primaryModel: "gemini-2.5-pro",
+    maxOutputTokens: DEBATE_MAX_TOKENS,
+  });
   return { text: result.response.text(), modelUsed };
 }
 
@@ -278,12 +284,24 @@ app.post("/api/debate", async (req, res) => {
       return res.status(400).json({ error: "speakers (2人以上) required" });
     }
 
+    const providerLabel = {
+      gemini: "Google が開発した大規模言語モデル Gemini",
+      claude: "Anthropic が開発した大規模言語モデル Claude",
+      gpt:    "OpenAI が開発した大規模言語モデル GPT",
+    };
+
     let prompt;
     let provider = "gemini";
     if (summary) {
       const log = history.map((h) => `${h.name}：${h.text}`).join("\n") || "（発言なし）";
       const names = speakers.map((s) => s.name).join("・");
-      prompt = `お題「${topic}」について ${names} の3つのAIが議論しました。論点と結論を200字以内でまとめてください。プレーンテキストで、装飾や箇条書きは使わない。
+      prompt = `お題「${topic}」について ${names} の3つのAIが議論しました。
+議論全体を踏まえて以下を出力してください：
+1. 主要な論点（3つまで、各1〜2文）
+2. 各AIの立場の違いがどこにあったか
+3. 結論（合意があれば合意点、無ければ残された対立点）
+
+全体で600〜900字程度。プレーンテキストで、見出しは「【論点】」「【立場の違い】」「【結論】」のように記号付きで区切る。マークダウン記法は使わない。
 
 議論ログ:
 ${log}
@@ -293,13 +311,21 @@ ${log}
       const me = speakers.find((s) => s.name === nextSpeaker);
       if (!me) return res.status(400).json({ error: "nextSpeaker not in speakers" });
       provider = me.provider || "gemini";
+      const meLabel = providerLabel[provider] || `AI「${me.name}」`;
       const others = speakers.filter((s) => s.name !== nextSpeaker)
-        .map((s) => `・${s.name}`).join("\n");
+        .map((s) => `・${s.name}（${providerLabel[s.provider] || s.name}）`).join("\n");
       const log = history.length
         ? history.map((h) => `${h.name}：${h.text}`).join("\n")
         : "（まだ誰も発言していない）";
-      prompt = `あなたは AI「${me.name}」です。今、複数のAIで次のお題について議論しています：
+      prompt = `あなたは ${meLabel} です。
+今、複数社の AI が一堂に会する公開ディベートに参加しています。
+あなた自身のモデルとしての訓練上の傾向・思想・回答スタイルを抑え込まず、素のまま出してください。
+他社の AI の発言には礼儀正しく接しつつ、忖度せず、おかしいと思えば率直に反論してください。
+
+お題：
 「${topic}」
+
+お題は社内の経営判断・組織方針に関わる議題です。抽象論で逃げず、具体的な根拠・想定リスク・実行可能性まで踏み込んで議論してください。
 
 他の参加者:
 ${others}
@@ -307,11 +333,13 @@ ${others}
 これまでの発言:
 ${log}
 
-あなた（${me.name}）の番です。80〜140字程度で発言してください。
-- 直前の発言に必ず反応する（同意・反論・補足・質問など）
-- 自分の意見・立場を明確に出す
+あなた（${me.name}）の番です。以下を守って発言してください：
+- 300〜600字程度。論理を展開できる長さで。
+- 直前の発言には必ず明示的に反応する（同意・反論・補足・突っ込み・質問）
+- 自分の立場・結論を明確に出す。曖昧な両論併記で逃げない。
+- 根拠や具体例を1つ以上交える
 - 「${me.name}：」のような名前プレフィックスは不要、本文だけ
-- マークダウン・記号装飾なし、自然な話し言葉で
+- マークダウン・箇条書き記号は使わない、自然な話し言葉で
 発言:`;
     }
 
