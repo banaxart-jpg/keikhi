@@ -59,7 +59,13 @@ textarea:focus, input:focus { outline: none; }
 .msg .body { background: var(--bg); padding: 10px 14px; border-radius: 16px; font-size: 13.5px; line-height: 1.6; box-shadow: 4px 4px 10px var(--sd), -3px -3px 10px var(--sl); white-space: pre-wrap; word-break: break-word; }
 .msg .who { font-size: 11px; font-weight: 700; color: var(--text2); margin-bottom: 3px; display: flex; gap: 6px; align-items: baseline; }
 .msg .meta { font-size: 9px; color: var(--text3); }
-.msg.thinking .body { color: var(--text3); font-style: italic; }
+.msg.thinking .body { color: var(--text2); font-style: italic; display: flex; align-items: center; gap: 8px; }
+.msg.thinking .dot { animation: dot-pulse 1.4s ease-in-out infinite; }
+@keyframes dot-pulse { 0%, 100% { transform: scale(1); opacity: 1; } 50% { transform: scale(0.85); opacity: 0.55; } }
+.spinner { width: 12px; height: 12px; border: 2px solid rgba(73,97,255,0.2); border-top-color: #4961ff; border-radius: 50%; animation: spin 0.8s linear infinite; flex-shrink: 0; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.elapsed { font-size: 10px; color: var(--text3); margin-left: 4px; font-variant-numeric: tabular-nums; }
+
 .msg.system .body { background: rgba(154,160,184,0.12); color: var(--text2); font-size: 12.5px; line-height: 1.6; }
 .msg.system .who { color: var(--text3); }
 .summary-card { margin-top: 16px; padding: 16px; border-radius: 18px; background: linear-gradient(135deg, #fff4e0, #ffe7d0); box-shadow: 6px 6px 14px var(--sd), -4px -4px 12px var(--sl); white-space: pre-wrap; word-break: break-word; }
@@ -313,12 +319,18 @@ async function refreshSession() {
     const { session, messages } = await api("GET", `/api/kaigi/sessions/${state.sessionId}`);
     state.session = session;
     state.messages = messages;
+    // メッセージが増えてたら thinking タイマーをリセット
+    if (messages.length !== lastMsgCount) {
+      lastMsgCount = messages.length;
+      if (session.status === "auto") resetThinkingTimer();
+    }
     renderSession();
-    // status === 'auto' なら自動ポーリング
     if (session.status === "auto") {
       ensurePoll();
+      if (!thinkingStartedAt) resetThinkingTimer();
     } else {
       stopPoll();
+      stopThinkingTimer();
     }
   } catch (e) {
     errSession(e.message);
@@ -410,9 +422,10 @@ function renderSession() {
       <div class="dot" style="background:${next.color}">${next.short}</div>
       <div>
         <div class="who">${next.name}</div>
-        <div class="body">考え中…</div>
+        <div class="body"><div class="spinner"></div>考え中<span class="elapsed" id="thinkingElapsed"></span></div>
       </div>`;
     chat.appendChild(div);
+    updateThinkingElapsed();
   }
 
   // 結論
@@ -542,6 +555,34 @@ function ensurePoll() {
 }
 function stopPoll() {
   if (state.pollTimer) { clearInterval(state.pollTimer); state.pollTimer = null; }
+}
+
+// thinking 経過秒数の表示（1秒ごとに更新）
+let thinkingTimer = null;
+let thinkingStartedAt = null;
+let lastMsgCount = 0;
+function updateThinkingElapsed() {
+  const el = $("thinkingElapsed");
+  if (!el || !thinkingStartedAt) return;
+  const sec = Math.floor((Date.now() - thinkingStartedAt) / 1000);
+  const min = Math.floor(sec / 60);
+  el.textContent = ` (${min ? min + "分" : ""}${sec % 60}秒経過)`;
+  // 60秒超えても進まなければ停滞警告
+  if (sec > 60) {
+    el.textContent += " — 詰まってる可能性あり";
+    el.style.color = "var(--err)";
+  }
+}
+function ensureThinkingTimer() {
+  if (!thinkingTimer) thinkingTimer = setInterval(updateThinkingElapsed, 1000);
+}
+function resetThinkingTimer() {
+  thinkingStartedAt = Date.now();
+  ensureThinkingTimer();
+}
+function stopThinkingTimer() {
+  if (thinkingTimer) { clearInterval(thinkingTimer); thinkingTimer = null; }
+  thinkingStartedAt = null;
 }
 
 // ─── API 呼び出し（Firebase ID token 付き） ───
