@@ -78,16 +78,19 @@ cloudbuild.yaml の流れ：
 4. **ensure-hosting-site** — Hosting site `keihi-496002` を冪等に作成
 5. **deploy-hosting** — `firebase deploy --only hosting`（プロジェクト root の `firebase.json` を使用）
 
-手動再デプロイ：
+### 手動 deploy（緊急時のみ）
+
+`firebase deploy` 直接呼び出しは**禁止**（ローカル clone が古いと過去状態を本番に上書きするため）。手動 deploy は必ず以下のラッパー経由：
+
 ```bash
-gcloud builds submit --config=apps/keihi/cloudbuild.yaml --region=asia-northeast1 .
+bash infra/deploy-hosting.sh
 ```
 
-緊急時の Hosting だけ手動デプロイ（Cloud Shell）：
+内部で `git fetch && git pull --ff-only origin main` してから `firebase deploy` する。
+
+Cloud Run + Hosting 全体を再ビルドしたい場合：
 ```bash
-RUN_URL=$(gcloud run services describe keihi-api --region=asia-northeast1 --format='value(status.url)')
-echo "window.API_BASE='$RUN_URL';" > apps/config.js
-firebase deploy --only hosting --project=static-epigram-496002-v8
+gcloud builds submit --config=apps/keihi/cloudbuild.yaml --region=asia-northeast1 .
 ```
 
 ## ローカル実行

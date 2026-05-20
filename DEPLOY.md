@@ -202,19 +202,51 @@ Cloud Build に**接続済み**である必要がある。未接続だと bootst
 
 ---
 
-## 4. 手動デプロイ（接続前の暫定 / フォールバック）
+## 4. 手動デプロイ（緊急時のみ）
 
-トリガ接続が済むまでの間、または緊急時のみ。**通常運用では不要**。
+通常は `main` に push すれば Cloud Build が自動 deploy する。手動は緊急時のみ。
+
+### ⚠️ 重要：`firebase deploy` の直接呼び出しは禁止
+
+直接 `firebase deploy --only hosting` を打つと、**ローカル clone が古い時に過去状態を本番 Hosting に上書きしてしまう**（実際に1回事故が発生）。Cloud Build はその後正しい状態を deploy しても、人間が再び古い clone から `firebase deploy` を打てば再発する。
+
+### ✅ 手動 deploy する場合の正規ルート
+
+```bash
+bash infra/deploy-hosting.sh
+```
+
+このラッパーが内部で:
+1. `git fetch origin main` で remote を更新
+2. ローカル main を `git pull --ff-only origin main` で最新化（未 push 不可・stale 不可）
+3. `gcloud run services describe` で Cloud Run URL 取得 → `apps/config.js` を生成
+4. `firebase deploy --only hosting --config=firebase.json`
+
+main 以外のブランチや未 push commit があると最初の段階で exit 1 で止まる。古い clone からの暴発を構造的に防ぐ。
+
+### Cloud Build を手動で再発火させたい場合
+
+Cloud Build を経由したいなら、空 commit で trigger を叩く：
+
+```bash
+git fetch origin main
+git checkout main && git pull --ff-only origin main
+git commit --allow-empty -m "Force redeploy"
+git push origin main
+```
+
+### admin 側
+
+admin（別 Hosting site）も同様、`bash infra/deploy-hosting.sh` を使うか、Cloud Build トリガ経由で：
 
 ```
-gcloud builds submit --config=apps/keihi/cloudbuild.yaml --region=asia-northeast1 .
 gcloud builds submit --config=apps/admin/cloudbuild.yaml --region=asia-northeast1 .
 ```
 
-ビルド状況：
+### ビルド状況
 
-```
-gcloud builds list --region=asia-northeast1 --limit=5
+```bash
+gcloud builds list --region=global --project=static-epigram-496002-v8 --limit=5
 ```
 
 ---

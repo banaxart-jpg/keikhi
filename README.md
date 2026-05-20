@@ -317,6 +317,16 @@ apps/                          ← Hosting 公開ルート（site: keihi-496002�
 
 ### 手動デプロイ（緊急時のみ）
 
+`firebase deploy --only hosting` を**直接打つのは禁止**。ローカル clone が古いと過去状態を本番に上書きする（過去に事故発生）。手動 deploy は必ずラッパー経由：
+
+```bash
+bash infra/deploy-hosting.sh
+```
+
+内部で `git fetch && git pull --ff-only origin main` してから deploy する。stale clone からの暴発を構造的にブロック。
+
+Cloud Run（バックエンド）含めて全体ビルドし直したいとき：
+
 ```bash
 gcloud builds submit --config=apps/keihi/cloudbuild.yaml --region=asia-northeast1 .
 gcloud builds submit --config=apps/admin/cloudbuild.yaml --region=asia-northeast1 .
