@@ -227,14 +227,15 @@ app.post("/api/scan", async (req, res) => {
 // ─────────────────────────────
 // speakers: [{ name: "Gemini", provider: "gemini" }, { name: "Claude", provider: "claude" }, ...]
 // 各 provider 用の API キーが入るまで全部 Gemini にフォールバックする。
-// 会社方針議論用途のため、3者とも最上位モデル + 出力長め (2000 tokens)。
+// 【デバッグ中】3者とも軽量モデル・短文設定。安定確認後に最上位モデルに戻す。
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-const DEBATE_MAX_TOKENS = 2000;
+const DEBATE_MAX_TOKENS = 800;
 
 async function callByProvider(provider, prompt, { web = true } = {}) {
   if (provider === "claude" && ANTHROPIC_API_KEY) {
     // Anthropic native web search (web_search_20250305)
+    // 【デバッグ中】haiku-4-5 で軽量・高速
     const r = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
       headers: {
@@ -243,10 +244,10 @@ async function callByProvider(provider, prompt, { web = true } = {}) {
         "anthropic-version": "2023-06-01",
       },
       body: JSON.stringify({
-        model: "claude-opus-4-7",
+        model: "claude-haiku-4-5",
         max_tokens: DEBATE_MAX_TOKENS,
         messages: [{ role: "user", content: prompt }],
-        ...(web ? { tools: [{ type: "web_search_20250305", name: "web_search", max_uses: 3 }] } : {}),
+        ...(web ? { tools: [{ type: "web_search_20250305", name: "web_search", max_uses: 2 }] } : {}),
       }),
     });
     if (!r.ok) throw new Error(`anthropic ${r.status}: ${await r.text()}`);
@@ -256,10 +257,15 @@ async function callByProvider(provider, prompt, { web = true } = {}) {
       .filter((b) => b.type === "text")
       .map((b) => b.text)
       .join("\n").trim();
+    if (!text) {
+      throw new Error(`claude 応答が空 (stop_reason=${j.stop_reason}, usage=${JSON.stringify(j.usage || {})})`);
+    }
     return { text, modelUsed: j.model };
   }
   if (provider === "gpt" && OPENAI_API_KEY) {
-    // GPT-5 は Responses API がメインライン、web_search ツールもここで使う
+    // 【デバッグ中】gpt-5-mini + reasoning minimal で速度優先
+    // GPT-5 は reasoning model なので max_output_tokens は reasoning + visible
+    // の合計。reasoning minimal でも余裕持って 3000 確保。
     const r = await fetch("https://api.openai.com/v1/responses", {
       method: "POST",
       headers: {
@@ -267,29 +273,41 @@ async function callByProvider(provider, prompt, { web = true } = {}) {
         authorization: "Bearer " + OPENAI_API_KEY,
       },
       body: JSON.stringify({
-        model: "gpt-5",
+        model: "gpt-5-mini",
         input: prompt,
-        max_output_tokens: DEBATE_MAX_TOKENS,
+        max_output_tokens: 3000,
+        reasoning: { effort: "minimal" },
         ...(web ? { tools: [{ type: "web_search" }] } : {}),
       }),
     });
     if (!r.ok) throw new Error(`openai ${r.status}: ${await r.text()}`);
     const j = await r.json();
-    const text = j.output_text
+    const text = (j.output_text
       || (j.output || [])
         .flatMap((o) => o.content || [])
-        .filter((c) => c.type === "output_text")
+        .filter((c) => c.type === "output_text" || c.type === "text")
         .map((c) => c.text)
-        .join("\n").trim();
+        .join("\n")
+    ).trim();
+    if (!text) {
+      const reason = j.incomplete_details?.reason || j.status || "unknown";
+      const usage = JSON.stringify(j.usage || {});
+      throw new Error(`gpt 応答が空 (reason=${reason}, usage=${usage})`);
+    }
     return { text, modelUsed: j.model };
   }
-  // Gemini (本物 or 他 provider のフォールバック)。会社方針議論なので Pro 固定。
+  // Gemini (本物 or 他 provider のフォールバック)。【デバッグ中】Flash で高速。
   const { result, modelUsed } = await callGeminiWithFallback(prompt, {
-    primaryModel: "gemini-2.5-pro",
+    primaryModel: "gemini-2.5-flash",
     maxOutputTokens: DEBATE_MAX_TOKENS,
     useGoogleSearch: web,
   });
-  return { text: result.response.text(), modelUsed };
+  const text = result.response.text().trim();
+  if (!text) {
+    const fr = result.response?.candidates?.[0]?.finishReason || "unknown";
+    throw new Error(`gemini 応答が空 (finishReason=${fr})`);
+  }
+  return { text, modelUsed };
 }
 
 app.post("/api/debate", async (req, res) => {
@@ -313,12 +331,7 @@ app.post("/api/debate", async (req, res) => {
       const log = history.map((h) => `${h.name}：${h.text}`).join("\n") || "（発言なし）";
       const names = speakers.map((s) => s.name).join("・");
       prompt = `お題「${topic}」について ${names} の3つのAIが議論しました。
-議論全体を踏まえて以下を出力してください：
-1. 主要な論点（3つまで、各1〜2文）
-2. 各AIの立場の違いがどこにあったか
-3. 結論（合意があれば合意点、無ければ残された対立点）
-
-全体で600〜900字程度。プレーンテキストで、見出しは「【論点】」「【立場の違い】」「【結論】」のように記号付きで区切る。マークダウン記法は使わない。
+論点と結論を200〜300字でまとめてください。プレーンテキスト、装飾なし。
 
 議論ログ:
 ${log}
@@ -354,10 +367,9 @@ ${others}
 ${log}
 
 あなた（${me.name}）の番です。以下を守って発言してください：
-- 300〜600字程度。論理を展開できる長さで。
+- 100〜200字程度で簡潔に（デバッグ中のため短め）
 - 直前の発言には必ず明示的に反応する（同意・反論・補足・突っ込み・質問）
-- 自分の立場・結論を明確に出す。曖昧な両論併記で逃げない。
-- 根拠や具体例を1つ以上交える（必要なら web 検索で裏付ける）
+- 自分の立場・結論を明確に出す
 - 「${me.name}：」のような名前プレフィックスは不要、本文だけ
 - マークダウン・箇条書き記号は使わない、自然な話し言葉で
 発言:`;
