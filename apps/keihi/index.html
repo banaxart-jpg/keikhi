@@ -146,12 +146,12 @@ select.nm-field option { background: #e4e6ee; color: #42455e; }
     <span></span>
     <button class="pill-btn" id="recordBtn" type="button">記録 <span id="recordCount">0</span>件 →</button>
   </div>
-  <p class="hint-text">名前タップで読取（最大5枚まとめて可）</p>
+  <p class="hint-text">名前タップで撮影（複数枚を並べて1ショットでOK）</p>
   <div class="buyers-row">
     <button class="buyer-btn" data-buyer="小西" type="button">小西</button>
     <button class="buyer-btn" data-buyer="名取" type="button">名取</button>
   </div>
-  <input type="file" id="fileInput" accept="image/*" multiple style="display:none">
+  <input type="file" id="fileInput" accept="image/*" capture="environment" style="display:none">
 </div>
 
 <!-- スキャン中 -->
@@ -334,9 +334,8 @@ let currentImgUrl = "";
 let scanResult = null;
 let sitesOpen = false;
 let editingId = null; // record id when editing an existing record (null = new)
-// 複数枚読取: 5枚まで一括取り込み→確認シートを順送りで登録。
-const BULK_MAX = 5;
-let bulkQueue = []; // [{ blobUrl, parsed, errMsg, imageUrl }]
+// 1枚の写真に複数の領収書が写っていたら、Gemini に全部抽出させて順送り確認。
+let bulkQueue = []; // [{ parsed, errMsg, imageUrl }]  ※ blobUrl は currentImgUrl で共有
 let bulkIndex = 0;
 const inBulk = () => bulkQueue.length > 0;
 
@@ -509,97 +508,62 @@ $("retakeBtn").addEventListener("click", () => {
 });
 
 // ───────── Scan ─────────
+// 1ショットで複数枚OK。サーバが receipts 配列を返してくる。
 async function handleFile(input) {
-  const files = Array.from(input.files || []);
+  const file = input.files?.[0];
+  if (!file) return;
   input.value = "";
-  if (!files.length) return;
-  if (files.length > BULK_MAX) {
-    toast(`一度に読み取れるのは${BULK_MAX}枚まで。最初の${BULK_MAX}枚で処理します`, true);
-  }
-  const picked = files.slice(0, BULK_MAX);
-  if (picked.length === 1) return handleSingle(picked[0]);
-  return handleBulk(picked);
-}
 
-// 1枚に対する読取。失敗しても他は止めない。
-async function scanOne(file) {
-  const blobUrl = URL.createObjectURL(file);
-  try {
-    const b64 = await resizeImage(file, 1200);
-    const parsed = await api("POST", "/api/scan", {
-      image: b64, mimeType: "image/jpeg",
-      sites: sites.map((s) => s.name),
-    });
-    return { blobUrl, parsed, errMsg: "", imageUrl: parsed?.imageUrl || null };
-  } catch (e) {
-    return { blobUrl, parsed: {}, errMsg: e.message || "読取失敗", imageUrl: null };
-  }
-}
-
-// 並列度3でスキャン → 確認シートを順送り。
-async function handleBulk(files) {
-  if (currentImgUrl) URL.revokeObjectURL(currentImgUrl);
-  currentImgUrl = URL.createObjectURL(files[0]);
-  $("previewImg").src = currentImgUrl;
-  const label = document.querySelector("#scanScreen .scan-label");
-  const setLabel = (n, total) => { if (label) label.textContent = `読み取り中… ${n}/${total}`; };
-  setLabel(0, files.length);
-  show("scanScreen");
-
-  const limit = 3;
-  const results = new Array(files.length);
-  let done = 0, next = 0;
-  async function worker() {
-    while (next < files.length) {
-      const i = next++;
-      results[i] = await scanOne(files[i]);
-      done++; setLabel(done, files.length);
-    }
-  }
-  await Promise.all(Array.from({ length: Math.min(limit, files.length) }, worker));
-
-  bulkQueue = results;
-  bulkIndex = 0;
-  reviewNext();
-}
-
-// bulk: 次の1枚を確認シートに送る。全部終わったらリスト画面へ。
-function reviewNext() {
-  if (currentImgUrl) { URL.revokeObjectURL(currentImgUrl); currentImgUrl = ""; }
-  if (bulkIndex >= bulkQueue.length) {
-    bulkQueue = []; bulkIndex = 0;
-    showList();
-    return;
-  }
-  const it = bulkQueue[bulkIndex];
-  currentImgUrl = it.blobUrl;
-  $("previewImg").src = currentImgUrl;
-  $("confirmImg").src = currentImgUrl;
-  scanResult = { ...(it.parsed || {}), imageUrl: it.imageUrl };
-  showConfirm(it.parsed || {}, it.errMsg || "");
-}
-
-async function handleSingle(file) {
   if (currentImgUrl) URL.revokeObjectURL(currentImgUrl);
   currentImgUrl = URL.createObjectURL(file);
   $("previewImg").src = currentImgUrl;
   $("confirmImg").src = currentImgUrl;
   show("scanScreen");
 
-  let parsed = {}, errMsg = "";
+  let resp = null, errMsg = "";
   try {
-    const b64 = await resizeImage(file, 1200);
-    parsed = await api("POST", "/api/scan", {
-      image: b64,
-      mimeType: "image/jpeg",
+    const b64 = await resizeImage(file, 1600); // 複数枚並び対応で少し高解像度
+    resp = await api("POST", "/api/scan", {
+      image: b64, mimeType: "image/jpeg",
       sites: sites.map((s) => s.name),
     });
-    scanResult = parsed;
   } catch (e) {
     errMsg = e.message;
-    scanResult = null;
   }
-  showConfirm(parsed, errMsg);
+
+  const receipts = resp?.receipts || [];
+  const imageUrl = resp?.imageUrl || null;
+
+  if (errMsg || receipts.length === 0) {
+    // 失敗 or 検出ゼロ → 空の確認シートをエラー付きで表示（ユーザーが手入力 or 撮り直し）
+    scanResult = { imageUrl };
+    showConfirm({}, errMsg || "領収書を検出できませんでした");
+    return;
+  }
+  if (receipts.length === 1) {
+    scanResult = { ...receipts[0], imageUrl };
+    showConfirm(receipts[0], "");
+    return;
+  }
+  // 複数検出 → 順送り確認
+  bulkQueue = receipts.map((r) => ({ parsed: r, errMsg: "", imageUrl }));
+  bulkIndex = 0;
+  reviewNext();
+}
+
+// bulk: 次の1枚を確認シートに送る。画像は同一なので blob はそのまま使い回す。
+function reviewNext() {
+  if (bulkIndex >= bulkQueue.length) {
+    bulkQueue = []; bulkIndex = 0;
+    if (currentImgUrl) { URL.revokeObjectURL(currentImgUrl); currentImgUrl = ""; }
+    showList();
+    return;
+  }
+  const it = bulkQueue[bulkIndex];
+  $("previewImg").src = currentImgUrl;
+  $("confirmImg").src = currentImgUrl;
+  scanResult = { ...(it.parsed || {}), imageUrl: it.imageUrl };
+  showConfirm(it.parsed || {}, it.errMsg || "");
 }
 
 function showConfirm(parsed, errMsg) {

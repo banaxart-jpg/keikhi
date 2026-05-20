@@ -189,7 +189,9 @@ app.post("/api/scan", async (req, res) => {
     }
 
     const today = new Date().toISOString().slice(0, 10);
-    const prompt = `領収書を読み取りJSONのみ返してください。\n{"date":"${today}","store":"","total":0,"category":"材料費 or 接待交際費 or ガソリン代 or 駐車場代 or 工具・備品 or 外注費 or その他","workType":"水道 or 電気 or 木工 or 塗装 or 左官 or 内装 or 外構 or 解体 or 設備 or その他","site":"${sites.join(" or ")}から最も近いものまたは空文字"}`;
+    // 1枚の画像に複数の領収書が並んでいたら全部抽出する。1枚だけなら要素1配列。
+    const prompt = `画像内の領収書を全て検出してJSONのみ返してください。複数並んでいる場合は全部を要素にした配列にする。1枚しか無くても要素1の配列。形式:
+{"receipts":[{"date":"YYYY-MM-DD(無ければ${today})","store":"店舗名","total":合計金額の数値,"category":"材料費 or 接待交際費 or ガソリン代 or 駐車場代 or 工具・備品 or 外注費 or その他","workType":"水道 or 電気 or 木工 or 塗装 or 左官 or 内装 or 外構 or 解体 or 設備 or その他","site":"${sites.join(" or ") || "(空文字でOK)"}から最も近いものまたは空文字"}]}`;
     const { result, modelUsed } = await callGeminiWithFallback([
       prompt,
       { inlineData: { data: image, mimeType } },
@@ -198,8 +200,12 @@ app.post("/api/scan", async (req, res) => {
     const s = text.indexOf("{");
     const e = text.lastIndexOf("}");
     if (s < 0 || e <= s) throw new Error("AI response did not contain JSON");
-    const parsed = JSON.parse(text.slice(s, e + 1));
-    res.json({ ...parsed, imageUrl, modelUsed });
+    const raw = JSON.parse(text.slice(s, e + 1));
+    // 後方互換: Gemini が単一オブジェクトを返した場合も配列に正規化
+    const receipts = Array.isArray(raw?.receipts)
+      ? raw.receipts
+      : (raw && (raw.store || raw.total || raw.date)) ? [raw] : [];
+    res.json({ receipts, imageUrl, modelUsed });
   } catch (err) {
     console.error("scan error", err);
     const msg = String(err?.message || err);
