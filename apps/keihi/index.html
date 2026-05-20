@@ -270,6 +270,21 @@ select.nm-field option { background: #e4e6ee; color: #42455e; }
       </button>
       <div id="sitesList" style="display:none"></div>
     </div>
+    <div class="sites-manage-card">
+      <button class="sites-toggle" id="sheetToggleBtn" type="button">
+        <span>スプレッドシート連携 <span id="sheetState" style="font-size:9px;color:var(--bulb2);text-shadow:0 0 6px var(--bulb-glow2);"></span></span><span id="sheetArrow">▼</span>
+      </button>
+      <div id="sheetPanel" style="display:none; padding:14px 18px 16px;">
+        <label style="font-size:11px;color:var(--text2);font-weight:700;display:block;margin-bottom:6px;">Apps Script の URL</label>
+        <input type="text" id="sheetUrlInput" class="nm-field" placeholder="https://script.google.com/macros/s/…/exec" style="font-size:11px;font-family:ui-monospace,Menlo,monospace;">
+        <div style="display:flex;gap:8px;margin-top:10px;">
+          <button class="pill-btn" id="sheetSaveBtn" type="button">保存</button>
+          <button class="pill-btn" id="sheetClearBtn" type="button">クリア</button>
+          <button class="pill-btn" id="sheetTestBtn" type="button">テスト送信</button>
+        </div>
+        <div id="sheetStatusMsg" style="font-size:11px;color:var(--text2);margin-top:10px;word-break:break-all;"></div>
+      </div>
+    </div>
     <div id="recordList"></div>
   </div>
   <div class="list-add-btn">
@@ -485,6 +500,24 @@ async function loadData() {
     api("GET", "/api/records").catch(() => []),
     api("GET", "/api/sites").catch(() => []),
   ]);
+}
+
+// ───────── Spreadsheet (Apps Script Web App) ─────────
+// 経費登録の度に GAS URL に POST して月別タブに append する。
+// CORS preflight を避けるため Content-Type を指定しない (= ブラウザは text/plain で送る)。
+function getSheetUrl() {
+  return (localStorage.getItem("sheetUrl") || "").trim();
+}
+async function postToSheet(record) {
+  const url = getSheetUrl();
+  if (!url) return { skipped: true };
+  try {
+    await fetch(url, { method: "POST", body: JSON.stringify(record), redirect: "follow" });
+    return { ok: true };
+  } catch (e) {
+    console.warn("[sheet] post failed", e);
+    return { ok: false, error: e.message };
+  }
 }
 
 // ───────── Image utils ─────────
@@ -868,7 +901,13 @@ $("submitBtn").addEventListener("click", async () => {
     } else {
       const saved = await api("POST", "/api/records", record);
       records.unshift({ ...record, id: saved.id, createdAt: saved.created_at });
-      toast("✅ 登録しました！");
+      const sheetRes = await postToSheet(record);
+      const okMsg = sheetRes.skipped
+        ? "✅ 登録しました！"
+        : sheetRes.ok
+          ? "✅ 登録しました！📊シートにも追加"
+          : "✅ 登録（⚠️シートへの追加は失敗）";
+      toast(okMsg);
       if (inBulk()) { bulkIndex++; reviewNext(); }
       else showBuyer();
     }
@@ -888,6 +927,58 @@ $("sitesToggleBtn").addEventListener("click", () => {
   $("sitesList").style.display = sitesOpen ? "block" : "none";
   $("sitesArrow").textContent = sitesOpen ? "▲" : "▼";
 });
+
+let sheetOpen = false;
+function refreshSheetState() {
+  const u = getSheetUrl();
+  $("sheetState").textContent = u ? "● 接続済" : "";
+}
+$("sheetToggleBtn").addEventListener("click", () => {
+  sheetOpen = !sheetOpen;
+  $("sheetPanel").style.display = sheetOpen ? "block" : "none";
+  $("sheetArrow").textContent = sheetOpen ? "▲" : "▼";
+  if (sheetOpen) {
+    $("sheetUrlInput").value = getSheetUrl();
+    $("sheetStatusMsg").textContent = "";
+  }
+});
+$("sheetSaveBtn").addEventListener("click", () => {
+  const u = $("sheetUrlInput").value.trim();
+  if (u && !/^https:\/\/script\.google\.com\/.*\/exec/.test(u)) {
+    $("sheetStatusMsg").textContent = "⚠️ Apps Script の URL（…/exec で終わるやつ）を入れてください";
+    return;
+  }
+  if (u) localStorage.setItem("sheetUrl", u);
+  else localStorage.removeItem("sheetUrl");
+  refreshSheetState();
+  $("sheetStatusMsg").textContent = u ? "✅ 保存しました" : "🗑 クリアしました";
+});
+$("sheetClearBtn").addEventListener("click", () => {
+  localStorage.removeItem("sheetUrl");
+  $("sheetUrlInput").value = "";
+  refreshSheetState();
+  $("sheetStatusMsg").textContent = "🗑 クリアしました";
+});
+$("sheetTestBtn").addEventListener("click", async () => {
+  const u = $("sheetUrlInput").value.trim();
+  if (!u) { $("sheetStatusMsg").textContent = "URL を先に入れてください"; return; }
+  // 入力中の URL を一時保存して送る
+  const prev = getSheetUrl();
+  localStorage.setItem("sheetUrl", u);
+  $("sheetStatusMsg").textContent = "📤 テスト送信中…";
+  const today = new Date().toISOString().slice(0, 10);
+  const res = await postToSheet({
+    date: today, buyer: "テスト", site: "テスト現場", store: "テスト",
+    total: 1, category: "その他", workType: "その他", payment: "現金",
+    memo: "経費アプリからの接続テスト",
+  });
+  // 元に戻す（保存ボタン押さなきゃ反映しない方針）
+  if (prev) localStorage.setItem("sheetUrl", prev); else localStorage.removeItem("sheetUrl");
+  refreshSheetState();
+  if (res.ok) $("sheetStatusMsg").textContent = "✅ 送信できました（スプレッドシート開いて確認してみて）";
+  else $("sheetStatusMsg").textContent = "⚠️ 送信失敗: " + (res.error || "不明");
+});
+refreshSheetState();
 $("filterSite").addEventListener("change", renderList);
 $("filterMonth").addEventListener("change", renderList);
 
