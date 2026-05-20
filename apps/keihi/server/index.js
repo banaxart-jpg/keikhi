@@ -221,8 +221,54 @@ app.post("/api/scan", async (req, res) => {
 // ─────────────────────────────
 // AI 3人議論 (giron)
 // ─────────────────────────────
-// 1リクエスト = 1発言生成。フロントが speakers/history/nextSpeaker を渡して
-// 1人ずつ順番に発言を取りに来る。summary:true でまとめモード。
+// speakers: [{ name: "Gemini", provider: "gemini" }, { name: "Claude", provider: "claude" }, ...]
+// 各 provider 用の API キーが入るまで全部 Gemini にフォールバックする。
+// キー入手後は callByProvider() の分岐を埋めれば差し替え完了。
+const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
+
+async function callByProvider(provider, prompt) {
+  // TODO: ANTHROPIC_API_KEY / OPENAI_API_KEY が入ったら下の分岐を有効化
+  if (provider === "claude" && ANTHROPIC_API_KEY) {
+    const r = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-api-key": ANTHROPIC_API_KEY,
+        "anthropic-version": "2023-06-01",
+      },
+      body: JSON.stringify({
+        model: "claude-sonnet-4-6",
+        max_tokens: 400,
+        messages: [{ role: "user", content: prompt }],
+      }),
+    });
+    if (!r.ok) throw new Error(`anthropic ${r.status}: ${await r.text()}`);
+    const j = await r.json();
+    return { text: j.content?.[0]?.text || "", modelUsed: j.model };
+  }
+  if (provider === "gpt" && OPENAI_API_KEY) {
+    const r = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: "Bearer " + OPENAI_API_KEY,
+      },
+      body: JSON.stringify({
+        model: "gpt-4o",
+        messages: [{ role: "user", content: prompt }],
+        max_tokens: 400,
+      }),
+    });
+    if (!r.ok) throw new Error(`openai ${r.status}: ${await r.text()}`);
+    const j = await r.json();
+    return { text: j.choices?.[0]?.message?.content || "", modelUsed: j.model };
+  }
+  // Gemini (本物 or 他 provider のフォールバック)
+  const { result, modelUsed } = await callGeminiWithFallback(prompt);
+  return { text: result.response.text(), modelUsed };
+}
+
 app.post("/api/debate", async (req, res) => {
   try {
     if (!genAI) return res.status(503).json({ error: "GEMINI_API_KEY not configured" });
@@ -233,10 +279,11 @@ app.post("/api/debate", async (req, res) => {
     }
 
     let prompt;
+    let provider = "gemini";
     if (summary) {
       const log = history.map((h) => `${h.name}：${h.text}`).join("\n") || "（発言なし）";
       const names = speakers.map((s) => s.name).join("・");
-      prompt = `お題「${topic}」について ${names} の3人が議論しました。論点と結論を200字以内でまとめてください。プレーンテキストで、装飾や箇条書きは使わない。
+      prompt = `お題「${topic}」について ${names} の3つのAIが議論しました。論点と結論を200字以内でまとめてください。プレーンテキストで、装飾や箇条書きは使わない。
 
 議論ログ:
 ${log}
@@ -245,13 +292,14 @@ ${log}
     } else {
       const me = speakers.find((s) => s.name === nextSpeaker);
       if (!me) return res.status(400).json({ error: "nextSpeaker not in speakers" });
+      provider = me.provider || "gemini";
       const others = speakers.filter((s) => s.name !== nextSpeaker)
-        .map((s) => `・${s.name}（${s.persona}）`).join("\n");
+        .map((s) => `・${s.name}`).join("\n");
       const log = history.length
         ? history.map((h) => `${h.name}：${h.text}`).join("\n")
         : "（まだ誰も発言していない）";
-      prompt = `あなたは「${me.name}」、性格・立場は「${me.persona}」です。
-3人でお題について議論しています：「${topic}」
+      prompt = `あなたは AI「${me.name}」です。今、複数のAIで次のお題について議論しています：
+「${topic}」
 
 他の参加者:
 ${others}
@@ -260,23 +308,22 @@ ${others}
 ${log}
 
 あなた（${me.name}）の番です。80〜140字程度で発言してください。
-- 直前の発言に必ず反応する（同意・反論・補足・突っ込み等）
-- キャラの立場・性格を反映させる
+- 直前の発言に必ず反応する（同意・反論・補足・質問など）
+- 自分の意見・立場を明確に出す
 - 「${me.name}：」のような名前プレフィックスは不要、本文だけ
 - マークダウン・記号装飾なし、自然な話し言葉で
 発言:`;
     }
 
-    const { result, modelUsed } = await callGeminiWithFallback(prompt);
-    const text = result.response.text().trim()
-      .replace(/^[「『"']/, "").replace(/[」』"']$/, "");
-    res.json({ text, modelUsed });
+    const { text: raw, modelUsed } = await callByProvider(provider, prompt);
+    const text = raw.trim().replace(/^[「『"']/, "").replace(/[」』"']$/, "");
+    res.json({ text, modelUsed, provider });
   } catch (err) {
     console.error("debate error", err);
     const msg = String(err?.message || err);
     const isTransient = /\b(503|429|500)\b|UNAVAILABLE|overload|high demand/i.test(msg);
     res.status(isTransient ? 503 : 500).json({
-      error: isTransient ? `Gemini が混雑中: ${msg.slice(0, 200)}` : msg,
+      error: isTransient ? `AI が混雑中: ${msg.slice(0, 200)}` : msg,
     });
   }
 });

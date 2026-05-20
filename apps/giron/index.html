@@ -13,7 +13,9 @@
 :root {
   --bg: #e4e6ee; --sl: rgba(255,255,255,1); --sd: rgba(168,172,192,0.75);
   --text: #42455e; --text2: rgba(66,69,94,0.52); --text3: rgba(66,69,94,0.28);
-  --c1: #ff8a5b; --c2: #5badff; --c3: #6dcf9e;
+  --gemini: #4285f4;
+  --claude: #d97706;
+  --gpt:    #10a37f;
   --err: #b04040;
 }
 body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; padding-bottom: 100px; }
@@ -26,30 +28,27 @@ body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); 
 .subtitle { font-size: 12px; color: var(--text2); font-weight: 600; margin-top: 2px; margin-bottom: 22px; }
 
 .card { background: var(--bg); border-radius: 22px; padding: 18px; margin-bottom: 16px; box-shadow: 8px 8px 18px var(--sd), -6px -6px 16px var(--sl); }
-.label { font-size: 11px; font-weight: 700; letter-spacing: 0.16em; color: var(--text3); text-transform: uppercase; margin-bottom: 8px; }
-textarea, input { width: 100%; border: none; background: var(--bg); padding: 12px 14px; border-radius: 14px; font-size: 14px; font-family: inherit; color: var(--text); resize: none; box-shadow: inset 3px 3px 8px var(--sd), inset -3px -3px 8px var(--sl); }
-textarea:focus, input:focus { outline: none; }
-textarea { min-height: 60px; line-height: 1.5; }
+.label { font-size: 11px; font-weight: 700; letter-spacing: 0.16em; color: var(--text3); text-transform: uppercase; margin-bottom: 10px; }
+textarea { width: 100%; border: none; background: var(--bg); padding: 12px 14px; border-radius: 14px; font-size: 14px; font-family: inherit; color: var(--text); resize: none; box-shadow: inset 3px 3px 8px var(--sd), inset -3px -3px 8px var(--sl); min-height: 60px; line-height: 1.5; }
+textarea:focus { outline: none; }
 
-.speaker-row { display: grid; grid-template-columns: 36px 1fr; gap: 10px; align-items: start; margin-top: 10px; }
-.dot { width: 36px; height: 36px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: 800; color: white; font-size: 14px; box-shadow: 3px 3px 8px var(--sd), -3px -3px 8px var(--sl); }
-.d1 { background: linear-gradient(135deg, #ffae5e, var(--c1)); }
-.d2 { background: linear-gradient(135deg, #7ec0ff, var(--c2)); }
-.d3 { background: linear-gradient(135deg, #8fe0b8, var(--c3)); }
-.speaker-fields { display: grid; gap: 6px; }
-.speaker-fields .name { font-size: 13px; font-weight: 700; padding: 8px 12px; }
-.speaker-fields .persona { font-size: 12px; padding: 8px 12px; min-height: 40px; }
+.speakers { display: flex; gap: 10px; }
+.speaker { flex: 1; padding: 12px 8px; border-radius: 14px; text-align: center; background: var(--bg); box-shadow: inset 3px 3px 8px var(--sd), inset -3px -3px 8px var(--sl); }
+.speaker .dot { width: 30px; height: 30px; border-radius: 50%; margin: 0 auto 6px; color: white; font-weight: 800; font-size: 12px; display: flex; align-items: center; justify-content: center; box-shadow: 2px 2px 6px var(--sd); }
+.speaker .nm { font-size: 12px; font-weight: 700; }
+.speaker .sub { font-size: 9px; color: var(--text2); font-weight: 600; margin-top: 2px; }
 
 .actions { display: flex; gap: 10px; margin-top: 18px; }
 .btn { flex: 1; padding: 14px; border-radius: 18px; border: none; font-size: 14px; font-weight: 700; font-family: inherit; color: var(--text); background: var(--bg); box-shadow: 6px 6px 14px var(--sd), -5px -5px 14px var(--sl); cursor: pointer; }
 .btn:active { box-shadow: inset 4px 4px 10px var(--sd), inset -3px -3px 10px var(--sl); transform: scale(0.98); }
 .btn:disabled { opacity: 0.45; cursor: not-allowed; }
-.btn.primary { color: white; background: linear-gradient(135deg, #6b7eff, #4961ff); box-shadow: 6px 6px 14px var(--sd), -5px -5px 14px var(--sl); }
+.btn.primary { color: white; background: linear-gradient(135deg, #6b7eff, #4961ff); }
 .btn.primary:disabled { background: #aaa; }
 
 .chat { display: flex; flex-direction: column; gap: 12px; }
 .msg { display: grid; grid-template-columns: 36px 1fr; gap: 10px; align-items: start; animation: fade 0.3s ease; }
 @keyframes fade { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+.msg .dot { width: 36px; height: 36px; border-radius: 50%; color: white; font-weight: 800; font-size: 12px; display: flex; align-items: center; justify-content: center; box-shadow: 3px 3px 8px var(--sd); }
 .msg .body { background: var(--bg); padding: 10px 14px; border-radius: 16px; font-size: 13.5px; line-height: 1.6; box-shadow: 4px 4px 10px var(--sd), -3px -3px 10px var(--sl); }
 .msg .who { font-size: 11px; font-weight: 700; color: var(--text2); margin-bottom: 3px; }
 .msg.thinking .body { color: var(--text3); font-style: italic; }
@@ -59,6 +58,7 @@ textarea { min-height: 60px; line-height: 1.5; }
 
 .err { color: var(--err); font-size: 12px; margin-top: 10px; font-weight: 600; }
 .empty { text-align: center; color: var(--text3); font-size: 12px; padding: 30px 0; font-weight: 600; }
+.note { font-size: 10px; color: var(--text3); text-align: center; margin-top: 6px; font-weight: 600; }
 </style>
 </head>
 <body>
@@ -70,16 +70,17 @@ textarea { min-height: 60px; line-height: 1.5; }
 
 <div class="wrap">
   <div class="title">AI議論</div>
-  <div class="subtitle">3人のAIにお題を投げて議論させる</div>
+  <div class="subtitle">Gemini / Claude / GPT の3者で議論させる</div>
 
   <div class="card">
     <div class="label">お題</div>
     <textarea id="topic" placeholder="例：会社の昼休みは1時間と2時間どっちがいい？"></textarea>
   </div>
 
-  <div class="card" id="speakersCard">
-    <div class="label">参加者 (キャラは編集できる)</div>
-    <div id="speakers"></div>
+  <div class="card">
+    <div class="label">参加者</div>
+    <div class="speakers" id="speakers"></div>
+    <div class="note" id="providerNote"></div>
   </div>
 
   <div class="actions">
@@ -104,18 +105,13 @@ textarea { min-height: 60px; line-height: 1.5; }
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js";
 import { getAuth, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
 
-const DEFAULT_SPEAKERS = [
-  { name: "ニコラ", persona: "天才発明家ニコラ・テスラ。突飛な発想で常識を覆す。電気と直感の人。可能性とロマンを最優先し、効率より美しさで判断する。", cls: "d1" },
-  { name: "苫米地英人", persona: "認知科学者。抽象度を上げて議論し、相手の前提や認知バイアスをメタに指摘する。ゴール設定とコンフォートゾーンの観点で物事を捉え直す。やや断定的。", cls: "d2" },
-  { name: "ソクラテス", persona: "古代ギリシアの哲学者。安易な結論を許さず、用語の定義と前提を問い直す。『それはどういう意味か』『なぜそう言える』と質問で追い詰める。", cls: "d3" },
+const SPEAKERS = [
+  { name: "Gemini", provider: "gemini", short: "G", color: "var(--gemini)" },
+  { name: "Claude", provider: "claude", short: "C", color: "var(--claude)" },
+  { name: "GPT",    provider: "gpt",    short: "Φ", color: "var(--gpt)" },
 ];
 
-const state = {
-  speakers: DEFAULT_SPEAKERS.map((s) => ({ ...s })),
-  history: [],
-  busy: false,
-  roundIdx: 0, // 次に喋る人のインデックス
-};
+const state = { history: [], busy: false, roundIdx: 0 };
 
 const $ = (id) => document.getElementById(id);
 const err = (m) => { $("err").textContent = m || ""; };
@@ -123,24 +119,16 @@ const err = (m) => { $("err").textContent = m || ""; };
 function renderSpeakers() {
   const wrap = $("speakers");
   wrap.innerHTML = "";
-  state.speakers.forEach((s, i) => {
-    const row = document.createElement("div");
-    row.className = "speaker-row";
-    row.innerHTML = `
-      <div class="dot ${s.cls}">${i + 1}</div>
-      <div class="speaker-fields">
-        <input class="name" data-i="${i}" data-k="name" value="${s.name}">
-        <textarea class="persona" data-i="${i}" data-k="persona">${s.persona}</textarea>
-      </div>`;
-    wrap.appendChild(row);
-  });
-  wrap.querySelectorAll("input,textarea").forEach((el) => {
-    el.addEventListener("input", (e) => {
-      const i = +e.target.dataset.i;
-      const k = e.target.dataset.k;
-      state.speakers[i][k] = e.target.value;
-    });
-  });
+  for (const s of SPEAKERS) {
+    const d = document.createElement("div");
+    d.className = "speaker";
+    d.innerHTML = `
+      <div class="dot" style="background:${s.color}">${s.short}</div>
+      <div class="nm">${s.name}</div>
+      <div class="sub">${s.provider}</div>`;
+    wrap.appendChild(d);
+  }
+  $("providerNote").textContent = "※ Claude / GPT のキー未登録時は Gemini が代理応答";
 }
 
 function renderChat() {
@@ -151,12 +139,11 @@ function renderChat() {
   }
   c.innerHTML = "";
   for (const h of state.history) {
-    const idx = state.speakers.findIndex((s) => s.name === h.name);
-    const cls = state.speakers[idx]?.cls || "d1";
+    const s = SPEAKERS.find((x) => x.name === h.name) || SPEAKERS[0];
     const div = document.createElement("div");
     div.className = "msg" + (h.thinking ? " thinking" : "");
     div.innerHTML = `
-      <div class="dot ${cls}">${idx + 1}</div>
+      <div class="dot" style="background:${s.color}">${s.short}</div>
       <div>
         <div class="who">${escapeHtml(h.name)}</div>
         <div class="body">${escapeHtml(h.text)}</div>
@@ -198,22 +185,20 @@ async function startRound() {
   $("summaryBtn").disabled = true;
   $("resetBtn").disabled = true;
 
-  // 1ラウンド = 3人が1発言ずつ
   try {
-    for (let k = 0; k < state.speakers.length; k++) {
-      const nextSpeaker = state.speakers[state.roundIdx % state.speakers.length].name;
-      // thinking placeholder
-      state.history.push({ name: nextSpeaker, text: "考え中…", thinking: true });
+    for (let k = 0; k < SPEAKERS.length; k++) {
+      const next = SPEAKERS[state.roundIdx % SPEAKERS.length];
+      state.history.push({ name: next.name, text: "考え中…", thinking: true });
       renderChat();
       try {
         const { text } = await callDebate({
           topic,
-          speakers: state.speakers.map(({ name, persona }) => ({ name, persona })),
+          speakers: SPEAKERS.map(({ name, provider }) => ({ name, provider })),
           history: state.history.filter((h) => !h.thinking),
-          nextSpeaker,
+          nextSpeaker: next.name,
         });
         state.history.pop();
-        state.history.push({ name: nextSpeaker, text });
+        state.history.push({ name: next.name, text });
       } catch (e) {
         state.history.pop();
         throw e;
@@ -245,7 +230,7 @@ async function doSummary() {
   try {
     const { text } = await callDebate({
       topic,
-      speakers: state.speakers.map(({ name, persona }) => ({ name, persona })),
+      speakers: SPEAKERS.map(({ name, provider }) => ({ name, provider })),
       history: state.history.filter((h) => !h.thinking),
       summary: true,
     });
@@ -277,7 +262,6 @@ window.resetChat = resetChat;
 renderSpeakers();
 renderChat();
 
-// ─── 認証 ───
 (async () => {
   try {
     const cfg = await fetch("/__/firebase/init.json").then((r) => r.json());
@@ -286,7 +270,6 @@ renderChat();
     onAuthStateChanged(auth, async (user) => {
       if (!user) { location.href = "/?next=" + encodeURIComponent(location.pathname); return; }
       authToken = await user.getIdToken();
-      // トークン期限切れ対策で 30分ごとに更新
       setInterval(async () => { authToken = await user.getIdToken(true); }, 30 * 60 * 1000);
     });
   } catch (e) {
