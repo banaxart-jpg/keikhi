@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>AI議論</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+:root {
+  --bg: #e4e6ee; --sl: rgba(255,255,255,1); --sd: rgba(168,172,192,0.75);
+  --text: #42455e; --text2: rgba(66,69,94,0.52); --text3: rgba(66,69,94,0.28);
+  --c1: #ff8a5b; --c2: #5badff; --c3: #6dcf9e;
+  --err: #b04040;
+}
+body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; padding-bottom: 100px; }
+.bar { display: flex; justify-content: space-between; align-items: center; padding: 40px 20px 0; }
+.hint { font-size: 11px; letter-spacing: 0.22em; color: var(--text3); font-weight: 700; text-transform: uppercase; }
+.pill { padding: 8px 16px; border-radius: 24px; font-size: 12px; font-weight: 700; border: none; color: var(--text2); background: var(--bg); box-shadow: 4px 4px 10px var(--sd), -4px -4px 10px var(--sl); cursor: pointer; font-family: inherit; }
+.pill:active { box-shadow: inset 3px 3px 8px var(--sd), inset -3px -3px 8px var(--sl); transform: scale(0.97); }
+.wrap { padding: 24px 18px 40px; }
+.title { font-size: 26px; font-weight: 800; }
+.subtitle { font-size: 12px; color: var(--text2); font-weight: 600; margin-top: 2px; margin-bottom: 22px; }
+
+.card { background: var(--bg); border-radius: 22px; padding: 18px; margin-bottom: 16px; box-shadow: 8px 8px 18px var(--sd), -6px -6px 16px var(--sl); }
+.label { font-size: 11px; font-weight: 700; letter-spacing: 0.16em; color: var(--text3); text-transform: uppercase; margin-bottom: 8px; }
+textarea, input { width: 100%; border: none; background: var(--bg); padding: 12px 14px; border-radius: 14px; font-size: 14px; font-family: inherit; color: var(--text); resize: none; box-shadow: inset 3px 3px 8px var(--sd), inset -3px -3px 8px var(--sl); }
+textarea:focus, input:focus { outline: none; }
+textarea { min-height: 60px; line-height: 1.5; }
+
+.speaker-row { display: grid; grid-template-columns: 36px 1fr; gap: 10px; align-items: start; margin-top: 10px; }
+.dot { width: 36px; height: 36px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: 800; color: white; font-size: 14px; box-shadow: 3px 3px 8px var(--sd), -3px -3px 8px var(--sl); }
+.d1 { background: linear-gradient(135deg, #ffae5e, var(--c1)); }
+.d2 { background: linear-gradient(135deg, #7ec0ff, var(--c2)); }
+.d3 { background: linear-gradient(135deg, #8fe0b8, var(--c3)); }
+.speaker-fields { display: grid; gap: 6px; }
+.speaker-fields .name { font-size: 13px; font-weight: 700; padding: 8px 12px; }
+.speaker-fields .persona { font-size: 12px; padding: 8px 12px; min-height: 40px; }
+
+.actions { display: flex; gap: 10px; margin-top: 18px; }
+.btn { flex: 1; padding: 14px; border-radius: 18px; border: none; font-size: 14px; font-weight: 700; font-family: inherit; color: var(--text); background: var(--bg); box-shadow: 6px 6px 14px var(--sd), -5px -5px 14px var(--sl); cursor: pointer; }
+.btn:active { box-shadow: inset 4px 4px 10px var(--sd), inset -3px -3px 10px var(--sl); transform: scale(0.98); }
+.btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.btn.primary { color: white; background: linear-gradient(135deg, #6b7eff, #4961ff); box-shadow: 6px 6px 14px var(--sd), -5px -5px 14px var(--sl); }
+.btn.primary:disabled { background: #aaa; }
+
+.chat { display: flex; flex-direction: column; gap: 12px; }
+.msg { display: grid; grid-template-columns: 36px 1fr; gap: 10px; align-items: start; animation: fade 0.3s ease; }
+@keyframes fade { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+.msg .body { background: var(--bg); padding: 10px 14px; border-radius: 16px; font-size: 13.5px; line-height: 1.6; box-shadow: 4px 4px 10px var(--sd), -3px -3px 10px var(--sl); }
+.msg .who { font-size: 11px; font-weight: 700; color: var(--text2); margin-bottom: 3px; }
+.msg.thinking .body { color: var(--text3); font-style: italic; }
+.summary-card { margin-top: 16px; padding: 16px; border-radius: 18px; background: linear-gradient(135deg, #fff4e0, #ffe7d0); box-shadow: 6px 6px 14px var(--sd), -4px -4px 12px var(--sl); }
+.summary-card .label { color: #a86a2b; }
+.summary-card .text { font-size: 13.5px; line-height: 1.7; color: #5a3a1a; }
+
+.err { color: var(--err); font-size: 12px; margin-top: 10px; font-weight: 600; }
+.empty { text-align: center; color: var(--text3); font-size: 12px; padding: 30px 0; font-weight: 600; }
+</style>
+</head>
+<body>
+
+<div class="bar">
+  <span class="hint">AI Giron</span>
+  <button class="pill" onclick="location.href='/'">← 戻る</button>
+</div>
+
+<div class="wrap">
+  <div class="title">AI議論</div>
+  <div class="subtitle">3人のAIにお題を投げて議論させる</div>
+
+  <div class="card">
+    <div class="label">お題</div>
+    <textarea id="topic" placeholder="例：会社の昼休みは1時間と2時間どっちがいい？"></textarea>
+  </div>
+
+  <div class="card" id="speakersCard">
+    <div class="label">参加者 (キャラは編集できる)</div>
+    <div id="speakers"></div>
+  </div>
+
+  <div class="actions">
+    <button class="btn primary" id="startBtn" onclick="startRound()">議論スタート</button>
+    <button class="btn" id="summaryBtn" onclick="doSummary()" disabled>まとめる</button>
+  </div>
+  <div class="actions" style="margin-top: 10px;">
+    <button class="btn" id="resetBtn" onclick="resetChat()" disabled>リセット</button>
+  </div>
+
+  <div class="err" id="err"></div>
+
+  <div class="card" style="margin-top: 24px;">
+    <div class="label">議論ログ</div>
+    <div class="chat" id="chat"><div class="empty">お題を入れて「議論スタート」</div></div>
+    <div id="summaryWrap"></div>
+  </div>
+</div>
+
+<script src="/config.js"></script>
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js";
+import { getAuth, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
+
+const DEFAULT_SPEAKERS = [
+  { name: "アツシ", persona: "情熱的で前向き。新しいことをどんどんやろうと推す。リスクより可能性を見る。", cls: "d1" },
+  { name: "ミナ",   persona: "慎重で論理的。コスト・リスク・現実性を細かく指摘する。", cls: "d2" },
+  { name: "ケンタ", persona: "現場目線。実際に動く人の手間や使いやすさを最優先する。", cls: "d3" },
+];
+
+const state = {
+  speakers: DEFAULT_SPEAKERS.map((s) => ({ ...s })),
+  history: [],
+  busy: false,
+  roundIdx: 0, // 次に喋る人のインデックス
+};
+
+const $ = (id) => document.getElementById(id);
+const err = (m) => { $("err").textContent = m || ""; };
+
+function renderSpeakers() {
+  const wrap = $("speakers");
+  wrap.innerHTML = "";
+  state.speakers.forEach((s, i) => {
+    const row = document.createElement("div");
+    row.className = "speaker-row";
+    row.innerHTML = `
+      <div class="dot ${s.cls}">${i + 1}</div>
+      <div class="speaker-fields">
+        <input class="name" data-i="${i}" data-k="name" value="${s.name}">
+        <textarea class="persona" data-i="${i}" data-k="persona">${s.persona}</textarea>
+      </div>`;
+    wrap.appendChild(row);
+  });
+  wrap.querySelectorAll("input,textarea").forEach((el) => {
+    el.addEventListener("input", (e) => {
+      const i = +e.target.dataset.i;
+      const k = e.target.dataset.k;
+      state.speakers[i][k] = e.target.value;
+    });
+  });
+}
+
+function renderChat() {
+  const c = $("chat");
+  if (!state.history.length) {
+    c.innerHTML = `<div class="empty">お題を入れて「議論スタート」</div>`;
+    return;
+  }
+  c.innerHTML = "";
+  for (const h of state.history) {
+    const idx = state.speakers.findIndex((s) => s.name === h.name);
+    const cls = state.speakers[idx]?.cls || "d1";
+    const div = document.createElement("div");
+    div.className = "msg" + (h.thinking ? " thinking" : "");
+    div.innerHTML = `
+      <div class="dot ${cls}">${idx + 1}</div>
+      <div>
+        <div class="who">${escapeHtml(h.name)}</div>
+        <div class="body">${escapeHtml(h.text)}</div>
+      </div>`;
+    c.appendChild(div);
+  }
+  c.scrollIntoView({ behavior: "smooth", block: "end" });
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, (c) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+  }[c]));
+}
+
+let authToken = null;
+
+async function callDebate(body) {
+  if (!authToken) throw new Error("ログインが切れました。トップへ戻ってログインし直してください。");
+  const res = await fetch(window.API_BASE + "/api/debate", {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: "Bearer " + authToken },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const j = await res.json().catch(() => ({}));
+    throw new Error(j.error || `HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
+async function startRound() {
+  err("");
+  const topic = $("topic").value.trim();
+  if (!topic) { err("お題を入れてください"); return; }
+  if (state.busy) return;
+  state.busy = true;
+  $("startBtn").disabled = true;
+  $("summaryBtn").disabled = true;
+  $("resetBtn").disabled = true;
+
+  // 1ラウンド = 3人が1発言ずつ
+  try {
+    for (let k = 0; k < state.speakers.length; k++) {
+      const nextSpeaker = state.speakers[state.roundIdx % state.speakers.length].name;
+      // thinking placeholder
+      state.history.push({ name: nextSpeaker, text: "考え中…", thinking: true });
+      renderChat();
+      try {
+        const { text } = await callDebate({
+          topic,
+          speakers: state.speakers.map(({ name, persona }) => ({ name, persona })),
+          history: state.history.filter((h) => !h.thinking),
+          nextSpeaker,
+        });
+        state.history.pop();
+        state.history.push({ name: nextSpeaker, text });
+      } catch (e) {
+        state.history.pop();
+        throw e;
+      }
+      renderChat();
+      state.roundIdx++;
+    }
+    $("startBtn").textContent = "もう1ラウンド進める";
+    $("summaryBtn").disabled = false;
+    $("resetBtn").disabled = false;
+  } catch (e) {
+    err(e.message);
+    renderChat();
+  } finally {
+    state.busy = false;
+    $("startBtn").disabled = false;
+  }
+}
+
+async function doSummary() {
+  err("");
+  const topic = $("topic").value.trim();
+  if (!topic || !state.history.length) return;
+  if (state.busy) return;
+  state.busy = true;
+  $("summaryBtn").disabled = true;
+  $("startBtn").disabled = true;
+  $("summaryWrap").innerHTML = `<div class="summary-card"><div class="label">まとめ</div><div class="text">生成中…</div></div>`;
+  try {
+    const { text } = await callDebate({
+      topic,
+      speakers: state.speakers.map(({ name, persona }) => ({ name, persona })),
+      history: state.history.filter((h) => !h.thinking),
+      summary: true,
+    });
+    $("summaryWrap").innerHTML = `<div class="summary-card"><div class="label">まとめ</div><div class="text">${escapeHtml(text)}</div></div>`;
+  } catch (e) {
+    err(e.message);
+    $("summaryWrap").innerHTML = "";
+  } finally {
+    state.busy = false;
+    $("startBtn").disabled = false;
+    $("summaryBtn").disabled = false;
+  }
+}
+
+function resetChat() {
+  state.history = [];
+  state.roundIdx = 0;
+  $("summaryWrap").innerHTML = "";
+  $("startBtn").textContent = "議論スタート";
+  $("summaryBtn").disabled = true;
+  $("resetBtn").disabled = true;
+  renderChat();
+}
+
+window.startRound = startRound;
+window.doSummary = doSummary;
+window.resetChat = resetChat;
+
+renderSpeakers();
+renderChat();
+
+// ─── 認証 ───
+(async () => {
+  try {
+    const cfg = await fetch("/__/firebase/init.json").then((r) => r.json());
+    cfg.authDomain = location.hostname;
+    const auth = getAuth(initializeApp(cfg));
+    onAuthStateChanged(auth, async (user) => {
+      if (!user) { location.href = "/?next=" + encodeURIComponent(location.pathname); return; }
+      authToken = await user.getIdToken();
+      // トークン期限切れ対策で 30分ごとに更新
+      setInterval(async () => { authToken = await user.getIdToken(true); }, 30 * 60 * 1000);
+    });
+  } catch (e) {
+    err("認証初期化エラー: " + e.message);
+  }
+})();
+</script>
+</body>
+</html>

@@ -219,6 +219,69 @@ app.post("/api/scan", async (req, res) => {
 });
 
 // ─────────────────────────────
+// AI 3人議論 (giron)
+// ─────────────────────────────
+// 1リクエスト = 1発言生成。フロントが speakers/history/nextSpeaker を渡して
+// 1人ずつ順番に発言を取りに来る。summary:true でまとめモード。
+app.post("/api/debate", async (req, res) => {
+  try {
+    if (!genAI) return res.status(503).json({ error: "GEMINI_API_KEY not configured" });
+    const { topic, speakers = [], history = [], nextSpeaker, summary } = req.body || {};
+    if (!topic) return res.status(400).json({ error: "topic required" });
+    if (!Array.isArray(speakers) || speakers.length < 2) {
+      return res.status(400).json({ error: "speakers (2人以上) required" });
+    }
+
+    let prompt;
+    if (summary) {
+      const log = history.map((h) => `${h.name}：${h.text}`).join("\n") || "（発言なし）";
+      const names = speakers.map((s) => s.name).join("・");
+      prompt = `お題「${topic}」について ${names} の3人が議論しました。論点と結論を200字以内でまとめてください。プレーンテキストで、装飾や箇条書きは使わない。
+
+議論ログ:
+${log}
+
+まとめ:`;
+    } else {
+      const me = speakers.find((s) => s.name === nextSpeaker);
+      if (!me) return res.status(400).json({ error: "nextSpeaker not in speakers" });
+      const others = speakers.filter((s) => s.name !== nextSpeaker)
+        .map((s) => `・${s.name}（${s.persona}）`).join("\n");
+      const log = history.length
+        ? history.map((h) => `${h.name}：${h.text}`).join("\n")
+        : "（まだ誰も発言していない）";
+      prompt = `あなたは「${me.name}」、性格・立場は「${me.persona}」です。
+3人でお題について議論しています：「${topic}」
+
+他の参加者:
+${others}
+
+これまでの発言:
+${log}
+
+あなた（${me.name}）の番です。80〜140字程度で発言してください。
+- 直前の発言に必ず反応する（同意・反論・補足・突っ込み等）
+- キャラの立場・性格を反映させる
+- 「${me.name}：」のような名前プレフィックスは不要、本文だけ
+- マークダウン・記号装飾なし、自然な話し言葉で
+発言:`;
+    }
+
+    const { result, modelUsed } = await callGeminiWithFallback(prompt);
+    const text = result.response.text().trim()
+      .replace(/^[「『"']/, "").replace(/[」』"']$/, "");
+    res.json({ text, modelUsed });
+  } catch (err) {
+    console.error("debate error", err);
+    const msg = String(err?.message || err);
+    const isTransient = /\b(503|429|500)\b|UNAVAILABLE|overload|high demand/i.test(msg);
+    res.status(isTransient ? 503 : 500).json({
+      error: isTransient ? `Gemini が混雑中: ${msg.slice(0, 200)}` : msg,
+    });
+  }
+});
+
+// ─────────────────────────────
 // Records
 // ─────────────────────────────
 app.get("/api/records", async (req, res) => {
