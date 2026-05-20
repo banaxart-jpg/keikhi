@@ -225,6 +225,62 @@ Cloud Run（バックエンドの URL）が入った変数。
 
 `<input type="file" accept="image/*" capture="environment">` でスマホカメラ起動。Base64 にして送る。詳細は経費アプリ (`apps/keihi/index.html` の `handleFile()` あたり) を参照。
 
+### F. DB に保存して後で見返したい（ブラウザ閉じても消えない）
+
+Cloud SQL (Postgres) を **`keihi-api` 経由で**使う。スキーマは `apps/keihi/infra/schema.sql` に1ファイルで集約（冪等）。参考実装：
+
+- 経費の `records` テーブル — `apps/keihi/server/index.js` の `/api/records`
+- 会議の `kaigi_sessions` / `kaigi_messages` — 同じく `/api/kaigi/sessions/*`
+
+#### 手順
+
+1. **スキーマ追記** — `apps/keihi/infra/schema.sql` に `CREATE TABLE IF NOT EXISTS my_table (...)` を追記
+2. **小西に DB 適用を頼む**（Cloud Shell で1コマンド）:
+   ```bash
+   ./infra/db.sh keihi < apps/keihi/infra/schema.sql
+   ```
+3. **エンドポイント追加** — `apps/keihi/server/index.js` に `app.get("/api/my-thing", ...)` 等を追加。`getPool()` で pg client が取れる
+4. **フロントから叩く** — レシピ C と同じパターン（Bearer トークン）で fetch
+
+```js
+// サーバー側（apps/keihi/server/index.js）
+app.get("/api/my-thing", async (req, res) => {
+  const p = getPool();
+  const { rows } = await p.query("SELECT * FROM my_table WHERE user_email=$1", [req.user.email]);
+  res.json(rows);
+});
+```
+
+`req.user.email` は Firebase ID トークン検証済みのログインユーザー。ユーザー別にデータを絞るのに使う。
+
+### G. ブラウザ閉じてる間もバックエンドで処理を進めたい（Cloud Tasks）
+
+長時間処理（AI 何十回叩く、PDF 生成、大量データ移行など）はリクエストを返した後にバックエンドで進める。Cloud Tasks の queue `kaigi-tick` が稼働中。参考実装：会議の自動進行 (`apps/keihi/server/index.js` の `enqueueKaigiTick` と `/api/internal/kaigi/tick`)。
+
+```js
+// 1. キックされたエンドポイントが Cloud Tasks に「あとでこれ叩いて」を enqueue
+//    → 即座にレスポンス返してブラウザを解放
+const task = {
+  httpRequest: {
+    httpMethod: "POST",
+    url: `${SERVICE_URL}/api/internal/my-job`,
+    headers: { "content-type": "application/json", "x-tick-secret": INTERNAL_TICK_SECRET },
+    body: Buffer.from(JSON.stringify({ jobId: 123 })).toString("base64"),
+  },
+};
+await tasksClient.createTask({ parent, task });
+
+// 2. /api/internal/my-job が Cloud Tasks から叩かれて1単位の処理
+//    残作業あれば自分でまた enqueue（chain）→ 完了まで自走
+```
+
+`/api/internal/*` は Firebase Auth ではなく `x-tick-secret` ヘッダで認証（`INTERNAL_TICK_SECRET` env と一致確認）。
+
+新しい queue が必要なら小西に依頼：
+```bash
+gcloud tasks queues create my-queue --location=asia-northeast1
+```
+
 ---
 
 ## 🧰 今このプロジェクトで使える GCP の機能
@@ -236,7 +292,7 @@ Cloud Run（バックエンドの URL）が入った変数。
 | **Firebase Auth** | 入口の受付係（誰が来たか確認） | ✅ 稼働中 | ランチャー経由で自動ログイン済 |
 | **Firebase Hosting** | お店の看板・店内（静的ファイル配信） | ✅ 稼働中 | `apps/` 配下が自動配信される（`firebase.json` の ignore で server/infra 等は除外） |
 | **Cloud Run** | お店の厨房（サーバ側プログラム実行） | ✅ 稼働中 (`keihi-api`) | バックエンドが要るとき。**新規構築は小西** |
-| **Cloud SQL (Postgres)** | 棚卸帳簿（行と列の表で整理されたデータ） | ✅ 稼働中 (`keikhi-db` / `keihi` DB) | バックエンド経由でクエリ。**新テーブル追加は小西** |
+| **Cloud SQL (Postgres)** | 棚卸帳簿（行と列の表で整理されたデータ） | ✅ 稼働中 (`keikhi-db` / `keihi` DB) | バックエンド経由でクエリ。既存テーブル: `sites`, `records` (経費), `kaigi_sessions`, `kaigi_messages` (会議)。**新テーブル追加は小西**（`apps/keihi/infra/schema.sql` 編集 + apply） |
 | **Cloud Storage** | 倉庫（ファイル/画像保存） | ✅ 稼働中 (`<project>-keihi-receipts` バケット) | バックエンド経由でアップロード |
 | **Firestore** | メモ帳 (NoSQL、軽量データ向け) | △ API有効・DB未作成 | ブラウザ直接読み書き可。**DB初期化は小西** |
 | **Gemini API** | 文章を読んだり画像を見たりするAI | ✅ 稼働中 (`gemini-2.5-flash`) | `keihi-api` の `/api/scan` を流用 or 新エンドポイント |
@@ -246,6 +302,7 @@ Cloud Run（バックエンドの URL）が入った変数。
 | **Secret Manager** | 金庫（APIキー等の秘密情報保管） | ✅ 稼働中 (`gemini-api-key`, `keihi-db-password`) | **新規追加は小西** |
 | **Cloud Build** | 工場（コードからデプロイ） | ✅ 稼働中 | main に push すれば自動で動く |
 | **Artifact Registry** | 倉庫（ビルド済みコンテナ） | ✅ 稼働中 (`keikhi` リポジトリ) | Cloud Build が自動で push |
+| **Cloud Tasks** | 工程予約表（あとで動かすジョブを並べる） | ✅ 稼働中 (queue: `kaigi-tick`, `asia-northeast1`) | サーバから enqueue → 数秒〜数分後に自分の Cloud Run を再キック。ブラウザ閉じてもバックエンドで処理を進められる。**新規 queue 追加は小西** |
 
 ---
 
@@ -312,6 +369,7 @@ apps/                          ← Hosting 公開ルート（site: keihi-496002�
 |---|---|---|---|
 | `apps/keihi/` | `keihi-api` | 経費管理（領収書OCR） | 稼働中 ✅ |
 | `apps/cost/` | （静的のみ） | AIコスト計算機 | 稼働中 ✅ |
+| `apps/kaigi/` | `keihi-api` 共有 | 3者AI（Gemini/Claude/GPT）会議。会話を Cloud SQL 保存、Cloud Tasks で自動進行 | 稼働中 ✅ |
 | `apps/admin/` | `keikhi-admin` | 管理ダッシュボード | 稼働中 ✅ |
 | `apps/denki-zumen/` | `denki-zumen-api` | 電気図面作成 | 未着手 |
 
@@ -335,9 +393,10 @@ apps/                          ← Hosting 公開ルート（site: keihi-496002�
 | Hosting | Firebase Hosting (`keihi-496002.web.app`, `static-epigram-496002-v8.web.app`) |
 | Auth | Firebase Auth (Google プロバイダ) |
 | API | Cloud Run (`asia-northeast1`) |
-| AI | Gemini API (Secret Manager: `gemini-api-key`) |
+| AI | Gemini API + Claude (`anthropic-api-key`) + GPT (`openai-api-key`) |
 | DB | Cloud SQL Postgres 15 (`keikhi-db`, 全アプリで共有・DBは別) |
 | Storage | Cloud Storage (アプリ毎に `<project>-<app>-receipts`) |
+| Queue | Cloud Tasks (`kaigi-tick`, `asia-northeast1`) ← 非同期処理用 |
 | Registry | Artifact Registry (`keikhi`) |
 | CI/CD | Cloud Build トリガ（`main` push で自動デプロイ） |
 
