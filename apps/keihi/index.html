@@ -57,12 +57,13 @@ body { font-family: 'Outfit', -apple-system, sans-serif; font-weight: 400; backg
 .retake-btn { font-size: 12px; font-weight: 800; padding: 8px 16px; border-radius: 20px; cursor: pointer; border: none; color: var(--bulb2); font-family: 'Outfit', sans-serif; background: var(--bg); box-shadow: 4px 4px 10px var(--sd), -4px -4px 10px var(--sl), 2px 2px 4px var(--sd2); transition: all 0.12s; }
 .retake-btn:active { box-shadow: inset 2px 2px 6px var(--sd), inset -2px -2px 6px var(--sl); }
 
-.preview-row { display: flex; gap: 14px; margin-bottom: 16px; }
-#confirmImg { width: 74px; height: 102px; object-fit: cover; border-radius: 20px; flex-shrink: 0; box-shadow: 6px 6px 16px var(--sd), -4px -4px 12px var(--sl), 2px 2px 6px var(--sd2); }
-.preview-info { flex: 1; border-radius: 20px; padding: 13px; background: var(--bg2); box-shadow: inset 4px 4px 10px var(--sd), inset -4px -4px 10px var(--sl); }
-.preview-amount { font-size: 32px; font-weight: 900; letter-spacing: -1.5px; }
-.preview-store { font-size: 13px; color: var(--text2); margin-top: 2px; font-weight: 600; }
-.ai-tags { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 9px; }
+.preview-row { display: flex; gap: 12px; margin-bottom: 14px; align-items: stretch; }
+#confirmImg { width: 96px; height: auto; align-self: stretch; object-fit: cover; border-radius: 20px; flex-shrink: 0; box-shadow: 6px 6px 16px var(--sd), -4px -4px 12px var(--sl), 2px 2px 6px var(--sd2); }
+.preview-info { flex: 1; border-radius: 20px; padding: 11px 13px; background: var(--bg2); box-shadow: inset 4px 4px 10px var(--sd), inset -4px -4px 10px var(--sl); display: flex; flex-direction: column; }
+.preview-amount { font-size: 26px; font-weight: 900; letter-spacing: -1.2px; line-height: 1.1; }
+.preview-store { font-size: 12px; color: var(--text2); margin-top: 2px; font-weight: 600; }
+.ai-tags { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+.submit-btn.submit-btn-inline { margin-top: auto; padding: 10px; font-size: 14px; border-radius: 16px; box-shadow: 4px 4px 12px rgba(190,120,0,0.4), -2px -2px 8px rgba(255,230,140,0.5), inset 0 1px 0 rgba(255,240,180,0.3); }
 .tag { font-size: 11px; padding: 4px 11px; border-radius: 10px; font-weight: 800; color: var(--bulb2); background: var(--bg); box-shadow: 3px 3px 7px var(--sd), -3px -3px 7px var(--sl); text-shadow: 0 0 8px var(--bulb-glow2); }
 .tag.green { color: #3aaa7a; text-shadow: none; }
 
@@ -78,10 +79,10 @@ textarea.nm-field { resize: vertical; min-height: 60px; font-family: 'Outfit', s
 select.nm-field { background: var(--bg2) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1l5 5 5-5' stroke='rgba(66,69,94,0.3)' stroke-width='2' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") no-repeat right 14px center; padding-right: 36px; }
 select.nm-field option { background: #e4e6ee; color: #42455e; }
 
-.site-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-.site-btn { padding: 15px 6px; border-radius: 18px; font-size: 13px; font-weight: 600; color: var(--text2); cursor: pointer; border: none; text-align: center; font-family: 'Outfit', sans-serif; background: var(--bg); position: relative; overflow: hidden; box-shadow: 6px 6px 15px var(--sd), -6px -6px 15px var(--sl), 3px 3px 6px var(--sd2); transition: box-shadow 0.18s, transform 0.14s, color 0.22s; white-space: nowrap; text-overflow: ellipsis; }
-.site-btn.selected { box-shadow: inset 5px 5px 13px var(--sd), inset -5px -5px 13px var(--sl), inset 2px 2px 5px var(--sd2); transform: scale(0.975); color: var(--bulb2); text-shadow: 0 0 10px var(--bulb-glow), 0 0 22px var(--bulb-glow2); }
-.site-add-btn { padding: 15px 6px; border-radius: 18px; font-size: 13px; font-weight: 800; color: var(--bulb2); cursor: pointer; background: var(--bg); border: none; font-family: 'Outfit', sans-serif; box-shadow: 6px 6px 15px var(--sd), -6px -6px 15px var(--sl), 3px 3px 6px var(--sd2); text-shadow: 0 0 8px var(--bulb-glow2); transition: all 0.12s; }
+.site-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; }
+.site-btn { padding: 10px 4px; border-radius: 14px; font-size: 12px; font-weight: 600; color: var(--text2); cursor: pointer; border: none; text-align: center; font-family: 'Outfit', sans-serif; background: var(--bg); position: relative; overflow: hidden; box-shadow: 4px 4px 11px var(--sd), -4px -4px 11px var(--sl), 2px 2px 4px var(--sd2); transition: box-shadow 0.18s, transform 0.14s, color 0.22s; white-space: nowrap; text-overflow: ellipsis; min-width: 0; }
+.site-btn.selected { box-shadow: inset 4px 4px 10px var(--sd), inset -4px -4px 10px var(--sl), inset 2px 2px 4px var(--sd2); transform: scale(0.975); color: var(--bulb2); text-shadow: 0 0 10px var(--bulb-glow), 0 0 22px var(--bulb-glow2); }
+.site-add-btn { padding: 10px 4px; border-radius: 14px; font-size: 12px; font-weight: 800; color: var(--bulb2); cursor: pointer; background: var(--bg); border: none; font-family: 'Outfit', sans-serif; box-shadow: 4px 4px 11px var(--sd), -4px -4px 11px var(--sl), 2px 2px 4px var(--sd2); text-shadow: 0 0 8px var(--bulb-glow2); transition: all 0.12s; }
 .site-add-btn:active { box-shadow: inset 3px 3px 8px var(--sd), inset -3px -3px 8px var(--sl); transform: scale(0.97); }
 
 .pay-row { display: flex; gap: 10px; }
@@ -116,14 +117,14 @@ select.nm-field option { background: #e4e6ee; color: #42455e; }
 .site-manage-name { font-size: 14px; font-weight: 700; }
 .site-del-btn { font-size: 11px; font-weight: 800; color: #b04040; cursor: pointer; border: none; background: var(--bg); border-radius: 12px; padding: 6px 13px; font-family: 'Outfit', sans-serif; box-shadow: 3px 3px 8px var(--sd), -3px -3px 8px var(--sl), 1px 1px 3px var(--sd2); transition: all 0.12s; }
 
-.record-card { border-radius: 24px; padding: 16px 18px; margin-bottom: 10px; display: flex; align-items: flex-start; justify-content: space-between; background: var(--bg); box-shadow: 6px 6px 16px var(--sd), -6px -6px 16px var(--sl), 3px 3px 7px var(--sd2), -1px -1px 4px rgba(255,255,255,0.6); position: relative; }
-.record-info { flex: 1; min-width: 0; }
-.record-date { font-size: 11px; color: var(--text3); margin-bottom: 3px; font-weight: 700; }
-.record-amount { font-size: 26px; font-weight: 700; letter-spacing: -1px; }
-.record-store { font-size: 13px; color: var(--text2); margin-top: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: 600; }
-.record-tags { display: flex; gap: 5px; margin-top: 7px; flex-wrap: wrap; }
-.record-tag { font-size: 10px; padding: 3px 10px; border-radius: 9px; font-weight: 800; color: var(--bulb2); background: var(--bg); box-shadow: 2px 2px 5px var(--sd), -2px -2px 5px var(--sl); text-shadow: 0 0 6px var(--bulb-glow2); }
-.record-meta { font-size: 11px; color: var(--text3); margin-top: 6px; font-weight: 600; }
+.record-card { border-radius: 18px; padding: 10px 14px; margin-bottom: 7px; display: flex; align-items: center; justify-content: space-between; gap: 8px; background: var(--bg); box-shadow: 5px 5px 13px var(--sd), -5px -5px 13px var(--sl), 2px 2px 5px var(--sd2), -1px -1px 3px rgba(255,255,255,0.6); position: relative; }
+.record-info { flex: 1; min-width: 0; display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; }
+.record-date { font-size: 10px; color: var(--text3); font-weight: 700; flex: 0 0 auto; }
+.record-amount { font-size: 17px; font-weight: 800; letter-spacing: -0.5px; flex: 0 0 auto; }
+.record-store { font-size: 12px; color: var(--text2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: 600; min-width: 0; flex: 1 1 auto; }
+.record-tags { display: flex; gap: 4px; flex-wrap: wrap; flex: 0 0 auto; }
+.record-tag { font-size: 9px; padding: 2px 7px; border-radius: 7px; font-weight: 800; color: var(--bulb2); background: var(--bg); box-shadow: 1px 1px 3px var(--sd), -1px -1px 3px var(--sl); text-shadow: 0 0 5px var(--bulb-glow2); }
+.record-meta { font-size: 10px; color: var(--text3); font-weight: 600; flex: 1 1 100%; }
 .del-btn { font-size: 18px; color: rgba(148,152,176,0.4); background: none; border: none; cursor: pointer; padding: 0 0 0 14px; }
 .list-add-btn { position: fixed; bottom: 0; left: 0; right: 0; padding: 14px 20px 36px; background: linear-gradient(to top, var(--bg) 55%, transparent); }
 .empty { text-align: center; padding: 80px 0; }
@@ -154,7 +155,7 @@ select.nm-field option { background: #e4e6ee; color: #42455e; }
 <!-- 名前選択 -->
 <div id="buyerScreen">
   <div class="top-bar">
-    <span></span>
+    <button class="pill-btn" id="homeBtn" type="button" onclick="location.href='/'">← トップ</button>
     <button class="pill-btn" id="recordBtn" type="button">記録 <span id="recordCount">0</span>件 →</button>
   </div>
   <p class="hint-text">名前タップで撮影開始（1枚ずつ撮影→まとめて読取）</p>
@@ -203,13 +204,8 @@ select.nm-field option { background: #e4e6ee; color: #42455e; }
         <div class="preview-amount">¥<span id="previewAmount">0</span></div>
         <div class="preview-store" id="previewStore">店舗名</div>
         <div class="ai-tags" id="previewTags"></div>
+        <button class="submit-btn submit-btn-inline" id="submitBtn" type="button">登録する</button>
       </div>
-    </div>
-    <div class="card">
-      <div class="card-title">基本情報</div>
-      <div class="field"><label>購入日</label><input type="date" id="fDate" class="nm-field"></div>
-      <div class="field"><label>金額（円）</label><input type="number" id="fTotal" class="nm-field" placeholder="0"></div>
-      <div class="field"><label>店舗名</label><input type="text" id="fStore" class="nm-field" placeholder="例：コメリ"></div>
     </div>
     <div class="card">
       <div class="card-title">現場</div>
@@ -217,6 +213,12 @@ select.nm-field option { background: #e4e6ee; color: #42455e; }
       <div id="newSiteField" style="display:none;margin-top:10px;">
         <input type="text" id="fNewSite" class="nm-field" placeholder="新しい現場名を入力">
       </div>
+    </div>
+    <div class="card">
+      <div class="card-title">基本情報</div>
+      <div class="field"><label>購入日</label><input type="date" id="fDate" class="nm-field"></div>
+      <div class="field"><label>金額（円）</label><input type="number" id="fTotal" class="nm-field" placeholder="0"></div>
+      <div class="field"><label>店舗名</label><input type="text" id="fStore" class="nm-field" placeholder="例：コメリ"></div>
     </div>
     <div class="card">
       <div class="card-title">分類</div>
@@ -243,7 +245,6 @@ select.nm-field option { background: #e4e6ee; color: #42455e; }
         <textarea id="fMemo" class="nm-field" placeholder="（任意）" rows="2"></textarea>
       </div>
     </div>
-    <button class="submit-btn" id="submitBtn" type="button">登録する</button>
   </div>
 </div>
 
