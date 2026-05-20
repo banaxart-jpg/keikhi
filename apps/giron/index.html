@@ -70,7 +70,7 @@ textarea:focus { outline: none; }
 
 <div class="wrap">
   <div class="title">AI議論</div>
-  <div class="subtitle">Gemini / Claude / GPT の3者で議論させる</div>
+  <div class="subtitle">Gemini / Claude / GPT の3者で検討して結論を出す</div>
 
   <div class="card">
     <div class="label">お題</div>
@@ -84,8 +84,8 @@ textarea:focus { outline: none; }
   </div>
 
   <div class="actions">
-    <button class="btn primary" id="startBtn" onclick="startRound()">議論スタート</button>
-    <button class="btn" id="summaryBtn" onclick="doSummary()" disabled>まとめる</button>
+    <button class="btn primary" id="startBtn" onclick="startRound()">検討スタート</button>
+    <button class="btn" id="summaryBtn" onclick="doSummary()" disabled>結論を出す</button>
   </div>
   <div class="actions" style="margin-top: 10px;">
     <button class="btn" id="resetBtn" onclick="resetChat()" disabled>リセット</button>
@@ -94,8 +94,8 @@ textarea:focus { outline: none; }
   <div class="err" id="err"></div>
 
   <div class="card" style="margin-top: 24px;">
-    <div class="label">議論ログ</div>
-    <div class="chat" id="chat"><div class="empty">お題を入れて「議論スタート」</div></div>
+    <div class="label">検討ログ</div>
+    <div class="chat" id="chat"><div class="empty">お題を入れて「検討スタート」</div></div>
     <div id="summaryWrap"></div>
   </div>
 </div>
@@ -134,7 +134,7 @@ function renderSpeakers() {
 function renderChat() {
   const c = $("chat");
   if (!state.history.length) {
-    c.innerHTML = `<div class="empty">お題を入れて「議論スタート」</div>`;
+    c.innerHTML = `<div class="empty">お題を入れて「検討スタート」</div>`;
     return;
   }
   c.innerHTML = "";
@@ -206,7 +206,7 @@ async function startRound() {
       renderChat();
       state.roundIdx++;
     }
-    $("startBtn").textContent = "もう1ラウンド進める";
+    $("startBtn").textContent = "もう1ラウンド検討";
     $("summaryBtn").disabled = false;
     $("resetBtn").disabled = false;
   } catch (e) {
@@ -226,7 +226,7 @@ async function doSummary() {
   state.busy = true;
   $("summaryBtn").disabled = true;
   $("startBtn").disabled = true;
-  $("summaryWrap").innerHTML = `<div class="summary-card"><div class="label">まとめ</div><div class="text">生成中…</div></div>`;
+  $("summaryWrap").innerHTML = `<div class="summary-card"><div class="label">結論</div><div class="text">生成中…</div></div>`;
   try {
     const { text } = await callDebate({
       topic,
@@ -234,7 +234,7 @@ async function doSummary() {
       history: state.history.filter((h) => !h.thinking),
       summary: true,
     });
-    $("summaryWrap").innerHTML = `<div class="summary-card"><div class="label">まとめ</div><div class="text">${escapeHtml(text)}</div></div>`;
+    $("summaryWrap").innerHTML = `<div class="summary-card"><div class="label">結論</div><div class="text">${escapeHtml(text)}</div></div>`;
   } catch (e) {
     err(e.message);
     $("summaryWrap").innerHTML = "";
@@ -249,7 +249,7 @@ function resetChat() {
   state.history = [];
   state.roundIdx = 0;
   $("summaryWrap").innerHTML = "";
-  $("startBtn").textContent = "議論スタート";
+  $("startBtn").textContent = "検討スタート";
   $("summaryBtn").disabled = true;
   $("resetBtn").disabled = true;
   renderChat();
