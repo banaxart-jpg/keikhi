@@ -16,11 +16,13 @@
   --gemini: #4285f4; --claude: #d97706; --gpt: #10a37f;
   --err: #b04040;
 }
-body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; padding-bottom: 130px; }
+body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; padding-bottom: 170px; }
 
-.fixed-footer { position: fixed; left: 0; right: 0; bottom: 0; padding: 14px 16px calc(14px + env(safe-area-inset-bottom)); background: linear-gradient(180deg, rgba(228,230,238,0) 0%, rgba(228,230,238,0.95) 30%, rgba(228,230,238,1) 70%); display: none; gap: 10px; z-index: 100; }
+.fixed-footer { position: fixed; left: 0; right: 0; bottom: 0; padding: 14px 16px calc(14px + env(safe-area-inset-bottom)); background: linear-gradient(180deg, rgba(228,230,238,0) 0%, rgba(228,230,238,0.95) 30%, rgba(228,230,238,1) 70%); display: none; flex-direction: column; gap: 8px; z-index: 100; }
 .fixed-footer.show { display: flex; }
-.fixed-footer .btn { flex: 1; }
+.fixed-footer .row { display: flex; gap: 10px; }
+.fixed-footer .row .btn { flex: 1; }
+.fixed-footer .btn.tiny { padding: 8px; font-size: 11px; }
 .bar { display: flex; justify-content: space-between; align-items: center; padding: 40px 20px 0; }
 .hint { font-size: 11px; letter-spacing: 0.22em; color: var(--text3); font-weight: 700; text-transform: uppercase; }
 .pill { padding: 8px 16px; border-radius: 24px; font-size: 12px; font-weight: 700; border: none; color: var(--text2); background: var(--bg); box-shadow: 4px 4px 10px var(--sd), -4px -4px 10px var(--sl); cursor: pointer; font-family: inherit; }
@@ -149,8 +151,13 @@ textarea:focus, input:focus { outline: none; }
 
 <!-- 画面下固定ボタン（セッション詳細時のみ） -->
 <div class="fixed-footer" id="fixedFooter">
-  <button class="btn primary" id="roundBtn" onclick="advanceRound()">もう1ラウンド</button>
-  <button class="btn" id="concludeBtn" onclick="doConclude()">結論を出す</button>
+  <div class="row">
+    <button class="btn primary" id="roundBtn" onclick="advanceRound()">もう1ラウンド</button>
+    <button class="btn" id="concludeBtn" onclick="doConclude()">結論を出す</button>
+  </div>
+  <div class="row">
+    <button class="btn tiny danger" id="resetBtn" onclick="resetSession()">リセット（履歴クリア）</button>
+  </div>
 </div>
 
 <script src="/config.js"></script>
@@ -324,6 +331,7 @@ function renderSession() {
   $("autoBtn").disabled = isAuto || state.busy;
   $("roundBtn").disabled = isAuto || state.busy;
   $("concludeBtn").disabled = isAuto || state.busy || !hasMessages;
+  $("resetBtn").disabled = isAuto || state.busy || !hasMessages;
   $("stopAutoBtn").style.display = isAuto ? "" : "none";
 
   // チャット
@@ -444,6 +452,24 @@ async function stopAuto() {
   }
 }
 window.stopAuto = stopAuto;
+
+async function resetSession() {
+  if (state.busy || !state.sessionId) return;
+  if (!confirm("このセッションの履歴を全部消して、同じお題で最初からやり直しますか？")) return;
+  errSession("");
+  state.busy = true;
+  $("resetBtn").disabled = true;
+  try {
+    await api("POST", `/api/kaigi/sessions/${state.sessionId}/reset`);
+    await refreshSession();
+  } catch (e) {
+    errSession(e.message);
+  } finally {
+    state.busy = false;
+    $("resetBtn").disabled = false;
+  }
+}
+window.resetSession = resetSession;
 
 async function deleteSession() {
   if (!state.sessionId) return;

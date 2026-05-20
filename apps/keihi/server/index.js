@@ -237,15 +237,14 @@ app.post("/api/scan", async (req, res) => {
 // ─────────────────────────────
 // speakers: [{ name: "Gemini", provider: "gemini" }, { name: "Claude", provider: "claude" }, ...]
 // 各 provider 用の API キーが入るまで全部 Gemini にフォールバックする。
-// 【デバッグ中】3者とも軽量モデル・短文設定。安定確認後に最上位モデルに戻す。
+// 安定確認済みのため最上位モデル（Pro / Opus / GPT-5）に戻し、出力長も拡張。
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-const DEBATE_MAX_TOKENS = 800;
+const DEBATE_MAX_TOKENS = 2000;
 
 async function callByProvider(provider, prompt, { web = true } = {}) {
   if (provider === "claude" && ANTHROPIC_API_KEY) {
     // Anthropic native web search (web_search_20250305)
-    // 【デバッグ中】haiku-4-5 で軽量・高速
     const r = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
       headers: {
@@ -254,10 +253,10 @@ async function callByProvider(provider, prompt, { web = true } = {}) {
         "anthropic-version": "2023-06-01",
       },
       body: JSON.stringify({
-        model: "claude-haiku-4-5",
+        model: "claude-opus-4-7",
         max_tokens: DEBATE_MAX_TOKENS,
         messages: [{ role: "user", content: prompt }],
-        ...(web ? { tools: [{ type: "web_search_20250305", name: "web_search", max_uses: 2 }] } : {}),
+        ...(web ? { tools: [{ type: "web_search_20250305", name: "web_search", max_uses: 3 }] } : {}),
       }),
     });
     if (!r.ok) throw new Error(`anthropic ${r.status}: ${await r.text()}`);
@@ -273,9 +272,9 @@ async function callByProvider(provider, prompt, { web = true } = {}) {
     return { text, modelUsed: j.model };
   }
   if (provider === "gpt" && OPENAI_API_KEY) {
-    // 【デバッグ中】gpt-5-mini + reasoning low で速度寄り
-    // reasoning.effort: "minimal" は web_search ツールと併用不可（API 制約）
-    // web 検索使うなら最低 "low" 必要。
+    // GPT-5 (full) + web search。reasoning model なので max_output_tokens は
+    // reasoning + visible の合算。effort 'medium' の余裕を見て 8000 確保。
+    // 'minimal' は web_search と併用不可（API 制約）→ web ON 時は 'medium'。
     const r = await fetch("https://api.openai.com/v1/responses", {
       method: "POST",
       headers: {
@@ -283,10 +282,10 @@ async function callByProvider(provider, prompt, { web = true } = {}) {
         authorization: "Bearer " + OPENAI_API_KEY,
       },
       body: JSON.stringify({
-        model: "gpt-5-mini",
+        model: "gpt-5",
         input: prompt,
-        max_output_tokens: 3000,
-        reasoning: { effort: web ? "low" : "minimal" },
+        max_output_tokens: 8000,
+        reasoning: { effort: web ? "medium" : "minimal" },
         ...(web ? { tools: [{ type: "web_search" }] } : {}),
       }),
     });
@@ -306,9 +305,9 @@ async function callByProvider(provider, prompt, { web = true } = {}) {
     }
     return { text, modelUsed: j.model };
   }
-  // Gemini (本物 or 他 provider のフォールバック)。【デバッグ中】Flash で高速。
+  // Gemini (本物 or 他 provider のフォールバック)。会社方針議論なので Pro 固定。
   const { result, modelUsed } = await callGeminiWithFallback(prompt, {
-    primaryModel: "gemini-2.5-flash",
+    primaryModel: "gemini-2.5-pro",
     maxOutputTokens: DEBATE_MAX_TOKENS,
     useGoogleSearch: web,
   });
@@ -379,7 +378,7 @@ ${others}
 これまでの発言:
 ${log}
 
-あなた（${me.name}）の番です。100〜200字程度で簡潔に発言してください。名前プレフィックス・マークダウン・箇条書き記号は不要、自然な話し言葉で本文だけ。
+あなた（${me.name}）の番です。300〜600字程度で発言してください。論理を展開できる長さで。名前プレフィックス・マークダウン・箇条書き記号は不要、自然な話し言葉で本文だけ。
 発言:`;
   return { provider, prompt, roundNum };
 }
@@ -388,15 +387,16 @@ function buildConclusionPrompt({ topic, speakers, history }) {
   const log = history.map((h) => `${h.name}：${h.text}`).join("\n") || "（発言なし）";
   const names = speakers.map((s) => s.name).join("・");
   const prompt = `お題「${topic}」について ${names} の3つのAIが検討しました。
-議論を踏まえて、経営判断として実行できる結論を1つ提案してください。
+議論を踏まえて以下を出力してください：
 
 形式:
 【結論】何をやる / やらないか（1〜2文で断定的に）
-【根拠】2〜3点
-【実行上の注意点】1〜2点
+【根拠】3〜4点（議論で出た事実・出典に基づいて）
+【3者の立場の違い】どこで意見が分かれたか（1〜2文）
+【実行上の注意点】2〜3点
 
 プレーンテキスト、見出しは上記の【】記号付きで区切る。マークダウン記法は使わない。
-全体で300〜500字。両論併記や「ケースバイケース」「状況による」のような逃げは禁止。
+全体で600〜900字。両論併記や「ケースバイケース」「状況による」のような逃げは禁止。議論で根拠が出ていない主張は結論の根拠にしない。
 
 議論ログ:
 ${log}
@@ -611,6 +611,25 @@ app.delete("/api/kaigi/sessions/:id", async (req, res) => {
     res.status(204).end();
   } catch (err) {
     console.error("kaigi delete", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// リセット: メッセージ全削除、status を active に戻す（セッション自体は残す）
+app.post("/api/kaigi/sessions/:id/reset", async (req, res) => {
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  try {
+    const { rowCount } = await p.query(
+      `UPDATE kaigi_sessions SET status='active', auto_rounds_remaining=0, last_error=NULL, updated_at=now()
+         WHERE id=$1 AND user_email=$2`,
+      [req.params.id, req.user.email]
+    );
+    if (!rowCount) return res.status(404).json({ error: "not found" });
+    await p.query("DELETE FROM kaigi_messages WHERE session_id=$1", [req.params.id]);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error("kaigi reset", err);
     res.status(500).json({ error: err.message });
   }
 });

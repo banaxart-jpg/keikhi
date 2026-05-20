@@ -42,18 +42,19 @@ Gemini / Claude / GPT の3つの AI で経営判断のお題を**協働検討**�
 | DELETE | `/api/kaigi/sessions/:id`       | セッション削除 |
 | POST   | `/api/kaigi/sessions/:id/next`  | 次の1発言を生成して保存 |
 | POST   | `/api/kaigi/sessions/:id/conclude` | 結論を生成して保存（status=completed） |
+| POST   | `/api/kaigi/sessions/:id/reset` | メッセージ全削除（セッションは残る、お題はそのまま） |
 | POST   | `/api/kaigi/sessions/:id/auto`  | 自動進行開始 `{rounds: N}` → Cloud Tasks enqueue |
 | POST   | `/api/kaigi/sessions/:id/auto/stop` | 自動進行を停止 |
 | POST   | `/api/internal/kaigi/tick`      | 内部用 Cloud Tasks コールバック（x-tick-secret 認証） |
 
-## モデル / web 検索（デバッグ中設定）
-| AI | モデル | web 検索 |
-|---|---|---|
-| Gemini | `gemini-2.5-flash` | `googleSearch` tool |
-| Claude | `claude-haiku-4-5` | `web_search_20250305` (max_uses=2) |
-| GPT    | `gpt-5-mini` | `web_search` (Responses API、effort=low) |
+## モデル / web 検索
+| AI | モデル | max_tokens | web 検索 |
+|---|---|---|---|
+| Gemini | `gemini-2.5-pro` | 2000 | `googleSearch` tool |
+| Claude | `claude-opus-4-7` | 2000 | `web_search_20250305` (max_uses=3) |
+| GPT    | `gpt-5` (Responses API) | 8000 | `web_search` (effort=medium、web無し時は minimal) |
 
-安定確認後に最上位モデル（Gemini Pro / Claude Opus / GPT-5）に戻す。
+各発言 300〜600字、結論は 600〜900字構造化（結論/根拠/立場の違い/注意点）。
 
 ## DB スキーマ
 `apps/keihi/infra/schema.sql` に追加（冪等）。
@@ -73,7 +74,6 @@ Gemini / Claude / GPT の3つの AI で経営判断のお題を**協働検討**�
 5. フロントは 5秒ごとにポーリングで新メッセージを取得
 
 ## 残課題
-- [ ] デバッグ完了後、最上位モデルに戻す
 - [ ] web 検索の出典 URL を grounding metadata から取って UI に表示
 - [ ] 自動進行完了時に FCM プッシュ通知
 - [ ] 検討ログのエクスポート（Markdown / CSV）
