@@ -46,6 +46,8 @@ body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); 
 .gbtn:active { box-shadow: inset 5px 5px 12px var(--sd), inset -4px -4px 10px var(--sl); transform: scale(0.97); }
 .sub { font-size: 12px; color: var(--text2); line-height: 1.7; }
 .err { font-size: 11px; color: #b04040; font-weight: 600; max-width: 320px; word-break: break-all; }
+.diag { font-size: 10px; color: var(--text2); font-family: ui-monospace, Menlo, monospace; white-space: pre-wrap; word-break: break-all; text-align: left; max-width: 320px; max-height: 220px; overflow: auto; padding: 10px 12px; border-radius: 12px; background: rgba(255,255,255,0.4); margin-top: 4px; cursor: pointer; line-height: 1.5; }
+.diag:empty { display: none; }
 </style>
 </head>
 <body>
@@ -68,6 +70,7 @@ body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); 
   <button class="gbtn" id="signinBtn">Sign in with Google</button>
   <div class="sub" id="signinStatus"></div>
   <div class="err" id="signinErr"></div>
+  <div class="diag" id="signinDiag" title="タップで全文コピー"></div>
 </div>
 
 <script src="/config.js"></script>
@@ -111,6 +114,36 @@ function renderGrid() {
 // 各 /<app>/ で共有される。API 認証は各アプリ側で getIdToken() を使用。
 const sStatus = (m) => { document.getElementById("signinStatus").textContent = m; };
 const sErr = (m) => { document.getElementById("signinErr").textContent = m; };
+
+// ログイン診断ログ (redirect を跨いで残るよう sessionStorage に蓄積)。
+// 画面に表示してタップで全文コピー。詰まった時はここを貼ってもらう。
+function diagLog(msg) {
+  const arr = JSON.parse(sessionStorage.getItem("loginLog") || "[]");
+  const ts = new Date().toISOString().slice(11, 19);
+  arr.push(`[${ts}] ${msg}`);
+  if (arr.length > 40) arr.shift();
+  sessionStorage.setItem("loginLog", JSON.stringify(arr));
+  renderDiag();
+}
+function renderDiag() {
+  const el = document.getElementById("signinDiag");
+  if (!el) return;
+  const arr = JSON.parse(sessionStorage.getItem("loginLog") || "[]");
+  el.textContent = arr.join("\n");
+}
+function clearDiag() {
+  sessionStorage.removeItem("loginLog");
+  renderDiag();
+}
+document.getElementById("signinDiag")?.addEventListener("click", () => {
+  const t = document.getElementById("signinDiag").textContent;
+  if (!t) return;
+  navigator.clipboard?.writeText(t).then(
+    () => sStatus("📋 診断ログをコピーしました"),
+    () => sStatus("コピー失敗")
+  );
+});
+renderDiag(); // 前回 redirect 前のログがあれば表示
 let fbAuth = null;
 
 (async function initAuth() {
@@ -125,22 +158,32 @@ let fbAuth = null;
   // 別ミニアプリ(/keihi/ 等)から未ログインで飛ばされてきた場合の戻り先
   const nextUrl = new URLSearchParams(location.search).get("next");
   const isMobile = /iphone|ipad|ipod|android/i.test(navigator.userAgent);
+  diagLog(`load host=${location.hostname} mobile=${isMobile} next=${nextUrl || "-"}`);
 
   try {
     const cfg = await fetch("/__/firebase/init.json").then((r) => r.json());
+    const origAuthDomain = cfg.authDomain;
     cfg.authDomain = location.hostname; // 認証フローを Hosting と同一オリジンに（iOS Safari ITP でセッション喪失するため）
+    diagLog(`init.json project=${cfg.projectId} authDomain=${origAuthDomain}→${cfg.authDomain}`);
     fbAuth = getAuth(initializeApp(cfg));
     await setPersistence(fbAuth, browserLocalPersistence);
     const provider = new GoogleAuthProvider();
     provider.setCustomParameters({ prompt: "select_account" });
 
-    try { await getRedirectResult(fbAuth); }
-    catch (e) { sErr("redirect: " + (e.code || e.message)); }
+    try {
+      const rr = await getRedirectResult(fbAuth);
+      diagLog(`redirectResult=${rr ? rr.user.email : "null"}`);
+    } catch (e) {
+      diagLog(`redirectResult ERR ${e.code || ""} ${e.message}`);
+      sErr("redirect: " + (e.code || e.message));
+    }
 
     let done = false;
     function onAuthed(user) {
       if (done) return;
       done = true;
+      diagLog(`onAuthed → ${nextUrl || "grid"}`);
+      clearDiag();
       // 元のミニアプリへ自動復帰（ログイン後に経費へ戻る等）
       if (nextUrl && nextUrl.startsWith("/")) { location.replace(nextUrl); return; }
       document.getElementById("signinOverlay").style.display = "none";
@@ -151,27 +194,33 @@ let fbAuth = null;
 
     document.getElementById("signinBtn").addEventListener("click", async () => {
       sErr(""); sStatus("ログイン中…");
+      diagLog("click signin");
       // モバイルは popup が不安定なので redirect 一択
       if (isMobile) {
-        try { await signInWithRedirect(fbAuth, provider); }
-        catch (e) { sErr((e.code || "") + " " + e.message); }
+        try { diagLog("→ signInWithRedirect"); await signInWithRedirect(fbAuth, provider); }
+        catch (e) { diagLog(`redirect ERR ${e.code || ""} ${e.message}`); sErr((e.code || "") + " " + e.message); }
         return;
       }
       try {
+        diagLog("→ signInWithPopup");
         const res = await signInWithPopup(fbAuth, provider);
         onAuthed(res.user);
       } catch (e) {
+        diagLog(`popup ERR ${e.code || ""} ${e.message}`);
         if (["auth/popup-blocked","auth/popup-closed-by-user","auth/cancelled-popup-request","auth/operation-not-supported-in-this-environment"].includes(e.code)) {
-          try { await signInWithRedirect(fbAuth, provider); } catch (e2) { sErr(e2.message); }
+          try { diagLog("→ fallback signInWithRedirect"); await signInWithRedirect(fbAuth, provider); }
+          catch (e2) { diagLog(`fallback redirect ERR ${e2.code || ""} ${e2.message}`); sErr(e2.message); }
         } else { sErr((e.code || "") + " " + e.message); }
       }
     });
 
     onAuthStateChanged(fbAuth, (user) => {
+      diagLog(`authState ${user ? user.email : "null"}`);
       if (user) onAuthed(user);
       else document.getElementById("signinOverlay").style.display = "flex";
     });
   } catch (e) {
+    diagLog(`init ERR ${e.message}`);
     document.getElementById("signinOverlay").style.display = "flex";
     sErr("init失敗: " + e.message);
   }
