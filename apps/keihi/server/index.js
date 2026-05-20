@@ -263,9 +263,9 @@ async function callByProvider(provider, prompt, { web = true } = {}) {
     return { text, modelUsed: j.model };
   }
   if (provider === "gpt" && OPENAI_API_KEY) {
-    // 【デバッグ中】gpt-5-mini + reasoning minimal で速度優先
-    // GPT-5 は reasoning model なので max_output_tokens は reasoning + visible
-    // の合計。reasoning minimal でも余裕持って 3000 確保。
+    // 【デバッグ中】gpt-5-mini + reasoning low で速度寄り
+    // reasoning.effort: "minimal" は web_search ツールと併用不可（API 制約）
+    // web 検索使うなら最低 "low" 必要。
     const r = await fetch("https://api.openai.com/v1/responses", {
       method: "POST",
       headers: {
@@ -276,7 +276,7 @@ async function callByProvider(provider, prompt, { web = true } = {}) {
         model: "gpt-5-mini",
         input: prompt,
         max_output_tokens: 3000,
-        reasoning: { effort: "minimal" },
+        reasoning: { effort: web ? "low" : "minimal" },
         ...(web ? { tools: [{ type: "web_search" }] } : {}),
       }),
     });

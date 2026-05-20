@@ -56,7 +56,10 @@ textarea:focus { outline: none; }
 .summary-card .label { color: #a86a2b; }
 .summary-card .text { font-size: 13.5px; line-height: 1.7; color: #5a3a1a; }
 
-.err { color: var(--err); font-size: 12px; margin-top: 10px; font-weight: 600; }
+.err { color: var(--err); font-size: 11px; margin-top: 10px; font-weight: 600; padding: 10px 12px; border-radius: 12px; background: rgba(176, 64, 64, 0.08); white-space: pre-wrap; word-break: break-all; cursor: pointer; line-height: 1.5; max-height: 200px; overflow: auto; font-family: ui-monospace, Menlo, monospace; }
+.err:empty { display: none; padding: 0; }
+.err::before { content: "📋 タップでコピー  "; font-weight: 800; color: var(--text3); font-family: 'Outfit', sans-serif; }
+.err.copied::before { content: "✅ コピーしました  "; color: #2a8c3a; }
 .empty { text-align: center; color: var(--text3); font-size: 12px; padding: 30px 0; font-weight: 600; }
 .note { font-size: 10px; color: var(--text3); text-align: center; margin-top: 6px; font-weight: 600; }
 </style>
@@ -261,6 +264,16 @@ window.resetChat = resetChat;
 
 renderSpeakers();
 renderChat();
+
+// エラー表示をタップでクリップボードコピー
+$("err").addEventListener("click", () => {
+  const t = $("err").textContent;
+  if (!t) return;
+  navigator.clipboard?.writeText(t).then(() => {
+    $("err").classList.add("copied");
+    setTimeout(() => $("err").classList.remove("copied"), 1500);
+  });
+});
 
 (async () => {
   try {
