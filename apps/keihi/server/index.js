@@ -333,10 +333,14 @@ function buildSpeakerPrompt({ topic, speakers, history, nextSpeaker }) {
   const meLabel = providerLabel[provider] || `AI「${me.name}」`;
   const others = speakers.filter((s) => s.name !== nextSpeaker)
     .map((s) => `・${s.name}（${providerLabel[s.provider] || s.name}）`).join("\n");
+  // system note は会話に挟む。スピーチだけを round 計算に使う
+  const speeches = history.filter((h) => !h.isSystemNote);
   const log = history.length
-    ? history.map((h) => `${h.name}：${h.text}`).join("\n")
+    ? history.map((h) => h.isSystemNote
+        ? `（システム通知）${h.text}`
+        : `${h.name}：${h.text}`).join("\n")
     : "（まだ誰も発言していない）";
-  const roundNum = Math.floor(history.length / speakers.length) + 1;
+  const roundNum = Math.floor(speeches.length / speakers.length) + 1;
   const stageHint = roundNum === 1
     ? "今は最初のラウンドです。お題に対する自分の視点・前提を出してください。"
     : roundNum === 2
@@ -384,7 +388,11 @@ ${log}
 }
 
 function buildConclusionPrompt({ topic, speakers, history }) {
-  const log = history.map((h) => `${h.name}：${h.text}`).join("\n") || "（発言なし）";
+  const log = history.length
+    ? history.map((h) => h.isSystemNote
+        ? `（システム通知）${h.text}`
+        : `${h.name}：${h.text}`).join("\n")
+    : "（発言なし）";
   const names = speakers.map((s) => s.name).join("・");
   const prompt = `お題「${topic}」について ${names} の3つのAIが検討しました。
 議論を踏まえて以下を出力してください：
@@ -479,12 +487,15 @@ async function advanceSession(sessionId, userEmail) {
   const session = await loadSession(sessionId, userEmail);
   const speakers = session.speakers;
   const { rows: msgRows } = await p.query(
-    `SELECT speaker, content, seq FROM kaigi_messages WHERE session_id=$1 AND NOT is_conclusion ORDER BY seq ASC`,
+    `SELECT speaker, content, seq, is_system_note AS "isSystemNote"
+       FROM kaigi_messages WHERE session_id=$1 AND NOT is_conclusion ORDER BY seq ASC`,
     [sessionId]
   );
-  const history = msgRows.map((m) => ({ name: m.speaker, text: m.content }));
+  const history = msgRows.map((m) => ({ name: m.speaker, text: m.content, isSystemNote: m.isSystemNote }));
+  // 次の speaker は「speech 数 % 3」で決める（system note は除外して順番計算）
+  const speechCount = history.filter((h) => !h.isSystemNote).length;
   const nextSeq = msgRows.length;
-  const nextSpeakerObj = speakers[nextSeq % speakers.length];
+  const nextSpeakerObj = speakers[speechCount % speakers.length];
   const { provider, prompt, roundNum } = buildSpeakerPrompt({
     topic: session.topic,
     speakers,
@@ -515,11 +526,13 @@ async function concludeSession(sessionId, userEmail) {
   const p = getPool();
   const session = await loadSession(sessionId, userEmail);
   const { rows: msgRows } = await p.query(
-    `SELECT speaker, content FROM kaigi_messages WHERE session_id=$1 AND NOT is_conclusion ORDER BY seq ASC`,
+    `SELECT speaker, content, is_system_note AS "isSystemNote"
+       FROM kaigi_messages WHERE session_id=$1 AND NOT is_conclusion ORDER BY seq ASC`,
     [sessionId]
   );
-  if (!msgRows.length) throw Object.assign(new Error("発言が無いと結論は出せません"), { status: 400 });
-  const history = msgRows.map((m) => ({ name: m.speaker, text: m.content }));
+  const speeches = msgRows.filter((m) => !m.isSystemNote);
+  if (!speeches.length) throw Object.assign(new Error("発言が無いと結論は出せません"), { status: 400 });
+  const history = msgRows.map((m) => ({ name: m.speaker, text: m.content, isSystemNote: m.isSystemNote }));
   const { provider, prompt } = buildConclusionPrompt({
     topic: session.topic,
     speakers: session.speakers,
@@ -543,7 +556,7 @@ app.get("/api/kaigi/sessions", async (req, res) => {
   try {
     const { rows } = await p.query(
       `SELECT s.id, s.topic, s.status, s.auto_rounds_remaining, s.last_error, s.created_at, s.updated_at,
-              (SELECT count(*)::int FROM kaigi_messages m WHERE m.session_id = s.id AND NOT m.is_conclusion) AS msg_count,
+              (SELECT count(*)::int FROM kaigi_messages m WHERE m.session_id = s.id AND NOT m.is_conclusion AND NOT m.is_system_note) AS msg_count,
               EXISTS(SELECT 1 FROM kaigi_messages m WHERE m.session_id = s.id AND m.is_conclusion) AS has_conclusion
          FROM kaigi_sessions s
         WHERE s.user_email = $1
@@ -587,7 +600,8 @@ app.get("/api/kaigi/sessions/:id", async (req, res) => {
   try {
     const session = await loadSession(req.params.id, req.user.email);
     const { rows: messages } = await p.query(
-      `SELECT id, speaker, provider, content, model_used AS "modelUsed", round_num AS "roundNum", seq, is_conclusion AS "isConclusion", created_at AS "createdAt"
+      `SELECT id, speaker, provider, content, model_used AS "modelUsed", round_num AS "roundNum", seq,
+              is_conclusion AS "isConclusion", is_system_note AS "isSystemNote", created_at AS "createdAt"
          FROM kaigi_messages WHERE session_id=$1 ORDER BY is_conclusion ASC, seq ASC, id ASC`,
       [req.params.id]
     );
@@ -676,6 +690,54 @@ app.post("/api/kaigi/sessions/:id/auto", async (req, res) => {
   }
 });
 
+// 延長: 結論に納得いかない時、議題を編集して（or そのまま）もう3ラウンド
+app.post("/api/kaigi/sessions/:id/extend", async (req, res) => {
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  const rounds = Math.min(Math.max(parseInt(req.body?.rounds || "3", 10), 1), 10);
+  const newTopic = typeof req.body?.newTopic === "string" ? req.body.newTopic.trim() : null;
+  try {
+    const session = await loadSession(req.params.id, req.user.email);
+    const oldTopic = session.topic;
+    const topicChanged = newTopic && newTopic !== oldTopic;
+
+    if (topicChanged) {
+      await p.query("UPDATE kaigi_sessions SET topic=$1 WHERE id=$2", [newTopic, req.params.id]);
+    }
+
+    // 会話履歴に system note を残して、次のラウンドの AI が認識できるようにする
+    const { rows: cntRows } = await p.query(
+      "SELECT COUNT(*)::int AS n FROM kaigi_messages WHERE session_id=$1",
+      [req.params.id]
+    );
+    const noteText = topicChanged
+      ? `ユーザーが先ほどの結論に納得していません。さらに議題を編集して再検討を求めています。旧議題:「${oldTopic}」→ 新議題:「${newTopic}」。この変更を踏まえて議論を続けてください。これまでの議論で出た論点・前提のうち、新議題にも使えるものは引き継ぎつつ、新しい角度で詰め直してください。`
+      : `ユーザーが先ほどの結論に納得していません。議題は変わっていませんが、もう一度別の角度から3ラウンド深く検討し直してください。これまでの結論を繰り返すのではなく、別の前提・別の解決策・前回見落とした観点を意識的に出してください。`;
+
+    await p.query(
+      `INSERT INTO kaigi_messages (session_id, speaker, provider, content, model_used, round_num, seq, is_system_note)
+       VALUES ($1, '司会', 'system', $2, NULL, 0, $3, true)`,
+      [req.params.id, noteText, cntRows[0].n]
+    );
+
+    await p.query(
+      `UPDATE kaigi_sessions
+         SET status='auto',
+             auto_rounds_remaining=$1,
+             extension_count=extension_count+1,
+             last_error=NULL,
+             updated_at=now()
+       WHERE id=$2 AND user_email=$3`,
+      [rounds, req.params.id, req.user.email]
+    );
+    const taskName = await enqueueKaigiTick(Number(req.params.id), 0);
+    res.json({ ok: true, topicChanged, taskQueued: !!taskName });
+  } catch (err) {
+    console.error("kaigi extend", err);
+    res.status(err.status || 500).json({ error: err.message });
+  }
+});
+
 // 自動進行を止める
 app.post("/api/kaigi/sessions/:id/auto/stop", async (req, res) => {
   const p = getPool();
@@ -706,8 +768,9 @@ app.post("/api/internal/kaigi/tick", async (req, res) => {
       return res.json({ stopped: true });
     }
     const speakers = session.speakers;
+    // ラウンド計算は speech だけで（system_note は除外）
     const { rows: cntRows } = await p.query(
-      `SELECT COUNT(*)::int AS n FROM kaigi_messages WHERE session_id=$1 AND NOT is_conclusion`,
+      `SELECT COUNT(*)::int AS n FROM kaigi_messages WHERE session_id=$1 AND NOT is_conclusion AND NOT is_system_note`,
       [sessionId]
     );
     const seqBefore = cntRows[0].n;

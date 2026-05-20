@@ -60,6 +60,8 @@ textarea:focus, input:focus { outline: none; }
 .msg .who { font-size: 11px; font-weight: 700; color: var(--text2); margin-bottom: 3px; display: flex; gap: 6px; align-items: baseline; }
 .msg .meta { font-size: 9px; color: var(--text3); }
 .msg.thinking .body { color: var(--text3); font-style: italic; }
+.msg.system .body { background: rgba(154,160,184,0.12); color: var(--text2); font-size: 12.5px; line-height: 1.6; }
+.msg.system .who { color: var(--text3); }
 .summary-card { margin-top: 16px; padding: 16px; border-radius: 18px; background: linear-gradient(135deg, #fff4e0, #ffe7d0); box-shadow: 6px 6px 14px var(--sd), -4px -4px 12px var(--sl); white-space: pre-wrap; word-break: break-word; }
 .summary-card .label { color: #a86a2b; }
 .summary-card .text { font-size: 13.5px; line-height: 1.7; color: #5a3a1a; white-space: pre-wrap; }
@@ -129,32 +131,42 @@ textarea:focus, input:focus { outline: none; }
         <button class="btn compact danger" onclick="deleteSession()">削除</button>
       </div>
       <div class="label" style="margin-top: 14px;">お題</div>
-      <div id="sessionTopic" style="font-size: 14px; font-weight: 600; line-height: 1.5;"></div>
+      <div id="topicView" style="font-size: 14px; font-weight: 600; line-height: 1.5;"></div>
+      <textarea id="topicEdit" style="display:none; margin-top: 6px;"></textarea>
       <div class="status-line" id="sessionStatus"></div>
-    </div>
-
-    <div class="actions">
-      <button class="btn compact" id="nextBtn" onclick="advanceOne()">次の1発言だけ</button>
-      <button class="btn compact" id="autoBtn" onclick="startAuto()">自動進行（3R→結論）</button>
-      <button class="btn compact" id="stopAutoBtn" onclick="stopAuto()" style="display:none;">自動止める</button>
     </div>
 
     <div class="err" id="sessionErr"></div>
 
     <div class="card" style="margin-top: 20px;">
       <div class="label">検討ログ</div>
-      <div class="chat" id="chat"><div class="empty">「次の1発言」or「1ラウンド進める」で開始</div></div>
+      <div class="chat" id="chat"><div class="empty">下の「会議スタート」を押すと検討が始まります</div></div>
       <div id="conclusionWrap"></div>
     </div>
   </div>
 </div>
 
-<!-- 画面下固定ボタン（セッション詳細時のみ） -->
+<!-- 画面下固定ボタン（セッション詳細時のみ。状態で出し分け） -->
 <div class="fixed-footer" id="fixedFooter">
-  <div class="row">
-    <button class="btn primary" id="roundBtn" onclick="advanceRound()">もう1ラウンド</button>
-    <button class="btn" id="concludeBtn" onclick="doConclude()">結論を出す</button>
+  <!-- 未開始 / 結論なし: スタートボタン -->
+  <div class="row" id="startRow">
+    <button class="btn primary" id="startBtn" onclick="startKaigi()">🚀 会議スタート（3R→結論）</button>
   </div>
+  <!-- 自動進行中 -->
+  <div class="row" id="autoRow" style="display:none;">
+    <button class="btn" id="stopAutoBtn" onclick="stopAuto()">⏸ 自動進行を止める</button>
+  </div>
+  <!-- 完了後: 延長 -->
+  <div class="row" id="extendRow" style="display:none;">
+    <button class="btn primary" id="editExtendBtn" onclick="openEditExtend()">✏️ 議題編集して+3R</button>
+    <button class="btn" id="sameExtendBtn" onclick="extendSame()">🔄 そのまま+3R</button>
+  </div>
+  <!-- 議題編集中 -->
+  <div class="row" id="editRow" style="display:none;">
+    <button class="btn primary" id="confirmEditBtn" onclick="confirmEditExtend()">この議題で+3R</button>
+    <button class="btn" onclick="cancelEdit()">キャンセル</button>
+  </div>
+  <!-- 共通: リセット -->
   <div class="row">
     <button class="btn tiny danger" id="resetBtn" onclick="resetSession()">リセット（履歴クリア）</button>
   </div>
@@ -179,6 +191,7 @@ const state = {
   messages: [],
   busy: false,
   pollTimer: null,
+  editing: false,
 };
 
 const $ = (id) => document.getElementById(id);
@@ -314,49 +327,83 @@ async function refreshSession() {
 
 function renderSession() {
   if (!state.session) return;
-  $("sessionTopic").textContent = state.session.topic;
+  $("topicView").textContent = state.session.topic;
+  const ext = state.session.extension_count || 0;
   const remaining = state.session.auto_rounds_remaining;
   const statusMap = {
-    active: "進行中",
-    auto: `自動進行中（残り ${remaining} ラウンド）`,
-    completed: "完了",
+    active: ext > 0 ? `準備完了（延長 ${ext} 回済）` : "準備完了",
+    auto: `自動進行中（残り ${remaining}R）${ext > 0 ? ` ／延長 ${ext} 回目` : ""}`,
+    completed: ext > 0 ? `完了（延長 ${ext} 回）` : "完了",
     failed: `失敗: ${state.session.last_error || ""}`,
   };
   $("sessionStatus").textContent = statusMap[state.session.status] || state.session.status;
 
-  // ボタンの可否
+  const speeches = state.messages.filter((m) => !m.isConclusion && !m.isSystemNote);
+  const systemNotes = state.messages.filter((m) => m.isSystemNote);
+  const concl = state.messages.find((m) => m.isConclusion);
   const isAuto = state.session.status === "auto";
-  const hasMessages = state.messages.filter((m) => !m.isConclusion).length > 0;
-  $("nextBtn").disabled = isAuto || state.busy;
-  $("autoBtn").disabled = isAuto || state.busy;
-  $("roundBtn").disabled = isAuto || state.busy;
-  $("concludeBtn").disabled = isAuto || state.busy || !hasMessages;
-  $("resetBtn").disabled = isAuto || state.busy || !hasMessages;
-  $("stopAutoBtn").style.display = isAuto ? "" : "none";
+  const isCompleted = state.session.status === "completed" || !!concl;
+
+  // フッターの出し分け
+  $("startRow").style.display = "none";
+  $("autoRow").style.display = "none";
+  $("extendRow").style.display = "none";
+  $("editRow").style.display = "none";
+  $("topicEdit").style.display = "none";
+  $("topicView").style.display = "";
+  if (state.editing) {
+    $("editRow").style.display = "flex";
+    $("topicEdit").style.display = "";
+    $("topicView").style.display = "none";
+  } else if (isAuto) {
+    $("autoRow").style.display = "flex";
+  } else if (isCompleted) {
+    $("extendRow").style.display = "flex";
+  } else {
+    $("startRow").style.display = "flex";
+  }
+
+  $("startBtn").disabled = state.busy;
+  $("stopAutoBtn").disabled = state.busy;
+  $("editExtendBtn").disabled = state.busy;
+  $("sameExtendBtn").disabled = state.busy;
+  $("confirmEditBtn").disabled = state.busy;
+  $("resetBtn").disabled = isAuto || state.busy || !state.messages.length;
 
   // チャット
   const chat = $("chat");
-  const nonConclusion = state.messages.filter((m) => !m.isConclusion);
-  if (!nonConclusion.length) {
-    chat.innerHTML = `<div class="empty">「次の1発言」or「1ラウンド進める」で開始</div>`;
+  // 表示は speech + systemNote（順番通り）
+  const visible = state.messages.filter((m) => !m.isConclusion);
+  if (!visible.length) {
+    chat.innerHTML = `<div class="empty">下の「会議スタート」を押すと検討が始まります</div>`;
   } else {
     chat.innerHTML = "";
-    for (const m of nonConclusion) {
-      const s = speakerOf(m.speaker);
+    for (const m of visible) {
       const div = document.createElement("div");
-      div.className = "msg";
-      div.innerHTML = `
-        <div class="dot" style="background:${s.color}">${s.short}</div>
-        <div>
-          <div class="who">${escapeHtml(m.speaker)} <span class="meta">R${m.roundNum} · ${m.modelUsed || m.provider}</span></div>
-          <div class="body">${escapeHtml(m.content)}</div>
-        </div>`;
+      if (m.isSystemNote) {
+        div.className = "msg system";
+        div.innerHTML = `
+          <div class="dot" style="background:#9aa0b8">📋</div>
+          <div>
+            <div class="who">司会（システム）</div>
+            <div class="body">${escapeHtml(m.content)}</div>
+          </div>`;
+      } else {
+        const s = speakerOf(m.speaker);
+        div.className = "msg";
+        div.innerHTML = `
+          <div class="dot" style="background:${s.color}">${s.short}</div>
+          <div>
+            <div class="who">${escapeHtml(m.speaker)} <span class="meta">R${m.roundNum} · ${m.modelUsed || m.provider}</span></div>
+            <div class="body">${escapeHtml(m.content)}</div>
+          </div>`;
+      }
       chat.appendChild(div);
     }
   }
-  // thinking placeholder
-  if (state.busy && !isAuto) {
-    const next = SPEAKERS[nonConclusion.length % SPEAKERS.length];
+  // thinking placeholder (auto 中も次の speaker が出るまで待ち状態)
+  if (isAuto) {
+    const next = SPEAKERS[speeches.length % SPEAKERS.length];
     const div = document.createElement("div");
     div.className = "msg thinking";
     div.innerHTML = `
@@ -369,78 +416,83 @@ function renderSession() {
   }
 
   // 結論
-  const concl = state.messages.find((m) => m.isConclusion);
   if (concl) {
-    $("conclusionWrap").innerHTML = `<div class="summary-card"><div class="label">結論</div><div class="text">${escapeHtml(concl.content)}</div></div>`;
+    $("conclusionWrap").innerHTML = `<div class="summary-card"><div class="label">結論${ext > 0 ? `（延長 ${ext} 回後）` : ""}</div><div class="text">${escapeHtml(concl.content)}</div></div>`;
   } else {
     $("conclusionWrap").innerHTML = "";
   }
   chat.scrollIntoView({ behavior: "smooth", block: "end" });
 }
 
-async function advanceOne() {
+// 会議スタート（3R + 自動結論）
+async function startKaigi() {
   if (state.busy || !state.sessionId) return;
   errSession("");
   state.busy = true;
   renderSession();
   try {
-    const msg = await api("POST", `/api/kaigi/sessions/${state.sessionId}/next`);
-    state.messages.push(msg);
-  } catch (e) {
-    errSession(e.message);
-  } finally {
-    state.busy = false;
-    await refreshSession();
-  }
-}
-window.advanceOne = advanceOne;
-
-async function advanceRound() {
-  if (state.busy || !state.sessionId) return;
-  for (let i = 0; i < SPEAKERS.length; i++) {
-    if (state.busy) return;
-    await advanceOne();
-    if ($("sessionErr").textContent) break;
-  }
-}
-window.advanceRound = advanceRound;
-
-async function doConclude() {
-  if (state.busy || !state.sessionId) return;
-  errSession("");
-  state.busy = true;
-  $("conclusionWrap").innerHTML = `<div class="summary-card"><div class="label">結論</div><div class="text">生成中…</div></div>`;
-  $("concludeBtn").disabled = true;
-  try {
-    await api("POST", `/api/kaigi/sessions/${state.sessionId}/conclude`);
-    await refreshSession();
-  } catch (e) {
-    errSession(e.message);
-    $("conclusionWrap").innerHTML = "";
-  } finally {
-    state.busy = false;
-    $("concludeBtn").disabled = false;
-  }
-}
-window.doConclude = doConclude;
-
-async function startAuto() {
-  if (state.busy || !state.sessionId) return;
-  errSession("");
-  state.busy = true;
-  $("autoBtn").disabled = true;
-  try {
     const r = await api("POST", `/api/kaigi/sessions/${state.sessionId}/auto`, { rounds: 3 });
-    if (r.note) errSession(`⚠️ ${r.note} — 「次の1発言」で手動進行できます`);
+    if (r.note) errSession(`⚠️ ${r.note}`);
     await refreshSession();
   } catch (e) {
     errSession(e.message);
   } finally {
     state.busy = false;
-    $("autoBtn").disabled = false;
   }
 }
-window.startAuto = startAuto;
+window.startKaigi = startKaigi;
+
+// 延長: 議題そのまま +3R
+async function extendSame() {
+  if (state.busy || !state.sessionId) return;
+  errSession("");
+  state.busy = true;
+  renderSession();
+  try {
+    await api("POST", `/api/kaigi/sessions/${state.sessionId}/extend`, { rounds: 3 });
+    await refreshSession();
+  } catch (e) {
+    errSession(e.message);
+  } finally {
+    state.busy = false;
+  }
+}
+window.extendSame = extendSame;
+
+// 延長: 議題編集モード開始
+function openEditExtend() {
+  if (!state.session) return;
+  state.editing = true;
+  $("topicEdit").value = state.session.topic;
+  renderSession();
+  setTimeout(() => $("topicEdit").focus(), 50);
+}
+window.openEditExtend = openEditExtend;
+
+function cancelEdit() {
+  state.editing = false;
+  renderSession();
+}
+window.cancelEdit = cancelEdit;
+
+async function confirmEditExtend() {
+  if (state.busy || !state.sessionId) return;
+  const newTopic = $("topicEdit").value.trim();
+  if (!newTopic) { errSession("議題を入れてください"); return; }
+  errSession("");
+  state.busy = true;
+  state.editing = false;
+  renderSession();
+  try {
+    await api("POST", `/api/kaigi/sessions/${state.sessionId}/extend`, { rounds: 3, newTopic });
+    await refreshSession();
+  } catch (e) {
+    errSession(e.message);
+  } finally {
+    state.busy = false;
+  }
+}
+window.confirmEditExtend = confirmEditExtend;
 
 async function stopAuto() {
   if (!state.sessionId) return;

@@ -4,16 +4,22 @@ Gemini / Claude / GPT の3つの AI で経営判断のお題を**協働検討**�
 **会話は Cloud SQL に保存**されるので、途中でブラウザ閉じても再開可能。**Cloud Tasks 経由で閉じてる間も自動進行**できる。
 
 ## 使い方
-- ランチャーから 🏛️ AI会議 をタップ
-- 一覧画面でお題を入れて「この議題で会議を作る」
-- 詳細画面の下部固定ボタン：
-  - **もう1ラウンド** — 3者が1発言ずつ進む
-  - **結論を出す** — 【結論】【根拠】【実行上の注意点】を生成
-- 上段の細ボタン：
-  - **次の1発言だけ** — 1人ずつ刻みたい時
-  - **自動進行（3R→結論）** — Cloud Tasks に投げて閉じてる間も進む
-  - **自動止める** — 自動進行中だけ表示
-- 一覧画面に戻れば過去の会議が並んでる（最新100件）
+1. ランチャーから 🏛️ AI会議 をタップ
+2. 一覧画面でお題を入れて「この議題で会議を作る」
+3. 詳細画面で **🚀 会議スタート（3R→結論）** を押す
+4. Cloud Tasks 経由で 3 ラウンド進む（ブラウザ閉じてもOK） → 自動で結論生成 → 完了
+5. 結論を見て：
+   - 納得 → 終わり
+   - **✏️ 議題編集して+3R** — 議題を書き換えてもう3ラウンド検討
+   - **🔄 そのまま+3R** — 議題そのままでもう3ラウンド（別の角度から再検討）
+   - 何度でも延長可。延長回数はステータスに表示
+6. 一覧画面に戻れば過去の会議が並んでる（最新100件）
+
+延長時、システム通知が会話履歴に挟まる：
+- 議題変更時:「ユーザーが先ほどの結論に納得していません。旧議題「X」→新議題「Y」」
+- 議題そのまま:「ユーザーが先ほどの結論に納得していません。別の角度から3ラウンド」
+
+→ 次のラウンドの AI はこれを文脈で認識して、前回の繰り返しではなく別の切り口で議論する。
 
 ## ラウンド進行
 | Round | フェーズ |
@@ -45,6 +51,7 @@ Gemini / Claude / GPT の3つの AI で経営判断のお題を**協働検討**�
 | POST   | `/api/kaigi/sessions/:id/reset` | メッセージ全削除（セッションは残る、お題はそのまま） |
 | POST   | `/api/kaigi/sessions/:id/auto`  | 自動進行開始 `{rounds: N}` → Cloud Tasks enqueue |
 | POST   | `/api/kaigi/sessions/:id/auto/stop` | 自動進行を停止 |
+| POST   | `/api/kaigi/sessions/:id/extend` | 結論に納得いかない時の延長 `{rounds, newTopic?}`。newTopic 指定で議題編集、未指定でそのまま延長。system note を会話履歴に挿入 |
 | POST   | `/api/internal/kaigi/tick`      | 内部用 Cloud Tasks コールバック（x-tick-secret 認証） |
 
 ## モデル / web 検索
@@ -59,8 +66,10 @@ Gemini / Claude / GPT の3つの AI で経営判断のお題を**協働検討**�
 ## DB スキーマ
 `apps/keihi/infra/schema.sql` に追加（冪等）。
 
-- `kaigi_sessions(id, user_email, topic, speakers, status, auto_rounds_remaining, last_error, created_at, updated_at)`
-- `kaigi_messages(id, session_id, speaker, provider, content, model_used, round_num, seq, is_conclusion, created_at)`
+- `kaigi_sessions(id, user_email, topic, speakers, status, auto_rounds_remaining, extension_count, last_error, created_at, updated_at)`
+- `kaigi_messages(id, session_id, speaker, provider, content, model_used, round_num, seq, is_conclusion, is_system_note, created_at)`
+
+`is_system_note=true` のメッセージは「司会」(speaker='司会', provider='system') として保存され、会話履歴に「(システム通知) ...」として AI プロンプトに混ぜられる。延長フローで使う。
 
 ## 自動進行（Cloud Tasks）の仕組み
 1. `POST /api/kaigi/sessions/:id/auto?rounds=3` で `status='auto'`, `auto_rounds_remaining=3`

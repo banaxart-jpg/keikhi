@@ -59,3 +59,7 @@ CREATE TABLE IF NOT EXISTS kaigi_messages (
 
 CREATE INDEX IF NOT EXISTS kaigi_messages_session_idx ON kaigi_messages (session_id, seq);
 CREATE INDEX IF NOT EXISTS kaigi_sessions_user_idx    ON kaigi_sessions (user_email, updated_at DESC);
+
+-- 延長フロー（結論→不満→議題編集→もう3ラウンド）対応
+ALTER TABLE kaigi_sessions ADD COLUMN IF NOT EXISTS extension_count INT NOT NULL DEFAULT 0;
+ALTER TABLE kaigi_messages ADD COLUMN IF NOT EXISTS is_system_note  BOOLEAN NOT NULL DEFAULT false;
