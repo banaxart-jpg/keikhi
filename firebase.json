@@ -1,11 +1,18 @@
 {
   "hosting": {
     "site": "keihi-496002",
-    "public": "web",
+    "public": "apps",
     "ignore": [
       "firebase.json",
       "**/.*",
-      "**/node_modules/**"
+      "**/node_modules/**",
+      "**/server/**",
+      "**/infra/**",
+      "**/cloudbuild.yaml",
+      "**/app.yaml",
+      "**/*.md",
+      "admin/**",
+      "denki-zumen/**"
     ],
     "headers": [
       {

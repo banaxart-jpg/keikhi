@@ -309,12 +309,12 @@ if (DEV) {
   // Cloud Shell 即プレビュー用：本番(Firebase Hosting)と同じ構成を1プロセスで再現。
   //  - /api/**         → 上で定義済み（本番の Hosting rewrite と同一オリジン）
   //  - /__/firebase/init.json → 本番Hostingが配る Firebase 設定をローカルでも提供
-  //  - それ以外        → apps/keihi/web 配下の静的ファイル（ランチャー & 各ミニアプリ）
+  //  - それ以外        → リポジトリ root の apps/ 配下の静的ファイル（ランチャー & 各ミニアプリ）
   const { readFileSync } = await import("node:fs");
   const path = await import("node:path");
   const { fileURLToPath } = await import("node:url");
   const webDir = path.resolve(
-    path.dirname(fileURLToPath(import.meta.url)), "../web"
+    path.dirname(fileURLToPath(import.meta.url)), "../.."
   );
   app.get("/__/firebase/init.json", (req, res) => {
     try {

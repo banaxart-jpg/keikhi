@@ -8,7 +8,7 @@
 ## 🛠 このプロジェクトについて
 
 業務に役立つミニアプリをスマホで運用するための社内サンドボックス。
-経費管理 (`/keihi/`)、AIコスト計算 (`/cost/`) を皮切りに、各メンバーが必要なアプリを `apps/keihi/web/<id>/index.html` を1ファイル作るだけで追加できる。
+経費管理 (`/keihi/`)、AIコスト計算 (`/cost/`) を皮切りに、各メンバーが必要なアプリを `apps/<id>/index.html` を1ファイル作るだけで追加できる。
 各ミニアプリは独立してるので、新規追加・実験で他に影響しない。
 
 インフラ・GCP 設定・デプロイ周りは **小西 (info@banax.tokyo / konishi0221@gmail.com)** が管理。
@@ -29,10 +29,10 @@
 ## 👥 開発のお約束
 
 ### 自由に編集してOK
-- `apps/keihi/web/<id>/index.html` で新ミニアプリ作成（HTML/CSS/JS）
+- `apps/<id>/index.html` で新ミニアプリ作成（HTML/CSS/JS）
 - 自分が作ったミニアプリの中身・スタイル全般
-- ランチャー (`apps/keihi/web/index.html`) の `APPS` 配列に**自分のエントリを1行追加**
-- 実装の参考：[`/cost/`](apps/keihi/web/cost/index.html)（静的のみで完結）、[`/keihi/`](apps/keihi/web/keihi/index.html)（認証＋API呼び出し）
+- ランチャー (`apps/index.html`) の `APPS` 配列に**自分のエントリを1行追加**
+- 実装の参考：[`/cost/`](apps/cost/index.html)（静的のみで完結）、[`/keihi/`](apps/keihi/index.html)（認証＋API呼び出し）
 
 ### 🆕 AI を使うミニアプリを作るとき
 
@@ -67,11 +67,11 @@ OpenAI / Claude など**新しい AI 提供元**を使いたいときは APIキ�
 
 ### ✏️ 誰でも編集 OK
 - **このファイル (`README.md`)** — 上記の「小西管轄ラベル」セクション以外は自由に追記・修正OK。自分のミニアプリの説明追加・「📦 現在のアプリ」表への追記など歓迎
-- **`apps/keihi/web/<自分のID>/` 配下すべて**（README.md 含む）— 完全自由
+- **`apps/<自分のID>/` 配下すべて**（README.md 含む）— 完全自由
 
 ### 📝 新ミニアプリ作成時のルール
 
-`apps/keihi/web/<id>/` を作るときは **同じディレクトリに README.md も必ず1枚置く**。最小テンプレ：
+`apps/<id>/` を作るときは **同じディレクトリに README.md も必ず1枚置く**。最小テンプレ：
 
 ```md
 # <アプリ名>（/<id>/）
@@ -99,7 +99,7 @@ Claude Code に新ミニアプリを依頼するときは、index.html と一緒
 
 ### A. 認証もAPIも要らないアプリ（電卓・チェックリスト等）
 
-`apps/keihi/web/<id>/index.html` を1ファイル書くだけ。参考実装：[`/cost/`](apps/keihi/web/cost/index.html)。
+`apps/<id>/index.html` を1ファイル書くだけ。参考実装：[`/cost/`](apps/cost/index.html)。
 
 ```html
 <!DOCTYPE html>
@@ -112,7 +112,7 @@ Claude Code に新ミニアプリを依頼するときは、index.html と一緒
 </html>
 ```
 
-最後にランチャー (`apps/keihi/web/index.html`) の `APPS` 配列に1行追加：
+最後にランチャー (`apps/index.html`) の `APPS` 配列に1行追加：
 
 ```js
 { id: "myapp", name: "マイアプリ", icon: "🎯", desc: "説明", path: "/myapp/" },
@@ -171,13 +171,13 @@ onAuthStateChanged(auth, async (user) => {
 Cloud Run（バックエンドの URL）が入った変数。
 
 - 値の例: `https://keihi-api-734350696397.asia-northeast1.run.app`
-- どこで決まる: Cloud Build の `prep-config` ステップが、デプロイ時の Cloud Run URL を `apps/keihi/web/config.js` に注入
+- どこで決まる: Cloud Build の `prep-config` ステップが、デプロイ時の Cloud Run URL を `apps/config.js` に注入
 - なぜ要る: 開発環境・本番環境・将来サービス名変更があっても、HTMLを書き換えずに済む
 - 使い方: `<script src="/config.js"></script>` を読み込めば `window.API_BASE` が定義される
 
 ### E. 画像を撮ってアップロードしたい
 
-`<input type="file" accept="image/*" capture="environment">` でスマホカメラ起動。Base64 にして送る。詳細は経費アプリ (`apps/keihi/web/keihi/index.html` の `handleFile()` あたり) を参照。
+`<input type="file" accept="image/*" capture="environment">` でスマホカメラ起動。Base64 にして送る。詳細は経費アプリ (`apps/keihi/index.html` の `handleFile()` あたり) を参照。
 
 ---
 
@@ -188,7 +188,7 @@ Cloud Run（バックエンドの URL）が入った変数。
 | サービス | 用途（例え話） | 状態 | 使い方 |
 |---|---|---|---|
 | **Firebase Auth** | 入口の受付係（誰が来たか確認） | ✅ 稼働中 | ランチャー経由で自動ログイン済 |
-| **Firebase Hosting** | お店の看板・店内（静的ファイル配信） | ✅ 稼働中 | `apps/keihi/web/` の中身が自動配信される |
+| **Firebase Hosting** | お店の看板・店内（静的ファイル配信） | ✅ 稼働中 | `apps/` 配下が自動配信される（`firebase.json` の ignore で server/infra 等は除外） |
 | **Cloud Run** | お店の厨房（サーバ側プログラム実行） | ✅ 稼働中 (`keihi-api`) | バックエンドが要るとき。**新規構築は小西** |
 | **Cloud SQL (Postgres)** | 棚卸帳簿（行と列の表で整理されたデータ） | ✅ 稼働中 (`keikhi-db` / `keihi` DB) | バックエンド経由でクエリ。**新テーブル追加は小西** |
 | **Cloud Storage** | 倉庫（ファイル/画像保存） | ✅ 稼働中 (`<project>-keihi-receipts` バケット) | バックエンド経由でアップロード |
@@ -206,12 +206,21 @@ Cloud Run（バックエンドの URL）が入った変数。
 ## 📁 ミニアプリ構造（ランチャー方式）
 
 ```
-apps/keihi/web/                ← Hosting 公開ルート（site: keihi-496002）
-├── index.html                 ← ランチャー（アプリ選択 + 共通Googleログイン）
+apps/                          ← Hosting 公開ルート（site: keihi-496002）
+├── index.html                 ← ランチャー（アプリ選択 + 共通Googleログイン）→ /
 ├── config.js                  ← Cloud Run URL（ビルド時に自動注入）
-├── keihi/index.html           ← 経費アプリ        → /keihi/
-├── cost/index.html            ← AIコスト計算      → /cost/
-└── <新アプリID>/index.html    ← 新ミニアプリ      → /<新アプリID>/
+├── keihi/                     ← 経費アプリ        → /keihi/
+│   ├── index.html
+│   ├── README.md
+│   ├── server/                ← Cloud Run コード（Hosting 配信から除外）
+│   ├── infra/                 ← schema.sql 等（同上）
+│   └── cloudbuild.yaml        ← デプロイ仕様（同上）
+├── cost/                      ← AIコスト計算      → /cost/
+│   ├── index.html
+│   └── README.md
+└── <新アプリID>/
+    ├── index.html
+    └── README.md
 ```
 
 | URL | 中身 |
@@ -223,16 +232,16 @@ apps/keihi/web/                ← Hosting 公開ルート（site: keihi-496002�
 
 ### 新しいミニアプリの追加手順
 
-1. `apps/keihi/web/<id>/index.html` を作る（**1アプリ＝1ディレクトリ**）
-2. ランチャー `apps/keihi/web/index.html` の `APPS` 配列に1行追加
+1. `apps/<id>/index.html` と `apps/<id>/README.md` を作る（**1アプリ＝1ディレクトリ**）
+2. ランチャー `apps/index.html` の `APPS` 配列に1行追加
    （`{ id, name, icon, desc, path:"/<id>/" }`。`soon:true` で「準備中」表示）
 3. main に push → 自動デプロイ → `keihi-496002.web.app/<id>/` で公開
 
 ### ルール
 
 - **共通ログイン**：ランチャーで1回 Google ログイン → `localStorage` 永続化で同一オリジンの全ミニアプリで共有
-- **バックエンドが要るアプリ**：必要なら専用 Cloud Run サービスを持てる（経費は `keihi-api`）
-- ディレクトリ名 `keihi` は歴史的経緯。新アプリは必ず自分の `<id>/` 配下に置く
+- **バックエンドが要るアプリ**：必要なら専用 Cloud Run サービスを持てる（経費は `keihi-api`）。サーバコードは `apps/<id>/server/` 配下に
+- 静的のみのアプリは `apps/<id>/index.html` 1ファイルだけで完結
 
 ---
 
@@ -255,8 +264,8 @@ apps/keihi/web/                ← Hosting 公開ルート（site: keihi-496002�
 
 | ディレクトリ | サービス名 | 内容 | 状態 |
 |---|---|---|---|
-| `apps/keihi/web/keihi/` | `keihi-api` | 経費管理（領収書OCR） | 稼働中 ✅ |
-| `apps/keihi/web/cost/` | （静的のみ） | AIコスト計算機 | 稼働中 ✅ |
+| `apps/keihi/` | `keihi-api` | 経費管理（領収書OCR） | 稼働中 ✅ |
+| `apps/cost/` | （静的のみ） | AIコスト計算機 | 稼働中 ✅ |
 | `apps/admin/` | `keikhi-admin` | 管理ダッシュボード | 稼働中 ✅ |
 | `apps/denki-zumen/` | `denki-zumen-api` | 電気図面作成 | 未着手 |
 

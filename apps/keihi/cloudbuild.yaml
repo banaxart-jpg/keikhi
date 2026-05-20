@@ -72,7 +72,7 @@ steps:
           --role=roles/run.invoker --quiet
         RUN_URL=$$(gcloud run services describe ${_SERVICE} \
           --region=${_REGION} --format='value(status.url)')
-        echo "window.API_BASE='$$RUN_URL';" > apps/${_APP}/web/config.js
+        echo "window.API_BASE='$$RUN_URL';" > apps/config.js
         echo "API_BASE = $$RUN_URL (direct Cloud Run call)"
 
   - id: ensure-hosting-site
@@ -98,7 +98,7 @@ steps:
         npm install -g firebase-tools@13 --silent --no-audit --no-fund
         firebase deploy --only hosting \
           --project=$PROJECT_ID \
-          --config=apps/${_APP}/firebase.json \
+          --config=firebase.json \
           --non-interactive
 
 options:

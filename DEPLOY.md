@@ -94,10 +94,10 @@ Claude が作業ブランチで作業 → main に push → トリガ発火 → 
    - `--memory=512Mi --cpu=1 --min-instances=0 --max-instances=3`
 3. **prep-config** —
    - `allUsers` + `info@banax.tokyo` に `roles/run.invoker` 付与（冪等）
-   - `gcloud run services describe` で URL 取得 → `apps/keihi/web/config.js` に
+   - `gcloud run services describe` で URL 取得 → `apps/config.js` に
      `window.API_BASE='<url>';` 書き込み（ブラウザはこの URL に直接 fetch する）
 4. **ensure-hosting-site** — Hosting サイト `keihi-496002` を冪等に作成
-5. **deploy-hosting** — `firebase deploy --only hosting`（`apps/keihi/web` を配信）
+5. **deploy-hosting** — `firebase deploy --only hosting`（プロジェクト root の `firebase.json` で `apps/` を配信）
 
 #### 認証フロー
 
@@ -289,7 +289,7 @@ sleep 180   # 反映に最大7分かかる
 **原因**: Firebase Auth デフォルトの `authDomain = <project>.firebaseapp.com`
 を iOS Safari ITP が「クロスサイトストレージ」と判定して数日で消す。
 
-**対策**: `web/index.html`・`web/keihi/index.html` で
+**対策**: `apps/index.html`（ランチャー）・`apps/keihi/index.html`（経費）で
 `cfg.authDomain = location.hostname` を上書き。認証フロー全部を
 `keihi-496002.web.app` 内に閉じる。
 
