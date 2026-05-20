@@ -32,6 +32,17 @@ body { font-family: 'Outfit', -apple-system, sans-serif; font-weight: 400; backg
 .buyer-btn.pressed { box-shadow: inset 7px 7px 18px var(--sd), inset -5px -5px 14px var(--sl), inset 2px 2px 6px var(--sd2); transform: scale(0.96); color: var(--bulb2); text-shadow: 0 0 16px var(--bulb-glow), 0 0 32px var(--bulb-glow2); }
 
 #scanScreen { position: fixed; inset: 0; display: none; flex-direction: column; align-items: center; justify-content: center; background: var(--bg); gap: 28px; }
+#trayScreen { position: fixed; inset: 0; display: none; flex-direction: column; background: var(--bg); }
+.tray-top { display: flex; align-items: center; justify-content: space-between; padding: 54px 18px 14px; }
+.tray-title { font-size: 16px; font-weight: 800; color: var(--text); }
+.tray-grid { flex: 1; overflow-y: auto; display: grid; grid-template-columns: 1fr 1fr; gap: 12px; padding: 8px 18px 140px; }
+.tray-thumb { position: relative; aspect-ratio: 3/4; border-radius: 16px; overflow: hidden; box-shadow: 6px 6px 16px var(--sd), -4px -4px 12px var(--sl); background: var(--bg); }
+.tray-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.tray-del { position: absolute; top: 6px; right: 6px; width: 30px; height: 30px; border-radius: 50%; border: none; background: rgba(0,0,0,0.6); color: #fff; font-size: 18px; line-height: 30px; cursor: pointer; padding: 0; font-weight: 700; }
+.tray-empty { grid-column: 1/-1; text-align: center; color: var(--text2); padding: 60px 0; font-size: 13px; font-weight: 600; }
+.tray-actions { position: fixed; left: 0; right: 0; bottom: 0; padding: 16px 18px calc(16px + env(safe-area-inset-bottom)); background: linear-gradient(180deg, transparent, var(--bg) 30%); display: flex; gap: 12px; align-items: center; }
+.tray-actions .pill-btn { flex: 0 0 auto; padding: 14px 18px; }
+.tray-actions .submit-btn { flex: 1; margin-top: 0; padding: 16px; font-size: 15px; }
 #previewImg { width: 185px; height: 248px; object-fit: cover; border-radius: 26px; box-shadow: 10px 10px 28px var(--sd), -6px -6px 18px var(--sl), 4px 4px 10px var(--sd2); }
 .scan-pill { display: flex; align-items: center; gap: 12px; padding: 14px 28px; border-radius: 40px; background: var(--bg); box-shadow: 6px 6px 16px var(--sd), -6px -6px 16px var(--sl), 2px 2px 5px var(--sd2); }
 .spinner { width: 18px; height: 18px; border-radius: 50%; border: 2.5px solid rgba(255,170,40,0.2); border-top-color: var(--bulb); animation: spin 0.75s linear infinite; }
@@ -146,7 +157,7 @@ select.nm-field option { background: #e4e6ee; color: #42455e; }
     <span></span>
     <button class="pill-btn" id="recordBtn" type="button">記録 <span id="recordCount">0</span>件 →</button>
   </div>
-  <p class="hint-text">名前タップで撮影（複数枚を並べて1ショットでOK）</p>
+  <p class="hint-text">名前タップで撮影開始（1枚ずつ撮影→まとめて読取）</p>
   <div class="buyers-row">
     <button class="buyer-btn" data-buyer="小西" type="button">小西</button>
     <button class="buyer-btn" data-buyer="名取" type="button">名取</button>
@@ -160,6 +171,20 @@ select.nm-field option { background: #e4e6ee; color: #42455e; }
   <div class="scan-pill">
     <div class="spinner"></div>
     <span class="scan-label">読み取り中…</span>
+  </div>
+</div>
+
+<!-- 撮影トレイ: 1枚ずつ撮影 → ためる → まとめて読取 -->
+<div id="trayScreen">
+  <div class="tray-top">
+    <button class="pill-btn" id="trayBackBtn" type="button">← 戻る</button>
+    <span class="tray-title">撮影トレイ <span id="trayCount">0</span>枚</span>
+    <span style="width:60px"></span>
+  </div>
+  <div class="tray-grid" id="trayGrid"></div>
+  <div class="tray-actions">
+    <button class="pill-btn" id="trayAddBtn" type="button">📷 もう1枚</button>
+    <button class="submit-btn" id="traySendBtn" type="button" disabled>📤 まとめて読取</button>
   </div>
 </div>
 
@@ -335,7 +360,9 @@ let scanResult = null;
 let sitesOpen = false;
 let editingId = null; // record id when editing an existing record (null = new)
 // 1枚の写真に複数の領収書が写っていたら、Gemini に全部抽出させて順送り確認。
-let bulkQueue = []; // [{ parsed, errMsg, imageUrl }]  ※ blobUrl は currentImgUrl で共有
+// 撮影トレイ: 1枚ずつ撮ってためる。「まとめて読取」で並列スキャン → 確認シートを順送り。
+let trayItems = []; // [{ file, blobUrl }]
+let bulkQueue = []; // [{ blobUrl, parsed, errMsg, imageUrl }]  各 blobUrl は trayItems の blob を参照
 let bulkIndex = 0;
 const inBulk = () => bulkQueue.length > 0;
 
@@ -349,7 +376,7 @@ function esc(s) {
 }
 
 // ───────── Screens ─────────
-const screens = ["buyerScreen", "scanScreen", "confirmScreen", "listScreen"];
+const screens = ["buyerScreen", "scanScreen", "trayScreen", "confirmScreen", "listScreen"];
 function show(id) {
   for (const s of screens) {
     $(s).style.display = s === id ? "flex" : "none";
@@ -507,64 +534,153 @@ $("retakeBtn").addEventListener("click", () => {
   }
 });
 
-// ───────── Scan ─────────
-// 1ショットで複数枚OK。サーバが receipts 配列を返してくる。
-async function handleFile(input) {
+// ───────── Tray (撮影 → ためる → まとめて読取) ─────────
+function addToTray(file) {
+  trayItems.push({ file, blobUrl: URL.createObjectURL(file) });
+}
+function removeFromTray(i) {
+  const [removed] = trayItems.splice(i, 1);
+  if (removed) URL.revokeObjectURL(removed.blobUrl);
+  renderTray();
+}
+function clearTray() {
+  for (const t of trayItems) URL.revokeObjectURL(t.blobUrl);
+  trayItems = [];
+}
+function renderTray() {
+  const grid = $("trayGrid");
+  grid.innerHTML = "";
+  if (!trayItems.length) {
+    const empty = document.createElement("div");
+    empty.className = "tray-empty";
+    empty.textContent = "「📷 もう1枚」で撮影を追加できます";
+    grid.appendChild(empty);
+  } else {
+    trayItems.forEach((t, i) => {
+      const wrap = document.createElement("div");
+      wrap.className = "tray-thumb";
+      const img = document.createElement("img");
+      img.src = t.blobUrl;
+      img.alt = "";
+      const del = document.createElement("button");
+      del.type = "button";
+      del.className = "tray-del";
+      del.setAttribute("aria-label", "削除");
+      del.textContent = "×";
+      del.addEventListener("click", (e) => {
+        e.stopPropagation();
+        removeFromTray(i);
+      });
+      wrap.appendChild(img);
+      wrap.appendChild(del);
+      grid.appendChild(wrap);
+    });
+  }
+  $("trayCount").textContent = String(trayItems.length);
+  const sendBtn = $("traySendBtn");
+  sendBtn.disabled = trayItems.length === 0;
+  sendBtn.textContent = trayItems.length
+    ? `📤 まとめて読取 (${trayItems.length})`
+    : "📤 まとめて読取";
+}
+function showTray() { renderTray(); show("trayScreen"); }
+
+// fileInput change: 撮った写真はトレイへ追加してトレイ画面に戻る。
+function handleFile(input) {
   const file = input.files?.[0];
   if (!file) return;
   input.value = "";
+  addToTray(file);
+  showTray();
+}
 
-  if (currentImgUrl) URL.revokeObjectURL(currentImgUrl);
-  currentImgUrl = URL.createObjectURL(file);
-  $("previewImg").src = currentImgUrl;
-  $("confirmImg").src = currentImgUrl;
+// 「まとめて読取」: トレイ内を並列スキャン → 検出された receipts を全部フラットに
+// 並べて bulkQueue に積み、確認シートを順送りで回す。
+async function sendTray() {
+  if (!trayItems.length) return;
+  const total = trayItems.length;
+  const label = document.querySelector("#scanScreen .scan-label");
+  const setLabel = (n) => { if (label) label.textContent = `読み取り中… ${n}/${total}`; };
+  // プレビュー画像に1枚目を出して scanScreen
+  $("previewImg").src = trayItems[0].blobUrl;
+  setLabel(0);
   show("scanScreen");
 
-  let resp = null, errMsg = "";
-  try {
-    const b64 = await resizeImage(file, 1600); // 複数枚並び対応で少し高解像度
-    resp = await api("POST", "/api/scan", {
-      image: b64, mimeType: "image/jpeg",
-      sites: sites.map((s) => s.name),
-    });
-  } catch (e) {
-    errMsg = e.message;
+  const results = new Array(total);
+  let done = 0, next = 0;
+  async function worker() {
+    while (next < total) {
+      const i = next++;
+      try {
+        const b64 = await resizeImage(trayItems[i].file, 1600);
+        const resp = await api("POST", "/api/scan", {
+          image: b64, mimeType: "image/jpeg",
+          sites: sites.map((s) => s.name),
+        });
+        results[i] = {
+          blobUrl: trayItems[i].blobUrl,
+          list: resp?.receipts || [],
+          imageUrl: resp?.imageUrl || null,
+          err: "",
+        };
+      } catch (e) {
+        results[i] = {
+          blobUrl: trayItems[i].blobUrl,
+          list: [], imageUrl: null,
+          err: e.message || "読取失敗",
+        };
+      }
+      done++; setLabel(done);
+    }
   }
+  await Promise.all(Array.from({ length: Math.min(3, total) }, worker));
 
-  const receipts = resp?.receipts || [];
-  const imageUrl = resp?.imageUrl || null;
-
-  if (errMsg || receipts.length === 0) {
-    // 失敗 or 検出ゼロ → 空の確認シートをエラー付きで表示（ユーザーが手入力 or 撮り直し）
-    scanResult = { imageUrl };
-    showConfirm({}, errMsg || "領収書を検出できませんでした");
-    return;
+  // フラット化: 写真1枚で複数領収書が検出されたら全部キューに入れる。
+  const queue = [];
+  for (const r of results) {
+    if (!r.list.length) {
+      queue.push({
+        blobUrl: r.blobUrl, parsed: {},
+        errMsg: r.err || "領収書を検出できませんでした",
+        imageUrl: r.imageUrl,
+      });
+    } else {
+      for (const it of r.list) {
+        queue.push({ blobUrl: r.blobUrl, parsed: it, errMsg: "", imageUrl: r.imageUrl });
+      }
+    }
   }
-  if (receipts.length === 1) {
-    scanResult = { ...receipts[0], imageUrl };
-    showConfirm(receipts[0], "");
-    return;
-  }
-  // 複数検出 → 順送り確認
-  bulkQueue = receipts.map((r) => ({ parsed: r, errMsg: "", imageUrl }));
+  bulkQueue = queue;
   bulkIndex = 0;
   reviewNext();
 }
 
-// bulk: 次の1枚を確認シートに送る。画像は同一なので blob はそのまま使い回す。
+// bulk: 次の1件を確認シートに送る。trayItems が blob 所有者なので個別 revoke しない。
+// 全件終わったらまとめて開放してリストへ。
 function reviewNext() {
   if (bulkIndex >= bulkQueue.length) {
     bulkQueue = []; bulkIndex = 0;
-    if (currentImgUrl) { URL.revokeObjectURL(currentImgUrl); currentImgUrl = ""; }
+    clearTray();
+    currentImgUrl = "";
     showList();
     return;
   }
   const it = bulkQueue[bulkIndex];
+  currentImgUrl = it.blobUrl;
   $("previewImg").src = currentImgUrl;
   $("confirmImg").src = currentImgUrl;
   scanResult = { ...(it.parsed || {}), imageUrl: it.imageUrl };
   showConfirm(it.parsed || {}, it.errMsg || "");
 }
+
+// トレイ画面のボタン
+$("trayAddBtn").addEventListener("click", () => $("fileInput").click());
+$("traySendBtn").addEventListener("click", sendTray);
+$("trayBackBtn").addEventListener("click", () => {
+  clearTray();
+  renderTray();
+  showBuyer();
+});
 
 function showConfirm(parsed, errMsg) {
   editingId = null;
