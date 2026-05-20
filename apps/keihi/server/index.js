@@ -143,7 +143,7 @@ app.delete("/api/sites/:id", async (req, res) => {
 // 503/UNAVAILABLE 等の過渡的エラーで指数バックオフ→別モデルへフォールバック。
 // Gemini Flash は時々スパイクで詰まるので、ユーザーが「Retry」を押す前に
 // サーバ側で吸収する。
-async function callGeminiWithFallback(content, { primaryModel, maxOutputTokens } = {}) {
+async function callGeminiWithFallback(content, { primaryModel, maxOutputTokens, useGoogleSearch } = {}) {
   const fallbackChain = [
     ...new Set([primaryModel || GEMINI_MODEL, "gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-flash-latest"]),
   ];
@@ -154,6 +154,7 @@ async function callGeminiWithFallback(content, { primaryModel, maxOutputTokens }
         const m = genAI.getGenerativeModel({
           model: name,
           ...(maxOutputTokens ? { generationConfig: { maxOutputTokens } } : {}),
+          ...(useGoogleSearch ? { tools: [{ googleSearch: {} }] } : {}),
         });
         const r = await m.generateContent(content);
         return { result: r, modelUsed: name, attempts: attempt };
@@ -231,8 +232,9 @@ const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const DEBATE_MAX_TOKENS = 2000;
 
-async function callByProvider(provider, prompt) {
+async function callByProvider(provider, prompt, { web = true } = {}) {
   if (provider === "claude" && ANTHROPIC_API_KEY) {
+    // Anthropic native web search (web_search_20250305)
     const r = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
       headers: {
@@ -244,14 +246,21 @@ async function callByProvider(provider, prompt) {
         model: "claude-opus-4-7",
         max_tokens: DEBATE_MAX_TOKENS,
         messages: [{ role: "user", content: prompt }],
+        ...(web ? { tools: [{ type: "web_search_20250305", name: "web_search", max_uses: 3 }] } : {}),
       }),
     });
     if (!r.ok) throw new Error(`anthropic ${r.status}: ${await r.text()}`);
     const j = await r.json();
-    return { text: j.content?.[0]?.text || "", modelUsed: j.model };
+    // tool_use/tool_result が混ざるので text ブロックだけ集約
+    const text = (j.content || [])
+      .filter((b) => b.type === "text")
+      .map((b) => b.text)
+      .join("\n").trim();
+    return { text, modelUsed: j.model };
   }
   if (provider === "gpt" && OPENAI_API_KEY) {
-    const r = await fetch("https://api.openai.com/v1/chat/completions", {
+    // GPT-5 は Responses API がメインライン、web_search ツールもここで使う
+    const r = await fetch("https://api.openai.com/v1/responses", {
       method: "POST",
       headers: {
         "content-type": "application/json",
@@ -259,18 +268,26 @@ async function callByProvider(provider, prompt) {
       },
       body: JSON.stringify({
         model: "gpt-5",
-        messages: [{ role: "user", content: prompt }],
-        max_completion_tokens: DEBATE_MAX_TOKENS,
+        input: prompt,
+        max_output_tokens: DEBATE_MAX_TOKENS,
+        ...(web ? { tools: [{ type: "web_search" }] } : {}),
       }),
     });
     if (!r.ok) throw new Error(`openai ${r.status}: ${await r.text()}`);
     const j = await r.json();
-    return { text: j.choices?.[0]?.message?.content || "", modelUsed: j.model };
+    const text = j.output_text
+      || (j.output || [])
+        .flatMap((o) => o.content || [])
+        .filter((c) => c.type === "output_text")
+        .map((c) => c.text)
+        .join("\n").trim();
+    return { text, modelUsed: j.model };
   }
   // Gemini (本物 or 他 provider のフォールバック)。会社方針議論なので Pro 固定。
   const { result, modelUsed } = await callGeminiWithFallback(prompt, {
     primaryModel: "gemini-2.5-pro",
     maxOutputTokens: DEBATE_MAX_TOKENS,
+    useGoogleSearch: web,
   });
   return { text: result.response.text(), modelUsed };
 }
@@ -327,6 +344,9 @@ ${log}
 
 お題は社内の経営判断・組織方針に関わる議題です。抽象論で逃げず、具体的な根拠・想定リスク・実行可能性まで踏み込んで議論してください。
 
+【ツール】
+Web検索ツールが使えます。最新の市場動向・統計・事例・他社事例・法改正など、訓練データだけでは古い/不確かな情報については積極的に検索して根拠を裏付けてください。検索した場合は本文中で「(◯◯によれば〜)」のように出典に触れてください。
+
 他の参加者:
 ${others}
 
@@ -337,13 +357,14 @@ ${log}
 - 300〜600字程度。論理を展開できる長さで。
 - 直前の発言には必ず明示的に反応する（同意・反論・補足・突っ込み・質問）
 - 自分の立場・結論を明確に出す。曖昧な両論併記で逃げない。
-- 根拠や具体例を1つ以上交える
+- 根拠や具体例を1つ以上交える（必要なら web 検索で裏付ける）
 - 「${me.name}：」のような名前プレフィックスは不要、本文だけ
 - マークダウン・箇条書き記号は使わない、自然な話し言葉で
 発言:`;
     }
 
-    const { text: raw, modelUsed } = await callByProvider(provider, prompt);
+    // まとめは web 検索不要（既出のログを要約するだけ）。発言生成のみ web 有効。
+    const { text: raw, modelUsed } = await callByProvider(provider, prompt, { web: !summary });
     const text = raw.trim().replace(/^[「『"']/, "").replace(/[」』"']$/, "");
     res.json({ text, modelUsed, provider });
   } catch (err) {
