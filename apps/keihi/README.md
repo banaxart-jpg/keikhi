@@ -63,6 +63,10 @@ apps/keihi/
     └── schema.sql      ← Postgres スキーマ
 ```
 
+Hosting 設定 (`firebase.json`) はプロジェクト root に。`public: "apps"` で
+`apps/` 配下全体が配信され、`server/`・`infra/`・`cloudbuild.yaml`・
+`*.md` は `ignore` で除外される。
+
 ## デプロイ
 
 `apps/keihi/**` への push で Cloud Build トリガが自動発火。
@@ -104,70 +108,28 @@ GEMINI_API_KEY=... DEV=1 npm run dev
 
 ---
 
-## 🚨 過去にハマったポイント（再発防止メモ）
+## 🚨 過去にハマったポイント（keihi 固有）
 
-### 1. `/api/*` が 403 Forbidden（Google 標準HTML）を返す
+プロジェクト全体のインフラ系の罠（403 / iOS Safari ITP / Hosting rewrite が使えない理由 / 組織ポリシー）は **[DEPLOY.md §6](../../DEPLOY.md#6-過去にハマったポイント再発防止メモ)** に集約済。
 
-**症状**: Network タブで `/api/records` が 403、レスポンスが
-`<h1>Error: Forbidden</h1>` 形式の HTML。
+ここには **keihi/Cloud Run 固有** のものだけ残す：
 
-**原因**: Cloud Run の IAM から `allUsers` invoker が消えている、または
-組織ポリシーが再有効化された。
+### A. Gemini API が「prepayment credits depleted」で 429
 
-**確認**:
-```bash
-gcloud run services get-iam-policy keihi-api \
-  --region=asia-northeast1 --project=static-epigram-496002-v8
-```
+`/api/scan` が `[GoogleGenerativeAI Error] ... 429 Too Many Requests` を返す。AI Studio の prepay クレジット枯渇。
 
-**修正**:
-```bash
-gcloud run services add-iam-policy-binding keihi-api \
-  --region=asia-northeast1 --project=static-epigram-496002-v8 \
-  --member=allUsers --role=roles/run.invoker
-```
-
-組織ポリシーが復活している場合：
-```bash
-cat > /tmp/policy.yaml <<'EOF'
-name: projects/static-epigram-496002-v8/policies/iam.allowedPolicyMemberDomains
-spec:
-  rules:
-    - allowAll: true
-EOF
-gcloud org-policies set-policy /tmp/policy.yaml
-sleep 180   # 反映に最大7分
-```
-
-### 2. iOS Safari で経費画面に遷移すると「セッション期限切れ」
-
-**原因**: iOS Safari ITP が Firebase Auth デフォルトの `authDomain`
-(`keihi-496002.firebaseapp.com`) のストレージを「クロスサイト」判定で消す。
-
-**対策**: `apps/keihi/index.html`（と `apps/index.html`）で
-`cfg.authDomain = location.hostname` を設定。
-認証フローを Hosting と同一オリジン (`keihi-496002.web.app`) に閉じる。
-
-**前提**: Cloud Console の OAuth クライアントに
-`https://keihi-496002.web.app/__/auth/handler` をリダイレクトURIとして手動登録済。
-
-### 3. Firebase Hosting の Cloud Run rewrite は機能しない
-
-`firebase.json` に `/api/** → run` の rewrite を追加すると 403 になる。
-組織ポリシーで Firebase Hosting SA が IAM 登録できないため。
-**Cloud Run 直叩き構成を維持するのが正解。**
-
-### 4. Gemini API が「prepayment credits depleted」で 429
-
-**対策**:
-- AI Studio で課金設定：<https://ai.studio/projects>
-- もしくは Cloud Console で billing アカウントを Generative Language API にリンク：
+**対策**: どちらかで課金設定
+- AI Studio: <https://ai.studio/projects>
+- Cloud Console で billing アカウントを Generative Language API にリンク：
   <https://console.cloud.google.com/apis/api/generativelanguage.googleapis.com/metrics?project=static-epigram-496002-v8>
 
-### 5. `--set-env-vars` で `Bad syntax for dict arg`
+### B. `--set-env-vars` で `Bad syntax for dict arg: [konishi0221@gmail.com]`
 
-`ALLOWED_EMAILS` 内のコンマが env var 区切り文字と衝突する。
-cloudbuild.yaml で `--set-env-vars=^||^...` で区切り文字を `||` に変更して回避済。
+`ALLOWED_EMAILS` 内のコンマが env var 区切り文字と衝突する。cloudbuild.yaml で `--set-env-vars=^||^...` で区切り文字を `||` に変更して回避済。新規環境変数で値にコンマを含めるときは同じ形式を維持すること。
+
+### C. Gemini model が "no longer available to new users" で 404
+
+`gemini-2.0-flash` などのモデル名は新規 billing アカウントでは無効化されている場合あり。`gemini-2.5-flash` を使う。サーバ側に retry + fallback（`gemini-2.5-flash-lite` → `gemini-flash-latest`）を実装済（`server/index.js` の `callGeminiWithFallback`）。
 
 ---
 

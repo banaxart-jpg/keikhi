@@ -278,7 +278,7 @@ sleep 180   # 反映に最大7分かかる
 - `firebase.json` から `rewrites` を削除
 - Cloud Run を `allUsers` invoker で public 化
 - `cloudbuild.yaml` の `prep-config` で `gcloud run services describe` から
-  URL 取得 → `web/config.js` に `window.API_BASE='<url>';` を注入
+  URL 取得 → `apps/config.js` に `window.API_BASE='<url>';` を注入
 - ブラウザは絶対 URL で Cloud Run を直接 fetch（CORS allow `*`）
 - 認証は Express の `verifyIdToken` ミドルウェアが行う（実質ノーリスク）
 

@@ -55,19 +55,21 @@ OpenAI / Claude など**新しい AI 提供元**を使いたいときは APIキ�
 
 **先に自分でやってみて詰まったら相談**でOK。事前許可は要らない。
 
-### 🔒 インフラ管理ファイル（小西のみ変更）
+### ✏️ 誰でも編集 OK
+- **`apps/<自分のID>/` 配下すべて**（`index.html`, `README.md`, etc.）— 完全自由
+- ランチャー (`apps/index.html`) の `APPS` 配列に**自分のアプリの行を1つ追加**
+- このファイル (`README.md`) の自由テキスト部分（自分のミニアプリの説明追加、「📦 現在のアプリ」表への追記など）
+
+### 🔒 小西管轄（編集は小西のみ）
 
 デプロイ・GCP 構成と密結合してるので、勝手に変えるとデプロイが止まる：
 
-- **`DEPLOY.md`**
-- **`infra/`** 配下すべて（`bootstrap.sh`, `db.sh`, `dev.sh`）
-- 各アプリの `cloudbuild.yaml` / `firebase.json`
-- **`apps/keihi/README.md`**（keihi 全体の構成・過去ハマりポイント記載）
-- このファイル (`README.md`) の **「🚨 知っておくべき制約・落とし穴」「🚀 デプロイ」「🔧 よく使う運用コマンド」** セクション
-
-### ✏️ 誰でも編集 OK
-- **このファイル (`README.md`)** — 上記の「小西管轄ラベル」セクション以外は自由に追記・修正OK。自分のミニアプリの説明追加・「📦 現在のアプリ」表への追記など歓迎
-- **`apps/<自分のID>/` 配下すべて**（README.md 含む）— 完全自由
+- `DEPLOY.md`、`CLAUDE.md`、プロジェクト root の `firebase.json`
+- `infra/` 配下すべて（`bootstrap.sh`, `db.sh`, `dev.sh`）
+- 各アプリの `cloudbuild.yaml`
+- `apps/keihi/README.md`（keihi 全体の構成・過去ハマりポイント記載）
+- このファイル (`README.md`) のうち、**「🚨 知っておくべき制約・落とし穴」「🚀 デプロイ」「🔧 よく使う運用コマンド」「🏗️ 共有スタック」「💰 想定コスト」「🎯 初回セットアップ」「📂 ファイル構成」** のセクション
+- ランチャー (`apps/index.html`) の **APPS 配列以外（スタイル・ロジック・他人のエントリ）**
 
 ### 📝 新ミニアプリ作成時のルール
 
@@ -382,23 +384,25 @@ bash infra/dev.sh keihi
 keikhi/
 ├── README.md                   ← これ
 ├── DEPLOY.md                   ← デプロイ詳細（小西のみ変更可）
+├── CLAUDE.md                   ← Claude Code 用設定（小西のみ変更可）
+├── firebase.json               ← Hosting 設定（public: "apps"）
 ├── infra/
 │   ├── bootstrap.sh            ← GCP リソース一括プロビジョン
 │   ├── db.sh                   ← パスワード不要 psql ラッパー
 │   └── dev.sh                  ← Cloud Shell 即プレビュー
-└── apps/
-    ├── keihi/                  ← 経費管理アプリ
-    │   ├── cloudbuild.yaml     ← デプロイ仕様
-    │   ├── firebase.json       ← Hosting 設定
-    │   ├── README.md           ← keihi 専用ドキュメント
+└── apps/                       ← Hosting 公開ルート
+    ├── index.html              ← ランチャー → /
+    ├── config.js               ← Cloud Run URL（自動注入）
+    ├── keihi/                  ← 経費アプリ → /keihi/
+    │   ├── index.html
+    │   ├── README.md
+    │   ├── cloudbuild.yaml     ← デプロイ仕様（Cloud Run + Hosting）
     │   ├── infra/schema.sql    ← Postgres スキーマ
-    │   ├── server/             ← Cloud Run コード (Express)
-    │   └── web/                ← Firebase Hosting 公開ルート
-    │       ├── index.html      ← ランチャー
-    │       ├── config.js       ← Cloud Run URL（自動注入）
-    │       ├── keihi/          ← 経費アプリ
-    │       └── cost/           ← AIコスト計算アプリ
-    ├── admin/                  ← 管理ダッシュボード
+    │   └── server/             ← Cloud Run コード (Express)
+    ├── cost/                   ← AIコスト計算 → /cost/
+    │   ├── index.html
+    │   └── README.md
+    ├── admin/                  ← 管理ダッシュボード（別 Hosting site）
     └── denki-zumen/            ← 電気図面アプリ (placeholder)
 ```
 
