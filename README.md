@@ -313,7 +313,7 @@ apps/                          ← Hosting 公開ルート（site: keihi-496002�
 
 | トリガ | 発火条件 | 実行 |
 |---|---|---|
-| `keihi-api-deploy` | `main` への push で `apps/keihi/**` 変更 | `apps/keihi/cloudbuild.yaml` |
+| `keihi-api-deploy` | `main` への push（ファイルフィルタなし＝main 全変更で発火） | `apps/keihi/cloudbuild.yaml` |
 
 ### 手動デプロイ（緊急時のみ）
 

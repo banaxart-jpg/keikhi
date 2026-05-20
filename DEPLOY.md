@@ -17,7 +17,7 @@ Claude が作業ブランチで作業 → main に push → トリガ発火 → 
 
 | トリガ名 | リージョン | 発火条件 | 実行 |
 |---------|-----------|---------|------|
-| `keihi-api-deploy` | `global`（第1世代 GitHub App） | **`main` への push** で `apps/keihi/**` が変更 | keihi の build+deploy |
+| `keihi-api-deploy` | `global`（第1世代 GitHub App） | **`main` への push**（ファイルフィルタなし＝main 全変更で発火） | `apps/keihi/cloudbuild.yaml` |
 
 ブランチは **`main` のみ**（`^main$`）。Claude は作業ブランチ
 `claude/development-session-*` で作業し、完了したら **`main` に push（fast-forward）して
@@ -149,7 +149,9 @@ gcloud builds triggers create github \
   --repo-owner="banaxart-jpg" --repo-name="keikhi" \
   --branch-pattern='^main$' \
   --build-config="apps/keihi/cloudbuild.yaml" \
-  --included-files="apps/keihi/**"
+  # 現状はファイルフィルタなし（main 全変更で発火）。
+  # 必要なら下を追加（マルチアプリ化したら推奨）:
+  # --included-files='apps/**'
   # --region は付けない（第1世代＝global）
 ```
 
@@ -160,7 +162,7 @@ gcloud builds triggers create github \
 - ビルド実行SA = `734350696397-compute@developer.gserviceaccount.com`
   （bootstrap.sh が必要ロールを付与済み：run.admin / artifactregistry.writer /
   firebasehosting.admin / firebase.admin / iam.serviceAccountUser ほか）
-- `--included-files` により `apps/keihi/**` が変わった時だけ発火（無駄ビルドなし）
+- 現状 `--included-files` 未設定 = main へのどんな変更でも発火（README.md 1行直しでも build が走る。無駄ビルドが気になったら `apps/**` を入れる）
 - ブランチは **`main` のみ**。`README.md` 等リポジトリ直下の変更ではデプロイは走らない
 
 ### 足りない唯一のもの：GitHub↔Cloud Build 初回接続
@@ -187,7 +189,7 @@ Cloud Build に**接続済み**である必要がある。未接続だと bootst
 2. Claude が claude/development-session-* で作業 → commit → そのブランチに push
 3. Claude が main を作業ブランチ HEAD に fast-forward → main に push
                           ↓ 自動
-4. keihi-api-deploy トリガ発火（main への push かつ apps/keihi/** 変更時）
+4. keihi-api-deploy トリガ発火（main への push）
                           ↓ 自動
 5. apps/keihi/cloudbuild.yaml 実行（Docker→Cloud Run→Hosting）
                           ↓
