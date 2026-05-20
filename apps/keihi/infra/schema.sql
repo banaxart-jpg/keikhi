@@ -28,3 +28,34 @@ CREATE INDEX IF NOT EXISTS records_site_idx ON records (site);
 INSERT INTO sites (name) VALUES
   ('西新井焼肉屋'), ('宇佐美別荘'), ('倉庫改装'), ('共通')
 ON CONFLICT (name) DO NOTHING;
+
+-- ──────────────────────────────────────────
+-- kaigi : 3者AI協働検討の会話永続化
+-- ──────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS kaigi_sessions (
+  id                    BIGSERIAL PRIMARY KEY,
+  user_email            TEXT NOT NULL,
+  topic                 TEXT NOT NULL,
+  speakers              JSONB NOT NULL,
+  status                TEXT NOT NULL DEFAULT 'active',   -- 'active' | 'auto' | 'completed' | 'failed'
+  auto_rounds_remaining INTEGER NOT NULL DEFAULT 0,        -- B: Cloud Tasks 自動進行で残ラウンド数
+  last_error            TEXT,
+  created_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at            TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS kaigi_messages (
+  id            BIGSERIAL PRIMARY KEY,
+  session_id    BIGINT NOT NULL REFERENCES kaigi_sessions(id) ON DELETE CASCADE,
+  speaker       TEXT NOT NULL,
+  provider      TEXT NOT NULL,
+  content       TEXT NOT NULL,
+  model_used    TEXT,
+  round_num     INTEGER NOT NULL,
+  seq           INTEGER NOT NULL,        -- セッション内 通し番号 (0 始まり)
+  is_conclusion BOOLEAN NOT NULL DEFAULT false,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS kaigi_messages_session_idx ON kaigi_messages (session_id, seq);
+CREATE INDEX IF NOT EXISTS kaigi_sessions_user_idx    ON kaigi_sessions (user_email, updated_at DESC);

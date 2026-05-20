@@ -44,7 +44,7 @@ steps:
       - --no-allow-unauthenticated
       - --service-account=${_SA}@$PROJECT_ID.iam.gserviceaccount.com
       - --add-cloudsql-instances=$PROJECT_ID:${_REGION}:${_DB_INSTANCE}
-      - --set-secrets=GEMINI_API_KEY=gemini-api-key:latest,DB_PASSWORD=keihi-db-password:latest,OPENAI_API_KEY=openai-api-key:latest,ANTHROPIC_API_KEY=anthropic-api-key:latest
+      - --set-secrets=GEMINI_API_KEY=gemini-api-key:latest,DB_PASSWORD=keihi-db-password:latest,OPENAI_API_KEY=openai-api-key:latest,ANTHROPIC_API_KEY=anthropic-api-key:latest,INTERNAL_TICK_SECRET=kaigi-tick-secret:latest
       # ALLOWED_EMAILS は値にコンマを含むので、`^||^` で env vars 同士の
       # 区切り文字を `||` に切り替えて値内のコンマを誤分解させない。
       - --set-env-vars=^||^DB_USER=keihi||DB_NAME=${_DB_NAME}||DB_INSTANCE_CONNECTION_NAME=$PROJECT_ID:${_REGION}:${_DB_INSTANCE}||RECEIPTS_BUCKET=$PROJECT_ID-${_BUCKET_SUFFIX}||FIREBASE_PROJECT_ID=$PROJECT_ID||ALLOWED_EMAILS=${_ALLOWED_EMAILS}
@@ -74,6 +74,12 @@ steps:
           --region=${_REGION} --format='value(status.url)')
         echo "window.API_BASE='$$RUN_URL';" > apps/config.js
         echo "API_BASE = $$RUN_URL (direct Cloud Run call)"
+        # kaigi 自動進行（Cloud Tasks → 自身の /api/internal/kaigi/tick へ）に
+        # 必要な SELF URL と queue 情報を Cloud Run の env として後注入する。
+        gcloud run services update ${_SERVICE} \
+          --region=${_REGION} \
+          --update-env-vars=SERVICE_URL=$$RUN_URL,KAIGI_TASKS_QUEUE=kaigi-tick,KAIGI_TASKS_LOCATION=${_REGION} \
+          --quiet
 
   - id: ensure-hosting-site
     name: gcr.io/google.com/cloudsdktool/cloud-sdk

@@ -1,6 +1,7 @@
 import express from "express";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import { Storage } from "@google-cloud/storage";
+import { CloudTasksClient } from "@google-cloud/tasks";
 import admin from "firebase-admin";
 import pg from "pg";
 import crypto from "node:crypto";
@@ -39,7 +40,16 @@ app.use((req, res, next) => {
 // Gate /api/* with a Firebase ID token. The browser calls this service
 // same-origin via Firebase Hosting rewrite, so no CORS/OAuth token is
 // involved — auth is a verified Firebase ID token instead.
+// 例外: /api/internal/* は Cloud Tasks コールバック用なので別認証(x-tick-secret)。
+const INTERNAL_TICK_SECRET = process.env.INTERNAL_TICK_SECRET;
 app.use("/api", async (req, res, next) => {
+  if (req.path.startsWith("/internal/")) {
+    if (!INTERNAL_TICK_SECRET || req.headers["x-tick-secret"] !== INTERNAL_TICK_SECRET) {
+      return res.status(403).json({ error: "forbidden (internal)" });
+    }
+    req.user = { email: "internal@cloud-tasks" };
+    return next();
+  }
   // Cloud Shell プレビューは cloudshell.dev ドメインで Firebase Auth が
   // 使えない（auth/unauthorized-domain）。DEV のときだけ認証をバイパス。
   // 本番は DEV 未設定なので常に厳格検証。
@@ -310,59 +320,31 @@ async function callByProvider(provider, prompt, { web = true } = {}) {
   return { text, modelUsed };
 }
 
-app.post("/api/debate", async (req, res) => {
-  try {
-    if (!genAI) return res.status(503).json({ error: "GEMINI_API_KEY not configured" });
-    const { topic, speakers = [], history = [], nextSpeaker, summary } = req.body || {};
-    if (!topic) return res.status(400).json({ error: "topic required" });
-    if (!Array.isArray(speakers) || speakers.length < 2) {
-      return res.status(400).json({ error: "speakers (2人以上) required" });
-    }
+// プロンプト生成（共通化：/api/debate と /api/kaigi/* で共有）
+const providerLabel = {
+  gemini: "Google が開発した大規模言語モデル Gemini",
+  claude: "Anthropic が開発した大規模言語モデル Claude",
+  gpt:    "OpenAI が開発した大規模言語モデル GPT",
+};
 
-    const providerLabel = {
-      gemini: "Google が開発した大規模言語モデル Gemini",
-      claude: "Anthropic が開発した大規模言語モデル Claude",
-      gpt:    "OpenAI が開発した大規模言語モデル GPT",
-    };
+function buildSpeakerPrompt({ topic, speakers, history, nextSpeaker }) {
+  const me = speakers.find((s) => s.name === nextSpeaker);
+  if (!me) throw Object.assign(new Error("nextSpeaker not in speakers"), { status: 400 });
+  const provider = me.provider || "gemini";
+  const meLabel = providerLabel[provider] || `AI「${me.name}」`;
+  const others = speakers.filter((s) => s.name !== nextSpeaker)
+    .map((s) => `・${s.name}（${providerLabel[s.provider] || s.name}）`).join("\n");
+  const log = history.length
+    ? history.map((h) => `${h.name}：${h.text}`).join("\n")
+    : "（まだ誰も発言していない）";
+  const roundNum = Math.floor(history.length / speakers.length) + 1;
+  const stageHint = roundNum === 1
+    ? "今は最初のラウンドです。お題に対する自分の視点・前提を出してください。"
+    : roundNum === 2
+    ? "2ラウンド目です。他の参加者の視点と自分の視点を統合し、合意できる点とまだズレている点を整理してください。"
+    : "3ラウンド目以降です。そろそろ結論に収束させるフェーズ。具体的な実行案を提案し、他の参加者の案との折衷も検討してください。";
 
-    let prompt;
-    let provider = "gemini";
-    if (summary) {
-      const log = history.map((h) => `${h.name}：${h.text}`).join("\n") || "（発言なし）";
-      const names = speakers.map((s) => s.name).join("・");
-      prompt = `お題「${topic}」について ${names} の3つのAIが検討しました。
-議論を踏まえて、経営判断として実行できる結論を1つ提案してください。
-
-形式:
-【結論】何をやる / やらないか（1〜2文で断定的に）
-【根拠】2〜3点
-【実行上の注意点】1〜2点
-
-プレーンテキスト、見出しは上記の【】記号付きで区切る。マークダウン記法は使わない。
-全体で300〜500字。両論併記や「ケースバイケース」「状況による」のような逃げは禁止。
-
-議論ログ:
-${log}
-
-回答:`;
-    } else {
-      const me = speakers.find((s) => s.name === nextSpeaker);
-      if (!me) return res.status(400).json({ error: "nextSpeaker not in speakers" });
-      provider = me.provider || "gemini";
-      const meLabel = providerLabel[provider] || `AI「${me.name}」`;
-      const others = speakers.filter((s) => s.name !== nextSpeaker)
-        .map((s) => `・${s.name}（${providerLabel[s.provider] || s.name}）`).join("\n");
-      const log = history.length
-        ? history.map((h) => `${h.name}：${h.text}`).join("\n")
-        : "（まだ誰も発言していない）";
-      const roundNum = Math.floor(history.length / speakers.length) + 1;
-      const stageHint = roundNum === 1
-        ? "今は最初のラウンドです。お題に対する自分の視点・前提を出してください。"
-        : roundNum === 2
-        ? "2ラウンド目です。他の参加者の視点と自分の視点を統合し、合意できる点とまだズレている点を整理してください。"
-        : "3ラウンド目以降です。そろそろ結論に収束させるフェーズ。具体的な実行案を提案し、他の参加者の案との折衷も検討してください。";
-
-      prompt = `あなたは ${meLabel} です。
+  const prompt = `あなたは ${meLabel} です。
 今、複数社の AI が集まって、社内の経営判断に使える結論を出すための協働検討を行っています。
 
 これはディベート（勝ち負けを決める競技）ではありません。3者で同じ目標——「お題に対する実行可能な結論」——に向かって、互いの視点を統合しながら詰めていく作業です。
@@ -399,9 +381,42 @@ ${log}
 
 あなた（${me.name}）の番です。100〜200字程度で簡潔に発言してください。名前プレフィックス・マークダウン・箇条書き記号は不要、自然な話し言葉で本文だけ。
 発言:`;
-    }
+  return { provider, prompt, roundNum };
+}
 
-    // まとめは web 検索不要（既出のログを要約するだけ）。発言生成のみ web 有効。
+function buildConclusionPrompt({ topic, speakers, history }) {
+  const log = history.map((h) => `${h.name}：${h.text}`).join("\n") || "（発言なし）";
+  const names = speakers.map((s) => s.name).join("・");
+  const prompt = `お題「${topic}」について ${names} の3つのAIが検討しました。
+議論を踏まえて、経営判断として実行できる結論を1つ提案してください。
+
+形式:
+【結論】何をやる / やらないか（1〜2文で断定的に）
+【根拠】2〜3点
+【実行上の注意点】1〜2点
+
+プレーンテキスト、見出しは上記の【】記号付きで区切る。マークダウン記法は使わない。
+全体で300〜500字。両論併記や「ケースバイケース」「状況による」のような逃げは禁止。
+
+議論ログ:
+${log}
+
+回答:`;
+  return { provider: "gemini", prompt };
+}
+
+// 既存 /api/debate（互換維持。フロントは新 /api/kaigi/* に移行する）
+app.post("/api/debate", async (req, res) => {
+  try {
+    if (!genAI) return res.status(503).json({ error: "GEMINI_API_KEY not configured" });
+    const { topic, speakers = [], history = [], nextSpeaker, summary } = req.body || {};
+    if (!topic) return res.status(400).json({ error: "topic required" });
+    if (!Array.isArray(speakers) || speakers.length < 2) {
+      return res.status(400).json({ error: "speakers (2人以上) required" });
+    }
+    const { provider, prompt } = summary
+      ? buildConclusionPrompt({ topic, speakers, history })
+      : buildSpeakerPrompt({ topic, speakers, history, nextSpeaker });
     const { text: raw, modelUsed } = await callByProvider(provider, prompt, { web: !summary });
     const text = raw.trim().replace(/^[「『"']/, "").replace(/[」』"']$/, "");
     res.json({ text, modelUsed, provider });
@@ -409,9 +424,302 @@ ${log}
     console.error("debate error", err);
     const msg = String(err?.message || err);
     const isTransient = /\b(503|429|500)\b|UNAVAILABLE|overload|high demand/i.test(msg);
-    res.status(isTransient ? 503 : 500).json({
+    res.status(err.status || (isTransient ? 503 : 500)).json({
       error: isTransient ? `AI が混雑中: ${msg.slice(0, 200)}` : msg,
     });
+  }
+});
+
+// ─────────────────────────────
+// kaigi: セッション永続化 + 自動進行 (Cloud Tasks)
+// ─────────────────────────────
+const KAIGI_TASKS_QUEUE = process.env.KAIGI_TASKS_QUEUE;
+const KAIGI_TASKS_LOCATION = process.env.KAIGI_TASKS_LOCATION || "asia-northeast1";
+const SERVICE_URL = process.env.SERVICE_URL; // 例: https://keihi-api-...run.app
+let _tasksClient = null;
+function getTasksClient() {
+  if (_tasksClient) return _tasksClient;
+  _tasksClient = new CloudTasksClient();
+  return _tasksClient;
+}
+async function enqueueKaigiTick(sessionId, delaySec = 0) {
+  if (!KAIGI_TASKS_QUEUE || !SERVICE_URL || !INTERNAL_TICK_SECRET || !FIREBASE_PROJECT_ID) {
+    console.warn("[kaigi] tick enqueue skipped (KAIGI_TASKS_QUEUE/SERVICE_URL/INTERNAL_TICK_SECRET/FIREBASE_PROJECT_ID 未設定)");
+    return null;
+  }
+  const client = getTasksClient();
+  const parent = client.queuePath(FIREBASE_PROJECT_ID, KAIGI_TASKS_LOCATION, KAIGI_TASKS_QUEUE);
+  const task = {
+    httpRequest: {
+      httpMethod: "POST",
+      url: `${SERVICE_URL}/api/internal/kaigi/tick`,
+      headers: { "content-type": "application/json", "x-tick-secret": INTERNAL_TICK_SECRET },
+      body: Buffer.from(JSON.stringify({ sessionId })).toString("base64"),
+    },
+  };
+  if (delaySec > 0) {
+    task.scheduleTime = { seconds: Math.floor(Date.now() / 1000) + delaySec };
+  }
+  const [resp] = await client.createTask({ parent, task });
+  return resp.name;
+}
+
+async function loadSession(sessionId, userEmail) {
+  const p = getPool();
+  if (!p) throw new Error("DB not configured");
+  const args = userEmail === "*" ? [sessionId] : [sessionId, userEmail];
+  const where = userEmail === "*" ? "WHERE id=$1" : "WHERE id=$1 AND user_email=$2";
+  const { rows } = await p.query(`SELECT * FROM kaigi_sessions ${where}`, args);
+  if (!rows.length) throw Object.assign(new Error("not found"), { status: 404 });
+  return rows[0];
+}
+
+async function advanceSession(sessionId, userEmail) {
+  const p = getPool();
+  const session = await loadSession(sessionId, userEmail);
+  const speakers = session.speakers;
+  const { rows: msgRows } = await p.query(
+    `SELECT speaker, content, seq FROM kaigi_messages WHERE session_id=$1 AND NOT is_conclusion ORDER BY seq ASC`,
+    [sessionId]
+  );
+  const history = msgRows.map((m) => ({ name: m.speaker, text: m.content }));
+  const nextSeq = msgRows.length;
+  const nextSpeakerObj = speakers[nextSeq % speakers.length];
+  const { provider, prompt, roundNum } = buildSpeakerPrompt({
+    topic: session.topic,
+    speakers,
+    history,
+    nextSpeaker: nextSpeakerObj.name,
+  });
+  const { text: raw, modelUsed } = await callByProvider(provider, prompt, { web: true });
+  const text = raw.trim().replace(/^[「『"']/, "").replace(/[」』"']$/, "");
+  const { rows: insRows } = await p.query(
+    `INSERT INTO kaigi_messages (session_id, speaker, provider, content, model_used, round_num, seq)
+     VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id, created_at`,
+    [sessionId, nextSpeakerObj.name, provider, text, modelUsed, roundNum, nextSeq]
+  );
+  await p.query("UPDATE kaigi_sessions SET updated_at=now() WHERE id=$1", [sessionId]);
+  return {
+    id: insRows[0].id,
+    speaker: nextSpeakerObj.name,
+    provider,
+    content: text,
+    modelUsed,
+    roundNum,
+    seq: nextSeq,
+    createdAt: insRows[0].created_at,
+  };
+}
+
+async function concludeSession(sessionId, userEmail) {
+  const p = getPool();
+  const session = await loadSession(sessionId, userEmail);
+  const { rows: msgRows } = await p.query(
+    `SELECT speaker, content FROM kaigi_messages WHERE session_id=$1 AND NOT is_conclusion ORDER BY seq ASC`,
+    [sessionId]
+  );
+  if (!msgRows.length) throw Object.assign(new Error("発言が無いと結論は出せません"), { status: 400 });
+  const history = msgRows.map((m) => ({ name: m.speaker, text: m.content }));
+  const { provider, prompt } = buildConclusionPrompt({
+    topic: session.topic,
+    speakers: session.speakers,
+    history,
+  });
+  const { text: raw, modelUsed } = await callByProvider(provider, prompt, { web: false });
+  const text = raw.trim();
+  await p.query(
+    `INSERT INTO kaigi_messages (session_id, speaker, provider, content, model_used, round_num, seq, is_conclusion)
+     VALUES ($1, '結論', $2, $3, $4, 0, -1, true)`,
+    [sessionId, provider, text, modelUsed]
+  );
+  await p.query("UPDATE kaigi_sessions SET status='completed', updated_at=now() WHERE id=$1", [sessionId]);
+  return { content: text, modelUsed, provider };
+}
+
+// 一覧
+app.get("/api/kaigi/sessions", async (req, res) => {
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  try {
+    const { rows } = await p.query(
+      `SELECT s.id, s.topic, s.status, s.auto_rounds_remaining, s.last_error, s.created_at, s.updated_at,
+              (SELECT count(*)::int FROM kaigi_messages m WHERE m.session_id = s.id AND NOT m.is_conclusion) AS msg_count,
+              EXISTS(SELECT 1 FROM kaigi_messages m WHERE m.session_id = s.id AND m.is_conclusion) AS has_conclusion
+         FROM kaigi_sessions s
+        WHERE s.user_email = $1
+        ORDER BY s.updated_at DESC
+        LIMIT 100`,
+      [req.user.email]
+    );
+    res.json(rows);
+  } catch (err) {
+    console.error("kaigi list", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 作成
+app.post("/api/kaigi/sessions", async (req, res) => {
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  const { topic, speakers } = req.body || {};
+  if (!topic || !Array.isArray(speakers) || speakers.length < 2) {
+    return res.status(400).json({ error: "topic, speakers (2人以上) required" });
+  }
+  try {
+    const { rows } = await p.query(
+      `INSERT INTO kaigi_sessions (user_email, topic, speakers)
+       VALUES ($1, $2, $3::jsonb)
+       RETURNING id, topic, speakers, status, auto_rounds_remaining, created_at, updated_at`,
+      [req.user.email, topic, JSON.stringify(speakers)]
+    );
+    res.status(201).json(rows[0]);
+  } catch (err) {
+    console.error("kaigi create", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 詳細＋メッセージ
+app.get("/api/kaigi/sessions/:id", async (req, res) => {
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  try {
+    const session = await loadSession(req.params.id, req.user.email);
+    const { rows: messages } = await p.query(
+      `SELECT id, speaker, provider, content, model_used AS "modelUsed", round_num AS "roundNum", seq, is_conclusion AS "isConclusion", created_at AS "createdAt"
+         FROM kaigi_messages WHERE session_id=$1 ORDER BY is_conclusion ASC, seq ASC, id ASC`,
+      [req.params.id]
+    );
+    res.json({ session, messages });
+  } catch (err) {
+    console.error("kaigi detail", err);
+    res.status(err.status || 500).json({ error: err.message });
+  }
+});
+
+// 削除
+app.delete("/api/kaigi/sessions/:id", async (req, res) => {
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  try {
+    const { rowCount } = await p.query(
+      "DELETE FROM kaigi_sessions WHERE id=$1 AND user_email=$2",
+      [req.params.id, req.user.email]
+    );
+    if (!rowCount) return res.status(404).json({ error: "not found" });
+    res.status(204).end();
+  } catch (err) {
+    console.error("kaigi delete", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 次の1発言を生成して保存
+app.post("/api/kaigi/sessions/:id/next", async (req, res) => {
+  try {
+    const msg = await advanceSession(req.params.id, req.user.email);
+    res.json(msg);
+  } catch (err) {
+    console.error("kaigi next", err);
+    res.status(err.status || 500).json({ error: err.message });
+  }
+});
+
+// 結論生成
+app.post("/api/kaigi/sessions/:id/conclude", async (req, res) => {
+  try {
+    const r = await concludeSession(req.params.id, req.user.email);
+    res.json(r);
+  } catch (err) {
+    console.error("kaigi conclude", err);
+    res.status(err.status || 500).json({ error: err.message });
+  }
+});
+
+// B: 自動進行開始（指定ラウンド数まで Cloud Tasks で chain dispatch）
+app.post("/api/kaigi/sessions/:id/auto", async (req, res) => {
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  const rounds = Math.min(Math.max(parseInt(req.body?.rounds || "3", 10), 1), 10);
+  try {
+    const { rowCount } = await p.query(
+      `UPDATE kaigi_sessions SET status='auto', auto_rounds_remaining=$1, last_error=NULL, updated_at=now()
+         WHERE id=$2 AND user_email=$3`,
+      [rounds, req.params.id, req.user.email]
+    );
+    if (!rowCount) return res.status(404).json({ error: "not found" });
+    const taskName = await enqueueKaigiTick(Number(req.params.id), 0);
+    res.json({ ok: true, rounds, taskQueued: !!taskName, note: taskName ? null : "Cloud Tasks 未設定のため enqueue されていません" });
+  } catch (err) {
+    console.error("kaigi auto", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 自動進行を止める
+app.post("/api/kaigi/sessions/:id/auto/stop", async (req, res) => {
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  try {
+    const { rowCount } = await p.query(
+      `UPDATE kaigi_sessions SET status='active', auto_rounds_remaining=0, updated_at=now()
+         WHERE id=$1 AND user_email=$2`,
+      [req.params.id, req.user.email]
+    );
+    if (!rowCount) return res.status(404).json({ error: "not found" });
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 内部: Cloud Tasks コールバック → 1発言進める → 残ラウンドあれば次の tick を enqueue
+app.post("/api/internal/kaigi/tick", async (req, res) => {
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  const sessionId = req.body?.sessionId;
+  if (!sessionId) return res.status(400).json({ error: "sessionId required" });
+  try {
+    const session = await loadSession(sessionId, "*");
+    if (session.status !== "auto") {
+      console.log(`[tick] session ${sessionId} not in auto (${session.status}), stop`);
+      return res.json({ stopped: true });
+    }
+    const speakers = session.speakers;
+    const { rows: cntRows } = await p.query(
+      `SELECT COUNT(*)::int AS n FROM kaigi_messages WHERE session_id=$1 AND NOT is_conclusion`,
+      [sessionId]
+    );
+    const seqBefore = cntRows[0].n;
+    const seqInRound = seqBefore % speakers.length;
+
+    await advanceSession(sessionId, "*");
+
+    // 1ラウンド完了したら remaining --、0 になったら conclude
+    if (seqInRound === speakers.length - 1) {
+      const { rows: rRows } = await p.query(
+        `UPDATE kaigi_sessions SET auto_rounds_remaining = auto_rounds_remaining - 1, updated_at=now()
+           WHERE id=$1 RETURNING auto_rounds_remaining`,
+        [sessionId]
+      );
+      if (rRows[0].auto_rounds_remaining <= 0) {
+        await concludeSession(sessionId, "*");
+        return res.json({ done: true });
+      }
+    }
+    // 4秒空けて次の tick（連続 API 叩きの軽減）
+    await enqueueKaigiTick(Number(sessionId), 4);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error("kaigi tick", err);
+    try {
+      await getPool().query(
+        `UPDATE kaigi_sessions SET status='failed', last_error=$2, updated_at=now() WHERE id=$1`,
+        [sessionId, String(err.message || err).slice(0, 1000)]
+      );
+    } catch (e2) { /* swallow */ }
+    res.status(err.status || 500).json({ error: err.message });
   }
 });
 

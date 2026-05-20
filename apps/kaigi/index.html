@@ -13,12 +13,14 @@
 :root {
   --bg: #e4e6ee; --sl: rgba(255,255,255,1); --sd: rgba(168,172,192,0.75);
   --text: #42455e; --text2: rgba(66,69,94,0.52); --text3: rgba(66,69,94,0.28);
-  --gemini: #4285f4;
-  --claude: #d97706;
-  --gpt:    #10a37f;
+  --gemini: #4285f4; --claude: #d97706; --gpt: #10a37f;
   --err: #b04040;
 }
-body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; padding-bottom: 100px; }
+body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; padding-bottom: 130px; }
+
+.fixed-footer { position: fixed; left: 0; right: 0; bottom: 0; padding: 14px 16px calc(14px + env(safe-area-inset-bottom)); background: linear-gradient(180deg, rgba(228,230,238,0) 0%, rgba(228,230,238,0.95) 30%, rgba(228,230,238,1) 70%); display: none; gap: 10px; z-index: 100; }
+.fixed-footer.show { display: flex; }
+.fixed-footer .btn { flex: 1; }
 .bar { display: flex; justify-content: space-between; align-items: center; padding: 40px 20px 0; }
 .hint { font-size: 11px; letter-spacing: 0.22em; color: var(--text3); font-weight: 700; text-transform: uppercase; }
 .pill { padding: 8px 16px; border-radius: 24px; font-size: 12px; font-weight: 700; border: none; color: var(--text2); background: var(--bg); box-shadow: 4px 4px 10px var(--sd), -4px -4px 10px var(--sl); cursor: pointer; font-family: inherit; }
@@ -29,8 +31,9 @@ body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); 
 
 .card { background: var(--bg); border-radius: 22px; padding: 18px; margin-bottom: 16px; box-shadow: 8px 8px 18px var(--sd), -6px -6px 16px var(--sl); }
 .label { font-size: 11px; font-weight: 700; letter-spacing: 0.16em; color: var(--text3); text-transform: uppercase; margin-bottom: 10px; }
-textarea { width: 100%; border: none; background: var(--bg); padding: 12px 14px; border-radius: 14px; font-size: 14px; font-family: inherit; color: var(--text); resize: none; box-shadow: inset 3px 3px 8px var(--sd), inset -3px -3px 8px var(--sl); min-height: 60px; line-height: 1.5; }
-textarea:focus { outline: none; }
+textarea, input { width: 100%; border: none; background: var(--bg); padding: 12px 14px; border-radius: 14px; font-size: 14px; font-family: inherit; color: var(--text); resize: none; box-shadow: inset 3px 3px 8px var(--sd), inset -3px -3px 8px var(--sl); }
+textarea { min-height: 60px; line-height: 1.5; }
+textarea:focus, input:focus { outline: none; }
 
 .speakers { display: flex; gap: 10px; }
 .speaker { flex: 1; padding: 12px 8px; border-radius: 14px; text-align: center; background: var(--bg); box-shadow: inset 3px 3px 8px var(--sd), inset -3px -3px 8px var(--sl); }
@@ -38,30 +41,48 @@ textarea:focus { outline: none; }
 .speaker .nm { font-size: 12px; font-weight: 700; }
 .speaker .sub { font-size: 9px; color: var(--text2); font-weight: 600; margin-top: 2px; }
 
-.actions { display: flex; gap: 10px; margin-top: 18px; }
-.btn { flex: 1; padding: 14px; border-radius: 18px; border: none; font-size: 14px; font-weight: 700; font-family: inherit; color: var(--text); background: var(--bg); box-shadow: 6px 6px 14px var(--sd), -5px -5px 14px var(--sl); cursor: pointer; }
+.actions { display: flex; gap: 10px; margin-top: 18px; flex-wrap: wrap; }
+.btn { flex: 1; min-width: 120px; padding: 14px; border-radius: 18px; border: none; font-size: 14px; font-weight: 700; font-family: inherit; color: var(--text); background: var(--bg); box-shadow: 6px 6px 14px var(--sd), -5px -5px 14px var(--sl); cursor: pointer; }
 .btn:active { box-shadow: inset 4px 4px 10px var(--sd), inset -3px -3px 10px var(--sl); transform: scale(0.98); }
 .btn:disabled { opacity: 0.45; cursor: not-allowed; }
 .btn.primary { color: white; background: linear-gradient(135deg, #6b7eff, #4961ff); }
 .btn.primary:disabled { background: #aaa; }
+.btn.danger { color: #b04040; }
+.btn.compact { flex: 0 0 auto; min-width: auto; padding: 10px 16px; font-size: 12px; }
 
 .chat { display: flex; flex-direction: column; gap: 12px; }
 .msg { display: grid; grid-template-columns: 36px 1fr; gap: 10px; align-items: start; animation: fade 0.3s ease; }
 @keyframes fade { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
 .msg .dot { width: 36px; height: 36px; border-radius: 50%; color: white; font-weight: 800; font-size: 12px; display: flex; align-items: center; justify-content: center; box-shadow: 3px 3px 8px var(--sd); }
-.msg .body { background: var(--bg); padding: 10px 14px; border-radius: 16px; font-size: 13.5px; line-height: 1.6; box-shadow: 4px 4px 10px var(--sd), -3px -3px 10px var(--sl); }
-.msg .who { font-size: 11px; font-weight: 700; color: var(--text2); margin-bottom: 3px; }
+.msg .body { background: var(--bg); padding: 10px 14px; border-radius: 16px; font-size: 13.5px; line-height: 1.6; box-shadow: 4px 4px 10px var(--sd), -3px -3px 10px var(--sl); white-space: pre-wrap; word-break: break-word; }
+.msg .who { font-size: 11px; font-weight: 700; color: var(--text2); margin-bottom: 3px; display: flex; gap: 6px; align-items: baseline; }
+.msg .meta { font-size: 9px; color: var(--text3); }
 .msg.thinking .body { color: var(--text3); font-style: italic; }
-.summary-card { margin-top: 16px; padding: 16px; border-radius: 18px; background: linear-gradient(135deg, #fff4e0, #ffe7d0); box-shadow: 6px 6px 14px var(--sd), -4px -4px 12px var(--sl); }
+.summary-card { margin-top: 16px; padding: 16px; border-radius: 18px; background: linear-gradient(135deg, #fff4e0, #ffe7d0); box-shadow: 6px 6px 14px var(--sd), -4px -4px 12px var(--sl); white-space: pre-wrap; word-break: break-word; }
 .summary-card .label { color: #a86a2b; }
-.summary-card .text { font-size: 13.5px; line-height: 1.7; color: #5a3a1a; }
+.summary-card .text { font-size: 13.5px; line-height: 1.7; color: #5a3a1a; white-space: pre-wrap; }
+
+.session-row { display: flex; justify-content: space-between; align-items: center; padding: 14px 12px; border-radius: 14px; cursor: pointer; background: var(--bg); box-shadow: 4px 4px 10px var(--sd), -3px -3px 10px var(--sl); margin-bottom: 10px; }
+.session-row:active { box-shadow: inset 3px 3px 8px var(--sd), inset -3px -3px 8px var(--sl); transform: scale(0.99); }
+.session-row .topic { font-size: 13px; font-weight: 700; flex: 1; margin-right: 10px; line-height: 1.4; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.session-row .meta { font-size: 10px; color: var(--text3); font-weight: 600; text-align: right; min-width: 90px; }
+.session-row .badge { display: inline-block; font-size: 9px; font-weight: 800; padding: 2px 7px; border-radius: 10px; margin-bottom: 4px; }
+.session-row .badge.active { background: #e0e7ff; color: #4961ff; }
+.session-row .badge.auto { background: #fff4e0; color: #a86a2b; }
+.session-row .badge.completed { background: #d4f0d4; color: #2a8c3a; }
+.session-row .badge.failed { background: #fbd5d5; color: #b04040; }
+
+.empty { text-align: center; color: var(--text3); font-size: 12px; padding: 30px 0; font-weight: 600; }
+.note { font-size: 10px; color: var(--text3); text-align: center; margin-top: 6px; font-weight: 600; }
+.status-line { font-size: 11px; color: var(--text2); margin-top: 8px; font-weight: 600; text-align: center; }
 
 .err { color: var(--err); font-size: 11px; margin-top: 10px; font-weight: 600; padding: 10px 12px; border-radius: 12px; background: rgba(176, 64, 64, 0.08); white-space: pre-wrap; word-break: break-all; cursor: pointer; line-height: 1.5; max-height: 200px; overflow: auto; font-family: ui-monospace, Menlo, monospace; }
 .err:empty { display: none; padding: 0; }
 .err::before { content: "📋 タップでコピー  "; font-weight: 800; color: var(--text3); font-family: 'Outfit', sans-serif; }
 .err.copied::before { content: "✅ コピーしました  "; color: #2a8c3a; }
-.empty { text-align: center; color: var(--text3); font-size: 12px; padding: 30px 0; font-weight: 600; }
-.note { font-size: 10px; color: var(--text3); text-align: center; margin-top: 6px; font-weight: 600; }
+
+.view { display: none; }
+.view.active { display: block; }
 </style>
 </head>
 <body>
@@ -75,32 +96,61 @@ textarea:focus { outline: none; }
   <div class="title">AI会議</div>
   <div class="subtitle">Gemini / Claude / GPT の3者で検討して結論を出す</div>
 
-  <div class="card">
-    <div class="label">お題</div>
-    <textarea id="topic" placeholder="例：会社の昼休みは1時間と2時間どっちがいい？"></textarea>
+  <!-- 一覧ビュー -->
+  <div class="view active" id="listView">
+    <div class="card">
+      <div class="label">新しい会議</div>
+      <textarea id="newTopic" placeholder="例：会社の昼休みは1時間と2時間どっちがいい？"></textarea>
+      <div class="actions">
+        <button class="btn primary" id="createBtn" onclick="createSession()">この議題で会議を作る</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="label">参加者（固定）</div>
+      <div class="speakers" id="speakersPreview"></div>
+    </div>
+
+    <div class="card">
+      <div class="label">過去の会議</div>
+      <div id="sessionList"><div class="empty">読み込み中…</div></div>
+    </div>
+
+    <div class="err" id="listErr"></div>
   </div>
 
-  <div class="card">
-    <div class="label">参加者</div>
-    <div class="speakers" id="speakers"></div>
-    <div class="note" id="providerNote"></div>
-  </div>
+  <!-- セッション詳細ビュー -->
+  <div class="view" id="sessionView">
+    <div class="card">
+      <div class="actions" style="margin-top: 0;">
+        <button class="btn compact" onclick="showList()">← 一覧</button>
+        <button class="btn compact danger" onclick="deleteSession()">削除</button>
+      </div>
+      <div class="label" style="margin-top: 14px;">お題</div>
+      <div id="sessionTopic" style="font-size: 14px; font-weight: 600; line-height: 1.5;"></div>
+      <div class="status-line" id="sessionStatus"></div>
+    </div>
 
-  <div class="actions">
-    <button class="btn primary" id="startBtn" onclick="startRound()">検討スタート</button>
-    <button class="btn" id="summaryBtn" onclick="doSummary()" disabled>結論を出す</button>
-  </div>
-  <div class="actions" style="margin-top: 10px;">
-    <button class="btn" id="resetBtn" onclick="resetChat()" disabled>リセット</button>
-  </div>
+    <div class="actions">
+      <button class="btn compact" id="nextBtn" onclick="advanceOne()">次の1発言だけ</button>
+      <button class="btn compact" id="autoBtn" onclick="startAuto()">自動進行（3R→結論）</button>
+      <button class="btn compact" id="stopAutoBtn" onclick="stopAuto()" style="display:none;">自動止める</button>
+    </div>
 
-  <div class="err" id="err"></div>
+    <div class="err" id="sessionErr"></div>
 
-  <div class="card" style="margin-top: 24px;">
-    <div class="label">検討ログ</div>
-    <div class="chat" id="chat"><div class="empty">お題を入れて「検討スタート」</div></div>
-    <div id="summaryWrap"></div>
+    <div class="card" style="margin-top: 20px;">
+      <div class="label">検討ログ</div>
+      <div class="chat" id="chat"><div class="empty">「次の1発言」or「1ラウンド進める」で開始</div></div>
+      <div id="conclusionWrap"></div>
+    </div>
   </div>
+</div>
+
+<!-- 画面下固定ボタン（セッション詳細時のみ） -->
+<div class="fixed-footer" id="fixedFooter">
+  <button class="btn primary" id="roundBtn" onclick="advanceRound()">もう1ラウンド</button>
+  <button class="btn" id="concludeBtn" onclick="doConclude()">結論を出す</button>
 </div>
 
 <script src="/config.js"></script>
@@ -113,168 +163,350 @@ const SPEAKERS = [
   { name: "Claude", provider: "claude", short: "C", color: "var(--claude)" },
   { name: "GPT",    provider: "gpt",    short: "Φ", color: "var(--gpt)" },
 ];
+const speakerOf = (name) => SPEAKERS.find((s) => s.name === name) || SPEAKERS[0];
 
-const state = { history: [], busy: false, roundIdx: 0 };
+const state = {
+  view: "list",
+  sessionId: null,
+  session: null,
+  messages: [],
+  busy: false,
+  pollTimer: null,
+};
 
 const $ = (id) => document.getElementById(id);
-const err = (m) => { $("err").textContent = m || ""; };
+const errList = (m) => { $("listErr").textContent = m || ""; };
+const errSession = (m) => { $("sessionErr").textContent = m || ""; };
 
-function renderSpeakers() {
-  const wrap = $("speakers");
+const escapeHtml = (s) => String(s).replace(/[&<>"']/g, (c) => ({
+  "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+}[c]));
+
+const fmtDate = (s) => {
+  if (!s) return "";
+  const d = new Date(s);
+  const today = new Date();
+  const sameDay = d.toDateString() === today.toDateString();
+  return sameDay
+    ? d.toTimeString().slice(0, 5)
+    : `${d.getMonth() + 1}/${d.getDate()} ${d.toTimeString().slice(0, 5)}`;
+};
+
+function renderSpeakersPreview() {
+  const wrap = $("speakersPreview");
   wrap.innerHTML = "";
   for (const s of SPEAKERS) {
     const d = document.createElement("div");
     d.className = "speaker";
-    d.innerHTML = `
-      <div class="dot" style="background:${s.color}">${s.short}</div>
-      <div class="nm">${s.name}</div>
-      <div class="sub">${s.provider}</div>`;
+    d.innerHTML = `<div class="dot" style="background:${s.color}">${s.short}</div><div class="nm">${s.name}</div><div class="sub">${s.provider}</div>`;
     wrap.appendChild(d);
   }
-  $("providerNote").textContent = "※ Claude / GPT のキー未登録時は Gemini が代理応答";
 }
 
-function renderChat() {
-  const c = $("chat");
-  if (!state.history.length) {
-    c.innerHTML = `<div class="empty">お題を入れて「検討スタート」</div>`;
-    return;
-  }
-  c.innerHTML = "";
-  for (const h of state.history) {
-    const s = SPEAKERS.find((x) => x.name === h.name) || SPEAKERS[0];
-    const div = document.createElement("div");
-    div.className = "msg" + (h.thinking ? " thinking" : "");
-    div.innerHTML = `
-      <div class="dot" style="background:${s.color}">${s.short}</div>
-      <div>
-        <div class="who">${escapeHtml(h.name)}</div>
-        <div class="body">${escapeHtml(h.text)}</div>
-      </div>`;
-    c.appendChild(div);
-  }
-  c.scrollIntoView({ behavior: "smooth", block: "end" });
+// ─── view 切替 ───
+function showList() {
+  stopPoll();
+  state.view = "list";
+  state.sessionId = null;
+  state.session = null;
+  state.messages = [];
+  errSession("");
+  $("listView").classList.add("active");
+  $("sessionView").classList.remove("active");
+  $("fixedFooter").classList.remove("show");
+  loadSessionList();
 }
 
-function escapeHtml(s) {
-  return String(s).replace(/[&<>"']/g, (c) => ({
-    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
-  }[c]));
+async function openSession(id) {
+  state.view = "session";
+  state.sessionId = id;
+  errList(""); errSession("");
+  $("listView").classList.remove("active");
+  $("sessionView").classList.add("active");
+  $("fixedFooter").classList.add("show");
+  await refreshSession();
 }
 
-let authToken = null;
+window.showList = showList;
+window.openSession = openSession;
 
-async function callDebate(body) {
-  if (!authToken) throw new Error("ログインが切れました。トップへ戻ってログインし直してください。");
-  const res = await fetch(window.API_BASE + "/api/debate", {
-    method: "POST",
-    headers: { "content-type": "application/json", authorization: "Bearer " + authToken },
-    body: JSON.stringify(body),
-  });
-  if (!res.ok) {
-    const j = await res.json().catch(() => ({}));
-    throw new Error(j.error || `HTTP ${res.status}`);
-  }
-  return res.json();
-}
-
-async function startRound() {
-  err("");
-  const topic = $("topic").value.trim();
-  if (!topic) { err("お題を入れてください"); return; }
-  if (state.busy) return;
-  state.busy = true;
-  $("startBtn").disabled = true;
-  $("summaryBtn").disabled = true;
-  $("resetBtn").disabled = true;
-
+// ─── 一覧 ───
+async function loadSessionList() {
+  errList("");
+  const wrap = $("sessionList");
+  wrap.innerHTML = `<div class="empty">読み込み中…</div>`;
   try {
-    for (let k = 0; k < SPEAKERS.length; k++) {
-      const next = SPEAKERS[state.roundIdx % SPEAKERS.length];
-      state.history.push({ name: next.name, text: "考え中…", thinking: true });
-      renderChat();
-      try {
-        const { text } = await callDebate({
-          topic,
-          speakers: SPEAKERS.map(({ name, provider }) => ({ name, provider })),
-          history: state.history.filter((h) => !h.thinking),
-          nextSpeaker: next.name,
-        });
-        state.history.pop();
-        state.history.push({ name: next.name, text });
-      } catch (e) {
-        state.history.pop();
-        throw e;
-      }
-      renderChat();
-      state.roundIdx++;
+    const list = await api("GET", "/api/kaigi/sessions");
+    if (!list.length) {
+      wrap.innerHTML = `<div class="empty">まだ会議はありません</div>`;
+      return;
     }
-    $("startBtn").textContent = "もう1ラウンド検討";
-    $("summaryBtn").disabled = false;
-    $("resetBtn").disabled = false;
+    wrap.innerHTML = "";
+    for (const s of list) {
+      const div = document.createElement("div");
+      div.className = "session-row";
+      const badgeClass = s.status;
+      const badgeLabel = { active: "進行中", auto: "自動進行中", completed: "完了", failed: "失敗" }[s.status] || s.status;
+      div.innerHTML = `
+        <div class="topic">${escapeHtml(s.topic)}</div>
+        <div class="meta">
+          <div class="badge ${badgeClass}">${badgeLabel}</div>
+          <div>${s.msg_count}発言 ${s.has_conclusion ? "🏛️" : ""}</div>
+          <div>${fmtDate(s.updated_at)}</div>
+        </div>`;
+      div.onclick = () => openSession(s.id);
+      wrap.appendChild(div);
+    }
   } catch (e) {
-    err(e.message);
-    renderChat();
-  } finally {
-    state.busy = false;
-    $("startBtn").disabled = false;
+    errList(e.message);
+    wrap.innerHTML = "";
   }
 }
 
-async function doSummary() {
-  err("");
-  const topic = $("topic").value.trim();
-  if (!topic || !state.history.length) return;
+async function createSession() {
+  errList("");
+  const topic = $("newTopic").value.trim();
+  if (!topic) { errList("お題を入れてください"); return; }
   if (state.busy) return;
   state.busy = true;
-  $("summaryBtn").disabled = true;
-  $("startBtn").disabled = true;
-  $("summaryWrap").innerHTML = `<div class="summary-card"><div class="label">結論</div><div class="text">生成中…</div></div>`;
+  $("createBtn").disabled = true;
   try {
-    const { text } = await callDebate({
+    const s = await api("POST", "/api/kaigi/sessions", {
       topic,
       speakers: SPEAKERS.map(({ name, provider }) => ({ name, provider })),
-      history: state.history.filter((h) => !h.thinking),
-      summary: true,
     });
-    $("summaryWrap").innerHTML = `<div class="summary-card"><div class="label">結論</div><div class="text">${escapeHtml(text)}</div></div>`;
+    $("newTopic").value = "";
+    await openSession(s.id);
   } catch (e) {
-    err(e.message);
-    $("summaryWrap").innerHTML = "";
+    errList(e.message);
   } finally {
     state.busy = false;
-    $("startBtn").disabled = false;
-    $("summaryBtn").disabled = false;
+    $("createBtn").disabled = false;
+  }
+}
+window.createSession = createSession;
+
+// ─── セッション詳細 ───
+async function refreshSession() {
+  if (!state.sessionId) return;
+  try {
+    const { session, messages } = await api("GET", `/api/kaigi/sessions/${state.sessionId}`);
+    state.session = session;
+    state.messages = messages;
+    renderSession();
+    // status === 'auto' なら自動ポーリング
+    if (session.status === "auto") {
+      ensurePoll();
+    } else {
+      stopPoll();
+    }
+  } catch (e) {
+    errSession(e.message);
   }
 }
 
-function resetChat() {
-  state.history = [];
-  state.roundIdx = 0;
-  $("summaryWrap").innerHTML = "";
-  $("startBtn").textContent = "検討スタート";
-  $("summaryBtn").disabled = true;
-  $("resetBtn").disabled = true;
-  renderChat();
+function renderSession() {
+  if (!state.session) return;
+  $("sessionTopic").textContent = state.session.topic;
+  const remaining = state.session.auto_rounds_remaining;
+  const statusMap = {
+    active: "進行中",
+    auto: `自動進行中（残り ${remaining} ラウンド）`,
+    completed: "完了",
+    failed: `失敗: ${state.session.last_error || ""}`,
+  };
+  $("sessionStatus").textContent = statusMap[state.session.status] || state.session.status;
+
+  // ボタンの可否
+  const isAuto = state.session.status === "auto";
+  const hasMessages = state.messages.filter((m) => !m.isConclusion).length > 0;
+  $("nextBtn").disabled = isAuto || state.busy;
+  $("autoBtn").disabled = isAuto || state.busy;
+  $("roundBtn").disabled = isAuto || state.busy;
+  $("concludeBtn").disabled = isAuto || state.busy || !hasMessages;
+  $("stopAutoBtn").style.display = isAuto ? "" : "none";
+
+  // チャット
+  const chat = $("chat");
+  const nonConclusion = state.messages.filter((m) => !m.isConclusion);
+  if (!nonConclusion.length) {
+    chat.innerHTML = `<div class="empty">「次の1発言」or「1ラウンド進める」で開始</div>`;
+  } else {
+    chat.innerHTML = "";
+    for (const m of nonConclusion) {
+      const s = speakerOf(m.speaker);
+      const div = document.createElement("div");
+      div.className = "msg";
+      div.innerHTML = `
+        <div class="dot" style="background:${s.color}">${s.short}</div>
+        <div>
+          <div class="who">${escapeHtml(m.speaker)} <span class="meta">R${m.roundNum} · ${m.modelUsed || m.provider}</span></div>
+          <div class="body">${escapeHtml(m.content)}</div>
+        </div>`;
+      chat.appendChild(div);
+    }
+  }
+  // thinking placeholder
+  if (state.busy && !isAuto) {
+    const next = SPEAKERS[nonConclusion.length % SPEAKERS.length];
+    const div = document.createElement("div");
+    div.className = "msg thinking";
+    div.innerHTML = `
+      <div class="dot" style="background:${next.color}">${next.short}</div>
+      <div>
+        <div class="who">${next.name}</div>
+        <div class="body">考え中…</div>
+      </div>`;
+    chat.appendChild(div);
+  }
+
+  // 結論
+  const concl = state.messages.find((m) => m.isConclusion);
+  if (concl) {
+    $("conclusionWrap").innerHTML = `<div class="summary-card"><div class="label">結論</div><div class="text">${escapeHtml(concl.content)}</div></div>`;
+  } else {
+    $("conclusionWrap").innerHTML = "";
+  }
+  chat.scrollIntoView({ behavior: "smooth", block: "end" });
 }
 
-window.startRound = startRound;
-window.doSummary = doSummary;
-window.resetChat = resetChat;
+async function advanceOne() {
+  if (state.busy || !state.sessionId) return;
+  errSession("");
+  state.busy = true;
+  renderSession();
+  try {
+    const msg = await api("POST", `/api/kaigi/sessions/${state.sessionId}/next`);
+    state.messages.push(msg);
+  } catch (e) {
+    errSession(e.message);
+  } finally {
+    state.busy = false;
+    await refreshSession();
+  }
+}
+window.advanceOne = advanceOne;
 
-renderSpeakers();
-renderChat();
+async function advanceRound() {
+  if (state.busy || !state.sessionId) return;
+  for (let i = 0; i < SPEAKERS.length; i++) {
+    if (state.busy) return;
+    await advanceOne();
+    if ($("sessionErr").textContent) break;
+  }
+}
+window.advanceRound = advanceRound;
 
-// エラー表示をタップでクリップボードコピー
-$("err").addEventListener("click", () => {
-  const t = $("err").textContent;
-  if (!t) return;
-  navigator.clipboard?.writeText(t).then(() => {
-    $("err").classList.add("copied");
-    setTimeout(() => $("err").classList.remove("copied"), 1500);
+async function doConclude() {
+  if (state.busy || !state.sessionId) return;
+  errSession("");
+  state.busy = true;
+  $("conclusionWrap").innerHTML = `<div class="summary-card"><div class="label">結論</div><div class="text">生成中…</div></div>`;
+  $("concludeBtn").disabled = true;
+  try {
+    await api("POST", `/api/kaigi/sessions/${state.sessionId}/conclude`);
+    await refreshSession();
+  } catch (e) {
+    errSession(e.message);
+    $("conclusionWrap").innerHTML = "";
+  } finally {
+    state.busy = false;
+    $("concludeBtn").disabled = false;
+  }
+}
+window.doConclude = doConclude;
+
+async function startAuto() {
+  if (state.busy || !state.sessionId) return;
+  errSession("");
+  state.busy = true;
+  $("autoBtn").disabled = true;
+  try {
+    const r = await api("POST", `/api/kaigi/sessions/${state.sessionId}/auto`, { rounds: 3 });
+    if (r.note) errSession(`⚠️ ${r.note} — 「次の1発言」で手動進行できます`);
+    await refreshSession();
+  } catch (e) {
+    errSession(e.message);
+  } finally {
+    state.busy = false;
+    $("autoBtn").disabled = false;
+  }
+}
+window.startAuto = startAuto;
+
+async function stopAuto() {
+  if (!state.sessionId) return;
+  try {
+    await api("POST", `/api/kaigi/sessions/${state.sessionId}/auto/stop`);
+    await refreshSession();
+  } catch (e) {
+    errSession(e.message);
+  }
+}
+window.stopAuto = stopAuto;
+
+async function deleteSession() {
+  if (!state.sessionId) return;
+  if (!confirm("この会議を削除しますか？")) return;
+  try {
+    await api("DELETE", `/api/kaigi/sessions/${state.sessionId}`);
+    showList();
+  } catch (e) {
+    errSession(e.message);
+  }
+}
+window.deleteSession = deleteSession;
+
+// ─── ポーリング（自動進行中の更新取得） ───
+function ensurePoll() {
+  if (state.pollTimer) return;
+  state.pollTimer = setInterval(refreshSession, 5000);
+}
+function stopPoll() {
+  if (state.pollTimer) { clearInterval(state.pollTimer); state.pollTimer = null; }
+}
+
+// ─── API 呼び出し（Firebase ID token 付き） ───
+let authToken = null;
+let firebaseUser = null;
+async function ensureToken() {
+  if (firebaseUser) authToken = await firebaseUser.getIdToken();
+  if (!authToken) throw new Error("ログインが切れました。トップへ戻ってログインし直してください。");
+}
+async function api(method, path, body) {
+  await ensureToken();
+  const res = await fetch(window.API_BASE + path, {
+    method,
+    headers: {
+      authorization: "Bearer " + authToken,
+      ...(body ? { "content-type": "application/json" } : {}),
+    },
+    body: body ? JSON.stringify(body) : undefined,
   });
-});
+  if (res.status === 204) return null;
+  const j = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(j.error || `HTTP ${res.status}`);
+  return j;
+}
 
+// ─── エラータップでコピー ───
+function bindErrCopy(id) {
+  const el = $(id);
+  el.addEventListener("click", () => {
+    const t = el.textContent;
+    if (!t) return;
+    navigator.clipboard?.writeText(t).then(() => {
+      el.classList.add("copied");
+      setTimeout(() => el.classList.remove("copied"), 1500);
+    });
+  });
+}
+bindErrCopy("listErr");
+bindErrCopy("sessionErr");
+
+renderSpeakersPreview();
+
+// ─── 認証 → 一覧ロード ───
 (async () => {
   try {
     const cfg = await fetch("/__/firebase/init.json").then((r) => r.json());
@@ -282,11 +514,13 @@ $("err").addEventListener("click", () => {
     const auth = getAuth(initializeApp(cfg));
     onAuthStateChanged(auth, async (user) => {
       if (!user) { location.href = "/?next=" + encodeURIComponent(location.pathname); return; }
+      firebaseUser = user;
       authToken = await user.getIdToken();
       setInterval(async () => { authToken = await user.getIdToken(true); }, 30 * 60 * 1000);
+      loadSessionList();
     });
   } catch (e) {
-    err("認証初期化エラー: " + e.message);
+    errList("認証初期化エラー: " + e.message);
   }
 })();
 </script>
