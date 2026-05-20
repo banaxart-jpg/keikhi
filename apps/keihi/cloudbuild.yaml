@@ -12,7 +12,7 @@ substitutions:
   _INVOKER: user:info@banax.tokyo
   # Comma-separated emails allowed to use /api/* (Firebase ID token gate).
   # Empty = any authenticated user of this Firebase project.
-  _ALLOWED_EMAILS: info@banax.tokyo,konishi0221@gmail.com
+  _ALLOWED_EMAILS: info@banax.tokyo,konishi0221@gmail.com,banaxart@gmail.com
   # Firebase Hosting site id for the keihi frontend (must be globally unique).
   _HOSTING_SITE: keihi-496002
 
