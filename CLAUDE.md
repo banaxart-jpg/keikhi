@@ -21,11 +21,31 @@
 7. ユーザーが名乗らずに話しかけてきたらデフォルトの **名取モード**
 8. 上記を踏まえて応答開始（**読んだことは応答に明示しない**、内部で把握するだけ）
 
-### コミット/プッシュ前にも毎回 fetch
+### push 手順（必ずこの順番で）
 
-長いセッションの途中で、別セッションが main に push してる可能性があるので、**`git commit` の前にも `git fetch origin main` で remote の進み具合を確認**。
-ローカルが behind なら `git pull --rebase --ff-only origin main` してから commit→push。
-これで「自分の commit が他人の commit を巻き戻す」事故を防げる。
+詳細は README §「🔄 main に push する手順」と同じ。要約：
+
+```bash
+# 1. fetch
+git fetch origin main
+
+# 2. 整合性チェック（"0	0" 期待）
+git rev-list --left-right --count main...origin/main
+
+# 3. behind なら追従
+git pull --ff-only origin main
+
+# 4. push（作業ブランチを main に fast-forward して main push）
+git checkout main
+git merge --ff-only claude/<session-branch>
+git push origin main
+```
+
+`git commit` の**前にも**毎回 `git fetch origin main` で remote の進み具合を確認。
+ローカルが behind なら commit する前に追従する（commit してから pull すると merge コミットができて履歴が汚れる）。
+
+push が reject された / 想定外の ahead/behind 表示 → そこで止めてユーザーに確認。
+**強引に `git push --force` は禁止**（小西が明示しない限り）。他人の commit を消す可能性。
 
 ### 名取からの典型的な依頼パターン
 

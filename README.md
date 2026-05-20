@@ -26,6 +26,50 @@
 
 ---
 
+## 🔄 main に push する手順（必ずこの順番で）
+
+別セッション・別 clone の commit を巻き戻す事故を防ぐため、**push する前に必ず fetch して状態確認** する。
+
+```bash
+# 1. リモートを取得
+git fetch origin main
+
+# 2. 整合性チェック（"0	0" 期待）
+git rev-list --left-right --count main...origin/main
+#  "0	0" → 完全一致、push 不要
+#  "N	0" → 自分が ahead N、そのまま push 可
+#  "0	M" → remote が先行、まず pull
+#  "N	M" → 分岐、rebase or merge してから
+
+# 3. behind なら追従
+git pull --ff-only origin main
+
+# 4. push（main へ直 commit はせず、作業ブランチから fast-forward させる）
+git push origin main
+```
+
+Claude Code が作業するときの実際の流れ：
+
+```bash
+# 作業ブランチで commit
+git checkout claude/<session-branch>
+git add ... && git commit -m "..."
+git push origin claude/<session-branch>
+
+# 必ず fetch → 整合確認 → main を fast-forward → main push
+git fetch origin main
+git rev-list --left-right --count main...origin/main   # behind 0 を確認
+git checkout main
+git merge --ff-only claude/<session-branch>
+git push origin main
+```
+
+`main` への push が Cloud Build トリガを発火させて本番デプロイされる。
+
+⚠️ **過去に1度 stale clone からの暴発で本番 Hosting が巻き戻った事故あり**。fetch を省略しない。
+
+---
+
 ## 👥 開発のお約束
 
 ### 自由に編集してOK
