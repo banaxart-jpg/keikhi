@@ -41,10 +41,14 @@ app.use((req, res, next) => {
 // same-origin via Firebase Hosting rewrite, so no CORS/OAuth token is
 // involved — auth is a verified Firebase ID token instead.
 // 例外: /api/internal/* は Cloud Tasks コールバック用なので別認証(x-tick-secret)。
-const INTERNAL_TICK_SECRET = process.env.INTERNAL_TICK_SECRET;
+// trim() で改行・空白の混入（openssl rand を data-file=- で入れた時に末尾改行が
+// 入りがち）を吸収する。
+const INTERNAL_TICK_SECRET = (process.env.INTERNAL_TICK_SECRET || "").trim();
 app.use("/api", async (req, res, next) => {
   if (req.path.startsWith("/internal/")) {
-    if (!INTERNAL_TICK_SECRET || req.headers["x-tick-secret"] !== INTERNAL_TICK_SECRET) {
+    const got = (req.headers["x-tick-secret"] || "").trim();
+    if (!INTERNAL_TICK_SECRET || got !== INTERNAL_TICK_SECRET) {
+      console.warn(`[internal] forbidden: secret present=${!!INTERNAL_TICK_SECRET} match=${got === INTERNAL_TICK_SECRET}`);
       return res.status(403).json({ error: "forbidden (internal)" });
     }
     req.user = { email: "internal@cloud-tasks" };
@@ -461,6 +465,7 @@ async function enqueueKaigiTick(sessionId, delaySec = 0) {
     httpRequest: {
       httpMethod: "POST",
       url: `${SERVICE_URL}/api/internal/kaigi/tick`,
+      // INTERNAL_TICK_SECRET は import 時に trim 済み
       headers: { "content-type": "application/json", "x-tick-secret": INTERNAL_TICK_SECRET },
       body: Buffer.from(JSON.stringify({ sessionId })).toString("base64"),
     },
