@@ -146,7 +146,7 @@ select.nm-field { background: var(--bg2) url("data:image/svg+xml,%3Csvg xmlns='h
 </head>
 <body>
 
-<div class="toast" id="toast">✅ 登録しました！</div>
+<div class="toast" id="toast">登録しました</div>
 
 <div id="signinOverlay" style="display:none;position:fixed;inset:0;z-index:400;background:var(--bg);flex-direction:column;align-items:center;justify-content:center;padding:32px;text-align:center;gap:18px;">
   <div style="font-size:24px;font-weight:800;">請求書</div>
@@ -168,17 +168,17 @@ select.nm-field { background: var(--bg2) url("data:image/svg+xml,%3Csvg xmlns='h
   </div>
   <p class="hint-text">向きを選ぶ</p>
   <div class="dir-row">
-    <button class="dir-btn" data-dir="in" type="button">📥 支払<span class="lab">払うやつ</span></button>
-    <button class="dir-btn" data-dir="out" type="button">📤 受取<span class="lab">もらうやつ</span></button>
+    <button class="dir-btn" data-dir="in" type="button">支払<span class="lab">払うやつ</span></button>
+    <button class="dir-btn" data-dir="out" type="button">受取<span class="lab">もらうやつ</span></button>
   </div>
   <p class="hint-text" id="srcHint" style="display:none;">読み込み方法</p>
   <div class="src-row" id="srcRow" style="display:none;">
-    <button class="src-btn" id="srcCamBtn" type="button">📷 カメラ</button>
-    <button class="src-btn" id="srcFileBtn" type="button">📎 ファイル<br><span style="font-size:10px;color:var(--text2);">PDF / 画像</span></button>
+    <button class="src-btn" id="srcCamBtn" type="button">カメラ</button>
+    <button class="src-btn" id="srcFileBtn" type="button">ファイル<br><span style="font-size:10px;color:var(--text2);">PDF / 画像</span></button>
   </div>
   <p class="hint-text" id="mainSummaryHint" style="text-align:center;line-height:1.7;">
-    📥 未払い <span id="mainUnpaidCount">0</span>件 ¥<span id="mainUnpaidTotal">0</span><br>
-    📤 未入金 <span id="mainUnreceivedCount">0</span>件 ¥<span id="mainUnreceivedTotal">0</span>
+    未払い <span id="mainUnpaidCount">0</span>件 ¥<span id="mainUnpaidTotal">0</span><br>
+    未入金 <span id="mainUnreceivedCount">0</span>件 ¥<span id="mainUnreceivedTotal">0</span>
   </p>
   <input type="file" id="fileInputCam" accept="image/*" capture="environment" style="display:none">
   <input type="file" id="fileInputAny" accept="image/*,application/pdf" style="display:none">
@@ -199,7 +199,7 @@ select.nm-field { background: var(--bg2) url("data:image/svg+xml,%3Csvg xmlns='h
     <div class="handle"></div>
     <div class="sheet-header">
       <span class="sheet-title" id="sheetTitle">内容を確認</span>
-      <button class="retake-btn" id="retakeBtn" type="button">📷 撮り直す</button>
+      <button class="retake-btn" id="retakeBtn" type="button">撮り直す</button>
     </div>
     <div id="errBox" class="err-box"></div>
     <div class="preview-row">
@@ -266,14 +266,14 @@ select.nm-field { background: var(--bg2) url("data:image/svg+xml,%3Csvg xmlns='h
       <div class="summary-count" id="summaryCount">0件</div>
     </div>
     <div class="tab-group">
-      <div class="tab-group-title">📥 支払（払うやつ）</div>
+      <div class="tab-group-title">支払（払うやつ）</div>
       <div class="tabs">
         <button class="tab active" data-dir="in" data-status="unpaid" type="button">未払い <span id="cntInUnpaid">0</span></button>
         <button class="tab paid-tab" data-dir="in" data-status="paid" type="button">支払済 <span id="cntInPaid">0</span></button>
       </div>
     </div>
     <div class="tab-group">
-      <div class="tab-group-title">📤 受取（もらうやつ）</div>
+      <div class="tab-group-title">受取（もらうやつ）</div>
       <div class="tabs">
         <button class="tab" data-dir="out" data-status="unpaid" type="button">未入金 <span id="cntOutUnpaid">0</span></button>
         <button class="tab paid-tab" data-dir="out" data-status="paid" type="button">入金済 <span id="cntOutPaid">0</span></button>
@@ -371,8 +371,8 @@ let editingDirection = "in";
 
 // direction ごとの文言
 const LABELS = {
-  in:  { name: "支払", tab1: "未払い", tab2: "支払済", state1: "支払期限", state2: "支払日",   emoji: "📥", noun: "支払請求書" },
-  out: { name: "受取", tab1: "未入金", tab2: "入金済", state1: "入金予定日", state2: "入金日", emoji: "📤", noun: "受取請求書" },
+  in:  { name: "支払", tab1: "未払い", tab2: "支払済", state1: "支払期限", state2: "支払日",   emoji: "", noun: "支払請求書" },
+  out: { name: "受取", tab1: "未入金", tab2: "入金済", state1: "入金予定日", state2: "入金日", emoji: "", noun: "受取請求書" },
 };
 
 const $ = (id) => document.getElementById(id);
@@ -394,12 +394,12 @@ function show(id) {
 let _toastTimer = null;
 function toast(msg, isErr = false) {
   const t = $("toast");
-  t.textContent = isErr ? msg + "\n\n👆 タップで全文コピー" : msg;
+  t.textContent = isErr ? msg + "\n\nタップで全文コピー" : msg;
   t.classList.toggle("err", !!isErr);
   t.style.display = "block";
   t.style.cursor = isErr ? "pointer" : "default";
   t.onclick = isErr
-    ? () => navigator.clipboard?.writeText(msg).then(() => { t.textContent = "📋 コピーしました"; }, () => {})
+    ? () => navigator.clipboard?.writeText(msg).then(() => { t.textContent = "コピーしました"; }, () => {})
     : null;
   clearTimeout(_toastTimer);
   _toastTimer = setTimeout(() => { t.style.display = "none"; }, isErr ? 15000 : 2500);
@@ -535,7 +535,7 @@ function showConfirm(parsed, errMsg) {
   editingDirection = currentDirection || "in";
   applyDirectionLabels(editingDirection);
   $("sheetTitle").textContent = `内容を確認（${LABELS[editingDirection].noun}）`;
-  $("retakeBtn").textContent = currentMimeType === "application/pdf" ? "📎 別のファイル" : "📷 撮り直す";
+  $("retakeBtn").textContent = currentMimeType === "application/pdf" ? "別のファイル" : "撮り直す";
   $("retakeBtn").style.display = "";
   if (currentImgUrl) {
     $("confirmImg").style.display = "";
@@ -565,7 +565,7 @@ function showConfirm(parsed, errMsg) {
   updatePreview();
   const eb = $("errBox");
   eb.style.display = errMsg ? "block" : "none";
-  eb.textContent = errMsg ? `⚠️ ${errMsg}` : "";
+  eb.textContent = errMsg || "";
   show("confirmScreen");
 }
 
@@ -574,7 +574,7 @@ function openEdit(b) {
   editingDirection = b.direction || "in";
   applyDirectionLabels(editingDirection);
   $("sheetTitle").textContent = `${LABELS[editingDirection].noun} を編集`;
-  $("retakeBtn").textContent = "✕ キャンセル";
+  $("retakeBtn").textContent = "キャンセル";
   $("confirmImg").style.display = b.thumb ? "" : "none";
   $("confirmImg").src = b.thumb || "";
   $("fIssuer").value = b.issuer || "";
@@ -691,7 +691,7 @@ $("submitBtn").addEventListener("click", async () => {
       const idx = bills.findIndex((x) => x.id === editingId);
       if (idx >= 0) bills[idx] = { ...bills[idx], ...rec };
       saveBills();
-      toast("✅ 更新しました！");
+      toast("更新しました");
       editingId = null;
       // 編集後はそのレコードが属するタブを表示
       tabDir = rec.direction;
@@ -711,10 +711,10 @@ $("submitBtn").addEventListener("click", async () => {
       saveBills();
       const sheetRes = await postToSheet(newRec);
       const okMsg = sheetRes.skipped
-        ? "✅ 登録しました！"
+        ? "登録しました"
         : sheetRes.ok
-          ? "✅ 登録しました！📊シートにも追加"
-          : "✅ 登録（⚠️シート追加は失敗）";
+          ? "登録しました（シートにも追加）"
+          : "登録（シート追加は失敗）";
       toast(okMsg);
       currentDirection = "";
       document.querySelectorAll(".dir-btn").forEach((b) => b.classList.remove("selected"));
@@ -796,7 +796,7 @@ function renderList() {
   const list = $("billList");
   list.textContent = "";
   if (!filtered.length) {
-    list.innerHTML = `<div class="empty"><div class="empty-icon">📄</div><div class="empty-text">${L.emoji} ${tabLbl}の請求書はありません</div></div>`;
+    list.innerHTML = `<div class="empty"><div class="empty-text">${tabLbl}の請求書はありません</div></div>`;
     return;
   }
   for (const b of filtered) list.appendChild(makeBillCard(b));
@@ -823,7 +823,7 @@ function makeBillCard(b) {
     });
   } else {
     thumbWrap.className = "bill-thumb-empty";
-    thumbWrap.textContent = b.mimeType === "application/pdf" ? "📕" : "📄";
+    thumbWrap.textContent = b.mimeType === "application/pdf" ? "PDF" : "IMG";
   }
 
   // 本体
@@ -842,7 +842,7 @@ function makeBillCard(b) {
     meta.appendChild(c);
   }
   if (b.site) {
-    const sp = document.createElement("span"); sp.textContent = `📍 ${b.site}`;
+    const sp = document.createElement("span"); sp.textContent = b.site;
     meta.appendChild(sp);
   }
   const acc = b.account || {};
@@ -850,7 +850,7 @@ function makeBillCard(b) {
     const sp = document.createElement("span");
     sp.style.cssText = "font-family:ui-monospace,Menlo,monospace;letter-spacing:-0.2px;";
     const parts = [acc.bank, acc.branch, acc.type, acc.number].filter(Boolean);
-    sp.textContent = `🏦 ${parts.join(" ")}`;
+    sp.textContent = `振込先: ${parts.join(" ")}`;
     meta.appendChild(sp);
   }
   if (b.dueDate) {
@@ -860,17 +860,17 @@ function makeBillCard(b) {
     const dueLbl = direction === "out" ? "入金予定" : "期限";
     const overLbl = direction === "out" ? "日経過" : "日超過";
     if (b.status !== "paid") {
-      if (diffDays < 0) { d.classList.add("over"); d.textContent = `🚨 ${dueLbl} ${b.dueDate}（${-diffDays}${overLbl}）`; }
-      else if (diffDays <= 3) { d.classList.add("soon"); d.textContent = `⏰ ${dueLbl} ${b.dueDate}（あと${diffDays}日）`; }
-      else { d.textContent = `📅 ${dueLbl} ${b.dueDate}`; }
+      if (diffDays < 0) { d.classList.add("over"); d.textContent = `${dueLbl} ${b.dueDate}（${-diffDays}${overLbl}）`; }
+      else if (diffDays <= 3) { d.classList.add("soon"); d.textContent = `${dueLbl} ${b.dueDate}（あと${diffDays}日）`; }
+      else { d.textContent = `${dueLbl} ${b.dueDate}`; }
     } else {
-      d.textContent = `📅 ${dueLbl} ${b.dueDate}`;
+      d.textContent = `${dueLbl} ${b.dueDate}`;
     }
     meta.appendChild(d);
   }
   if (b.status === "paid" && b.paidAt) {
     const p = document.createElement("span");
-    p.textContent = direction === "out" ? `✅ ${b.paidAt} 入金` : `✅ ${b.paidAt} 支払`;
+    p.textContent = direction === "out" ? `${b.paidAt} 入金` : `${b.paidAt} 支払`;
     meta.appendChild(p);
   }
   info.append(top, meta);
@@ -882,7 +882,7 @@ function makeBillCard(b) {
   const toggle = document.createElement("button");
   toggle.type = "button";
   toggle.className = "pay-toggle" + (b.status === "paid" ? " paid" : "");
-  toggle.textContent = "✓";
+  toggle.textContent = "OK";
   toggle.title = b.status === "paid" ? `${L.tab2}（タップで${L.tab1}に戻す）` : `${L.tab2}にする`;
   toggle.addEventListener("click", (e) => {
     e.stopPropagation();
@@ -938,13 +938,13 @@ $("sheetToggleBtn").addEventListener("click", () => {
 $("sheetSaveBtn").addEventListener("click", () => {
   const u = $("sheetUrlInput").value.trim();
   if (u && !/^https:\/\/script\.google\.com\/.*\/exec/.test(u)) {
-    $("sheetStatusMsg").textContent = "⚠️ Apps Script の URL（…/exec で終わるやつ）を入れてください";
+    $("sheetStatusMsg").textContent = "Apps Script の URL（…/exec で終わるやつ）を入れてください";
     return;
   }
   if (u) localStorage.setItem("seikyuSheetUrl", u);
   else localStorage.removeItem("seikyuSheetUrl");
   refreshSheetState();
-  $("sheetStatusMsg").textContent = u ? "✅ 保存しました" : "🗑 クリアしました";
+  $("sheetStatusMsg").textContent = u ? "保存しました" : "クリアしました";
 });
 $("sheetClearBtn").addEventListener("click", () => {
   localStorage.removeItem("seikyuSheetUrl");
@@ -957,7 +957,7 @@ $("sheetTestBtn").addEventListener("click", async () => {
   if (!u) { $("sheetStatusMsg").textContent = "URL を先に入れてください"; return; }
   const prev = getSheetUrl();
   localStorage.setItem("seikyuSheetUrl", u);
-  $("sheetStatusMsg").textContent = "📤 テスト送信中…";
+  $("sheetStatusMsg").textContent = "テスト送信中…";
   const today = new Date().toISOString().slice(0, 10);
   const res = await postToSheet({
     id: "test", createdAt: new Date().toISOString(), status: "unpaid", paidAt: null,
@@ -966,8 +966,8 @@ $("sheetTestBtn").addEventListener("click", async () => {
   });
   if (prev) localStorage.setItem("seikyuSheetUrl", prev); else localStorage.removeItem("seikyuSheetUrl");
   refreshSheetState();
-  if (res.ok) $("sheetStatusMsg").textContent = "✅ 送信できました（スプレッドシート開いて確認してみて）";
-  else $("sheetStatusMsg").textContent = "⚠️ 送信失敗: " + (res.error || "不明");
+  if (res.ok) $("sheetStatusMsg").textContent = "送信できました（スプレッドシート開いて確認してみて）";
+  else $("sheetStatusMsg").textContent = "送信失敗: " + (res.error || "不明");
 });
 
 // ───────── CSV ─────────

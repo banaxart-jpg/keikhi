@@ -10,7 +10,9 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@40,400,0,0">
 <style>
+.icon, .app-icon { font-family: 'Material Symbols Outlined'; font-weight: normal; font-style: normal; display: inline-block; line-height: 1; letter-spacing: normal; text-transform: none; white-space: nowrap; direction: ltr; -webkit-font-feature-settings: 'liga'; -webkit-font-smoothing: antialiased; font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 40; color: var(--text); }
 * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
 :root {
   --bg: #e4e6ee; --bg2: #d8dae4; --bg3: #ededf3;
@@ -36,6 +38,7 @@ body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); 
 .app-card.soon { opacity: 0.5; cursor: default; }
 .app-card.soon:active { box-shadow: 10px 10px 24px var(--sd), -8px -8px 20px var(--sl); transform: none; }
 .app-icon { font-size: 44px; line-height: 1; margin-bottom: 14px; }
+.app-card.soon .app-icon { color: var(--text2); }
 .app-name { font-size: 17px; font-weight: 700; margin-bottom: 4px; }
 .app-desc { font-size: 11px; color: var(--text2); font-weight: 600; line-height: 1.5; }
 .app-badge { position: absolute; top: 12px; right: 12px; font-size: 9px; font-weight: 800; letter-spacing: 0.1em; color: var(--text3); }
@@ -88,11 +91,12 @@ import {
 //   2. 下の APPS 配列に1行足す
 // soon:true にすると「準備中」表示でタップ不可。
 const APPS = [
-  { id: "keihi",  name: "経費", icon: "💴", desc: "領収書をAIで読取・記録", path: "/keihi/" },
-  { id: "seikyu", name: "請求書", icon: "📄", desc: "光熱費・税金の未払い管理", path: "/seikyu/" },
-  { id: "cost",   name: "AIコスト計算", icon: "🧮", desc: "Gemini/GPT/Claude の費用見積", path: "/cost/" },
-  { id: "kaigi",  name: "AI会議", icon: "🏛️", desc: "3者AIで検討して結論を出す", path: "/kaigi/" },
-  { id: "denki",  name: "電気図面", icon: "⚡️", desc: "準備中", soon: true },
+  // icon: Material Symbols (Outlined) のアイコン名。https://fonts.google.com/icons から選ぶ。
+  { id: "keihi",  name: "経費", icon: "receipt_long", desc: "領収書をAIで読取・記録", path: "/keihi/" },
+  { id: "seikyu", name: "請求書", icon: "request_quote", desc: "光熱費・税金の未払い管理", path: "/seikyu/" },
+  { id: "cost",   name: "AIコスト計算", icon: "calculate", desc: "Gemini/GPT/Claude の費用見積", path: "/cost/" },
+  { id: "kaigi",  name: "AI会議", icon: "forum", desc: "3者AIで検討して結論を出す", path: "/kaigi/" },
+  { id: "denki",  name: "電気図面", icon: "bolt", desc: "準備中", soon: true },
 ];
 
 function renderGrid() {
@@ -141,7 +145,7 @@ document.getElementById("signinDiag")?.addEventListener("click", () => {
   const t = document.getElementById("signinDiag").textContent;
   if (!t) return;
   navigator.clipboard?.writeText(t).then(
-    () => sStatus("📋 診断ログをコピーしました"),
+    () => sStatus("診断ログをコピーしました"),
     () => sStatus("コピー失敗")
   );
 });

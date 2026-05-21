@@ -8,8 +8,11 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@24,400,0,0">
 <style>
 * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+.icon { font-family: 'Material Symbols Outlined'; font-weight: normal; font-style: normal; font-size: 1.1em; display: inline-block; line-height: 1; letter-spacing: normal; text-transform: none; white-space: nowrap; direction: ltr; -webkit-font-feature-settings: 'liga'; -webkit-font-smoothing: antialiased; vertical-align: -0.18em; font-variation-settings: 'FILL' 0, 'wght' 500, 'GRAD' 0, 'opsz' 20; }
+.btn .icon { margin-right: 6px; }
 :root {
   --bg: #e4e6ee; --sl: rgba(255,255,255,1); --sd: rgba(168,172,192,0.75);
   --text: #42455e; --text2: rgba(66,69,94,0.52); --text3: rgba(66,69,94,0.28);
@@ -122,8 +125,8 @@ textarea:focus, input:focus { outline: none; }
 
 .err { color: var(--err); font-size: 11px; margin-top: 10px; font-weight: 600; padding: 10px 12px; border-radius: 12px; background: rgba(176, 64, 64, 0.08); white-space: pre-wrap; word-break: break-all; cursor: pointer; line-height: 1.5; max-height: 200px; overflow: auto; font-family: ui-monospace, Menlo, monospace; }
 .err:empty { display: none; padding: 0; }
-.err::before { content: "📋 タップでコピー  "; font-weight: 800; color: var(--text3); font-family: 'Outfit', sans-serif; }
-.err.copied::before { content: "✅ コピーしました  "; color: #2a8c3a; }
+.err::before { content: "タップでコピー"; font-weight: 800; color: var(--text3); font-family: 'Outfit', sans-serif; }
+.err.copied::before { content: "コピーしました"; color: #2a8c3a; }
 
 .view { display: none; }
 .view.active { display: block; }
@@ -186,21 +189,21 @@ textarea:focus, input:focus { outline: none; }
 <div class="fixed-footer" id="fixedFooter">
   <!-- 未開始 / 結論なし: スタートボタン -->
   <div class="row" id="startRow">
-    <button class="btn primary" id="startBtn" onclick="startKaigi()">🚀 会議スタート（3R→結論）</button>
+    <button class="btn primary" id="startBtn" onclick="startKaigi()"><span class="icon">rocket_launch</span>会議スタート（3R→結論）</button>
   </div>
   <!-- 自動進行中 -->
   <div class="row" id="autoRow" style="display:none;">
-    <button class="btn" id="stopAutoBtn" onclick="stopAuto()">⏸ 自動進行を止める</button>
+    <button class="btn" id="stopAutoBtn" onclick="stopAuto()"><span class="icon">pause</span>自動進行を止める</button>
   </div>
   <!-- 途中停止: 続きから or 強制結論 -->
   <div class="row" id="resumeRow" style="display:none;">
-    <button class="btn primary" id="resumeBtn" onclick="resumeAuto()">▶️ 続きから進める</button>
-    <button class="btn" id="forceConcludeBtn" onclick="doForceConclude()">🏁 ここで結論を出す</button>
+    <button class="btn primary" id="resumeBtn" onclick="resumeAuto()"><span class="icon">play_arrow</span>続きから進める</button>
+    <button class="btn" id="forceConcludeBtn" onclick="doForceConclude()"><span class="icon">flag</span>ここで結論を出す</button>
   </div>
   <!-- 完了後: 結論に不満なときの再検討（次の議題は結論カード内のボタンへ） -->
   <div class="row" id="extendRow" style="display:none;">
-    <button class="btn" id="editExtendBtn" onclick="openEditExtend()">✏️ 議題編集して再検討</button>
-    <button class="btn" id="sameExtendBtn" onclick="extendSame()">🔄 そのまま再検討</button>
+    <button class="btn" id="editExtendBtn" onclick="openEditExtend()"><span class="icon">edit</span>議題編集して再検討</button>
+    <button class="btn" id="sameExtendBtn" onclick="extendSame()"><span class="icon">refresh</span>そのまま再検討</button>
   </div>
   <!-- 議題編集中（議題編集して再検討 / 次の議題 共通）— フッター内に textarea とボタン -->
   <div class="row edit-mode" id="editRow" style="display:none; flex-direction: column;">
@@ -348,7 +351,7 @@ function renderConclusion(content, ext, isLast = true) {
   }
   // 最新の結論にだけ「次の議題へ」ボタン。過去の結論は表示のみで邪魔しない
   if (isLast) {
-    html += `<button class="next-topic-btn" onclick="openNextTopic()">▶️ この結論を踏まえて次の議題へ</button>`;
+    html += `<button class="next-topic-btn" onclick="openNextTopic()"><span class="icon">arrow_forward</span>この結論を踏まえて次の議題へ</button>`;
   }
   html += `</div>`;
   return html;
@@ -662,7 +665,7 @@ function renderSession() {
       if (m.isSystemNote) {
         div.className = "msg system";
         div.innerHTML = `
-          <div class="dot" style="background:#9aa0b8">📋</div>
+          <div class="dot" style="background:#9aa0b8"><span class="icon" style="color:white;">campaign</span></div>
           <div>
             <div class="who">司会（システム）</div>
             <div class="body">${escapeHtml(m.content)}</div>
@@ -708,7 +711,7 @@ async function startKaigi() {
   renderSession();
   try {
     const r = await api("POST", `/api/kaigi/sessions/${state.sessionId}/auto`, { rounds: 3 });
-    if (r.note) errSession(`⚠️ ${r.note}`);
+    if (r.note) errSession(r.note);
     await refreshSession();
   } catch (e) {
     errSession(e.message);

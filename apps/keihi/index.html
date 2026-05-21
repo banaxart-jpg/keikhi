@@ -137,7 +137,7 @@ select.nm-field option { background: #e4e6ee; color: #42455e; }
 </head>
 <body>
 
-<div class="toast" id="toast">✅ 登録しました！</div>
+<div class="toast" id="toast">登録しました</div>
 
 <div id="signinOverlay" style="display:none;position:fixed;inset:0;z-index:400;background:var(--bg);flex-direction:column;align-items:center;justify-content:center;padding:32px;text-align:center;gap:18px;">
   <div style="font-size:24px;font-weight:800;">経費</div>
@@ -184,8 +184,8 @@ select.nm-field option { background: #e4e6ee; color: #42455e; }
   </div>
   <div class="tray-grid" id="trayGrid"></div>
   <div class="tray-actions">
-    <button class="pill-btn" id="trayAddBtn" type="button">📷 もう1枚</button>
-    <button class="submit-btn" id="traySendBtn" type="button" disabled>📤 まとめて読取</button>
+    <button class="pill-btn" id="trayAddBtn" type="button">もう1枚</button>
+    <button class="submit-btn" id="traySendBtn" type="button" disabled>まとめて読取</button>
   </div>
 </div>
 
@@ -195,7 +195,7 @@ select.nm-field option { background: #e4e6ee; color: #42455e; }
     <div class="handle"></div>
     <div class="sheet-header">
       <span class="sheet-title" id="sheetTitle">内容を確認</span>
-      <button class="retake-btn" id="retakeBtn" type="button">📷 撮り直す</button>
+      <button class="retake-btn" id="retakeBtn" type="button">撮り直す</button>
     </div>
     <div id="errBox" class="err-box"></div>
     <div class="preview-row">
@@ -402,13 +402,13 @@ function show(id) {
 let _toastTimer = null;
 function toast(msg, isErr = false) {
   const t = $("toast");
-  t.textContent = isErr ? msg + "\n\n👆 タップで全文コピー" : msg;
+  t.textContent = isErr ? msg + "\n\nタップで全文コピー" : msg;
   t.classList.toggle("err", !!isErr);
   t.style.display = "block";
   t.style.cursor = isErr ? "pointer" : "default";
   t.onclick = isErr
     ? () => navigator.clipboard?.writeText(msg).then(
-        () => { t.textContent = "📋 コピーしました"; },
+        () => { t.textContent = "コピーしました"; },
         () => {}
       )
     : null;
@@ -443,7 +443,7 @@ async function api(method, url, body) {
     const ms = Date.now() - t0;
     const aborted = e?.name === "AbortError";
     const diag = [
-      aborted ? `⏱ タイムアウト (${timeoutMs / 1000}s 超過)` : "❌ ネットワーク失敗 (fetch reject)",
+      aborted ? `タイムアウト (${timeoutMs / 1000}s 超過)` : "ネットワーク失敗 (fetch reject)",
       `${method} ${url}`,
       `API_BASE = ${API_BASE || "(空! config.js未設定の可能性)"}`,
       `実URL = ${target}`,
@@ -465,7 +465,7 @@ async function api(method, url, body) {
     let serverMsg = "";
     try { const j = JSON.parse(raw); if (j.error) serverMsg = j.error; } catch {}
     const diag = [
-      `❌ 401 認証エラー (${ms}ms)`,
+      `401 認証エラー (${ms}ms)`,
       `${method} ${url}`,
       serverMsg ? `サーバ: ${serverMsg}` : `本文: ${(raw || "(空)").slice(0, 400)}`,
       `token = ${tok ? "送信あり(" + tok.length + "B)" : "送信なし"}`,
@@ -482,7 +482,7 @@ async function api(method, url, body) {
     let serverMsg = "";
     try { const j = JSON.parse(raw); if (j.error) serverMsg = j.error; } catch {}
     const diag = [
-      `❌ HTTP ${r.status} ${r.statusText}`,
+      `HTTP ${r.status} ${r.statusText}`,
       `${method} ${url}  (${ms}ms)`,
       `実URL = ${target}`,
       serverMsg ? `サーバ: ${serverMsg}` : `本文: ${(raw || "(空)").slice(0, 400)}`,
@@ -587,7 +587,7 @@ function renderTray() {
   if (!trayItems.length) {
     const empty = document.createElement("div");
     empty.className = "tray-empty";
-    empty.textContent = "「📷 もう1枚」で撮影を追加できます";
+    empty.textContent = "「もう1枚」で撮影を追加できます";
     grid.appendChild(empty);
   } else {
     trayItems.forEach((t, i) => {
@@ -614,8 +614,8 @@ function renderTray() {
   const sendBtn = $("traySendBtn");
   sendBtn.disabled = trayItems.length === 0;
   sendBtn.textContent = trayItems.length
-    ? `📤 まとめて読取 (${trayItems.length})`
-    : "📤 まとめて読取";
+    ? `まとめて読取 (${trayItems.length})`
+    : "まとめて読取";
 }
 function showTray() { renderTray(); show("trayScreen"); }
 
@@ -723,7 +723,7 @@ function showConfirm(parsed, errMsg) {
     $("retakeBtn").textContent = "⏭ スキップ";
   } else {
     $("sheetTitle").textContent = "内容を確認";
-    $("retakeBtn").textContent = "📷 撮り直す";
+    $("retakeBtn").textContent = "撮り直す";
   }
   $("retakeBtn").style.display = "";
   $("confirmImg").style.display = "";
@@ -745,16 +745,16 @@ function showConfirm(parsed, errMsg) {
   tags.innerHTML = "";
   if (parsed.category) tags.appendChild(makeTag(parsed.category));
   if (parsed.workType && parsed.workType !== "その他") tags.appendChild(makeTag(parsed.workType, "green"));
-  if (parsed.site) tags.appendChild(makeTag(`📍${parsed.site}`));
+  if (parsed.site) tags.appendChild(makeTag(parsed.site));
 
   const eb = $("errBox");
   eb.style.display = errMsg ? "block" : "none";
   if (errMsg) {
-    const full = `⚠️ 読取エラー\n${errMsg}`;
+    const full = `読取エラー\n${errMsg}`;
     eb.textContent = full;
     const cp = document.createElement("div");
     cp.className = "err-copy";
-    cp.textContent = "📋 エラー全文をコピー";
+    cp.textContent = "エラー全文をコピー";
     cp.onclick = () => {
       navigator.clipboard?.writeText(full).then(
         () => toast("コピーしました"),
@@ -781,7 +781,7 @@ function openEdit(r) {
   scanResult = null;
   $("sheetTitle").textContent = "記録を編集";
   $("retakeBtn").style.display = "";
-  $("retakeBtn").textContent = "✕ キャンセル";
+  $("retakeBtn").textContent = "キャンセル";
   $("confirmImg").style.display = "none";
   $("fDate").value = (r.date || "").slice(0, 10);
   $("fTotal").value = r.total || "";
@@ -798,7 +798,7 @@ function openEdit(r) {
   tags.innerHTML = "";
   if (r.category) tags.appendChild(makeTag(r.category));
   if (r.workType && r.workType !== "その他") tags.appendChild(makeTag(r.workType, "green"));
-  if (r.site) tags.appendChild(makeTag(`📍${r.site}`));
+  if (r.site) tags.appendChild(makeTag(r.site));
   $("errBox").style.display = "none";
   show("confirmScreen");
 }
@@ -895,7 +895,7 @@ $("submitBtn").addEventListener("click", async () => {
       const idx = records.findIndex((x) => x.id === editingId);
       if (idx >= 0) records[idx] = { ...records[idx], ...record };
       editingId = null;
-      toast("✅ 更新しました！");
+      toast("更新しました");
       renderList();
       show("listScreen");
     } else {
@@ -903,10 +903,10 @@ $("submitBtn").addEventListener("click", async () => {
       records.unshift({ ...record, id: saved.id, createdAt: saved.created_at });
       const sheetRes = await postToSheet(record);
       const okMsg = sheetRes.skipped
-        ? "✅ 登録しました！"
+        ? "登録しました"
         : sheetRes.ok
-          ? "✅ 登録しました！📊シートにも追加"
-          : "✅ 登録（⚠️シートへの追加は失敗）";
+          ? "登録しました（シートにも追加）"
+          : "登録（シートへの追加は失敗）";
       toast(okMsg);
       if (inBulk()) { bulkIndex++; reviewNext(); }
       else showBuyer();
@@ -945,19 +945,19 @@ $("sheetToggleBtn").addEventListener("click", () => {
 $("sheetSaveBtn").addEventListener("click", () => {
   const u = $("sheetUrlInput").value.trim();
   if (u && !/^https:\/\/script\.google\.com\/.*\/exec/.test(u)) {
-    $("sheetStatusMsg").textContent = "⚠️ Apps Script の URL（…/exec で終わるやつ）を入れてください";
+    $("sheetStatusMsg").textContent = "Apps Script の URL（…/exec で終わるやつ）を入れてください";
     return;
   }
   if (u) localStorage.setItem("sheetUrl", u);
   else localStorage.removeItem("sheetUrl");
   refreshSheetState();
-  $("sheetStatusMsg").textContent = u ? "✅ 保存しました" : "🗑 クリアしました";
+  $("sheetStatusMsg").textContent = u ? "保存しました" : "クリアしました";
 });
 $("sheetClearBtn").addEventListener("click", () => {
   localStorage.removeItem("sheetUrl");
   $("sheetUrlInput").value = "";
   refreshSheetState();
-  $("sheetStatusMsg").textContent = "🗑 クリアしました";
+  $("sheetStatusMsg").textContent = "クリアしました";
 });
 $("sheetTestBtn").addEventListener("click", async () => {
   const u = $("sheetUrlInput").value.trim();
@@ -965,7 +965,7 @@ $("sheetTestBtn").addEventListener("click", async () => {
   // 入力中の URL を一時保存して送る
   const prev = getSheetUrl();
   localStorage.setItem("sheetUrl", u);
-  $("sheetStatusMsg").textContent = "📤 テスト送信中…";
+  $("sheetStatusMsg").textContent = "テスト送信中…";
   const today = new Date().toISOString().slice(0, 10);
   const res = await postToSheet({
     date: today, buyer: "テスト", site: "テスト現場", store: "テスト",
@@ -975,8 +975,8 @@ $("sheetTestBtn").addEventListener("click", async () => {
   // 元に戻す（保存ボタン押さなきゃ反映しない方針）
   if (prev) localStorage.setItem("sheetUrl", prev); else localStorage.removeItem("sheetUrl");
   refreshSheetState();
-  if (res.ok) $("sheetStatusMsg").textContent = "✅ 送信できました（スプレッドシート開いて確認してみて）";
-  else $("sheetStatusMsg").textContent = "⚠️ 送信失敗: " + (res.error || "不明");
+  if (res.ok) $("sheetStatusMsg").textContent = "送信できました（スプレッドシート開いて確認してみて）";
+  else $("sheetStatusMsg").textContent = "送信失敗: " + (res.error || "不明");
 });
 refreshSheetState();
 $("filterSite").addEventListener("change", renderList);
@@ -1046,7 +1046,7 @@ function renderList() {
     row.className = "site-manage-row";
     const name = document.createElement("span");
     name.className = "site-manage-name";
-    name.textContent = `📍 ${s.name}`;
+    name.textContent = s.name;
     const del = document.createElement("button");
     del.className = "site-del-btn";
     del.textContent = "削除";
@@ -1067,7 +1067,7 @@ function renderList() {
   const list = $("recordList");
   list.textContent = "";
   if (!filtered.length) {
-    list.innerHTML = `<div class="empty"><div class="empty-icon">💡</div><div class="empty-text">記録がありません</div></div>`;
+    list.innerHTML = `<div class="empty"><div class="empty-text">記録がありません</div></div>`;
     return;
   }
   for (const r of filtered) {
@@ -1111,14 +1111,14 @@ function makeRecordCard(r) {
 
   const meta = document.createElement("div");
   meta.className = "record-meta";
-  meta.textContent = `📍${r.site}  💳${r.payment}  👤${r.buyer || "-"}`;
+  meta.textContent = `${r.site} ・ ${r.payment} ・ ${r.buyer || "-"}`;
 
   info.append(date, amount, store, tags, meta);
 
   if (r.memo) {
     const memo = document.createElement("div");
     memo.className = "record-meta";
-    memo.textContent = `📝 ${r.memo}`;
+    memo.textContent = r.memo;
     info.appendChild(memo);
   }
 
@@ -1133,7 +1133,7 @@ function makeRecordCard(r) {
     const img = document.createElement("button");
     img.className = "del-btn";
     img.type = "button";
-    img.textContent = "🧾";
+    img.textContent = "";
     img.title = "領収書を見る";
     img.style.padding = "0";
     img.addEventListener("click", (e) => { e.stopPropagation(); viewImage(r.id); });
