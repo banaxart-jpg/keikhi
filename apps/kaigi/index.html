@@ -91,6 +91,17 @@ textarea:focus, input:focus { outline: none; }
 .note { font-size: 10px; color: var(--text3); text-align: center; margin-top: 6px; font-weight: 600; }
 .status-line { font-size: 11px; color: var(--text2); margin-top: 8px; font-weight: 600; text-align: center; }
 
+.steps { display: flex; gap: 6px; margin-top: 12px; justify-content: center; }
+.steps .step { flex: 1; max-width: 64px; padding: 6px 4px; border-radius: 10px; font-size: 10px; font-weight: 700; text-align: center; background: rgba(154,160,184,0.15); color: var(--text3); letter-spacing: 0.04em; }
+.steps .step.done { background: #d4f0d4; color: #2a8c3a; }
+.steps .step.active { background: linear-gradient(135deg, #6b7eff, #4961ff); color: white; animation: pulse 1.6s ease-in-out infinite; }
+.steps .step.completed { background: linear-gradient(135deg, #ffae5e, #ff8a5b); color: white; }
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.65; } }
+
+.next-topic-btn { margin-top: 16px; width: 100%; padding: 14px; border-radius: 14px; border: none; font-family: inherit; font-size: 14px; font-weight: 800; cursor: pointer; color: white; background: linear-gradient(135deg, #6b7eff, #4961ff); box-shadow: 4px 4px 10px var(--sd); }
+.next-topic-btn:active { transform: scale(0.98); box-shadow: inset 2px 2px 6px rgba(0,0,0,0.15); }
+.next-topic-btn:disabled { opacity: 0.5; }
+
 .err { color: var(--err); font-size: 11px; margin-top: 10px; font-weight: 600; padding: 10px 12px; border-radius: 12px; background: rgba(176, 64, 64, 0.08); white-space: pre-wrap; word-break: break-all; cursor: pointer; line-height: 1.5; max-height: 200px; overflow: auto; font-family: ui-monospace, Menlo, monospace; }
 .err:empty { display: none; padding: 0; }
 .err::before { content: "📋 タップでコピー  "; font-weight: 800; color: var(--text3); font-family: 'Outfit', sans-serif; }
@@ -144,6 +155,7 @@ textarea:focus, input:focus { outline: none; }
       <div class="label" style="margin-top: 14px;">お題</div>
       <div id="topicView" style="font-size: 14px; font-weight: 600; line-height: 1.5;"></div>
       <textarea id="topicEdit" style="display:none; margin-top: 6px;"></textarea>
+      <div class="steps" id="steps"></div>
       <div class="status-line" id="sessionStatus"></div>
     </div>
 
@@ -167,11 +179,8 @@ textarea:focus, input:focus { outline: none; }
   <div class="row" id="autoRow" style="display:none;">
     <button class="btn" id="stopAutoBtn" onclick="stopAuto()">⏸ 自動進行を止める</button>
   </div>
-  <!-- 完了後: 延長 / 次の議題 -->
+  <!-- 完了後: 結論に不満なときの再検討（次の議題は結論カード内のボタンへ） -->
   <div class="row" id="extendRow" style="display:none;">
-    <button class="btn primary" id="nextTopicBtn" onclick="openNextTopic()">▶️ 結論を踏まえて次の議題</button>
-  </div>
-  <div class="row" id="extendRow2" style="display:none;">
     <button class="btn" id="editExtendBtn" onclick="openEditExtend()">✏️ 議題編集して再検討</button>
     <button class="btn" id="sameExtendBtn" onclick="extendSame()">🔄 そのまま再検討</button>
   </div>
@@ -251,6 +260,7 @@ function renderConclusion(content, ext) {
   if (parts.unresolved && !/^無し$/i.test(parts.unresolved.trim())) {
     html += `<div class="sub-label">未解決の論点</div><div class="sub-text">${escapeHtml(parts.unresolved)}</div>`;
   }
+  html += `<button class="next-topic-btn" onclick="openNextTopic()">▶️ この結論を踏まえて次の議題へ</button>`;
   html += `</div>`;
   return html;
 }
@@ -404,9 +414,32 @@ function renderSession() {
   $("topicView").textContent = state.session.topic;
   const ext = state.session.extension_count || 0;
   const remaining = state.session.auto_rounds_remaining;
+  const speakerCount = (state.session.speakers || SPEAKERS).length;
+  const speechesCount = state.messages.filter((m) => !m.isConclusion && !m.isSystemNote).length;
+  const currentRound = Math.floor(speechesCount / speakerCount) + (speechesCount % speakerCount === 0 ? 0 : 1);
+  const completedRounds = Math.floor(speechesCount / speakerCount);
+  const hasConcl = state.messages.some((m) => m.isConclusion);
+
+  // ステップインジケーター（3R + 結論）
+  const totalRounds = 3;
+  const stepsHTML = [];
+  for (let r = 1; r <= totalRounds; r++) {
+    let cls = "step";
+    if (r <= completedRounds) cls += " done";
+    else if (r === currentRound && state.session.status === "auto") cls += " active";
+    stepsHTML.push(`<div class="${cls}">R${r}</div>`);
+  }
+  let conclCls = "step";
+  if (hasConcl) conclCls += " completed";
+  else if (state.session.status === "auto" && completedRounds >= totalRounds) conclCls += " active";
+  stepsHTML.push(`<div class="${conclCls}">結論</div>`);
+  $("steps").innerHTML = stepsHTML.join("");
+
   const statusMap = {
     active: ext > 0 ? `準備完了（延長 ${ext} 回済）` : "準備完了",
-    auto: `自動進行中（残り ${remaining}R）${ext > 0 ? ` ／延長 ${ext} 回目` : ""}`,
+    auto: completedRounds >= totalRounds
+      ? `結論を生成中…${ext > 0 ? ` ／延長 ${ext} 回目` : ""}`
+      : `自動進行中（残り ${remaining}R）${ext > 0 ? ` ／延長 ${ext} 回目` : ""}`,
     completed: ext > 0 ? `完了（延長 ${ext} 回）` : "完了",
     failed: `失敗: ${state.session.last_error || ""}`,
   };
@@ -422,7 +455,6 @@ function renderSession() {
   $("startRow").style.display = "none";
   $("autoRow").style.display = "none";
   $("extendRow").style.display = "none";
-  $("extendRow2").style.display = "none";
   $("editRow").style.display = "none";
   $("topicEdit").style.display = "none";
   $("topicView").style.display = "";
@@ -434,7 +466,6 @@ function renderSession() {
     $("autoRow").style.display = "flex";
   } else if (isCompleted) {
     $("extendRow").style.display = "flex";
-    $("extendRow2").style.display = "flex";
   } else {
     $("startRow").style.display = "flex";
   }
