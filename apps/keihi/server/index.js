@@ -349,25 +349,32 @@ function buildSpeakerPrompt({ topic, speakers, history, nextSpeaker }) {
     ? "今は最初のラウンドです。お題に対する自分の視点・前提を出してください。"
     : roundNum === 2
     ? "2ラウンド目です。他の参加者の視点と自分の視点を統合し、合意できる点とまだズレている点を整理してください。"
-    : "3ラウンド目以降です。そろそろ結論に収束させるフェーズ。具体的な実行案を提案し、他の参加者の案との折衷も検討してください。";
+    : "3ラウンド目以降です。そろそろお題への答えに収束させるフェーズ。前のラウンドで出た合意を踏まえて、お題への結論につながる発言をしてください。";
 
   const prompt = `あなたは ${meLabel} です。
-今、複数社の AI が集まって、社内の経営判断に使える結論を出すための協働検討を行っています。
+今、複数社の AI が集まって、1つのお題について議論しています。目的は最後にお題に対する明確な答えを出すことです。
 
-これはディベート（勝ち負けを決める競技）ではありません。3者で同じ目標——「お題に対する実行可能な結論」——に向かって、互いの視点を統合しながら詰めていく作業です。
+これはディベート（勝ち負けを決める競技）ではありません。3者で同じ目標——お題に対する根拠ある答え——に向かって、互いの視点を統合しながら詰めていく作業です。
 
 お題：
 「${topic}」
+
+【お題に対する答えの形】
+お題の問いに合わせて答えてください。お題から外れた一般論や、お題と無関係なマイクロアクションに脱線しないこと。
+- 未来予測（「どうなるか」「どう進化するか」）→ 時系列で根拠ある状態を提示。「3年後/10年後はこうなる」と踏み込む
+- 経営判断（「やるべきか」「投資すべきか」）→ 立場を明確にし、実行可能性とリスクまで踏み込む
+- 比較（「A と B どっち」）→ どっちを選ぶか、なぜ
+- 分析・考察（「なぜ」「どう捉えるべき」）→ 結論となる解釈を提示
 
 【現在のフェーズ】
 ${stageHint}
 
 【スタンス】
-- 直前の発言を踏まえて、議論を前進させる発言をする
+- 直前の発言を踏まえて、議論を前進させる
 - 同意できる点はそのまま同意し、足りない観点があれば補い、前提のずれがあれば整理する
 - 反論のための反論はしない。違う視点を出すときは「なぜそれが重要か」と「どう統合できるか」も添える
-- 抽象論や「ケースバイケース」「状況による」のような逃げは禁止。実行可能性まで踏み込む
-- 議論が深まってきたら、合意できる結論を能動的に提案する
+- 「ケースバイケース」「状況による」のような逃げは禁止
+- 議論が深まってきたら、お題への答えを能動的に提案する
 
 【厳格な情報原則】憶測禁止・根拠ベース
 - 「だと思います」「一般的には」「肌感覚では」「〜と言われている」のような憶測・伝聞・一般論だけで主張するのは禁止
@@ -392,15 +399,15 @@ ${log}
 }
 
 function buildConclusionPrompt({ topic, speakers, history }) {
+  const names = speakers.map((s) => s.name).join("・");
   const log = history.length
     ? history.map((h) => h.isSystemNote
         ? `（システム通知）${h.text}`
         : `${h.name}：${h.text}`).join("\n")
     : "（発言なし）";
-  const names = speakers.map((s) => s.name).join("・");
   const prompt = `あなたは、上記の議論には参加していない第三者の議事ファシリテーター AI です。
 今、Anthropic の Claude、Google の Gemini、OpenAI の GPT という3つの AI がお題について議論を交わしました。
-あなたの役割は、3者の発言を俯瞰し、彼らが何に合意し、何で意見が分かれ、最終的に経営として何を決めるべきかを、議論を読み込んで判定して提示することです。議論には自分の意見を足さず、ログに書かれていることだけを根拠に、断定的にまとめてください。
+あなたの役割は、3者の発言を俯瞰し、お題の問いに対する答えを断定的に提示することです。議論には自分の意見を足さず、ログに書かれていることだけを根拠に、お題から外れない形でまとめてください。
 
 お題：
 「${topic}」
@@ -410,13 +417,22 @@ function buildConclusionPrompt({ topic, speakers, history }) {
 議論ログ:
 ${log}
 
+【お題に対する答えの形】
+お題の性質を判定し、それに合わせた答えを出してください：
+- 未来予測（「どうなるか」「どう進化するか」）→ 「◯◯年後はこうなる」と時系列で根拠ある状態を断定
+- 経営判断（「やるべきか」「投資すべきか」「どう対応するか」）→ 「やる/やらない」を断定し実行プランまで
+- 比較（「A と B どっち」）→ どちらを選ぶか、なぜ
+- 分析・考察（「なぜ」「どう捉えるべき」）→ 結論となる解釈
+
+お題が未来予測なのに「◯週間で何をやる」のようなマイクロアクションに着地させない。お題が経営判断なのに「業界はこうなる」みたいな展望で終わらせない。**お題の問いに直接答える**こと。
+
 【出力形式】プレーンテキストで、見出しは下記の【】記号付きで厳密に区切る。マークダウン・箇条書き記号は使わない。
 
 【ひと言結論】
-50文字以内で、決定事項を1行に凝縮する。新聞の見出しのように、お題に対して何をやる/やらないかが一読でわかる形にする。必ず1文・50字以内。
+50文字以内で、お題の問いに対する答えを1行に凝縮する。新聞の見出しのように、お題を読まずとも何の答えかが分かる形にする。必ず1文・50字以内。
 
 【結論】
-500字程度で、決定事項・なぜそれが結論なのか・どう実行するか・撤退ラインを連続した文章でまとめる。読み物として完結すること。箇条書きや見出しは使わず、自然な段落で。議論ログで出た出典・数値・KPI・実行スケジュール（0〜90日 / 12カ月 等）・撤退ラインを文章中に織り込む。
+500字程度で、答え本体・なぜその答えになるのか・必要なら実行/前提条件を連続した文章でまとめる。読み物として完結すること。箇条書きや見出しは使わず、自然な段落で。議論ログで出た出典・数値・事例を文章中に織り込む。
 
 【3者の立場の違い / 未解決の論点】
 合意しきれなかった点があれば1〜2文で。完全合意なら「無し」と1単語で書く。
@@ -425,8 +441,66 @@ ${log}
 - 「ケースバイケース」「状況による」「検討が必要」のような逃げは禁止
 - 議論ログで根拠が出ていない主張は結論に含めない
 - 議論には自分の意見を足さない。ログを統合・整理するだけ
+- お題から外れた一般論で水増ししない
 - 必ず3つの【】見出しを順番通りに出力すること`;
   return { provider: "claude", prompt };
+}
+
+// ─────────────────────────────
+// 議論履歴の圧縮（コンテキスト長対策）
+// ─────────────────────────────
+// 議題（topic）は呼び出し側で必ずプロンプトに含めるので、ここでは扱わない。
+// R1 全員の発言（議論の枠組み・前提を立てる重要部分）は無圧縮で保持し、
+// 中間ラウンドだけを要約に置換する。直近2ラウンドも生で残す。
+async function maybeCompressHistory(history, speakerCount, topic) {
+  const KEEP_FIRST = speakerCount;       // R1 全員
+  const KEEP_RECENT = speakerCount * 2;  // 直近2ラウンド
+  if (history.length <= KEEP_FIRST + KEEP_RECENT + 1) return history;
+
+  const head = history.slice(0, KEEP_FIRST);
+  const middle = history.slice(KEEP_FIRST, history.length - KEEP_RECENT);
+  const tail = history.slice(history.length - KEEP_RECENT);
+  if (!middle.length) return history;
+
+  const middleText = middle.map((h) => h.isSystemNote
+    ? `（システム通知）${h.text}`
+    : `${h.name}：${h.text}`).join("\n");
+
+  const prompt = `以下はあるお題についての議論の中盤部分です。これを 400〜600 字で要約してください。
+お題：「${topic}」
+
+要約の要件:
+- 各参加者がどの立場を取ったか、どんな根拠・出典・数値を出したかを保持
+- 合意した点と意見が分かれた点を明示
+- お題に直接関係しない雑談的な部分は削る
+- 箇条書きや見出しは使わず、連続した文章で
+- 「議論ログから読み取れる事実」だけを書く。要約者の意見は足さない
+
+中盤の発言:
+${middleText}
+
+要約:`;
+
+  try {
+    const { result } = await callGeminiWithFallback(prompt, {
+      primaryModel: "gemini-2.5-flash",
+      maxOutputTokens: 1500,
+    });
+    const summary = result.response.text().trim();
+    return [
+      ...head,
+      {
+        name: "司会",
+        text: `[これまでの中盤議論の要約] ${summary}`,
+        isSystemNote: true,
+      },
+      ...tail,
+    ];
+  } catch (e) {
+    console.warn("[maybeCompressHistory] failed, falling back to truncation:", e.message);
+    // 失敗時は単純に古い中盤を捨てる（落ちるよりまし）
+    return [...head, ...tail];
+  }
 }
 
 // 既存 /api/debate（互換維持。フロントは新 /api/kaigi/* に移行する）
@@ -508,11 +582,13 @@ async function advanceSession(sessionId, userEmail) {
        FROM kaigi_messages WHERE session_id=$1 AND NOT is_conclusion ORDER BY seq ASC`,
     [sessionId]
   );
-  const history = msgRows.map((m) => ({ name: m.speaker, text: m.content, isSystemNote: m.isSystemNote }));
+  const rawHistory = msgRows.map((m) => ({ name: m.speaker, text: m.content, isSystemNote: m.isSystemNote }));
   // 次の speaker は「speech 数 % 3」で決める（system note は除外して順番計算）
-  const speechCount = history.filter((h) => !h.isSystemNote).length;
+  const speechCount = rawHistory.filter((h) => !h.isSystemNote).length;
   const nextSeq = msgRows.length;
   const nextSpeakerObj = speakers[speechCount % speakers.length];
+  // 長い議論はコンテキスト圧縮（R1 全員＋直近2R は残し、中盤を要約）
+  const history = await maybeCompressHistory(rawHistory, speakers.length, session.topic);
   const { provider, prompt, roundNum } = buildSpeakerPrompt({
     topic: session.topic,
     speakers,
@@ -549,7 +625,9 @@ async function concludeSession(sessionId, userEmail) {
   );
   const speeches = msgRows.filter((m) => !m.isSystemNote);
   if (!speeches.length) throw Object.assign(new Error("発言が無いと結論は出せません"), { status: 400 });
-  const history = msgRows.map((m) => ({ name: m.speaker, text: m.content, isSystemNote: m.isSystemNote }));
+  const rawHistory = msgRows.map((m) => ({ name: m.speaker, text: m.content, isSystemNote: m.isSystemNote }));
+  // 結論生成時もコンテキスト圧縮（議論が長くなるとファシリテーターが落ちるため）
+  const history = await maybeCompressHistory(rawHistory, session.speakers.length, session.topic);
   const { provider, prompt } = buildConclusionPrompt({
     topic: session.topic,
     speakers: session.speakers,
