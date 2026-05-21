@@ -79,6 +79,16 @@ select.nm-field { background: var(--bg2) url("data:image/svg+xml,%3Csvg xmlns='h
 
 .err-box { border-radius: 16px; padding: 12px 15px; font-size: 11px; color: #b04040; margin-bottom: 12px; line-height: 1.5; display: none; font-weight: 600; background: var(--bg); box-shadow: inset 4px 4px 10px rgba(180,140,140,0.4), inset -4px -4px 10px rgba(255,255,255,0.85); white-space: pre-wrap; word-break: break-all; font-family: ui-monospace, Menlo, monospace; }
 
+.site-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; }
+.site-btn { padding: 10px 4px; border-radius: 14px; font-size: 12px; font-weight: 600; color: var(--text2); cursor: pointer; border: none; text-align: center; font-family: 'Outfit', sans-serif; background: var(--bg); position: relative; overflow: hidden; box-shadow: 4px 4px 11px var(--sd), -4px -4px 11px var(--sl), 2px 2px 4px var(--sd2); transition: box-shadow 0.18s, transform 0.14s, color 0.22s; white-space: nowrap; text-overflow: ellipsis; min-width: 0; }
+.site-btn.selected { box-shadow: inset 4px 4px 10px var(--sd), inset -4px -4px 10px var(--sl), inset 2px 2px 4px var(--sd2); transform: scale(0.975); color: var(--bulb2); text-shadow: 0 0 10px var(--bulb-glow), 0 0 22px var(--bulb-glow2); }
+.site-add-btn { padding: 10px 4px; border-radius: 14px; font-size: 12px; font-weight: 800; color: var(--bulb2); cursor: pointer; background: var(--bg); border: none; font-family: 'Outfit', sans-serif; box-shadow: 4px 4px 11px var(--sd), -4px -4px 11px var(--sl), 2px 2px 4px var(--sd2); text-shadow: 0 0 8px var(--bulb-glow2); transition: all 0.12s; }
+.site-add-btn:active { box-shadow: inset 3px 3px 8px var(--sd), inset -3px -3px 8px var(--sl); transform: scale(0.97); }
+
+.acc-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.acc-grid .field { margin-bottom: 0; }
+.acc-grid .field.full { grid-column: 1 / -1; }
+
 /* 一覧 */
 #listScreen { position: fixed; inset: 0; display: none; flex-direction: column; overflow-y: auto; background: var(--bg); }
 .list-header { display: flex; align-items: center; justify-content: space-between; padding: 56px 20px 18px; position: sticky; top: 0; background: var(--bg); box-shadow: 0 6px 20px rgba(148,152,176,0.18); z-index: 5; }
@@ -158,8 +168,8 @@ select.nm-field { background: var(--bg2) url("data:image/svg+xml,%3Csvg xmlns='h
   </div>
   <p class="hint-text">向きを選ぶ</p>
   <div class="dir-row">
-    <button class="dir-btn" data-dir="in" type="button">📥 来た<span class="lab">払う</span></button>
-    <button class="dir-btn" data-dir="out" type="button">📤 送った<span class="lab">もらう</span></button>
+    <button class="dir-btn" data-dir="in" type="button">📥 支払<span class="lab">払うやつ</span></button>
+    <button class="dir-btn" data-dir="out" type="button">📤 受取<span class="lab">もらうやつ</span></button>
   </div>
   <p class="hint-text" id="srcHint" style="display:none;">読み込み方法</p>
   <div class="src-row" id="srcRow" style="display:none;">
@@ -216,6 +226,28 @@ select.nm-field { background: var(--bg2) url("data:image/svg+xml,%3Csvg xmlns='h
         <textarea id="fMemo" class="nm-field" placeholder="（任意）使用期間・件名・摘要 等" rows="2"></textarea>
       </div>
     </div>
+    <div class="card">
+      <div class="card-title">現場</div>
+      <div class="site-grid" id="siteGrid"></div>
+      <div id="newSiteField" style="display:none;margin-top:10px;">
+        <input type="text" id="fNewSite" class="nm-field" placeholder="新しい現場名を入力">
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-title">振込先口座</div>
+      <div class="acc-grid">
+        <div class="field"><label>銀行</label><input type="text" id="fAccBank" class="nm-field" placeholder="〇〇銀行"></div>
+        <div class="field"><label>支店</label><input type="text" id="fAccBranch" class="nm-field" placeholder="〇〇支店"></div>
+        <div class="field"><label>種別</label>
+          <select id="fAccType" class="nm-field">
+            <option value="">未選択</option>
+            <option>普通</option><option>当座</option><option>貯蓄</option><option>振替</option>
+          </select>
+        </div>
+        <div class="field"><label>口座番号</label><input type="text" id="fAccNumber" class="nm-field" placeholder="1234567" inputmode="numeric"></div>
+        <div class="field full"><label>口座名義</label><input type="text" id="fAccHolder" class="nm-field" placeholder="例：ヤマダ タロウ / 山田太郎"></div>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -234,14 +266,14 @@ select.nm-field { background: var(--bg2) url("data:image/svg+xml,%3Csvg xmlns='h
       <div class="summary-count" id="summaryCount">0件</div>
     </div>
     <div class="tab-group">
-      <div class="tab-group-title">📥 来た（払う）</div>
+      <div class="tab-group-title">📥 支払（払うやつ）</div>
       <div class="tabs">
         <button class="tab active" data-dir="in" data-status="unpaid" type="button">未払い <span id="cntInUnpaid">0</span></button>
         <button class="tab paid-tab" data-dir="in" data-status="paid" type="button">支払済 <span id="cntInPaid">0</span></button>
       </div>
     </div>
     <div class="tab-group">
-      <div class="tab-group-title">📤 送った（もらう）</div>
+      <div class="tab-group-title">📤 受取（もらうやつ）</div>
       <div class="tabs">
         <button class="tab" data-dir="out" data-status="unpaid" type="button">未入金 <span id="cntOutUnpaid">0</span></button>
         <button class="tab paid-tab" data-dir="out" data-status="paid" type="button">入金済 <span id="cntOutPaid">0</span></button>
@@ -324,21 +356,23 @@ window.doSignOut = async () => { if (fbAuth) await signOut(fbAuth); location.rel
 
 // ───────── State ─────────
 const STORAGE_KEY = "seikyu_records";
-let bills = []; // {id, direction:"in"|"out", issuer, total, dueDate, issueDate, category, memo, status, paidAt, imageUrl, thumb, mimeType}
+let bills = []; // {id, direction, issuer, total, dueDate, issueDate, category, site, account:{bank,branch,type,number,holder}, memo, status, paidAt, imageUrl, thumb, mimeType}
+let sites = []; // 経費アプリと共有の現場リスト [{id,name}]
+let selectedSite = "";    // 確認シートで選択中の現場
 let tabDir = "in";        // "in" | "out"
 let tabStatus = "unpaid"; // "unpaid" | "paid"
 let currentDirection = ""; // メイン画面で選択中の方向 (in/out)
-let currentImgUrl = "";   // blob: スキャン中のプレビュー用
-let currentThumb = "";    // base64 サムネ (画像のみ。PDF は空)
-let currentImageUrl = ""; // GCS imageUrl
+let currentImgUrl = "";
+let currentThumb = "";
+let currentImageUrl = "";
 let currentMimeType = "image/jpeg";
 let editingId = null;
-let editingDirection = "in"; // 編集中レコードの direction（保存時に維持）
+let editingDirection = "in";
 
 // direction ごとの文言
 const LABELS = {
-  in:  { tab1: "未払い", tab2: "支払済", state1: "支払期限", state2: "支払日",     emoji: "📥", noun: "請求書（来た）" },
-  out: { tab1: "未入金", tab2: "入金済", state1: "入金予定日", state2: "入金日",   emoji: "📤", noun: "請求書（送った）" },
+  in:  { name: "支払", tab1: "未払い", tab2: "支払済", state1: "支払期限", state2: "支払日",   emoji: "📥", noun: "支払請求書" },
+  out: { name: "受取", tab1: "未入金", tab2: "入金済", state1: "入金予定日", state2: "入金日", emoji: "📤", noun: "受取請求書" },
 };
 
 const $ = (id) => document.getElementById(id);
@@ -517,6 +551,17 @@ function showConfirm(parsed, errMsg) {
   $("fIssueDate").value = parsed.issueDate || today;
   $("fCat").value = parsed.category || (editingDirection === "out" ? "工事代金" : "光熱費");
   $("fMemo").value = parsed.memo || "";
+  // 現場: AI が拾った値があり既存リストに存在すれば選択、なければ「なし」
+  selectedSite = (parsed.site && sites.some((s) => s.name === parsed.site)) ? parsed.site : "";
+  renderSiteGrid();
+  $("fNewSite").value = "";
+  // 振込先口座
+  const acc = parsed.account || {};
+  $("fAccBank").value = acc.bank || "";
+  $("fAccBranch").value = acc.branch || "";
+  $("fAccType").value = ["普通","当座","貯蓄","振替"].includes(acc.type) ? acc.type : "";
+  $("fAccNumber").value = acc.number || "";
+  $("fAccHolder").value = acc.holder || "";
   updatePreview();
   const eb = $("errBox");
   eb.style.display = errMsg ? "block" : "none";
@@ -538,10 +583,53 @@ function openEdit(b) {
   $("fIssueDate").value = b.issueDate || "";
   $("fCat").value = b.category || "光熱費";
   $("fMemo").value = b.memo || "";
+  selectedSite = b.site || "";
+  renderSiteGrid();
+  $("fNewSite").value = "";
+  const acc = b.account || {};
+  $("fAccBank").value = acc.bank || "";
+  $("fAccBranch").value = acc.branch || "";
+  $("fAccType").value = ["普通","当座","貯蓄","振替"].includes(acc.type) ? acc.type : "";
+  $("fAccNumber").value = acc.number || "";
+  $("fAccHolder").value = acc.holder || "";
   currentImgUrl = ""; currentThumb = b.thumb || ""; currentImageUrl = b.imageUrl || ""; currentMimeType = b.mimeType || "image/jpeg";
   updatePreview();
   $("errBox").style.display = "none";
   show("confirmScreen");
+}
+
+// ───────── Site grid (経費アプリと現場リスト共有) ─────────
+function renderSiteGrid() {
+  const grid = $("siteGrid");
+  grid.textContent = "";
+  // 「現場なし」を最初に
+  const none = document.createElement("button");
+  none.type = "button";
+  none.className = "site-btn" + (selectedSite === "" ? " selected" : "");
+  none.textContent = "現場なし";
+  none.addEventListener("click", () => { selectedSite = ""; renderSiteGrid(); });
+  grid.appendChild(none);
+  for (const s of sites) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "site-btn" + (selectedSite === s.name ? " selected" : "");
+    btn.textContent = s.name;
+    btn.addEventListener("click", () => { selectedSite = s.name; renderSiteGrid(); });
+    grid.appendChild(btn);
+  }
+  const add = document.createElement("button");
+  add.type = "button";
+  add.className = "site-add-btn";
+  add.textContent = "＋ 追加";
+  add.addEventListener("click", () => {
+    $("newSiteField").style.display = "block";
+    $("fNewSite").focus();
+  });
+  grid.appendChild(add);
+}
+async function loadSites() {
+  try { sites = await api("GET", "/api/sites"); }
+  catch (e) { sites = []; console.warn("sites load failed", e); }
 }
 
 function updatePreview() {
@@ -569,6 +657,19 @@ $("submitBtn").addEventListener("click", async () => {
   try {
     const total = Number($("fTotal").value) || 0;
     if (!total) { toast("金額を入れてください", true); return; }
+    // 新規現場を入力していたら経費アプリと共有の DB に登録
+    let site = selectedSite;
+    const newSiteName = $("fNewSite").value.trim();
+    if (!site && newSiteName) {
+      try {
+        const created = await api("POST", "/api/sites", { name: newSiteName });
+        sites.push(created);
+        site = created.name;
+      } catch (e) {
+        console.warn("site create failed", e);
+        site = newSiteName; // ローカルでは保存する
+      }
+    }
     const rec = {
       direction: editingDirection,
       issuer: $("fIssuer").value.trim(),
@@ -576,6 +677,14 @@ $("submitBtn").addEventListener("click", async () => {
       dueDate: $("fDueDate").value || "",
       issueDate: $("fIssueDate").value || new Date().toISOString().slice(0, 10),
       category: $("fCat").value,
+      site: site || "",
+      account: {
+        bank: $("fAccBank").value.trim(),
+        branch: $("fAccBranch").value.trim(),
+        type: $("fAccType").value || "",
+        number: $("fAccNumber").value.replace(/[\s\-]/g, ""),
+        holder: $("fAccHolder").value.trim(),
+      },
       memo: $("fMemo").value,
     };
     if (editingId != null) {
@@ -732,6 +841,18 @@ function makeBillCard(b) {
     const c = document.createElement("span"); c.className = "bill-cat"; c.textContent = b.category;
     meta.appendChild(c);
   }
+  if (b.site) {
+    const sp = document.createElement("span"); sp.textContent = `📍 ${b.site}`;
+    meta.appendChild(sp);
+  }
+  const acc = b.account || {};
+  if (acc.bank || acc.number) {
+    const sp = document.createElement("span");
+    sp.style.cssText = "font-family:ui-monospace,Menlo,monospace;letter-spacing:-0.2px;";
+    const parts = [acc.bank, acc.branch, acc.type, acc.number].filter(Boolean);
+    sp.textContent = `🏦 ${parts.join(" ")}`;
+    meta.appendChild(sp);
+  }
   if (b.dueDate) {
     const today = new Date().toISOString().slice(0, 10);
     const diffDays = Math.floor((new Date(b.dueDate) - new Date(today)) / 86400000);
@@ -852,14 +973,16 @@ $("sheetTestBtn").addEventListener("click", async () => {
 // ───────── CSV ─────────
 function csvCell(v) { const s = String(v ?? ""); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; }
 function downloadCSV() {
-  const header = ["向き", "発行日", "発行元/請求先", "金額", "期限", "分類", "状態", "完了日", "メモ"].map(csvCell).join(",");
+  const header = ["向き", "発行日", "発行元/請求先", "金額", "期限", "分類", "現場", "状態", "完了日", "銀行", "支店", "種別", "口座番号", "名義", "メモ"].map(csvCell).join(",");
   const rows = bills.map((b) => {
     const d = dirOf(b);
-    const dirLbl = d === "out" ? "送った（もらう）" : "来た（払う）";
+    const dirLbl = d === "out" ? "受取" : "支払";
     const statusLbl = b.status === "paid"
       ? (d === "out" ? "入金済" : "支払済")
       : (d === "out" ? "未入金" : "未払い");
-    return [dirLbl, b.issueDate, b.issuer, b.total, b.dueDate, b.category, statusLbl, b.paidAt || "", b.memo].map(csvCell).join(",");
+    const acc = b.account || {};
+    return [dirLbl, b.issueDate, b.issuer, b.total, b.dueDate, b.category, b.site || "", statusLbl, b.paidAt || "",
+            acc.bank || "", acc.branch || "", acc.type || "", acc.number || "", acc.holder || "", b.memo].map(csvCell).join(",");
   });
   const blob = new Blob(["﻿" + [header, ...rows].join("\n")], { type: "text/csv" });
   const a = document.createElement("a");
@@ -880,6 +1003,8 @@ function boot() {
   loadBills();
   refreshSheetState();
   showMain();
+  // 経費アプリと共有の現場リストは非同期で取得（取れなくても起動はする）
+  loadSites();
 }
 </script>
 </body>
