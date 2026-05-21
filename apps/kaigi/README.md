@@ -55,13 +55,20 @@ Gemini / Claude / GPT の3つの AI で経営判断のお題を**協働検討**�
 | POST   | `/api/internal/kaigi/tick`      | 内部用 Cloud Tasks コールバック（x-tick-secret 認証） |
 
 ## モデル / web 検索
+
+**議論ラウンド (R1〜R3):**
 | AI | モデル | max_tokens | web 検索 |
 |---|---|---|---|
 | Gemini | `gemini-2.5-pro` | 2000 | `googleSearch` tool |
 | Claude | `claude-opus-4-7` | 2000 | `web_search_20250305` (max_uses=3) |
 | GPT    | `gpt-5` (Responses API) | 8000 | `web_search` (effort=medium、web無し時は minimal) |
 
-各発言 300〜600字、結論は 600〜900字構造化（結論/根拠/立場の違い/注意点）。
+**結論生成（議事ファシリテーター）:**
+- `claude-opus-4-7` を使用。プロンプトで「議論には参加していない第三者の議事ファシリテーター」と役割を明示し、議論中の Claude とは別人格として 3 者の発言を俯瞰してまとめる
+- web 検索 OFF（議論ログだけが根拠）
+- 出力: 【決定事項】【根拠】【実行プラン】【KPI】【撤退ライン】【3者の立場の違いと未解決の論点】の6セクション構造化、800〜1200字
+
+各発言 300〜600字。「ケースバイケース」「状況による」のような逃げは禁止。
 
 ## DB スキーマ
 `apps/keihi/infra/schema.sql` に追加（冪等）。
