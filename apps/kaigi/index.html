@@ -23,6 +23,13 @@ body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); 
 .fixed-footer .row { display: flex; gap: 10px; }
 .fixed-footer .row .btn { flex: 1; }
 .fixed-footer .btn.tiny { padding: 8px; font-size: 11px; }
+.fixed-footer .edit-mode { padding: 6px 4px 4px; }
+.fixed-footer .edit-label { font-size: 10px; font-weight: 700; letter-spacing: 0.12em; color: var(--text3); text-transform: uppercase; margin-bottom: 4px; }
+.fixed-footer .edit-mode textarea { width: 100%; min-height: 100px; max-height: 220px; padding: 12px 14px; border-radius: 14px; border: none; background: var(--bg); box-shadow: inset 3px 3px 8px var(--sd), inset -3px -3px 8px var(--sl); font-family: 'Outfit', -apple-system, sans-serif; font-size: 14px; line-height: 1.5; resize: vertical; color: var(--text); }
+.fixed-footer .edit-mode textarea:focus { outline: none; box-shadow: inset 3px 3px 8px var(--sd), inset -3px -3px 8px var(--sl), 0 0 0 2px rgba(73,97,255,0.3); }
+.fixed-footer .edit-mode .edit-buttons { display: flex; gap: 10px; }
+.fixed-footer .edit-mode .edit-buttons .btn { flex: 1; }
+body.editing { padding-bottom: 360px; }
 .bar { display: flex; justify-content: space-between; align-items: center; padding: 40px 20px 0; }
 .hint { font-size: 11px; letter-spacing: 0.22em; color: var(--text3); font-weight: 700; text-transform: uppercase; }
 .pill { padding: 8px 16px; border-radius: 24px; font-size: 12px; font-weight: 700; border: none; color: var(--text2); background: var(--bg); box-shadow: 4px 4px 10px var(--sd), -4px -4px 10px var(--sl); cursor: pointer; font-family: inherit; }
@@ -161,7 +168,6 @@ textarea:focus, input:focus { outline: none; }
       </div>
       <div class="label" style="margin-top: 14px;">お題</div>
       <div id="topicView" style="font-size: 14px; font-weight: 600; line-height: 1.5;"></div>
-      <textarea id="topicEdit" style="display:none; margin-top: 6px;"></textarea>
       <div class="steps" id="steps"></div>
       <div class="status-line" id="sessionStatus"></div>
     </div>
@@ -196,10 +202,14 @@ textarea:focus, input:focus { outline: none; }
     <button class="btn" id="editExtendBtn" onclick="openEditExtend()">✏️ 議題編集して再検討</button>
     <button class="btn" id="sameExtendBtn" onclick="extendSame()">🔄 そのまま再検討</button>
   </div>
-  <!-- 議題編集中（議題編集して再検討 / 次の議題 共通） -->
-  <div class="row" id="editRow" style="display:none;">
-    <button class="btn primary" id="confirmEditBtn" onclick="confirmEdit()">この議題で+3R</button>
-    <button class="btn" onclick="cancelEdit()">キャンセル</button>
+  <!-- 議題編集中（議題編集して再検討 / 次の議題 共通）— フッター内に textarea とボタン -->
+  <div class="row edit-mode" id="editRow" style="display:none; flex-direction: column;">
+    <div class="edit-label" id="editLabel"></div>
+    <textarea id="topicEditInline" placeholder=""></textarea>
+    <div class="edit-buttons">
+      <button class="btn primary" id="confirmEditBtn" onclick="confirmEdit()">この議題で+3R</button>
+      <button class="btn" onclick="cancelEdit()">キャンセル</button>
+    </div>
   </div>
   <!-- 共通: リセット -->
   <div class="row">
@@ -594,12 +604,8 @@ function renderSession() {
   $("resumeRow").style.display = "none";
   $("extendRow").style.display = "none";
   $("editRow").style.display = "none";
-  $("topicEdit").style.display = "none";
-  $("topicView").style.display = "";
   if (state.editing) {
     $("editRow").style.display = "flex";
-    $("topicEdit").style.display = "";
-    $("topicView").style.display = "none";
   } else if (isAuto) {
     $("autoRow").style.display = "flex";
   } else if (isCompleted) {
@@ -712,46 +718,57 @@ async function extendSame() {
 }
 window.extendSame = extendSame;
 
-// 議題編集モード開始（再検討 / 次の議題 共通）
+// 議題編集モード開始（再検討 / 次の議題 共通）— 下部フッター内の textarea を使う
 function openEditExtend() {
   if (!state.session) return;
   state.editing = true;
-  state.editMode = "redo";  // 結論に納得いかない再検討
-  $("topicEdit").value = state.session.topic;
+  state.editMode = "redo";
+  $("topicEditInline").value = state.session.topic;
+  $("topicEditInline").setAttribute("placeholder", "議題を編集してください");
+  $("editLabel").textContent = "議題を編集して再検討";
+  document.body.classList.add("editing");
   renderSession();
-  setTimeout(() => $("topicEdit").focus(), 50);
+  setTimeout(() => {
+    $("topicEditInline").focus();
+    $("topicEditInline").scrollIntoView({ behavior: "smooth", block: "center" });
+  }, 50);
 }
 window.openEditExtend = openEditExtend;
 
 function openNextTopic() {
   if (!state.session) return;
   state.editing = true;
-  state.editMode = "next";  // 結論を踏まえて次の議題
-  $("topicEdit").value = "";  // 新議題なので空欄スタート
-  $("topicEdit").setAttribute("placeholder", "例: それを踏まえて、具体的に何から始めるべきか？");
+  state.editMode = "next";
+  $("topicEditInline").value = "";
+  $("topicEditInline").setAttribute("placeholder", "例: それを踏まえて、具体的に何から始めるべきか？");
+  $("editLabel").textContent = "次の議題を入力";
+  document.body.classList.add("editing");
   renderSession();
-  setTimeout(() => $("topicEdit").focus(), 50);
+  setTimeout(() => {
+    $("topicEditInline").focus();
+    $("topicEditInline").scrollIntoView({ behavior: "smooth", block: "center" });
+  }, 50);
 }
 window.openNextTopic = openNextTopic;
 
 function cancelEdit() {
   state.editing = false;
   state.editMode = null;
-  $("topicEdit").removeAttribute("placeholder");
+  document.body.classList.remove("editing");
   renderSession();
 }
 window.cancelEdit = cancelEdit;
 
 async function confirmEdit() {
   if (state.busy || !state.sessionId) return;
-  const newTopic = $("topicEdit").value.trim();
+  const newTopic = $("topicEditInline").value.trim();
   if (!newTopic) { errSession("議題を入れてください"); return; }
   errSession("");
   state.busy = true;
   state.editing = false;
   const mode = state.editMode;
   state.editMode = null;
-  $("topicEdit").removeAttribute("placeholder");
+  document.body.classList.remove("editing");
   renderSession();
   try {
     const endpoint = mode === "next" ? "next-topic" : "extend";
