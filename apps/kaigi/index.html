@@ -68,9 +68,12 @@ textarea:focus, input:focus { outline: none; }
 
 .msg.system .body { background: rgba(154,160,184,0.12); color: var(--text2); font-size: 12.5px; line-height: 1.6; }
 .msg.system .who { color: var(--text3); }
-.summary-card { margin-top: 16px; padding: 16px; border-radius: 18px; background: linear-gradient(135deg, #fff4e0, #ffe7d0); box-shadow: 6px 6px 14px var(--sd), -4px -4px 12px var(--sl); white-space: pre-wrap; word-break: break-word; }
+.summary-card { margin-top: 16px; padding: 20px 18px; border-radius: 18px; background: linear-gradient(135deg, #fff4e0, #ffe7d0); box-shadow: 6px 6px 14px var(--sd), -4px -4px 12px var(--sl); word-break: break-word; }
 .summary-card .label { color: #a86a2b; }
-.summary-card .text { font-size: 13.5px; line-height: 1.7; color: #5a3a1a; white-space: pre-wrap; }
+.summary-card .headline { font-size: 17px; font-weight: 800; color: #4a2e0a; line-height: 1.4; margin: 4px 0 14px; padding-bottom: 12px; border-bottom: 1px solid rgba(168, 106, 43, 0.25); }
+.summary-card .detail { font-size: 13.5px; line-height: 1.85; color: #5a3a1a; white-space: pre-wrap; }
+.summary-card .sub-label { font-size: 10px; font-weight: 700; letter-spacing: 0.14em; color: #a86a2b; margin: 14px 0 6px; text-transform: uppercase; }
+.summary-card .sub-text { font-size: 12px; line-height: 1.6; color: #6a4520; white-space: pre-wrap; }
 
 .session-row { display: flex; justify-content: space-between; align-items: center; padding: 14px 12px; border-radius: 14px; cursor: pointer; background: var(--bg); box-shadow: 4px 4px 10px var(--sd), -3px -3px 10px var(--sl); margin-bottom: 10px; }
 .session-row:active { box-shadow: inset 3px 3px 8px var(--sd), inset -3px -3px 8px var(--sl); transform: scale(0.99); }
@@ -207,6 +210,45 @@ const errSession = (m) => { $("sessionErr").textContent = m || ""; };
 const escapeHtml = (s) => String(s).replace(/[&<>"']/g, (c) => ({
   "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
 }[c]));
+
+// 結論テキストを【ひと言結論】【結論】【3者の立場の違い / 未解決の論点】に分解
+function parseConclusion(raw) {
+  const text = String(raw || "");
+  const headers = [
+    { key: "headline",   pattern: /【ひと言結論】/ },
+    { key: "detail",     pattern: /【結論】/ },
+    { key: "unresolved", pattern: /【3者の立場の違い[^】]*】/ },
+  ];
+  const indices = headers.map((h) => {
+    const m = h.pattern.exec(text);
+    return m ? { ...h, start: m.index, headerEnd: m.index + m[0].length } : null;
+  }).filter(Boolean).sort((a, b) => a.start - b.start);
+  const out = { headline: "", detail: "", unresolved: "" };
+  for (let i = 0; i < indices.length; i++) {
+    const cur = indices[i];
+    const next = indices[i + 1];
+    out[cur.key] = text.slice(cur.headerEnd, next ? next.start : text.length).trim();
+  }
+  if (!out.headline && !out.detail) out.detail = text;
+  return out;
+}
+
+function renderConclusion(content, ext) {
+  const parts = parseConclusion(content);
+  const extLabel = ext > 0 ? `（延長 ${ext} 回後）` : "";
+  let html = `<div class="summary-card"><div class="label">結論${extLabel}</div>`;
+  if (parts.headline) {
+    html += `<div class="headline">${escapeHtml(parts.headline)}</div>`;
+  }
+  if (parts.detail) {
+    html += `<div class="detail">${escapeHtml(parts.detail)}</div>`;
+  }
+  if (parts.unresolved && !/^無し$/i.test(parts.unresolved.trim())) {
+    html += `<div class="sub-label">未解決の論点</div><div class="sub-text">${escapeHtml(parts.unresolved)}</div>`;
+  }
+  html += `</div>`;
+  return html;
+}
 
 const fmtDate = (s) => {
   if (!s) return "";
@@ -430,7 +472,7 @@ function renderSession() {
 
   // 結論
   if (concl) {
-    $("conclusionWrap").innerHTML = `<div class="summary-card"><div class="label">結論${ext > 0 ? `（延長 ${ext} 回後）` : ""}</div><div class="text">${escapeHtml(concl.content)}</div></div>`;
+    $("conclusionWrap").innerHTML = renderConclusion(concl.content, ext);
   } else {
     $("conclusionWrap").innerHTML = "";
   }
