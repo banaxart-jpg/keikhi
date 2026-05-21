@@ -167,14 +167,17 @@ textarea:focus, input:focus { outline: none; }
   <div class="row" id="autoRow" style="display:none;">
     <button class="btn" id="stopAutoBtn" onclick="stopAuto()">⏸ 自動進行を止める</button>
   </div>
-  <!-- 完了後: 延長 -->
+  <!-- 完了後: 延長 / 次の議題 -->
   <div class="row" id="extendRow" style="display:none;">
-    <button class="btn primary" id="editExtendBtn" onclick="openEditExtend()">✏️ 議題編集して+3R</button>
-    <button class="btn" id="sameExtendBtn" onclick="extendSame()">🔄 そのまま+3R</button>
+    <button class="btn primary" id="nextTopicBtn" onclick="openNextTopic()">▶️ 結論を踏まえて次の議題</button>
   </div>
-  <!-- 議題編集中 -->
+  <div class="row" id="extendRow2" style="display:none;">
+    <button class="btn" id="editExtendBtn" onclick="openEditExtend()">✏️ 議題編集して再検討</button>
+    <button class="btn" id="sameExtendBtn" onclick="extendSame()">🔄 そのまま再検討</button>
+  </div>
+  <!-- 議題編集中（議題編集して再検討 / 次の議題 共通） -->
   <div class="row" id="editRow" style="display:none;">
-    <button class="btn primary" id="confirmEditBtn" onclick="confirmEditExtend()">この議題で+3R</button>
+    <button class="btn primary" id="confirmEditBtn" onclick="confirmEdit()">この議題で+3R</button>
     <button class="btn" onclick="cancelEdit()">キャンセル</button>
   </div>
   <!-- 共通: リセット -->
@@ -419,6 +422,7 @@ function renderSession() {
   $("startRow").style.display = "none";
   $("autoRow").style.display = "none";
   $("extendRow").style.display = "none";
+  $("extendRow2").style.display = "none";
   $("editRow").style.display = "none";
   $("topicEdit").style.display = "none";
   $("topicView").style.display = "";
@@ -430,6 +434,7 @@ function renderSession() {
     $("autoRow").style.display = "flex";
   } else if (isCompleted) {
     $("extendRow").style.display = "flex";
+    $("extendRow2").style.display = "flex";
   } else {
     $("startRow").style.display = "flex";
   }
@@ -531,32 +536,50 @@ async function extendSame() {
 }
 window.extendSame = extendSame;
 
-// 延長: 議題編集モード開始
+// 議題編集モード開始（再検討 / 次の議題 共通）
 function openEditExtend() {
   if (!state.session) return;
   state.editing = true;
+  state.editMode = "redo";  // 結論に納得いかない再検討
   $("topicEdit").value = state.session.topic;
   renderSession();
   setTimeout(() => $("topicEdit").focus(), 50);
 }
 window.openEditExtend = openEditExtend;
 
+function openNextTopic() {
+  if (!state.session) return;
+  state.editing = true;
+  state.editMode = "next";  // 結論を踏まえて次の議題
+  $("topicEdit").value = "";  // 新議題なので空欄スタート
+  $("topicEdit").setAttribute("placeholder", "例: それを踏まえて、具体的に何から始めるべきか？");
+  renderSession();
+  setTimeout(() => $("topicEdit").focus(), 50);
+}
+window.openNextTopic = openNextTopic;
+
 function cancelEdit() {
   state.editing = false;
+  state.editMode = null;
+  $("topicEdit").removeAttribute("placeholder");
   renderSession();
 }
 window.cancelEdit = cancelEdit;
 
-async function confirmEditExtend() {
+async function confirmEdit() {
   if (state.busy || !state.sessionId) return;
   const newTopic = $("topicEdit").value.trim();
   if (!newTopic) { errSession("議題を入れてください"); return; }
   errSession("");
   state.busy = true;
   state.editing = false;
+  const mode = state.editMode;
+  state.editMode = null;
+  $("topicEdit").removeAttribute("placeholder");
   renderSession();
   try {
-    await api("POST", `/api/kaigi/sessions/${state.sessionId}/extend`, { rounds: 3, newTopic });
+    const endpoint = mode === "next" ? "next-topic" : "extend";
+    await api("POST", `/api/kaigi/sessions/${state.sessionId}/${endpoint}`, { rounds: 3, newTopic });
     await refreshSession();
   } catch (e) {
     errSession(e.message);
@@ -564,7 +587,7 @@ async function confirmEditExtend() {
     state.busy = false;
   }
 }
-window.confirmEditExtend = confirmEditExtend;
+window.confirmEdit = confirmEdit;
 
 async function stopAuto() {
   if (!state.sessionId) return;

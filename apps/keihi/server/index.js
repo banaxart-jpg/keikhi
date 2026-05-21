@@ -882,6 +882,65 @@ app.post("/api/kaigi/sessions/:id/extend", async (req, res) => {
   }
 });
 
+// 次の議題に進む（前回の結論を踏まえて新議題で再スタート）
+app.post("/api/kaigi/sessions/:id/next-topic", async (req, res) => {
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  const newTopic = String(req.body?.newTopic || "").trim();
+  if (!newTopic) return res.status(400).json({ error: "newTopic required" });
+  const rounds = Math.min(Math.max(parseInt(req.body?.rounds || "3", 10), 1), 10);
+  try {
+    const session = await loadSession(req.params.id, req.user.email);
+    const oldTopic = session.topic;
+    const { rows: conclRows } = await p.query(
+      `SELECT content FROM kaigi_messages WHERE session_id=$1 AND is_conclusion ORDER BY created_at DESC LIMIT 1`,
+      [req.params.id]
+    );
+    const lastConclusion = conclRows[0]?.content || "(前回の結論なし)";
+
+    // 新議題が長文なら要約版生成
+    const newSummary = await summarizeTopicIfLong(newTopic);
+    await p.query(
+      `UPDATE kaigi_sessions SET topic=$1, topic_summary=$2 WHERE id=$3`,
+      [newTopic, newSummary, req.params.id]
+    );
+
+    // 前回テーマと結論を引き継ぐ system note
+    const oldTopicShort = oldTopic.length > 200 ? oldTopic.slice(0, 200) + "…" : oldTopic;
+    const { rows: cntRows } = await p.query(
+      "SELECT COUNT(*)::int AS n FROM kaigi_messages WHERE session_id=$1",
+      [req.params.id]
+    );
+    const noteText = `ユーザーが前の議論を踏まえて次の議題に進めました。これまでの議論と前回の結論を前提知識として持ったまま、新しい議題に取り組んでください。前回の論点を一から再説明する必要はありません。前回の結論からスムーズに新議題に発展させてください。
+
+【前のテーマ】
+${oldTopicShort}
+
+【前のテーマの結論】
+${lastConclusion}
+
+【新しい議題】
+${newTopic}`;
+
+    await p.query(
+      `INSERT INTO kaigi_messages (session_id, speaker, provider, content, model_used, round_num, seq, is_system_note)
+       VALUES ($1, '司会', 'system', $2, NULL, 0, $3, true)`,
+      [req.params.id, noteText, cntRows[0].n]
+    );
+
+    await p.query(
+      `UPDATE kaigi_sessions SET status='auto', auto_rounds_remaining=$1, extension_count=extension_count+1, last_error=NULL, updated_at=now()
+         WHERE id=$2`,
+      [rounds, req.params.id]
+    );
+    const taskName = await enqueueKaigiTick(Number(req.params.id), 0);
+    res.json({ ok: true, taskQueued: !!taskName });
+  } catch (err) {
+    console.error("kaigi next-topic", err);
+    res.status(err.status || 500).json({ error: err.message });
+  }
+});
+
 // 自動進行を止める
 app.post("/api/kaigi/sessions/:id/auto/stop", async (req, res) => {
   const p = getPool();
