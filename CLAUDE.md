@@ -41,6 +41,34 @@ git merge --ff-only claude/<session-branch>
 git push origin main
 ```
 
+### push 前の衝突チェック（中庸ルーチン・必ず実行）
+
+自動 ff push に丸投げせず、**push 前に必ず**変更ファイルを見比べて衝突可能性を判定する。これで「他人の変更を意図せず巻き戻す」事故を防ぐ。
+
+```bash
+# A. 自分の変更ファイル一覧
+git diff --stat origin/main..HEAD
+
+# B. 別セッションが進めた変更ファイル一覧（ff 可能なら空）
+git diff --stat HEAD..origin/main
+```
+
+**判定:**
+
+| 状態 | 対応 |
+|---|---|
+| A と B のファイルが**重ならない** | そのまま ff push でOK |
+| A と B のファイルが**重なる** | 該当ファイルだけ `git diff origin/main -- <file>` で full diff を読む。意図と矛盾なければ rebase/ff、矛盾あればユーザーに確認 |
+| B に**重要ファイル**（`cloudbuild.yaml` / `schema.sql` / `firebase.json` / `CLAUDE.md` / `DEPLOY.md` / `infra/**`）が含まれる | 必ず full diff を読む。リスク高いのでユーザー確認 |
+| B に**別の新規ミニアプリ追加** (`apps/<new-id>/`) が含まれる | 名取が並行で作ってる可能性。そのまま rebase で取り込んで OK だが、自分の変更との衝突をもう一度確認 |
+
+**例**:
+- A: `apps/kaigi/index.html`、B: `apps/seikyu/index.html` → 重ならない → そのまま push
+- A: `apps/keihi/server/index.js`、B: `apps/keihi/server/index.js` → 重なる → full diff 読む
+- A: `apps/kaigi/index.html`、B: `apps/keihi/cloudbuild.yaml` → 重要ファイル → 必ず diff 読んでユーザー確認
+
+このチェックは毎 push 前に必ず。所要 5〜10秒。事故防止コスパ最強。
+
 `git commit` の**前にも**毎回 `git fetch origin main` で remote の進み具合を確認。
 ローカルが behind なら commit する前に追従する（commit してから pull すると merge コミットができて履歴が汚れる）。
 
