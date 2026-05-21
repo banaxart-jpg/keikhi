@@ -453,16 +453,15 @@ ${log}
 // ─────────────────────────────
 // 議論履歴の圧縮（コンテキスト長対策）
 // ─────────────────────────────
-// 議題（topic）は呼び出し側で必ずプロンプトに含めるので、ここでは扱わない。
-// R1 全員の発言（議論の枠組み・前提を立てる重要部分）は無圧縮で保持し、
-// 中間ラウンドだけを要約に置換する。直近2ラウンドも生で残す。
+// お題（topic / topic_summary）は呼び出し側で必ずプロンプトに含めるので、
+// ここでは履歴のみを扱う。直近2ラウンド以外（お題の詳細 system note や R1 を含む）
+// をすべて要約して1つの system note に統合する。
 async function maybeCompressHistory(history, speakerCount, topic) {
-  const KEEP_FIRST = speakerCount;       // R1 全員
   const KEEP_RECENT = speakerCount * 2;  // 直近2ラウンド
-  if (history.length <= KEEP_FIRST + KEEP_RECENT + 1) return history;
+  // 直近2R に加えて1ラウンド分の余裕があれば圧縮しない（3ラウンド未満の議論は無圧縮）
+  if (history.length <= KEEP_RECENT + speakerCount) return history;
 
-  const head = history.slice(0, KEEP_FIRST);
-  const middle = history.slice(KEEP_FIRST, history.length - KEEP_RECENT);
+  const middle = history.slice(0, history.length - KEEP_RECENT);
   const tail = history.slice(history.length - KEEP_RECENT);
   if (!middle.length) return history;
 
@@ -470,17 +469,19 @@ async function maybeCompressHistory(history, speakerCount, topic) {
     ? `（システム通知）${h.text}`
     : `${h.name}：${h.text}`).join("\n");
 
-  const prompt = `以下はあるお題についての議論の中盤部分です。これを 400〜600 字で要約してください。
+  const prompt = `以下はあるお題についての議論のこれまでの部分です。長文の前提情報や各参加者の発言が含まれます。これを 500〜800 字で要約してください。
+
 お題：「${topic}」
 
 要約の要件:
+- お題の前提・背景情報（人物像・略歴・状況など）で議論に必要な部分は保持する
 - 各参加者がどの立場を取ったか、どんな根拠・出典・数値を出したかを保持
 - 合意した点と意見が分かれた点を明示
 - お題に直接関係しない雑談的な部分は削る
 - 箇条書きや見出しは使わず、連続した文章で
 - 「議論ログから読み取れる事実」だけを書く。要約者の意見は足さない
 
-中盤の発言:
+ログ:
 ${middleText}
 
 要約:`;
@@ -488,22 +489,21 @@ ${middleText}
   try {
     const { result } = await callGeminiWithFallback(prompt, {
       primaryModel: "gemini-2.5-flash",
-      maxOutputTokens: 1500,
+      maxOutputTokens: 2500,
     });
     const summary = result.response.text().trim();
     return [
-      ...head,
       {
         name: "司会",
-        text: `[これまでの中盤議論の要約] ${summary}`,
+        text: `[これまでの前提と議論の要約] ${summary}`,
         isSystemNote: true,
       },
       ...tail,
     ];
   } catch (e) {
     console.warn("[maybeCompressHistory] failed, falling back to truncation:", e.message);
-    // 失敗時は単純に古い中盤を捨てる（落ちるよりまし）
-    return [...head, ...tail];
+    // 失敗時は古い部分を捨てる（落ちるよりまし）。直近2R + tail のみ。
+    return [...tail];
   }
 }
 
@@ -591,10 +591,12 @@ async function advanceSession(sessionId, userEmail) {
   const speechCount = rawHistory.filter((h) => !h.isSystemNote).length;
   const nextSeq = msgRows.length;
   const nextSpeakerObj = speakers[speechCount % speakers.length];
-  // 長い議論はコンテキスト圧縮（R1 全員＋直近2R は残し、中盤を要約）
-  const history = await maybeCompressHistory(rawHistory, speakers.length, session.topic);
+  // 長文お題（略歴等）は topic_summary を優先使用、原文は履歴の system note 側にある
+  const effectiveTopic = session.topic_summary || session.topic;
+  // 長い議論はコンテキスト圧縮（直近2R は残し、それ以前を要約）
+  const history = await maybeCompressHistory(rawHistory, speakers.length, effectiveTopic);
   const { provider, prompt, roundNum } = buildSpeakerPrompt({
-    topic: session.topic,
+    topic: effectiveTopic,
     speakers,
     history,
     nextSpeaker: nextSpeakerObj.name,
@@ -630,10 +632,12 @@ async function concludeSession(sessionId, userEmail) {
   const speeches = msgRows.filter((m) => !m.isSystemNote);
   if (!speeches.length) throw Object.assign(new Error("発言が無いと結論は出せません"), { status: 400 });
   const rawHistory = msgRows.map((m) => ({ name: m.speaker, text: m.content, isSystemNote: m.isSystemNote }));
+  // 長文お題（略歴等）は topic_summary を優先使用
+  const effectiveTopic = session.topic_summary || session.topic;
   // 結論生成時もコンテキスト圧縮（議論が長くなるとファシリテーターが落ちるため）
-  const history = await maybeCompressHistory(rawHistory, session.speakers.length, session.topic);
+  const history = await maybeCompressHistory(rawHistory, session.speakers.length, effectiveTopic);
   const { provider, prompt } = buildConclusionPrompt({
-    topic: session.topic,
+    topic: effectiveTopic,
     speakers: session.speakers,
     history,
   });
@@ -673,6 +677,35 @@ app.get("/api/kaigi/sessions", async (req, res) => {
   }
 });
 
+// 長いお題（略歴等）に対応: 「核の問い + 背景の要約」を Gemini Flash で生成
+const LONG_TOPIC_THRESHOLD = 300;
+async function summarizeTopicIfLong(topic) {
+  if (!topic || topic.length <= LONG_TOPIC_THRESHOLD) return null;
+  const sumPrompt = `次のお題は長文で、背景情報や前提条件を多く含みます。これから3つの AI がこのお題について議論するため、AI に渡すための「核となる問い」と「背景の要約」を抽出してください。
+
+お題全文:
+${topic}
+
+出力形式 (厳密に従う、見出しは【】記号、マークダウン使わない):
+【核の問い】
+1〜2文で、AI が議論で答えるべき問いを抽出。お題から「何を聞いているのか」だけを取り出す。
+
+【背景の要約】
+400字以内で、議論で参照すべき前提・経歴・状況・条件を要約。固有名詞・数値・日付など重要な事実は保持する。要約者の意見は足さない。
+
+出力:`;
+  try {
+    const { result } = await callGeminiWithFallback(sumPrompt, {
+      primaryModel: "gemini-2.5-flash",
+      maxOutputTokens: 2000,
+    });
+    return result.response.text().trim();
+  } catch (e) {
+    console.warn("[summarizeTopic] failed:", e.message);
+    return null;
+  }
+}
+
 // 作成
 app.post("/api/kaigi/sessions", async (req, res) => {
   const p = getPool();
@@ -682,12 +715,21 @@ app.post("/api/kaigi/sessions", async (req, res) => {
     return res.status(400).json({ error: "topic, speakers (2人以上) required" });
   }
   try {
+    const topicSummary = await summarizeTopicIfLong(topic);
     const { rows } = await p.query(
-      `INSERT INTO kaigi_sessions (user_email, topic, speakers)
-       VALUES ($1, $2, $3::jsonb)
-       RETURNING id, topic, speakers, status, auto_rounds_remaining, created_at, updated_at`,
-      [req.user.email, topic, JSON.stringify(speakers)]
+      `INSERT INTO kaigi_sessions (user_email, topic, topic_summary, speakers)
+       VALUES ($1, $2, $3, $4::jsonb)
+       RETURNING id, topic, topic_summary AS "topicSummary", speakers, status, auto_rounds_remaining, created_at, updated_at`,
+      [req.user.email, topic, topicSummary, JSON.stringify(speakers)]
     );
+    // 長文お題の原文は seq=0 の system note として履歴に挿入（圧縮対象になる）
+    if (topicSummary) {
+      await p.query(
+        `INSERT INTO kaigi_messages (session_id, speaker, provider, content, model_used, round_num, seq, is_system_note)
+         VALUES ($1, '司会', 'system', $2, NULL, 0, 0, true)`,
+        [rows[0].id, `[お題の詳細全文]\n${topic}`]
+      );
+    }
     res.status(201).json(rows[0]);
   } catch (err) {
     console.error("kaigi create", err);

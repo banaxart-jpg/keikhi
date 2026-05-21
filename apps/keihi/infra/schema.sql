@@ -63,3 +63,6 @@ CREATE INDEX IF NOT EXISTS kaigi_sessions_user_idx    ON kaigi_sessions (user_em
 -- 延長フロー（結論→不満→議題編集→もう3ラウンド）対応
 ALTER TABLE kaigi_sessions ADD COLUMN IF NOT EXISTS extension_count INT NOT NULL DEFAULT 0;
 ALTER TABLE kaigi_messages ADD COLUMN IF NOT EXISTS is_system_note  BOOLEAN NOT NULL DEFAULT false;
+
+-- 長いお題（人生略歴等）対応。AI に渡す短い要約版を別途保存し、本文はメッセージ履歴の system note として保持して圧縮対象に。
+ALTER TABLE kaigi_sessions ADD COLUMN IF NOT EXISTS topic_summary TEXT;
