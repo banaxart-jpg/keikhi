@@ -193,7 +193,7 @@ async function callGeminiWithFallback(content, { primaryModel, maxOutputTokens, 
 app.post("/api/scan", async (req, res) => {
   try {
     if (!genAI) return res.status(503).json({ error: "GEMINI_API_KEY not configured" });
-    const { image, mimeType = "image/jpeg", sites = [] } = req.body || {};
+    const { image, mimeType = "image/jpeg", sites = [], kind = "receipt" } = req.body || {};
     if (!image) return res.status(400).json({ error: "image (base64) is required" });
 
     let imageUrl = null;
@@ -207,8 +207,12 @@ app.post("/api/scan", async (req, res) => {
     }
 
     const today = new Date().toISOString().slice(0, 10);
-    // 1枚の画像に複数の領収書が並んでいたら全部抽出する。1枚だけなら要素1配列。
-    const prompt = `画像内の領収書を全て検出してJSONのみ返してください。複数並んでいる場合は全部を要素にした配列にする。1枚しか無くても要素1の配列。形式:
+    // kind="invoice" は請求書 / 払込票 / 通知書 用のスキャン。発行元・支払期限を抽出。
+    // kind="receipt" (default) は既存の領収書スキャン。互換維持のため形は変えない。
+    const prompt = kind === "invoice"
+      ? `画像内の請求書 / 払込票 / 通知書を全て検出してJSONのみ返してください。複数並んでいる場合は全部を要素にした配列にする。1枚しか無くても要素1の配列。形式:
+{"receipts":[{"issuer":"発行元（東京電力 / 東京ガス / 〇〇税務署 等。「株式会社」等の法人格は省略可）","total":請求金額の数値,"dueDate":"YYYY-MM-DD(支払期限。読めなければ空文字)","issueDate":"YYYY-MM-DD(発行日。読めなければ${today})","category":"光熱費 or 通信費 or 税金 or 家賃 or 保険料 or その他","memo":"備考があれば短く（請求番号 / 使用期間 等）"}]}`
+      : `画像内の領収書を全て検出してJSONのみ返してください。複数並んでいる場合は全部を要素にした配列にする。1枚しか無くても要素1の配列。形式:
 {"receipts":[{"date":"YYYY-MM-DD(無ければ${today})","store":"店舗名","total":合計金額の数値,"category":"材料費 or 接待交際費 or ガソリン代 or 駐車場代 or 工具・備品 or 外注費 or その他","workType":"水道 or 電気 or 木工 or 塗装 or 左官 or 内装 or 外構 or 解体 or 設備 or その他","site":"${sites.join(" or ") || "(空文字でOK)"}から最も近いものまたは空文字"}]}`;
     const { result, modelUsed } = await callGeminiWithFallback([
       prompt,
@@ -222,7 +226,7 @@ app.post("/api/scan", async (req, res) => {
     // 後方互換: Gemini が単一オブジェクトを返した場合も配列に正規化
     const receipts = Array.isArray(raw?.receipts)
       ? raw.receipts
-      : (raw && (raw.store || raw.total || raw.date)) ? [raw] : [];
+      : (raw && (raw.store || raw.total || raw.date || raw.issuer)) ? [raw] : [];
     res.json({ receipts, imageUrl, modelUsed });
   } catch (err) {
     console.error("scan error", err);

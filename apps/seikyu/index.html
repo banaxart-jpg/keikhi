@@ -1,0 +1,743 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="請求書">
+<title>請求書</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+:root {
+  --bg: #e4e6ee; --bg2: #d8dae4; --bg3: #ededf3;
+  --sl: rgba(255,255,255,1); --sd: rgba(168,172,192,0.75); --sd2: rgba(148,152,176,0.55);
+  --text: #42455e; --text2: rgba(66,69,94,0.42); --text3: rgba(66,69,94,0.22);
+  --bulb: #ffb940; --bulb2: #ff9a10;
+  --bulb-glow: rgba(255,170,40,0.55); --bulb-glow2: rgba(255,140,20,0.25);
+  --paid: #3aaa7a; --paid-glow: rgba(58,170,122,0.35);
+  --due-soon: #e07040; --overdue: #b04040;
+}
+body { font-family: 'Outfit', -apple-system, sans-serif; font-weight: 400; background: var(--bg); color: var(--text); min-height: 100vh; overflow-x: hidden; }
+
+.top-bar { position: absolute; top: 0; left: 0; right: 0; display: flex; justify-content: space-between; align-items: center; padding: 54px 20px 0; }
+.pill-btn { padding: 9px 18px; border-radius: 30px; font-size: 12px; font-weight: 700; cursor: pointer; border: none; color: var(--text2); font-family: 'Outfit', sans-serif; background: var(--bg); box-shadow: 5px 5px 12px var(--sd), -5px -5px 12px var(--sl), 2px 2px 4px var(--sd2); transition: all 0.12s; }
+.pill-btn:active { box-shadow: inset 3px 3px 8px var(--sd), inset -3px -3px 8px var(--sl); transform: scale(0.96); }
+.hint-text { font-size: 11px; letter-spacing: 0.24em; color: var(--text3); text-transform: uppercase; font-weight: 700; }
+
+/* メイン画面 */
+#mainScreen { position: fixed; inset: 0; display: none; flex-direction: column; align-items: center; justify-content: center; background: var(--bg); gap: 24px; padding: 24px; }
+.capture-btn { width: 200px; padding: 28px 0; border-radius: 30px; font-size: 22px; font-weight: 700; color: var(--text); border: none; cursor: pointer; font-family: 'Outfit', sans-serif; background: var(--bg); position: relative; overflow: hidden; box-shadow: 10px 10px 24px var(--sd), -8px -8px 20px var(--sl), 4px 4px 8px var(--sd2); transition: box-shadow 0.2s, transform 0.15s, color 0.25s; }
+.capture-btn::before { content: ""; position: absolute; top: 0; left: 8%; right: 8%; height: 44%; background: linear-gradient(180deg, rgba(255,255,255,0.55) 0%, rgba(255,255,255,0) 100%); border-radius: 30px 30px 50% 50%; pointer-events: none; }
+.capture-btn:active { box-shadow: inset 7px 7px 18px var(--sd), inset -5px -5px 14px var(--sl); transform: scale(0.96); color: var(--bulb2); text-shadow: 0 0 16px var(--bulb-glow); }
+
+/* スキャン中 */
+#scanScreen { position: fixed; inset: 0; display: none; flex-direction: column; align-items: center; justify-content: center; background: var(--bg); gap: 28px; }
+#previewImg { width: 185px; height: 248px; object-fit: cover; border-radius: 26px; box-shadow: 10px 10px 28px var(--sd), -6px -6px 18px var(--sl), 4px 4px 10px var(--sd2); }
+.scan-pill { display: flex; align-items: center; gap: 12px; padding: 14px 28px; border-radius: 40px; background: var(--bg); box-shadow: 6px 6px 16px var(--sd), -6px -6px 16px var(--sl); }
+.spinner { width: 18px; height: 18px; border-radius: 50%; border: 2.5px solid rgba(255,170,40,0.2); border-top-color: var(--bulb); animation: spin 0.75s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.scan-label { font-size: 13px; color: var(--text2); font-weight: 700; }
+
+/* 確認シート */
+#confirmScreen { position: fixed; inset: 0; z-index: 40; display: none; flex-direction: column; justify-content: flex-end; background: rgba(180,184,205,0.35); }
+.sheet { background: var(--bg); border-radius: 38px 38px 0 0; box-shadow: -2px -10px 35px rgba(148,152,176,0.35); max-height: 92vh; overflow-y: auto; padding: 14px 18px 54px; }
+.handle { width: 46px; height: 5px; border-radius: 3px; background: rgba(100,104,130,0.16); margin: 0 auto 20px; }
+.sheet-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
+.sheet-title { font-size: 20px; font-weight: 700; letter-spacing: -0.4px; }
+.retake-btn { font-size: 12px; font-weight: 800; padding: 8px 16px; border-radius: 20px; cursor: pointer; border: none; color: var(--bulb2); font-family: 'Outfit', sans-serif; background: var(--bg); box-shadow: 4px 4px 10px var(--sd), -4px -4px 10px var(--sl); transition: all 0.12s; }
+.retake-btn:active { box-shadow: inset 2px 2px 6px var(--sd), inset -2px -2px 6px var(--sl); }
+
+.preview-row { display: flex; gap: 12px; margin-bottom: 14px; align-items: stretch; }
+#confirmImg { width: 96px; height: auto; align-self: stretch; object-fit: cover; border-radius: 20px; flex-shrink: 0; box-shadow: 6px 6px 16px var(--sd), -4px -4px 12px var(--sl); }
+.preview-info { flex: 1; border-radius: 20px; padding: 11px 13px; background: var(--bg2); box-shadow: inset 4px 4px 10px var(--sd), inset -4px -4px 10px var(--sl); display: flex; flex-direction: column; }
+.preview-amount { font-size: 26px; font-weight: 900; letter-spacing: -1.2px; line-height: 1.1; }
+.preview-issuer { font-size: 12px; color: var(--text2); margin-top: 2px; font-weight: 600; }
+.preview-due { font-size: 11px; color: var(--bulb2); margin-top: 6px; font-weight: 800; text-shadow: 0 0 6px var(--bulb-glow2); }
+
+.card { border-radius: 24px; padding: 16px; margin-bottom: 12px; background: var(--bg); box-shadow: 7px 7px 18px var(--sd), -7px -7px 18px var(--sl); position: relative; }
+.card-title { font-size: 10px; font-weight: 800; letter-spacing: 0.16em; text-transform: uppercase; color: var(--text3); margin-bottom: 14px; }
+.field { margin-bottom: 12px; }
+.field:last-child { margin-bottom: 0; }
+.field label { font-size: 11px; color: var(--text2); display: block; margin-bottom: 6px; font-weight: 700; }
+.nm-field { width: 100%; padding: 12px 14px; font-size: 15px; color: var(--text); outline: none; border: none; border-radius: 14px; font-family: 'Outfit', sans-serif; font-weight: 600; background: var(--bg2); box-shadow: inset 4px 4px 10px var(--sd), inset -4px -4px 10px var(--sl); -webkit-appearance: none; appearance: none; }
+.nm-field::placeholder { color: var(--text3); }
+textarea.nm-field { resize: vertical; min-height: 60px; font-family: 'Outfit', sans-serif; }
+select.nm-field { background: var(--bg2) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1l5 5 5-5' stroke='rgba(66,69,94,0.3)' stroke-width='2' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") no-repeat right 14px center; padding-right: 36px; }
+
+.submit-btn { width: 100%; padding: 18px; margin-top: 14px; border: none; border-radius: 24px; cursor: pointer; font-size: 17px; font-weight: 900; color: white; letter-spacing: 0.3px; font-family: 'Outfit', sans-serif; background: linear-gradient(145deg, #ffb940, #e08800); box-shadow: 8px 8px 22px rgba(190,120,0,0.45), -4px -4px 14px rgba(255,230,140,0.55); transition: all 0.15s; }
+.submit-btn:active { transform: scale(0.97); }
+.submit-btn:disabled { opacity: 0.5; cursor: wait; }
+.submit-btn.submit-btn-inline { margin-top: auto; padding: 10px; font-size: 14px; border-radius: 16px; box-shadow: 4px 4px 12px rgba(190,120,0,0.4), -2px -2px 8px rgba(255,230,140,0.5); }
+
+.err-box { border-radius: 16px; padding: 12px 15px; font-size: 11px; color: #b04040; margin-bottom: 12px; line-height: 1.5; display: none; font-weight: 600; background: var(--bg); box-shadow: inset 4px 4px 10px rgba(180,140,140,0.4), inset -4px -4px 10px rgba(255,255,255,0.85); white-space: pre-wrap; word-break: break-all; font-family: ui-monospace, Menlo, monospace; }
+
+/* 一覧 */
+#listScreen { position: fixed; inset: 0; display: none; flex-direction: column; overflow-y: auto; background: var(--bg); }
+.list-header { display: flex; align-items: center; justify-content: space-between; padding: 56px 20px 18px; position: sticky; top: 0; background: var(--bg); box-shadow: 0 6px 20px rgba(148,152,176,0.18); z-index: 5; }
+.back-btn, .csv-btn { font-size: 15px; font-weight: 800; color: var(--bulb2); background: none; border: none; cursor: pointer; font-family: 'Outfit', sans-serif; text-shadow: 0 0 8px var(--bulb-glow2); }
+.csv-btn { font-size: 12px; color: var(--text2); text-shadow: none; }
+.list-title { font-size: 20px; font-weight: 700; letter-spacing: -0.4px; }
+.list-body { padding: 16px 16px 120px; }
+
+.summary-card { border-radius: 28px; padding: 24px; margin-bottom: 18px; background: var(--bg); position: relative; overflow: hidden; box-shadow: 9px 9px 24px var(--sd), -9px -9px 24px var(--sl); }
+.summary-glow { position: absolute; top: -30px; right: -30px; width: 130px; height: 130px; border-radius: 50%; background: radial-gradient(circle, rgba(255,185,50,0.18), transparent 70%); pointer-events: none; }
+.summary-label { font-size: 12px; color: var(--text2); margin-bottom: 4px; font-weight: 700; }
+.summary-amount { font-size: 40px; font-weight: 900; letter-spacing: -2px; }
+.summary-count { font-size: 12px; color: var(--text3); margin-top: 3px; font-weight: 600; }
+
+.tabs { display: flex; gap: 10px; margin-bottom: 14px; }
+.tab { flex: 1; padding: 13px 0; border-radius: 18px; font-size: 14px; font-weight: 700; cursor: pointer; border: none; color: var(--text2); font-family: 'Outfit', sans-serif; background: var(--bg); box-shadow: 5px 5px 13px var(--sd), -5px -5px 13px var(--sl); transition: all 0.18s; }
+.tab.active { box-shadow: inset 4px 4px 11px var(--sd), inset -4px -4px 11px var(--sl); color: var(--bulb2); text-shadow: 0 0 12px var(--bulb-glow); }
+.tab.paid-tab.active { color: var(--paid); text-shadow: 0 0 12px var(--paid-glow); }
+
+.bill-card { border-radius: 18px; padding: 12px 14px; margin-bottom: 7px; display: flex; align-items: center; gap: 10px; background: var(--bg); box-shadow: 5px 5px 13px var(--sd), -5px -5px 13px var(--sl); position: relative; }
+.bill-card.paid { opacity: 0.65; }
+.bill-thumb { width: 44px; height: 44px; border-radius: 12px; background: var(--bg2); box-shadow: inset 2px 2px 6px var(--sd), inset -2px -2px 6px var(--sl); flex-shrink: 0; overflow: hidden; cursor: pointer; }
+.bill-thumb img { width: 100%; height: 100%; object-fit: cover; }
+.bill-thumb-empty { width: 44px; height: 44px; border-radius: 12px; background: var(--bg2); box-shadow: inset 2px 2px 6px var(--sd), inset -2px -2px 6px var(--sl); flex-shrink: 0; display: flex; align-items: center; justify-content: center; font-size: 20px; color: var(--text3); }
+.bill-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; cursor: pointer; }
+.bill-top { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.bill-amount { font-size: 17px; font-weight: 800; letter-spacing: -0.5px; }
+.bill-issuer { font-size: 12px; color: var(--text2); font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; flex: 1; }
+.bill-meta { font-size: 10px; color: var(--text3); font-weight: 600; display: flex; gap: 8px; flex-wrap: wrap; }
+.bill-due { font-weight: 800; }
+.bill-due.soon { color: var(--due-soon); }
+.bill-due.over { color: var(--overdue); }
+.bill-cat { font-size: 9px; padding: 2px 7px; border-radius: 7px; font-weight: 800; color: var(--bulb2); background: var(--bg); box-shadow: 1px 1px 3px var(--sd), -1px -1px 3px var(--sl); }
+.bill-actions { display: flex; flex-direction: column; align-items: center; gap: 6px; padding-left: 4px; }
+.pay-toggle { width: 38px; height: 38px; border-radius: 50%; border: 2.5px solid rgba(148,152,176,0.4); background: var(--bg); cursor: pointer; font-size: 16px; color: transparent; transition: all 0.15s; box-shadow: 3px 3px 8px var(--sd), -3px -3px 8px var(--sl); }
+.pay-toggle.paid { background: linear-gradient(145deg, #60c88a, #38a86a); border-color: transparent; color: white; box-shadow: 3px 3px 10px rgba(40,140,80,0.4), inset 0 1px 0 rgba(255,255,255,0.3); }
+.del-mini { font-size: 14px; color: rgba(148,152,176,0.5); background: none; border: none; cursor: pointer; padding: 0; }
+
+.list-add-btn { position: fixed; bottom: 0; left: 0; right: 0; padding: 14px 20px 36px; background: linear-gradient(to top, var(--bg) 55%, transparent); }
+.empty { text-align: center; padding: 80px 0; }
+.empty-icon { font-size: 52px; opacity: 0.12; margin-bottom: 12px; }
+.empty-text { color: var(--text3); font-size: 14px; font-weight: 700; }
+
+.sites-manage-card { border-radius: 24px; margin-bottom: 14px; overflow: hidden; background: var(--bg); box-shadow: 6px 6px 16px var(--sd), -6px -6px 16px var(--sl); }
+.sites-toggle { width: 100%; padding: 15px 18px; display: flex; justify-content: space-between; align-items: center; background: none; border: none; cursor: pointer; font-size: 10px; font-weight: 800; letter-spacing: 0.16em; text-transform: uppercase; color: var(--text3); font-family: 'Outfit', sans-serif; }
+
+.toast { position: fixed; top: 64px; left: 50%; transform: translateX(-50%); padding: 12px 26px; border-radius: 30px; font-size: 14px; font-weight: 800; z-index: 200; display: none; white-space: nowrap; color: white; font-family: 'Outfit', sans-serif; background: linear-gradient(135deg, #60c88a, #38a86a); box-shadow: 6px 6px 18px rgba(40,140,80,0.35); }
+.toast.err { background: linear-gradient(135deg, #d88080, #b04040); white-space: pre-wrap; word-break: break-all; border-radius: 16px; max-width: 86vw; font-size: 12px; font-weight: 600; text-align: left; max-height: 60vh; overflow: auto; }
+
+#imgOverlay { display: none; position: fixed; inset: 0; z-index: 300; background: rgba(20,22,32,0.92); align-items: center; justify-content: center; flex-direction: column; gap: 16px; padding: 24px; }
+#imgOverlay img { max-width: 100%; max-height: 80vh; border-radius: 14px; object-fit: contain; }
+</style>
+</head>
+<body>
+
+<div class="toast" id="toast">✅ 登録しました！</div>
+
+<div id="signinOverlay" style="display:none;position:fixed;inset:0;z-index:400;background:var(--bg);flex-direction:column;align-items:center;justify-content:center;padding:32px;text-align:center;gap:18px;">
+  <div style="font-size:24px;font-weight:800;">請求書</div>
+  <div style="font-size:13px;color:var(--text2);line-height:1.7;">トップでログインしてください</div>
+  <button class="submit-btn" type="button" style="max-width:280px;" onclick="location.href='/'">トップに戻る</button>
+  <div id="signinErr" style="font-size:11px;color:#b04040;word-break:break-word;max-width:340px;white-space:pre-wrap;font-family:monospace;"></div>
+</div>
+
+<div id="imgOverlay">
+  <img id="imgOverlayImg" src="" alt="">
+  <button class="pill-btn" id="imgOverlayClose" type="button">閉じる</button>
+</div>
+
+<!-- メイン -->
+<div id="mainScreen">
+  <div class="top-bar">
+    <button class="pill-btn" type="button" onclick="location.href='/'">← トップ</button>
+    <button class="pill-btn" id="listBtn" type="button">一覧 <span id="mainCount">0</span>件 →</button>
+  </div>
+  <p class="hint-text">タップで請求書を撮影</p>
+  <button class="capture-btn" id="captureBtn" type="button">📷 撮影</button>
+  <p class="hint-text" id="mainUnpaidHint" style="text-align:center;">未払い <span id="mainUnpaidCount">0</span>件 / ¥<span id="mainUnpaidTotal">0</span></p>
+  <input type="file" id="fileInput" accept="image/*" capture="environment" style="display:none">
+</div>
+
+<!-- スキャン中 -->
+<div id="scanScreen">
+  <img id="previewImg" src="" alt="">
+  <div class="scan-pill">
+    <div class="spinner"></div>
+    <span class="scan-label">読み取り中…</span>
+  </div>
+</div>
+
+<!-- 確認シート -->
+<div id="confirmScreen">
+  <div class="sheet">
+    <div class="handle"></div>
+    <div class="sheet-header">
+      <span class="sheet-title" id="sheetTitle">内容を確認</span>
+      <button class="retake-btn" id="retakeBtn" type="button">📷 撮り直す</button>
+    </div>
+    <div id="errBox" class="err-box"></div>
+    <div class="preview-row">
+      <img id="confirmImg" src="" alt="">
+      <div class="preview-info">
+        <div class="preview-amount">¥<span id="previewAmount">0</span></div>
+        <div class="preview-issuer" id="previewIssuer">発行元</div>
+        <div class="preview-due" id="previewDue"></div>
+        <button class="submit-btn submit-btn-inline" id="submitBtn" type="button">登録する</button>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-title">請求書情報</div>
+      <div class="field"><label>発行元</label><input type="text" id="fIssuer" class="nm-field" placeholder="例：東京電力"></div>
+      <div class="field"><label>金額（円）</label><input type="number" id="fTotal" class="nm-field" placeholder="0"></div>
+      <div class="field"><label>支払期限</label><input type="date" id="fDueDate" class="nm-field"></div>
+      <div class="field"><label>発行日</label><input type="date" id="fIssueDate" class="nm-field"></div>
+      <div class="field"><label>分類</label>
+        <select id="fCat" class="nm-field">
+          <option>光熱費</option><option>通信費</option><option>税金</option><option>家賃</option><option>保険料</option><option>その他</option>
+        </select>
+      </div>
+      <div class="field"><label>メモ</label>
+        <textarea id="fMemo" class="nm-field" placeholder="（任意）使用期間・請求番号 等" rows="2"></textarea>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 一覧 -->
+<div id="listScreen">
+  <div class="list-header">
+    <button class="back-btn" id="backBtn" type="button">← 戻る</button>
+    <span class="list-title">請求書一覧</span>
+    <button class="csv-btn" id="csvBtn" type="button">CSV</button>
+  </div>
+  <div class="list-body">
+    <div class="summary-card">
+      <div class="summary-glow"></div>
+      <div class="summary-label" id="summaryLabel">未払い 合計</div>
+      <div class="summary-amount">¥<span id="summaryTotal">0</span></div>
+      <div class="summary-count" id="summaryCount">0件</div>
+    </div>
+    <div class="tabs">
+      <button class="tab active" id="tabUnpaid" type="button">未払い <span id="cntUnpaid">0</span></button>
+      <button class="tab paid-tab" id="tabPaid" type="button">支払済 <span id="cntPaid">0</span></button>
+    </div>
+    <div class="sites-manage-card">
+      <button class="sites-toggle" id="sheetToggleBtn" type="button">
+        <span>スプレッドシート連携 <span id="sheetState" style="font-size:9px;color:var(--bulb2);"></span></span><span id="sheetArrow">▼</span>
+      </button>
+      <div id="sheetPanel" style="display:none; padding:14px 18px 16px;">
+        <label style="font-size:11px;color:var(--text2);font-weight:700;display:block;margin-bottom:6px;">Apps Script の URL</label>
+        <input type="text" id="sheetUrlInput" class="nm-field" placeholder="https://script.google.com/macros/s/…/exec" style="font-size:11px;font-family:ui-monospace,Menlo,monospace;">
+        <div style="display:flex;gap:8px;margin-top:10px;">
+          <button class="pill-btn" id="sheetSaveBtn" type="button">保存</button>
+          <button class="pill-btn" id="sheetClearBtn" type="button">クリア</button>
+          <button class="pill-btn" id="sheetTestBtn" type="button">テスト送信</button>
+        </div>
+        <div id="sheetStatusMsg" style="font-size:11px;color:var(--text2);margin-top:10px;word-break:break-all;"></div>
+      </div>
+    </div>
+    <div id="billList"></div>
+  </div>
+  <div class="list-add-btn">
+    <button class="submit-btn" id="listAddBtn" type="button">＋ 請求書を追加</button>
+  </div>
+</div>
+
+<script src="/config.js"></script>
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js";
+import {
+  getAuth, setPersistence, browserLocalPersistence,
+  onAuthStateChanged, signOut,
+} from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
+
+// ───────── Config / Auth ─────────
+const API_BASE = (window.API_BASE || "").replace(/\/$/, "");
+let fbAuth = null;
+async function idToken() {
+  const u = fbAuth?.currentUser;
+  return u ? await u.getIdToken() : null;
+}
+
+(async function initAuth() {
+  if (window.DEV_NO_AUTH) {
+    document.getElementById("signinOverlay").style.display = "none";
+    boot();
+    return;
+  }
+  try {
+    const cfg = await fetch("/__/firebase/init.json").then((r) => r.json());
+    cfg.authDomain = location.hostname;
+    fbAuth = getAuth(initializeApp(cfg));
+    await setPersistence(fbAuth, browserLocalPersistence);
+
+    let entered = false;
+    onAuthStateChanged(fbAuth, async (user) => {
+      if (user) {
+        if (entered) return;
+        entered = true;
+        sessionStorage.removeItem("authBounce");
+        document.getElementById("signinOverlay").style.display = "none";
+        boot();
+        return;
+      }
+      if (sessionStorage.getItem("authBounce")) {
+        document.getElementById("signinOverlay").style.display = "flex";
+        return;
+      }
+      sessionStorage.setItem("authBounce", "1");
+      location.replace("/?next=" + encodeURIComponent("/seikyu/"));
+    });
+  } catch (e) {
+    document.getElementById("signinOverlay").style.display = "flex";
+    document.getElementById("signinErr").textContent = "init失敗: " + e.message;
+  }
+})();
+
+window.doSignOut = async () => { if (fbAuth) await signOut(fbAuth); location.reload(); };
+
+// ───────── State ─────────
+const STORAGE_KEY = "seikyu_records";
+let bills = []; // 配列。1件ごとに id/issuer/total/dueDate/issueDate/category/memo/status/paidAt/imageUrl/thumb
+let tabFilter = "unpaid"; // "unpaid" | "paid"
+let currentImgUrl = "";   // blob: スキャン中のプレビュー用
+let currentThumb = "";    // base64 サムネ
+let currentImageUrl = ""; // GCS imageUrl
+let editingId = null;
+
+const $ = (id) => document.getElementById(id);
+
+function loadBills() {
+  try { bills = JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]"); }
+  catch { bills = []; }
+}
+function saveBills() {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(bills));
+}
+
+// ───────── Screens ─────────
+const screens = ["mainScreen", "scanScreen", "confirmScreen", "listScreen"];
+function show(id) {
+  for (const s of screens) $(s).style.display = s === id ? "flex" : "none";
+}
+
+let _toastTimer = null;
+function toast(msg, isErr = false) {
+  const t = $("toast");
+  t.textContent = isErr ? msg + "\n\n👆 タップで全文コピー" : msg;
+  t.classList.toggle("err", !!isErr);
+  t.style.display = "block";
+  t.style.cursor = isErr ? "pointer" : "default";
+  t.onclick = isErr
+    ? () => navigator.clipboard?.writeText(msg).then(() => { t.textContent = "📋 コピーしました"; }, () => {})
+    : null;
+  clearTimeout(_toastTimer);
+  _toastTimer = setTimeout(() => { t.style.display = "none"; }, isErr ? 15000 : 2500);
+}
+
+// ───────── API ─────────
+async function api(method, url, body) {
+  const target = API_BASE + url;
+  const opts = { method, headers: {} };
+  const tok = await idToken();
+  if (tok) opts.headers["Authorization"] = "Bearer " + tok;
+  if (body !== undefined) {
+    opts.headers["content-type"] = "application/json";
+    opts.body = JSON.stringify(body);
+  }
+  const r = await fetch(target, opts);
+  if (r.status === 401) {
+    document.getElementById("signinOverlay").style.display = "flex";
+    throw new Error("401 認証エラー");
+  }
+  if (!r.ok) {
+    let raw = ""; try { raw = await r.text(); } catch {}
+    let msg = ""; try { const j = JSON.parse(raw); if (j.error) msg = j.error; } catch {}
+    throw new Error(msg || `HTTP ${r.status}`);
+  }
+  return r.status === 204 ? null : r.json();
+}
+
+// ───────── Image utils ─────────
+function resizeImage(file, maxSize) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+    img.onload = () => {
+      const ratio = Math.min(maxSize / img.width, maxSize / img.height, 1);
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.round(img.width * ratio);
+      canvas.height = Math.round(img.height * ratio);
+      canvas.getContext("2d").drawImage(img, 0, 0, canvas.width, canvas.height);
+      URL.revokeObjectURL(url);
+      resolve(canvas.toDataURL("image/jpeg", 0.85).split(",")[1]);
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error("画像読込失敗")); };
+    img.src = url;
+  });
+}
+async function makeThumb(file) {
+  // localStorage に持つサムネ。300px・dataURL のまま保存。
+  try {
+    const b64 = await resizeImage(file, 300);
+    return "data:image/jpeg;base64," + b64;
+  } catch { return ""; }
+}
+
+// ───────── Capture & scan ─────────
+$("captureBtn").addEventListener("click", () => $("fileInput").click());
+$("fileInput").addEventListener("change", (ev) => handleFile(ev.target));
+$("listBtn").addEventListener("click", showList);
+
+async function handleFile(input) {
+  const file = input.files?.[0];
+  if (!file) return;
+  input.value = "";
+  currentImgUrl = URL.createObjectURL(file);
+  $("previewImg").src = currentImgUrl;
+  show("scanScreen");
+  try {
+    const [b64, thumb] = await Promise.all([
+      resizeImage(file, 1600),
+      makeThumb(file),
+    ]);
+    currentThumb = thumb;
+    const resp = await api("POST", "/api/scan", { image: b64, mimeType: "image/jpeg", kind: "invoice" });
+    currentImageUrl = resp?.imageUrl || "";
+    const list = resp?.receipts || [];
+    const parsed = list[0] || {};
+    showConfirm(parsed, list.length === 0 ? "請求書を検出できませんでした" : "");
+  } catch (e) {
+    showConfirm({}, e.message || "読取失敗");
+  }
+}
+
+function showConfirm(parsed, errMsg) {
+  editingId = null;
+  $("sheetTitle").textContent = "内容を確認";
+  $("retakeBtn").textContent = "📷 撮り直す";
+  $("retakeBtn").style.display = "";
+  $("confirmImg").style.display = "";
+  $("confirmImg").src = currentImgUrl;
+  const today = new Date().toISOString().slice(0, 10);
+  $("fIssuer").value = parsed.issuer || "";
+  $("fTotal").value = parsed.total || "";
+  $("fDueDate").value = parsed.dueDate || "";
+  $("fIssueDate").value = parsed.issueDate || today;
+  $("fCat").value = parsed.category || "光熱費";
+  $("fMemo").value = parsed.memo || "";
+  updatePreview();
+  const eb = $("errBox");
+  eb.style.display = errMsg ? "block" : "none";
+  eb.textContent = errMsg ? `⚠️ ${errMsg}` : "";
+  show("confirmScreen");
+}
+
+function openEdit(b) {
+  editingId = b.id;
+  $("sheetTitle").textContent = "請求書を編集";
+  $("retakeBtn").textContent = "✕ キャンセル";
+  $("confirmImg").style.display = b.thumb ? "" : "none";
+  $("confirmImg").src = b.thumb || "";
+  $("fIssuer").value = b.issuer || "";
+  $("fTotal").value = b.total || "";
+  $("fDueDate").value = b.dueDate || "";
+  $("fIssueDate").value = b.issueDate || "";
+  $("fCat").value = b.category || "光熱費";
+  $("fMemo").value = b.memo || "";
+  currentImgUrl = ""; currentThumb = b.thumb || ""; currentImageUrl = b.imageUrl || "";
+  updatePreview();
+  $("errBox").style.display = "none";
+  show("confirmScreen");
+}
+
+function updatePreview() {
+  $("previewAmount").textContent = (Number($("fTotal").value) || 0).toLocaleString();
+  $("previewIssuer").textContent = $("fIssuer").value || "発行元";
+  const due = $("fDueDate").value;
+  $("previewDue").textContent = due ? `支払期限: ${due}` : "";
+}
+$("fTotal").addEventListener("input", updatePreview);
+$("fIssuer").addEventListener("input", updatePreview);
+$("fDueDate").addEventListener("input", updatePreview);
+
+$("retakeBtn").addEventListener("click", () => {
+  if (editingId != null) { editingId = null; showList(); }
+  else $("fileInput").click();
+});
+
+// ───────── Submit ─────────
+$("submitBtn").addEventListener("click", async () => {
+  const btn = $("submitBtn");
+  btn.disabled = true;
+  try {
+    const total = Number($("fTotal").value) || 0;
+    if (!total) { toast("金額を入れてください", true); return; }
+    const rec = {
+      issuer: $("fIssuer").value.trim(),
+      total,
+      dueDate: $("fDueDate").value || "",
+      issueDate: $("fIssueDate").value || new Date().toISOString().slice(0, 10),
+      category: $("fCat").value,
+      memo: $("fMemo").value,
+    };
+    if (editingId != null) {
+      const idx = bills.findIndex((x) => x.id === editingId);
+      if (idx >= 0) bills[idx] = { ...bills[idx], ...rec };
+      saveBills();
+      toast("✅ 更新しました！");
+      editingId = null;
+      showList();
+    } else {
+      const newRec = {
+        id: crypto.randomUUID(),
+        createdAt: new Date().toISOString(),
+        status: "unpaid",
+        paidAt: null,
+        thumb: currentThumb || "",
+        imageUrl: currentImageUrl || "",
+        ...rec,
+      };
+      bills.unshift(newRec);
+      saveBills();
+      const sheetRes = await postToSheet(newRec);
+      const okMsg = sheetRes.skipped
+        ? "✅ 登録しました！"
+        : sheetRes.ok
+          ? "✅ 登録しました！📊シートにも追加"
+          : "✅ 登録（⚠️シート追加は失敗）";
+      toast(okMsg);
+      showMain();
+    }
+  } catch (e) {
+    toast(e.message, true);
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+// ───────── List ─────────
+$("backBtn").addEventListener("click", showMain);
+$("listAddBtn").addEventListener("click", () => { showMain(); $("fileInput").click(); });
+$("csvBtn").addEventListener("click", downloadCSV);
+$("tabUnpaid").addEventListener("click", () => { tabFilter = "unpaid"; renderList(); });
+$("tabPaid").addEventListener("click", () => { tabFilter = "paid"; renderList(); });
+
+function showMain() {
+  loadBills();
+  const unpaid = bills.filter((b) => b.status !== "paid");
+  $("mainCount").textContent = bills.length;
+  $("mainUnpaidCount").textContent = unpaid.length;
+  $("mainUnpaidTotal").textContent = unpaid.reduce((s, b) => s + (Number(b.total) || 0), 0).toLocaleString();
+  show("mainScreen");
+}
+
+function showList() {
+  loadBills();
+  renderList();
+  show("listScreen");
+}
+
+function renderList() {
+  const unpaid = bills.filter((b) => b.status !== "paid");
+  const paid = bills.filter((b) => b.status === "paid");
+  $("cntUnpaid").textContent = unpaid.length;
+  $("cntPaid").textContent = paid.length;
+  $("tabUnpaid").classList.toggle("active", tabFilter === "unpaid");
+  $("tabPaid").classList.toggle("active", tabFilter === "paid");
+  const filtered = tabFilter === "paid" ? paid : unpaid;
+  // 未払いは支払期限の昇順、支払済は支払日の降順
+  filtered.sort((a, b) => {
+    if (tabFilter === "unpaid") return (a.dueDate || "9999") < (b.dueDate || "9999") ? -1 : 1;
+    return (a.paidAt || "") < (b.paidAt || "") ? 1 : -1;
+  });
+  const total = filtered.reduce((s, b) => s + (Number(b.total) || 0), 0);
+  $("summaryLabel").textContent = tabFilter === "paid" ? "支払済 合計" : "未払い 合計";
+  $("summaryTotal").textContent = total.toLocaleString();
+  $("summaryCount").textContent = filtered.length + "件";
+
+  const list = $("billList");
+  list.textContent = "";
+  if (!filtered.length) {
+    list.innerHTML = `<div class="empty"><div class="empty-icon">📄</div><div class="empty-text">${tabFilter === "paid" ? "支払済の請求書はありません" : "未払いの請求書はありません"}</div></div>`;
+    return;
+  }
+  for (const b of filtered) list.appendChild(makeBillCard(b));
+}
+
+function makeBillCard(b) {
+  const card = document.createElement("div");
+  card.className = "bill-card" + (b.status === "paid" ? " paid" : "");
+
+  // サムネ
+  const thumbWrap = document.createElement("div");
+  if (b.thumb) {
+    thumbWrap.className = "bill-thumb";
+    const img = document.createElement("img");
+    img.src = b.thumb;
+    img.alt = "";
+    thumbWrap.appendChild(img);
+    thumbWrap.addEventListener("click", (e) => {
+      e.stopPropagation();
+      $("imgOverlayImg").src = b.thumb;
+      $("imgOverlay").style.display = "flex";
+    });
+  } else {
+    thumbWrap.className = "bill-thumb-empty";
+    thumbWrap.textContent = "📄";
+  }
+
+  // 本体
+  const info = document.createElement("div");
+  info.className = "bill-info";
+  const top = document.createElement("div");
+  top.className = "bill-top";
+  const amt = document.createElement("span"); amt.className = "bill-amount"; amt.textContent = `¥${(Number(b.total) || 0).toLocaleString()}`;
+  const iss = document.createElement("span"); iss.className = "bill-issuer"; iss.textContent = b.issuer || "—";
+  top.append(amt, iss);
+  const meta = document.createElement("div");
+  meta.className = "bill-meta";
+  if (b.category) {
+    const c = document.createElement("span"); c.className = "bill-cat"; c.textContent = b.category;
+    meta.appendChild(c);
+  }
+  if (b.dueDate) {
+    const today = new Date().toISOString().slice(0, 10);
+    const diffDays = Math.floor((new Date(b.dueDate) - new Date(today)) / 86400000);
+    const d = document.createElement("span"); d.className = "bill-due";
+    if (b.status !== "paid") {
+      if (diffDays < 0) { d.classList.add("over"); d.textContent = `🚨 期限 ${b.dueDate}（${-diffDays}日超過）`; }
+      else if (diffDays <= 3) { d.classList.add("soon"); d.textContent = `⏰ 期限 ${b.dueDate}（あと${diffDays}日）`; }
+      else { d.textContent = `📅 期限 ${b.dueDate}`; }
+    } else {
+      d.textContent = `📅 期限 ${b.dueDate}`;
+    }
+    meta.appendChild(d);
+  }
+  if (b.status === "paid" && b.paidAt) {
+    const p = document.createElement("span"); p.textContent = `✅ ${b.paidAt} 支払`;
+    meta.appendChild(p);
+  }
+  info.append(top, meta);
+  info.addEventListener("click", () => openEdit(b));
+
+  // 状態トグル
+  const actions = document.createElement("div");
+  actions.className = "bill-actions";
+  const toggle = document.createElement("button");
+  toggle.type = "button";
+  toggle.className = "pay-toggle" + (b.status === "paid" ? " paid" : "");
+  toggle.textContent = "✓";
+  toggle.title = b.status === "paid" ? "支払済（タップで未払いに戻す）" : "支払済にする";
+  toggle.addEventListener("click", (e) => {
+    e.stopPropagation();
+    if (b.status === "paid") { b.status = "unpaid"; b.paidAt = null; }
+    else { b.status = "paid"; b.paidAt = new Date().toISOString().slice(0, 10); }
+    saveBills();
+    renderList();
+  });
+  const del = document.createElement("button");
+  del.type = "button";
+  del.className = "del-mini";
+  del.textContent = "×";
+  del.addEventListener("click", (e) => {
+    e.stopPropagation();
+    if (!confirm("削除しますか？")) return;
+    bills = bills.filter((x) => x.id !== b.id);
+    saveBills();
+    renderList();
+  });
+  actions.append(toggle, del);
+
+  card.append(thumbWrap, info, actions);
+  return card;
+}
+
+// ───────── Spreadsheet (Apps Script Web App) ─────────
+function getSheetUrl() { return (localStorage.getItem("seikyuSheetUrl") || "").trim(); }
+async function postToSheet(rec) {
+  const url = getSheetUrl();
+  if (!url) return { skipped: true };
+  try {
+    await fetch(url, { method: "POST", body: JSON.stringify(rec), redirect: "follow" });
+    return { ok: true };
+  } catch (e) {
+    console.warn("[sheet] post failed", e);
+    return { ok: false, error: e.message };
+  }
+}
+function refreshSheetState() {
+  const u = getSheetUrl();
+  $("sheetState").textContent = u ? "● 接続済" : "";
+}
+let sheetOpen = false;
+$("sheetToggleBtn").addEventListener("click", () => {
+  sheetOpen = !sheetOpen;
+  $("sheetPanel").style.display = sheetOpen ? "block" : "none";
+  $("sheetArrow").textContent = sheetOpen ? "▲" : "▼";
+  if (sheetOpen) {
+    $("sheetUrlInput").value = getSheetUrl();
+    $("sheetStatusMsg").textContent = "";
+  }
+});
+$("sheetSaveBtn").addEventListener("click", () => {
+  const u = $("sheetUrlInput").value.trim();
+  if (u && !/^https:\/\/script\.google\.com\/.*\/exec/.test(u)) {
+    $("sheetStatusMsg").textContent = "⚠️ Apps Script の URL（…/exec で終わるやつ）を入れてください";
+    return;
+  }
+  if (u) localStorage.setItem("seikyuSheetUrl", u);
+  else localStorage.removeItem("seikyuSheetUrl");
+  refreshSheetState();
+  $("sheetStatusMsg").textContent = u ? "✅ 保存しました" : "🗑 クリアしました";
+});
+$("sheetClearBtn").addEventListener("click", () => {
+  localStorage.removeItem("seikyuSheetUrl");
+  $("sheetUrlInput").value = "";
+  refreshSheetState();
+  $("sheetStatusMsg").textContent = "🗑 クリアしました";
+});
+$("sheetTestBtn").addEventListener("click", async () => {
+  const u = $("sheetUrlInput").value.trim();
+  if (!u) { $("sheetStatusMsg").textContent = "URL を先に入れてください"; return; }
+  const prev = getSheetUrl();
+  localStorage.setItem("seikyuSheetUrl", u);
+  $("sheetStatusMsg").textContent = "📤 テスト送信中…";
+  const today = new Date().toISOString().slice(0, 10);
+  const res = await postToSheet({
+    id: "test", createdAt: new Date().toISOString(), status: "unpaid", paidAt: null,
+    issuer: "テスト発行元", total: 1, dueDate: today, issueDate: today,
+    category: "その他", memo: "請求書アプリからの接続テスト",
+  });
+  if (prev) localStorage.setItem("seikyuSheetUrl", prev); else localStorage.removeItem("seikyuSheetUrl");
+  refreshSheetState();
+  if (res.ok) $("sheetStatusMsg").textContent = "✅ 送信できました（スプレッドシート開いて確認してみて）";
+  else $("sheetStatusMsg").textContent = "⚠️ 送信失敗: " + (res.error || "不明");
+});
+
+// ───────── CSV ─────────
+function csvCell(v) { const s = String(v ?? ""); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; }
+function downloadCSV() {
+  const header = ["発行日", "発行元", "金額", "支払期限", "分類", "状態", "支払日", "メモ"].map(csvCell).join(",");
+  const rows = bills.map((b) => [b.issueDate, b.issuer, b.total, b.dueDate, b.category, b.status === "paid" ? "支払済" : "未払い", b.paidAt || "", b.memo].map(csvCell).join(","));
+  const blob = new Blob(["﻿" + [header, ...rows].join("\n")], { type: "text/csv" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = `請求書_${new Date().toISOString().slice(0, 10)}.csv`;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+}
+
+// ───────── Img overlay ─────────
+$("imgOverlayClose").addEventListener("click", () => {
+  $("imgOverlay").style.display = "none";
+  $("imgOverlayImg").src = "";
+});
+
+// ───────── Boot ─────────
+function boot() {
+  loadBills();
+  refreshSheetState();
+  showMain();
+}
+</script>
+</body>
+</html>
