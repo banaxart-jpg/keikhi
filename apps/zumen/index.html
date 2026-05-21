@@ -1,0 +1,296 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>図面読取検証</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@24,400,0,0">
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+:root {
+  --bg: #e4e6ee; --sl: rgba(255,255,255,1); --sd: rgba(168,172,192,0.75);
+  --text: #42455e; --text2: rgba(66,69,94,0.52); --text3: rgba(66,69,94,0.28);
+  --accent: #4961ff;
+  --err: #b04040;
+}
+body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; padding-bottom: 240px; }
+.icon { font-family: 'Material Symbols Outlined'; font-weight: normal; font-size: 1.1em; display: inline-block; line-height: 1; vertical-align: -0.18em; font-variation-settings: 'FILL' 0, 'wght' 500, 'GRAD' 0, 'opsz' 20; }
+
+.bar { display: flex; justify-content: space-between; align-items: center; padding: 40px 20px 0; }
+.hint { font-size: 11px; letter-spacing: 0.22em; color: var(--text3); font-weight: 700; text-transform: uppercase; }
+.pill { padding: 8px 16px; border-radius: 24px; font-size: 12px; font-weight: 700; border: none; color: var(--text2); background: var(--bg); box-shadow: 4px 4px 10px var(--sd), -4px -4px 10px var(--sl); cursor: pointer; font-family: inherit; }
+.pill:active { box-shadow: inset 3px 3px 8px var(--sd), inset -3px -3px 8px var(--sl); transform: scale(0.97); }
+
+.wrap { padding: 24px 18px 40px; max-width: 600px; margin: 0 auto; }
+.title { font-size: 26px; font-weight: 800; }
+.subtitle { font-size: 12px; color: var(--text2); font-weight: 600; margin-top: 2px; margin-bottom: 22px; }
+
+.card { background: var(--bg); border-radius: 22px; padding: 18px; margin-bottom: 16px; box-shadow: 8px 8px 18px var(--sd), -6px -6px 16px var(--sl); }
+.label { font-size: 11px; font-weight: 700; letter-spacing: 0.16em; color: var(--text3); text-transform: uppercase; margin-bottom: 10px; }
+
+/* 画像エリア */
+.img-area { border-radius: 14px; background: var(--bg); box-shadow: inset 3px 3px 8px var(--sd), inset -3px -3px 8px var(--sl); min-height: 180px; display: flex; align-items: center; justify-content: center; padding: 14px; cursor: pointer; }
+.img-area .placeholder { color: var(--text3); font-size: 13px; font-weight: 600; text-align: center; line-height: 1.6; }
+.img-area .placeholder .icon { font-size: 32px; color: var(--text3); margin-bottom: 8px; display: block; }
+.img-area img { max-width: 100%; max-height: 380px; border-radius: 8px; object-fit: contain; }
+.img-meta { display: flex; justify-content: space-between; align-items: center; margin-top: 8px; font-size: 10px; color: var(--text3); font-weight: 600; }
+.img-meta button { background: transparent; border: none; color: var(--accent); font-size: 11px; font-weight: 700; cursor: pointer; font-family: inherit; padding: 4px 8px; }
+
+/* チャット */
+.chat-thread { display: flex; flex-direction: column; gap: 10px; min-height: 100px; }
+.chat-thread:empty::before { content: "画像を選んでから、下の入力欄に質問を書いて送信"; font-size: 11.5px; color: var(--text3); font-style: italic; text-align: center; padding: 24px 0; display: block; }
+.chat-msg { display: grid; gap: 4px; padding: 10px 14px; border-radius: 14px; max-width: 92%; }
+.chat-msg .body { font-size: 13.5px; line-height: 1.6; white-space: pre-wrap; word-break: break-word; }
+.chat-msg .who { font-size: 9px; font-weight: 800; letter-spacing: 0.12em; color: var(--text3); text-transform: uppercase; }
+.chat-msg.q { background: rgba(73,97,255,0.12); align-self: flex-end; }
+.chat-msg.q .who { color: var(--accent); }
+.chat-msg.a { background: rgba(255,255,255,0.6); align-self: flex-start; box-shadow: 2px 2px 6px var(--sd); }
+.chat-msg.a .meta { font-size: 9px; color: var(--text3); margin-top: 4px; }
+.chat-msg.pending .body { color: var(--text2); font-style: italic; display: flex; align-items: center; gap: 8px; }
+.spinner { width: 12px; height: 12px; border: 2px solid rgba(73,97,255,0.2); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* 入力フッター */
+.fixed-footer { position: fixed; left: 0; right: 0; bottom: 0; padding: 14px 16px calc(14px + env(safe-area-inset-bottom)); background: linear-gradient(180deg, rgba(228,230,238,0) 0%, rgba(228,230,238,0.95) 30%, rgba(228,230,238,1) 70%); z-index: 100; }
+.input-row { display: flex; gap: 8px; align-items: flex-end; max-width: 600px; margin: 0 auto; }
+.input-row textarea { flex: 1; min-height: 48px; max-height: 140px; padding: 12px 14px; border-radius: 14px; border: none; background: var(--bg); box-shadow: inset 3px 3px 8px var(--sd), inset -3px -3px 8px var(--sl); font-family: inherit; font-size: 14px; line-height: 1.4; resize: none; color: var(--text); }
+.input-row textarea:focus { outline: none; box-shadow: inset 3px 3px 8px var(--sd), inset -3px -3px 8px var(--sl), 0 0 0 2px rgba(73,97,255,0.3); }
+.send-btn { padding: 0 18px; height: 48px; border: none; border-radius: 14px; background: linear-gradient(135deg, #6b7eff, #4961ff); color: white; font-weight: 800; font-size: 14px; font-family: inherit; cursor: pointer; box-shadow: 4px 4px 10px var(--sd); flex-shrink: 0; }
+.send-btn:disabled { opacity: 0.5; background: #aaa; }
+.send-btn:active:not(:disabled) { transform: scale(0.95); box-shadow: inset 2px 2px 6px rgba(0,0,0,0.15); }
+
+.err { color: var(--err); font-size: 11px; margin-top: 10px; font-weight: 600; padding: 10px 12px; border-radius: 12px; background: rgba(176, 64, 64, 0.08); white-space: pre-wrap; word-break: break-all; cursor: pointer; line-height: 1.5; font-family: ui-monospace, Menlo, monospace; }
+.err:empty { display: none; padding: 0; }
+.err::before { content: "タップでコピー  "; font-weight: 800; color: var(--text3); font-family: 'Outfit', sans-serif; }
+.err.copied::before { content: "コピーしました  "; color: #2a8c3a; }
+
+input[type="file"] { display: none; }
+</style>
+</head>
+<body>
+
+<div class="bar">
+  <span class="hint">Zumen</span>
+  <button class="pill" onclick="location.href='/'">← 戻る</button>
+</div>
+
+<div class="wrap">
+  <div class="title">図面読取検証</div>
+  <div class="subtitle">LLM (Gemini Pro) の図面読取精度を確認する。画像 + 質問で一問一答、画像を切り替えると会話はリセット。</div>
+
+  <div class="card">
+    <div class="label">図面画像</div>
+    <div class="img-area" id="imgArea" onclick="pickImage()">
+      <div class="placeholder" id="placeholder">
+        <span class="icon">add_photo_alternate</span>
+        タップして画像を選択<br>
+        <span style="font-size:11px;">図面・間取り図など</span>
+      </div>
+      <img id="imgPreview" style="display:none;" alt="図面">
+    </div>
+    <div class="img-meta" id="imgMeta" style="display:none;">
+      <span id="imgInfo"></span>
+      <button onclick="pickImage()">画像を変える</button>
+    </div>
+    <input type="file" id="fileInput" accept="image/*,application/pdf">
+  </div>
+
+  <div class="card">
+    <div class="label">質問と回答</div>
+    <div class="chat-thread" id="chatThread"></div>
+  </div>
+
+  <div class="err" id="err"></div>
+</div>
+
+<div class="fixed-footer">
+  <div class="input-row">
+    <textarea id="questionInput" placeholder="例: この部屋は何平米？ / 部屋数は？ / 玄関の幅は？" rows="1"></textarea>
+    <button class="send-btn" id="sendBtn" onclick="ask()" disabled>送信</button>
+  </div>
+</div>
+
+<script src="/config.js"></script>
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js";
+import { getAuth, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
+
+const state = {
+  imageBase64: null,
+  imageMime: null,
+  history: [],   // [{question, answer, modelUsed}]
+  busy: false,
+};
+
+const $ = (id) => document.getElementById(id);
+const err = (m) => { $("err").textContent = m || ""; };
+
+const escapeHtml = (s) => String(s).replace(/[&<>"']/g, (c) => ({
+  "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+}[c]));
+
+// ───── 画像選択 ─────
+window.pickImage = () => $("fileInput").click();
+
+$("fileInput").addEventListener("change", async (e) => {
+  const file = e.target.files?.[0];
+  if (!file) return;
+  if (file.size > 18 * 1024 * 1024) {
+    err("画像が大きすぎます (18MB 以内にしてください)");
+    return;
+  }
+  err("");
+  const reader = new FileReader();
+  reader.onload = () => {
+    const dataUrl = reader.result;
+    state.imageBase64 = dataUrl.split(",")[1];
+    state.imageMime = file.type || "image/jpeg";
+    // PDF はプレビューできないので別表示
+    if (state.imageMime === "application/pdf") {
+      $("imgPreview").style.display = "none";
+      $("placeholder").style.display = "";
+      $("placeholder").innerHTML = `<span class="icon">picture_as_pdf</span>${escapeHtml(file.name)}<br><span style="font-size:11px;">PDFファイル</span>`;
+    } else {
+      $("placeholder").style.display = "none";
+      $("imgPreview").style.display = "";
+      $("imgPreview").src = dataUrl;
+    }
+    $("imgMeta").style.display = "flex";
+    $("imgInfo").textContent = `${file.name} ・ ${(file.size / 1024).toFixed(0)} KB`;
+    // 画像が変わったらコンテキストリセット
+    state.history = [];
+    renderChat();
+    $("sendBtn").disabled = false;
+    $("questionInput").focus();
+  };
+  reader.readAsDataURL(file);
+  // input を空にして同じファイルでも change が発火するように
+  e.target.value = "";
+});
+
+// ───── チャット描画 ─────
+function renderChat() {
+  const thread = $("chatThread");
+  thread.innerHTML = "";
+  for (const h of state.history) {
+    const q = document.createElement("div");
+    q.className = "chat-msg q";
+    q.innerHTML = `<div class="who">あなた</div><div class="body">${escapeHtml(h.question)}</div>`;
+    thread.appendChild(q);
+    const a = document.createElement("div");
+    a.className = "chat-msg a" + (h.pending ? " pending" : "");
+    if (h.pending) {
+      a.innerHTML = `<div class="who">Gemini</div><div class="body"><span class="spinner"></span>読み取り中…</div>`;
+    } else {
+      a.innerHTML = `<div class="who">Gemini</div><div class="body">${escapeHtml(h.answer)}</div>` +
+        (h.modelUsed ? `<div class="meta">${escapeHtml(h.modelUsed)}</div>` : "");
+    }
+    thread.appendChild(a);
+  }
+}
+
+// ───── 送信 ─────
+let authToken = null;
+async function api(method, path, body) {
+  if (!authToken) throw new Error("ログインが切れました。トップへ戻ってログインし直してください。");
+  const res = await fetch(window.API_BASE + path, {
+    method,
+    headers: {
+      authorization: "Bearer " + authToken,
+      ...(body ? { "content-type": "application/json" } : {}),
+    },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  if (res.status === 204) return null;
+  const j = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(j.error || `HTTP ${res.status}`);
+  return j;
+}
+
+async function ask() {
+  if (state.busy) return;
+  const q = $("questionInput").value.trim();
+  if (!q) return;
+  if (!state.imageBase64 && state.history.length === 0) {
+    err("先に画像を選んでください");
+    return;
+  }
+  err("");
+  state.busy = true;
+  $("sendBtn").disabled = true;
+  $("questionInput").value = "";
+  // 楽観表示
+  const turn = { question: q, answer: "", pending: true };
+  state.history.push(turn);
+  renderChat();
+  try {
+    const r = await api("POST", "/api/zumen/ask", {
+      image: state.imageBase64,
+      mimeType: state.imageMime,
+      question: q,
+      // 過去の Q&A だけ送信 (pending を除く、回答済みのもの)
+      history: state.history.slice(0, -1).filter((h) => h.answer).map((h) => ({ question: h.question, answer: h.answer })),
+    });
+    turn.answer = r.answer;
+    turn.modelUsed = r.modelUsed;
+    turn.pending = false;
+    renderChat();
+  } catch (e) {
+    state.history.pop();
+    err(e.message);
+    renderChat();
+  } finally {
+    state.busy = false;
+    $("sendBtn").disabled = false;
+    $("questionInput").focus();
+  }
+}
+window.ask = ask;
+
+// Enter で送信 (Shift+Enter は改行)
+$("questionInput").addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
+    e.preventDefault();
+    ask();
+  }
+});
+
+// textarea 自動リサイズ
+$("questionInput").addEventListener("input", () => {
+  const ta = $("questionInput");
+  ta.style.height = "auto";
+  ta.style.height = Math.min(ta.scrollHeight, 140) + "px";
+});
+
+// ───── エラー欄タップでコピー ─────
+$("err").addEventListener("click", () => {
+  const t = $("err").textContent;
+  if (!t) return;
+  navigator.clipboard?.writeText(t).then(() => {
+    $("err").classList.add("copied");
+    setTimeout(() => $("err").classList.remove("copied"), 1500);
+  });
+});
+
+// ───── 認証 ─────
+(async () => {
+  try {
+    const cfg = await fetch("/__/firebase/init.json").then((r) => r.json());
+    cfg.authDomain = location.hostname;
+    const auth = getAuth(initializeApp(cfg));
+    onAuthStateChanged(auth, async (user) => {
+      if (!user) { location.href = "/?next=" + encodeURIComponent(location.pathname); return; }
+      authToken = await user.getIdToken();
+      setInterval(async () => { authToken = await user.getIdToken(true); }, 30 * 60 * 1000);
+    });
+  } catch (e) {
+    err("認証初期化エラー: " + e.message);
+  }
+})();
+</script>
+</body>
+</html>
