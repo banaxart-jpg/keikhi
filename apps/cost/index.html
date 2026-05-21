@@ -111,7 +111,31 @@ import { getAuth, onAuthStateChanged, setPersistence, browserLocalPersistence } 
 
 // ───────── AI 利用するミニアプリの設定 ─────────
 // 新しいAIアプリを追加するときは、ここに1ブロック足すだけ。
-// 必要なのは: 表示名・データ取得API・1呼出あたりの概算コスト(円)
+// 必要なのは: 表示名・データ取得API・(perCallJpy 固定 or costPerRecord で動的計算)
+//   perCallJpy:    1レコード一律のコスト (シンプル)
+//   costPerRecord: (record) => jpy  ... record ごとに provider/model から動的計算
+const COST_TABLE_USD = {
+  // 1メッセージ概算 (入力 + 出力トークン × 単価)。実態は web 検索追加等で増減する
+  "gemini-2.5-pro": { in: 4000, out: 700, inUsd: 1.25, outUsd: 10.0 },     // ≒ $0.012 = ¥1.8
+  "gemini-2.5-flash": { in: 4000, out: 700, inUsd: 0.30, outUsd: 2.50 },   // ≒ $0.003 = ¥0.5
+  "claude-opus-4-7": { in: 4000, out: 700, inUsd: 15.0, outUsd: 75.0 },    // ≒ $0.113 = ¥17
+  "gpt-5": { in: 4000, out: 2000, inUsd: 1.25, outUsd: 10.0 },             // reasoning消費 → out 多め ≒ $0.025 = ¥3.8
+};
+const USD_TO_JPY = 150;
+function kaigiCostFor(msg) {
+  if (msg.isSystemNote) return 0;
+  const model = msg.modelUsed
+    || (msg.provider === "claude" ? "claude-opus-4-7"
+      : msg.provider === "gpt" ? "gpt-5"
+      : msg.isConclusion ? "claude-opus-4-7"
+      : "gemini-2.5-pro");
+  // model_used に "models/" prefix が付いてる Gemini 等を正規化
+  const norm = String(model).replace(/^models\//, "").trim();
+  const t = COST_TABLE_USD[norm] || COST_TABLE_USD["gemini-2.5-pro"];
+  const usd = (t.in * t.inUsd + t.out * t.outUsd) / 1_000_000;
+  return usd * USD_TO_JPY;
+}
+
 const APPS = [
   {
     id: "keihi",
@@ -128,6 +152,22 @@ const APPS = [
     unitName: "レシート",
     dateField: "createdAt",
   },
+  {
+    id: "kaigi",
+    label: "AI会議",
+    fetchPath: "/api/kaigi/messages-summary",
+    costPerRecord: kaigiCostFor,
+    perCallJpy: 3.5,           // 表示用の平均値（3者ミックス）
+    perCallBreakdown: {
+      model: "gemini-2.5-pro / claude-opus-4-7 / gpt-5 (3者ミックス)",
+      inputTokens: 4000,
+      outputTokens: 1000,
+      inPriceUsdPerM: 5.83,    // 3者平均
+      outPriceUsdPerM: 31.67,
+    },
+    unitName: "発言",
+    dateField: "createdAt",
+  },
   // 新アプリ追加例 (コメントアウト):
   // {
   //   id: "nippou", label: "日報",
@@ -137,7 +177,6 @@ const APPS = [
   // },
 ];
 
-const USD_TO_JPY = 150;
 const $ = (id) => document.getElementById(id);
 
 // ───────── Auth ─────────
@@ -228,39 +267,42 @@ function escapeHtml(s) {
 }
 
 function render(app, records) {
+  const costOf = (r) => (app.costPerRecord ? app.costPerRecord(r) : app.perCallJpy);
   const totalCount = records.length;
-  const totalJpy = totalCount * app.perCallJpy;
+  const totalJpy = records.reduce((sum, r) => sum + costOf(r), 0);
   const totalUsd = totalJpy / USD_TO_JPY;
 
   // 月別集計
-  const byMonth = {};   // "YYYY-MM" → count
+  const byMonthCount = {};   // "YYYY-MM" → count
+  const byMonthJpy   = {};   // "YYYY-MM" → jpy
   const now = new Date();
   const thisYm = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,"0")}`;
   for (const r of records) {
     const d = r[app.dateField] ? new Date(r[app.dateField]) : null;
     if (!d || isNaN(d)) continue;
     const ym = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`;
-    byMonth[ym] = (byMonth[ym] || 0) + 1;
+    byMonthCount[ym] = (byMonthCount[ym] || 0) + 1;
+    byMonthJpy[ym]   = (byMonthJpy[ym]   || 0) + costOf(r);
   }
-  const thisMonthCount = byMonth[thisYm] || 0;
-  const thisMonthJpy = thisMonthCount * app.perCallJpy;
+  const thisMonthCount = byMonthCount[thisYm] || 0;
+  const thisMonthJpy   = byMonthJpy[thisYm]   || 0;
+  const avgPerCall = totalCount ? totalJpy / totalCount : app.perCallJpy;
 
-  // 最近6ヶ月のリスト（多い順ではなく時系列で）
+  // 最近6ヶ月のリスト（時系列で）
   const months = [];
   for (let i = 5; i >= 0; i--) {
     const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
     const ym = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`;
-    months.push({ ym, count: byMonth[ym] || 0 });
+    months.push({ ym, count: byMonthCount[ym] || 0, jpy: byMonthJpy[ym] || 0 });
   }
-  const maxCount = Math.max(...months.map(m => m.count), 1);
+  const maxJpy = Math.max(...months.map(m => m.jpy), 1);
 
   const monthHtml = months.map(m => {
-    const cost = m.count * app.perCallJpy;
-    const w = (m.count / maxCount) * 100;
+    const w = (m.jpy / maxJpy) * 100;
     return `<div class="month-row">
       <div class="month-label">${m.ym}</div>
       <div class="month-bar"><div class="month-bar-fill" style="width:${w}%"></div></div>
-      <div class="month-cost">${fmtJpy(cost)}</div>
+      <div class="month-cost">${fmtJpy(m.jpy)}</div>
       <div class="month-count">${m.count}件</div>
     </div>`;
   }).join("");
@@ -284,7 +326,7 @@ function render(app, records) {
       </div>
       <div class="stat-card">
         <div class="stat-label">1${app.unitName}平均</div>
-        <div class="stat-value">${fmtJpy(app.perCallJpy)}</div>
+        <div class="stat-value">${fmtJpy(avgPerCall)}</div>
       </div>
       <div class="stat-card">
         <div class="stat-label">今月</div>

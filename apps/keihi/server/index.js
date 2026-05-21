@@ -933,6 +933,28 @@ app.post("/api/kaigi/sessions/:id/extend", async (req, res) => {
   }
 });
 
+// cost アプリ用: ユーザー自身の kaigi 全メッセージのコスト集計用データを返す
+app.get("/api/kaigi/messages-summary", async (req, res) => {
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  try {
+    const { rows } = await p.query(
+      `SELECT m.provider, m.model_used AS "modelUsed", m.is_conclusion AS "isConclusion",
+              m.is_system_note AS "isSystemNote", m.created_at AS "createdAt"
+         FROM kaigi_messages m
+         JOIN kaigi_sessions s ON m.session_id = s.id
+        WHERE s.user_email = $1
+        ORDER BY m.created_at DESC
+        LIMIT 20000`,
+      [req.user.email]
+    );
+    res.json(rows);
+  } catch (err) {
+    console.error("kaigi cost summary", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // 次の議題に進む（前回の結論を踏まえて新議題で再スタート）
 app.post("/api/kaigi/sessions/:id/next-topic", async (req, res) => {
   const p = getPool();
