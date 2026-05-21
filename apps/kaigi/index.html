@@ -783,6 +783,7 @@ async function sendChat() {
     state.busy = false;
     const sb = document.getElementById("chatSendBtn");
     if (sb) sb.disabled = false;
+    renderChatThread();  // busy=false になった後にもう一度描画して startR2 ボタンの disabled を再評価
   }
 }
 window.sendChat = sendChat;
