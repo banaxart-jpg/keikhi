@@ -47,6 +47,25 @@ git push origin main
 push が reject された / 想定外の ahead/behind 表示 → そこで止めてユーザーに確認。
 **強引に `git push --force` は禁止**（小西が明示しない限り）。他人の commit を消す可能性。
 
+### 🚨🚨 ファイル編集の前にも必ず fetch（毎回）🚨🚨
+
+セッション中、複数ターンに分けて作業するときも、**新しいファイル編集を始める前に毎回**：
+
+```bash
+git fetch origin main
+git rev-list --left-right --count main...origin/main   # behind 0 を確認
+# behind なら必ず pull --ff-only
+git pull --ff-only origin main
+git checkout claude/<session-branch>
+git merge --ff-only main   # 作業ブランチも main に揃える
+```
+
+理由: 別の Claude Code セッション（別タブ・別人）や名取が main を進めている可能性。stale な状態で Edit すると、知らずに巻き戻し commit を作ってしまう。
+
+**判断基準**: 直前の commit から「1ターン以上経過した」or「タスクが切り替わった」場合は、編集前に必ず fetch。短く済むので毎回やる方が安全。
+
+これを怠った場合、commit のタイミングで rebase 沼にハマる（実際に発生したことが何度もある）。
+
 ### 名取からの典型的な依頼パターン
 
 小西が名取（楓ちゃん）に「Claude Code に README とかよく読んでから書いてって言えば大丈夫」と伝えてある。そのため、名取からのセッション開始メッセージはこういう形式が多い想定：

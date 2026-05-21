@@ -26,6 +26,35 @@
 
 ---
 
+## 🚨🚨🚨 コードを書く前に必ず pull する 🚨🚨🚨
+
+**最重要・例外なし**。一行でもコードを編集する前に、ローカルが remote の最新と一致しているか確認する。
+別セッション・別 clone・別ブランチが先に進めている可能性があるため、**stale な状態で編集→commit すると他人の作業を巻き戻す事故**になる。
+
+```bash
+# 作業前に必ず実行
+git fetch origin main
+git rev-list --left-right --count main...origin/main   # "0	0" を確認
+# behind なら追従
+git pull --ff-only origin main
+```
+
+**チェックリスト（毎セッション・毎タスク開始時）:**
+- [ ] `git fetch origin main`
+- [ ] `git rev-list --left-right --count main...origin/main` で **behind 0** を確認
+- [ ] behind があれば `git pull --ff-only origin main` で追従
+- [ ] 自分の作業ブランチ（`claude/*`）も `git merge --ff-only main` で main に揃える
+- [ ] **これを終えるまでファイルを編集しない**
+
+これは Claude Code・小西・名取・誰が触る場合も**例外なし**。Cloud Shell で作業するときも、Web の Claude セッションで作業するときも、ローカルで作業するときも同じ。
+
+⚠️ **過去事例:**
+- 別セッションの commit を見落として古い main を上書き→本番 Hosting が巻き戻る事故
+- 別ブランチで進められたフォーマット変更が消えて差分が壊れる
+- 同じファイルを別セッションが触ってる時に diff が膨らんで merge に失敗
+
+---
+
 ## 🔄 main に push する手順（必ずこの順番で）
 
 別セッション・別 clone の commit を巻き戻す事故を防ぐため、**push する前に必ず fetch して状態確認** する。

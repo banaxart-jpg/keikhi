@@ -998,9 +998,11 @@ app.post("/api/internal/kaigi/tick", async (req, res) => {
     res.json({ ok: true });
   } catch (err) {
     console.error("kaigi tick", err);
+    // status='failed' に書き換えない（Cloud Tasks の retry に救わせる）。
+    // 連続失敗を見たければ last_error と updated_at だけ更新しておく。
     try {
       await getPool().query(
-        `UPDATE kaigi_sessions SET status='failed', last_error=$2, updated_at=now() WHERE id=$1`,
+        `UPDATE kaigi_sessions SET last_error=$2, updated_at=now() WHERE id=$1`,
         [sessionId, String(err.message || err).slice(0, 1000)]
       );
     } catch (e2) { /* swallow */ }

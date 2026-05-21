@@ -413,8 +413,33 @@ async function refreshSession() {
       stopPoll();
       stopThinkingTimer();
     }
+    // 自動結論: 3R (= speakers * 3) 発言済みなのに結論未生成かつ auto でもない場合、
+    // 勝手に conclude を呼んで終わらせる。サーバー側の tick が落ちて止まっても救う。
+    await autoConcludeIfReady();
   } catch (e) {
     errSession(e.message);
+  }
+}
+
+async function autoConcludeIfReady() {
+  if (state.busy || !state.sessionId || !state.session) return;
+  const speakerCnt = (state.session.speakers || SPEAKERS).length;
+  const speechCnt = state.messages.filter((m) => !m.isConclusion && !m.isSystemNote).length;
+  const hasConcl = state.messages.some((m) => m.isConclusion);
+  if (speechCnt >= speakerCnt * 3 && !hasConcl && state.session.status !== "auto") {
+    state.busy = true;
+    renderSession();
+    try {
+      await api("POST", `/api/kaigi/sessions/${state.sessionId}/conclude`);
+      const { session, messages } = await api("GET", `/api/kaigi/sessions/${state.sessionId}`);
+      state.session = session;
+      state.messages = messages;
+      renderSession();
+    } catch (e) {
+      errSession("自動結論失敗: " + e.message);
+    } finally {
+      state.busy = false;
+    }
   }
 }
 
