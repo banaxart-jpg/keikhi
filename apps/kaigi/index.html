@@ -368,19 +368,23 @@ async function createSession() {
   if (state.busy) return;
   state.busy = true;
   $("createBtn").disabled = true;
+  let createdId = null;
   try {
     const s = await api("POST", "/api/kaigi/sessions", {
       topic,
       speakers: SPEAKERS.map(({ name, provider }) => ({ name, provider })),
     });
     $("newTopic").value = "";
-    await openSession(s.id);
+    createdId = s.id;
   } catch (e) {
     errList(e.message);
   } finally {
+    // openSession 内の renderSession が走る前に busy を解除しないと、
+    // 「会議スタート」ボタンが disabled のままレンダリングされてしまう。
     state.busy = false;
     $("createBtn").disabled = false;
   }
+  if (createdId) await openSession(createdId);
 }
 window.createSession = createSession;
 
