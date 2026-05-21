@@ -946,7 +946,8 @@ app.post("/api/kaigi/sessions/:id/chat", async (req, res) => {
     const session = await loadSession(req.params.id, req.user.email);
     const { rows: history } = await p.query(
       `SELECT speaker, content, is_conclusion AS "isConclusion",
-              is_system_note AS "isSystemNote", is_chat AS "isChat"
+              is_system_note AS "isSystemNote", is_chat AS "isChat",
+              created_at AS "createdAt"
          FROM kaigi_messages WHERE session_id=$1 ORDER BY created_at ASC, id ASC`,
       [req.params.id]
     );
@@ -954,7 +955,12 @@ app.post("/api/kaigi/sessions/:id/chat", async (req, res) => {
       .map((h) => h.isConclusion ? `【結論】\n${h.content}`
         : h.isSystemNote ? `（システム通知）${h.content}`
         : `${h.speaker}: ${h.content}`).join("\n\n");
-    const chatLog = history.filter((h) => h.isChat)
+    // チャットは「最新の結論より後に行われたもの」だけを文脈に含める。
+    // 前ラウンドの結論直下で交わしたチャットは、そのラウンドで完結したものとして
+    // 扱い、新しいラウンドのアシスタントには引き継がない（議論本体は引き継ぐ）。
+    const conclTimes = history.filter((h) => h.isConclusion).map((h) => new Date(h.createdAt).getTime());
+    const lastConclTime = conclTimes.length ? Math.max(...conclTimes) : 0;
+    const chatLog = history.filter((h) => h.isChat && new Date(h.createdAt).getTime() > lastConclTime)
       .map((h) => `${h.speaker}: ${h.content}`).join("\n\n");
 
     const prompt = `あなたは経営者と1対1で対話するアシスタント AI (Gemini Flash) です。
@@ -1019,12 +1025,21 @@ app.post("/api/kaigi/sessions/:id/start-from-chat", async (req, res) => {
   const rounds = Math.min(Math.max(parseInt(req.body?.rounds || "3", 10), 1), 10);
   try {
     const session = await loadSession(req.params.id, req.user.email);
-    const { rows: chatRows } = await p.query(
-      `SELECT speaker, content FROM kaigi_messages
-         WHERE session_id=$1 AND is_chat=true ORDER BY created_at ASC, id ASC`,
+    // 最新の結論以降のチャットだけを「今のラウンドのチャット」として扱う
+    const { rows: lastConclRows } = await p.query(
+      `SELECT created_at FROM kaigi_messages
+         WHERE session_id=$1 AND is_conclusion=true
+         ORDER BY created_at DESC LIMIT 1`,
       [req.params.id]
     );
-    if (!chatRows.length) return res.status(400).json({ error: "チャットが空です。何か話してから押してください。" });
+    const lastConclTime = lastConclRows[0]?.created_at || new Date(0);
+    const { rows: chatRows } = await p.query(
+      `SELECT speaker, content FROM kaigi_messages
+         WHERE session_id=$1 AND is_chat=true AND created_at > $2
+         ORDER BY created_at ASC, id ASC`,
+      [req.params.id, lastConclTime]
+    );
+    if (!chatRows.length) return res.status(400).json({ error: "最新ラウンドのチャットが空です。何か話してから押してください。" });
     const chatLog = chatRows.map((c) => `${c.speaker}: ${c.content}`).join("\n\n");
 
     const topicGenPrompt = `以下は、ある議題について 3 つの AI が議論して結論を出した後、ユーザーがアシスタント AI と次に何を議論すべきかを話し合った内容です。

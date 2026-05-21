@@ -740,7 +740,12 @@ function renderSession() {
 function renderChatThread() {
   const thread = document.getElementById("chatThread");
   if (!thread) return;  // 結論未生成時は chatCard 自体が存在しない
-  const chats = state.messages.filter((m) => m.isChat);
+  // 最新の結論より後に行われたチャットだけ表示する。
+  // 前ラウンドの結論直下で行ったチャットは、そのラウンドで完結したものとして畳む。
+  const conclMsgs = state.messages.filter((m) => m.isConclusion);
+  const lastConcl = conclMsgs[conclMsgs.length - 1];
+  const lastConclTime = lastConcl ? new Date(lastConcl.createdAt).getTime() : 0;
+  const chats = state.messages.filter((m) => m.isChat && new Date(m.createdAt).getTime() > lastConclTime);
   thread.innerHTML = "";
   for (const c of chats) {
     const div = document.createElement("div");
