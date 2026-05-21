@@ -746,7 +746,7 @@ app.get("/api/kaigi/sessions/:id", async (req, res) => {
     const { rows: messages } = await p.query(
       `SELECT id, speaker, provider, content, model_used AS "modelUsed", round_num AS "roundNum", seq,
               is_conclusion AS "isConclusion", is_system_note AS "isSystemNote", created_at AS "createdAt"
-         FROM kaigi_messages WHERE session_id=$1 ORDER BY is_conclusion ASC, seq ASC, id ASC`,
+         FROM kaigi_messages WHERE session_id=$1 ORDER BY created_at ASC, id ASC`,
       [req.params.id]
     );
     res.json({ session, messages });
