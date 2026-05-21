@@ -616,7 +616,7 @@ async function advanceSession(sessionId, userEmail) {
   const speakers = session.speakers;
   const { rows: msgRows } = await p.query(
     `SELECT speaker, content, seq, is_system_note AS "isSystemNote"
-       FROM kaigi_messages WHERE session_id=$1 AND NOT is_conclusion ORDER BY seq ASC`,
+       FROM kaigi_messages WHERE session_id=$1 AND NOT is_conclusion AND NOT is_chat ORDER BY seq ASC`,
     [sessionId]
   );
   const rawHistory = msgRows.map((m) => ({ name: m.speaker, text: m.content, isSystemNote: m.isSystemNote }));
@@ -659,7 +659,7 @@ async function concludeSession(sessionId, userEmail) {
   const session = await loadSession(sessionId, userEmail);
   const { rows: msgRows } = await p.query(
     `SELECT speaker, content, is_system_note AS "isSystemNote"
-       FROM kaigi_messages WHERE session_id=$1 AND NOT is_conclusion ORDER BY seq ASC`,
+       FROM kaigi_messages WHERE session_id=$1 AND NOT is_conclusion AND NOT is_chat ORDER BY seq ASC`,
     [sessionId]
   );
   const speeches = msgRows.filter((m) => !m.isSystemNote);
@@ -692,7 +692,7 @@ app.get("/api/kaigi/sessions", async (req, res) => {
   try {
     const { rows } = await p.query(
       `SELECT s.id, s.topic, s.topic_summary AS "topicSummary", s.status, s.auto_rounds_remaining, s.extension_count, s.last_error, s.created_at, s.updated_at,
-              (SELECT count(*)::int FROM kaigi_messages m WHERE m.session_id = s.id AND NOT m.is_conclusion AND NOT m.is_system_note) AS msg_count,
+              (SELECT count(*)::int FROM kaigi_messages m WHERE m.session_id = s.id AND NOT m.is_conclusion AND NOT m.is_system_note AND NOT m.is_chat) AS msg_count,
               EXISTS(SELECT 1 FROM kaigi_messages m WHERE m.session_id = s.id AND m.is_conclusion) AS has_conclusion,
               (SELECT LEFT(m.content, 500) FROM kaigi_messages m
                  WHERE m.session_id = s.id AND m.is_conclusion
@@ -796,7 +796,8 @@ app.get("/api/kaigi/sessions/:id", async (req, res) => {
     const session = await loadSession(req.params.id, req.user.email);
     const { rows: messages } = await p.query(
       `SELECT id, speaker, provider, content, model_used AS "modelUsed", round_num AS "roundNum", seq,
-              is_conclusion AS "isConclusion", is_system_note AS "isSystemNote", created_at AS "createdAt"
+              is_conclusion AS "isConclusion", is_system_note AS "isSystemNote", is_chat AS "isChat",
+              created_at AS "createdAt"
          FROM kaigi_messages WHERE session_id=$1 ORDER BY created_at ASC, id ASC`,
       [req.params.id]
     );
@@ -933,6 +934,158 @@ app.post("/api/kaigi/sessions/:id/extend", async (req, res) => {
   }
 });
 
+// ─────────────────────────────
+// kaigi: 結論後のチャット (アシスタント AI = Gemini Flash と1対1で対話)
+// ─────────────────────────────
+app.post("/api/kaigi/sessions/:id/chat", async (req, res) => {
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  const userMsg = String(req.body?.message || "").trim();
+  if (!userMsg) return res.status(400).json({ error: "message required" });
+  try {
+    const session = await loadSession(req.params.id, req.user.email);
+    const { rows: history } = await p.query(
+      `SELECT speaker, content, is_conclusion AS "isConclusion",
+              is_system_note AS "isSystemNote", is_chat AS "isChat"
+         FROM kaigi_messages WHERE session_id=$1 ORDER BY created_at ASC, id ASC`,
+      [req.params.id]
+    );
+    const debateLog = history.filter((h) => !h.isChat)
+      .map((h) => h.isConclusion ? `【結論】\n${h.content}`
+        : h.isSystemNote ? `（システム通知）${h.content}`
+        : `${h.speaker}: ${h.content}`).join("\n\n");
+    const chatLog = history.filter((h) => h.isChat)
+      .map((h) => `${h.speaker}: ${h.content}`).join("\n\n");
+
+    const prompt = `あなたは経営者と1対1で対話するアシスタント AI (Gemini Flash) です。
+役割は、3つの AI (Gemini, Claude, GPT) が行った議論と結論について、ユーザーが疑問を解消したり、補足情報を加えたり、次の議題を一緒に練ったりするのを手助けすることです。
+
+【お題】
+${session.topic_summary || session.topic}
+
+【3者の議論と結論】
+${debateLog || "（まだなし）"}
+
+${chatLog ? `【これまでのアシスタントとのチャット】\n${chatLog}\n\n` : ""}【ユーザーの新しい発言】
+${userMsg}
+
+【返答の方針】
+- 議論で出た内容や結論を根拠に答える。議論にない事実は推測で答えず「議論の中では触れられていない」と素直に言う
+- ユーザーが「次の議題はどうしよう」「もう少し◯◯について深めたい」と言ってきたら、議論を踏まえて 1〜3 個の具体的な議題候補を提案する
+- 平易な言葉で、業界用語は補足説明する
+- 200字程度で簡潔に。長く語らない
+- マークダウン記号は使わず自然な文章で
+返答:`;
+
+    const { result, modelUsed } = await callGeminiWithFallback(prompt, {
+      primaryModel: "gemini-2.5-flash",
+      maxOutputTokens: 1500,
+    });
+    const reply = result.response.text().trim();
+
+    const { rows: uRows } = await p.query(
+      `INSERT INTO kaigi_messages (session_id, speaker, provider, content, model_used, round_num, seq, is_chat)
+       VALUES ($1, 'あなた', 'user', $2, NULL, 0,
+         (SELECT COALESCE(MAX(seq),-1)+1 FROM kaigi_messages WHERE session_id=$1),
+         true)
+       RETURNING id, created_at`,
+      [req.params.id, userMsg]
+    );
+    const { rows: aRows } = await p.query(
+      `INSERT INTO kaigi_messages (session_id, speaker, provider, content, model_used, round_num, seq, is_chat)
+       VALUES ($1, 'アシスタント', 'gemini', $2, $3, 0,
+         (SELECT COALESCE(MAX(seq),-1)+1 FROM kaigi_messages WHERE session_id=$1),
+         true)
+       RETURNING id, created_at`,
+      [req.params.id, reply, modelUsed]
+    );
+    await p.query("UPDATE kaigi_sessions SET updated_at=now() WHERE id=$1", [req.params.id]);
+    res.json({
+      user: { id: uRows[0].id, speaker: "あなた", content: userMsg, isChat: true, createdAt: uRows[0].created_at },
+      assistant: { id: aRows[0].id, speaker: "アシスタント", provider: "gemini", content: reply, modelUsed, isChat: true, createdAt: aRows[0].created_at },
+    });
+  } catch (err) {
+    console.error("kaigi chat", err);
+    res.status(err.status || 500).json({ error: err.message });
+  }
+});
+
+// チャット履歴から次の議題を自動生成 → 第2ラウンド開始
+app.post("/api/kaigi/sessions/:id/start-from-chat", async (req, res) => {
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  const rounds = Math.min(Math.max(parseInt(req.body?.rounds || "3", 10), 1), 10);
+  try {
+    const session = await loadSession(req.params.id, req.user.email);
+    const { rows: chatRows } = await p.query(
+      `SELECT speaker, content FROM kaigi_messages
+         WHERE session_id=$1 AND is_chat=true ORDER BY created_at ASC, id ASC`,
+      [req.params.id]
+    );
+    if (!chatRows.length) return res.status(400).json({ error: "チャットが空です。何か話してから押してください。" });
+    const chatLog = chatRows.map((c) => `${c.speaker}: ${c.content}`).join("\n\n");
+
+    const topicGenPrompt = `以下は、ある議題について 3 つの AI が議論して結論を出した後、ユーザーがアシスタント AI と次に何を議論すべきかを話し合った内容です。
+
+【前のお題】
+${session.topic_summary || session.topic}
+
+【ユーザーとアシスタントのチャット】
+${chatLog}
+
+このチャットから、次のラウンドで議論すべき具体的なお題を 1 つ抽出してください。
+- ユーザーが明示的に「次は X を議論したい」と言っていればそれを使う
+- 明示されていなければ、チャットの流れから自然に導かれる議題を作る
+- ユーザーがチャットで提供した追加情報や前提があれば、お題に組み込む
+
+出力形式: お題本文だけを 1 つ。前置きや「次の議題は〜」のような枕詞は付けない。30〜200 字程度。`;
+
+    const { result } = await callGeminiWithFallback(topicGenPrompt, {
+      primaryModel: "gemini-2.5-flash",
+      maxOutputTokens: 1500,
+    });
+    const newTopic = result.response.text().trim();
+    if (!newTopic) throw new Error("議題の生成に失敗しました");
+
+    const oldTopic = session.topic;
+    const newSummary = await summarizeTopicIfLong(newTopic);
+    await p.query(
+      `UPDATE kaigi_sessions SET topic=$1, topic_summary=$2 WHERE id=$3`,
+      [newTopic, newSummary, req.params.id]
+    );
+
+    const oldTopicShort = oldTopic.length > 200 ? oldTopic.slice(0, 200) + "…" : oldTopic;
+    const { rows: cntRows } = await p.query(
+      "SELECT COUNT(*)::int AS n FROM kaigi_messages WHERE session_id=$1",
+      [req.params.id]
+    );
+    const noteText = `ユーザーが前の結論についてアシスタントとチャットし、その内容から次の議題を抽出しました。これまでの議論と結論、そしてチャットで補強された前提を踏まえて新議題に取り組んでください。
+
+【前のテーマ】
+${oldTopicShort}
+
+【チャットから生成された次の議題】
+${newTopic}`;
+
+    await p.query(
+      `INSERT INTO kaigi_messages (session_id, speaker, provider, content, model_used, round_num, seq, is_system_note)
+       VALUES ($1, '司会', 'system', $2, NULL, 0, $3, true)`,
+      [req.params.id, noteText, cntRows[0].n]
+    );
+
+    await p.query(
+      `UPDATE kaigi_sessions SET status='auto', auto_rounds_remaining=$1, extension_count=extension_count+1, last_error=NULL, updated_at=now()
+         WHERE id=$2`,
+      [rounds, req.params.id]
+    );
+    const taskName = await enqueueKaigiTick(Number(req.params.id), 0);
+    res.json({ ok: true, newTopic, taskQueued: !!taskName });
+  } catch (err) {
+    console.error("kaigi start-from-chat", err);
+    res.status(err.status || 500).json({ error: err.message });
+  }
+});
+
 // cost アプリ用: ユーザー自身の kaigi 全メッセージのコスト集計用データを返す
 app.get("/api/kaigi/messages-summary", async (req, res) => {
   const p = getPool();
@@ -1046,7 +1199,7 @@ app.post("/api/internal/kaigi/tick", async (req, res) => {
     const speakers = session.speakers;
     // ラウンド計算は speech だけで（system_note は除外）
     const { rows: cntRows } = await p.query(
-      `SELECT COUNT(*)::int AS n FROM kaigi_messages WHERE session_id=$1 AND NOT is_conclusion AND NOT is_system_note`,
+      `SELECT COUNT(*)::int AS n FROM kaigi_messages WHERE session_id=$1 AND NOT is_conclusion AND NOT is_system_note AND NOT is_chat`,
       [sessionId]
     );
     const seqBefore = cntRows[0].n;

@@ -66,3 +66,7 @@ ALTER TABLE kaigi_messages ADD COLUMN IF NOT EXISTS is_system_note  BOOLEAN NOT 
 
 -- 長いお題（人生略歴等）対応。AI に渡す短い要約版を別途保存し、本文はメッセージ履歴の system note として保持して圧縮対象に。
 ALTER TABLE kaigi_sessions ADD COLUMN IF NOT EXISTS topic_summary TEXT;
+
+-- 結論後のユーザー <-> アシスタントAI (Gemini Flash) チャット用フラグ
+-- 議論本体には影響させず、別レーンとして扱う
+ALTER TABLE kaigi_messages ADD COLUMN IF NOT EXISTS is_chat BOOLEAN NOT NULL DEFAULT false;

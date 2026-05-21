@@ -123,6 +123,27 @@ textarea:focus, input:focus { outline: none; }
 .next-topic-btn:active { transform: scale(0.98); box-shadow: inset 2px 2px 6px rgba(0,0,0,0.15); }
 .next-topic-btn:disabled { opacity: 0.5; }
 
+/* 結論後のチャット (アシスタントAI Gemini Flash と1対1) */
+.chat-card { margin-top: 16px; padding: 18px; border-radius: 18px; background: var(--bg); box-shadow: inset 4px 4px 10px var(--sd), inset -3px -3px 8px var(--sl); }
+.chat-card .label { color: var(--text2); margin-bottom: 12px; }
+.chat-thread { display: flex; flex-direction: column; gap: 10px; margin-bottom: 12px; max-height: 400px; overflow-y: auto; }
+.chat-thread:empty::before { content: "結論について質問したり、補足情報を追加したり、次の議題を相談できる"; font-size: 11.5px; color: var(--text3); font-style: italic; text-align: center; padding: 16px 0; display: block; }
+.chat-msg { display: grid; gap: 4px; padding: 8px 10px; border-radius: 12px; max-width: 88%; }
+.chat-msg .who { font-size: 9px; font-weight: 800; letter-spacing: 0.12em; color: var(--text3); text-transform: uppercase; }
+.chat-msg .body { font-size: 13px; line-height: 1.6; white-space: pre-wrap; word-break: break-word; }
+.chat-msg.user { background: rgba(73,97,255,0.1); align-self: flex-end; }
+.chat-msg.user .who { color: #4961ff; }
+.chat-msg.assistant { background: rgba(255,255,255,0.6); align-self: flex-start; }
+.chat-input-row { display: flex; gap: 8px; align-items: flex-end; }
+.chat-input-row textarea { flex: 1; min-height: 44px; max-height: 120px; padding: 10px 12px; border-radius: 12px; border: none; background: var(--bg); box-shadow: inset 2px 2px 6px var(--sd), inset -2px -2px 6px var(--sl); font-family: inherit; font-size: 13px; line-height: 1.4; resize: none; color: var(--text); }
+.chat-input-row textarea:focus { outline: none; }
+.chat-send-btn { padding: 0 16px; height: 44px; border: none; border-radius: 12px; background: linear-gradient(135deg, #6b7eff, #4961ff); color: white; font-weight: 800; font-size: 13px; font-family: inherit; cursor: pointer; box-shadow: 3px 3px 8px var(--sd); flex-shrink: 0; }
+.chat-send-btn:disabled { opacity: 0.5; }
+.chat-send-btn:active:not(:disabled) { transform: scale(0.95); box-shadow: inset 2px 2px 6px rgba(0,0,0,0.15); }
+.chat-start-r2-btn { margin-top: 10px; width: 100%; padding: 12px; border-radius: 12px; border: none; font-family: inherit; font-size: 13px; font-weight: 700; cursor: pointer; color: var(--text); background: var(--bg); box-shadow: 4px 4px 10px var(--sd), -3px -3px 8px var(--sl); }
+.chat-start-r2-btn:disabled { opacity: 0.45; }
+.chat-start-r2-btn:active:not(:disabled) { transform: scale(0.98); box-shadow: inset 3px 3px 8px var(--sd), inset -2px -2px 6px var(--sl); }
+
 .err { color: var(--err); font-size: 11px; margin-top: 10px; font-weight: 600; padding: 10px 12px; border-radius: 12px; background: rgba(176, 64, 64, 0.08); white-space: pre-wrap; word-break: break-all; cursor: pointer; line-height: 1.5; max-height: 200px; overflow: auto; font-family: ui-monospace, Menlo, monospace; }
 .err:empty { display: none; padding: 0; }
 .err::before { content: "タップでコピー"; font-weight: 800; color: var(--text3); font-family: 'Outfit', sans-serif; }
@@ -349,11 +370,20 @@ function renderConclusion(content, ext, isLast = true) {
   if (parts.unresolved && !/^無し$/i.test(parts.unresolved.trim())) {
     html += `<div class="sub-label">未解決の論点</div><div class="sub-text">${escapeHtml(parts.unresolved)}</div>`;
   }
-  // 最新の結論にだけ「次の議題へ」ボタン。過去の結論は表示のみで邪魔しない
-  if (isLast) {
-    html += `<button class="next-topic-btn" onclick="openNextTopic()"><span class="icon">arrow_forward</span>この結論を踏まえて次の議題へ</button>`;
-  }
   html += `</div>`;
+  // 最新の結論の直下にチャットUI（質問・補足・次議題の相談） + 「議題作って次へ」ボタン
+  // 過去の結論には何も追加しない
+  if (isLast) {
+    html += `<div class="chat-card" id="chatCard">
+      <div class="label">アシスタントと話す（Gemini）</div>
+      <div class="chat-thread" id="chatThread"></div>
+      <div class="chat-input-row">
+        <textarea id="chatInput" placeholder="例：◯◯の根拠は？ / 次は△△について議論したい"></textarea>
+        <button class="chat-send-btn" id="chatSendBtn" onclick="sendChat()">送信</button>
+      </div>
+      <button class="chat-start-r2-btn" id="chatStartR2Btn" onclick="startFromChat()" disabled>この会話から議題を作って次のラウンドへ</button>
+    </div>`;
+  }
   return html;
 }
 
@@ -607,7 +637,7 @@ function renderSession() {
   };
   $("sessionStatus").textContent = statusMap[state.session.status] || state.session.status;
 
-  const speeches = state.messages.filter((m) => !m.isConclusion && !m.isSystemNote);
+  const speeches = state.messages.filter((m) => !m.isConclusion && !m.isSystemNote && !m.isChat);
   const systemNotes = state.messages.filter((m) => m.isSystemNote);
   const concl = state.messages.find((m) => m.isConclusion);
   const isAuto = state.session.status === "auto";
@@ -654,11 +684,13 @@ function renderSession() {
   } else {
     chat.innerHTML = "";
     for (const m of visible) {
+      if (m.isChat) continue;  // チャットは結論カード直下のチャット欄に描画する
       if (m.isConclusion) {
-        // 結論カードを時系列で挿入（最後の結論にだけ next-topic ボタン）
+        // 結論カードを時系列で挿入（最後の結論にだけチャット欄を埋め込み）
         const wrap = document.createElement("div");
         wrap.innerHTML = renderConclusion(m.content, ext, m.id === lastConclId);
-        if (wrap.firstElementChild) chat.appendChild(wrap.firstElementChild);
+        // renderConclusion は summary-card と (最新なら) chat-card の 2 要素を返すので両方追加
+        while (wrap.firstElementChild) chat.appendChild(wrap.firstElementChild);
         continue;
       }
       const div = document.createElement("div");
@@ -700,8 +732,77 @@ function renderSession() {
 
   // 結論カードはチャット内に時系列でインライン表示するので、独立カードは未使用
   $("conclusionWrap").innerHTML = "";
+  // 結論カードの直下のチャットスレッドを描画
+  renderChatThread();
   // 自動スクロールは refreshSession 側で「下端付近にいた && 新着あり」時のみ実行
 }
+
+function renderChatThread() {
+  const thread = document.getElementById("chatThread");
+  if (!thread) return;  // 結論未生成時は chatCard 自体が存在しない
+  const chats = state.messages.filter((m) => m.isChat);
+  thread.innerHTML = "";
+  for (const c of chats) {
+    const div = document.createElement("div");
+    div.className = "chat-msg " + (c.provider === "user" ? "user" : "assistant");
+    div.innerHTML = `<div class="who">${escapeHtml(c.speaker)}</div><div class="body">${escapeHtml(c.content)}</div>`;
+    thread.appendChild(div);
+  }
+  // 「次のラウンドへ」ボタンの可否 (チャットが1往復以上ある時のみ)
+  const startR2 = document.getElementById("chatStartR2Btn");
+  if (startR2) startR2.disabled = state.busy || chats.length === 0;
+  // チャットスレッド内自動スクロール（チャットエリア自体の下端へ）
+  thread.scrollTop = thread.scrollHeight;
+}
+
+async function sendChat() {
+  if (state.busy || !state.sessionId) return;
+  const input = document.getElementById("chatInput");
+  const msg = (input?.value || "").trim();
+  if (!msg) return;
+  if (input) input.value = "";
+  errSession("");
+  state.busy = true;
+  document.getElementById("chatSendBtn").disabled = true;
+  // 楽観追加: id=null は仮レコードの目印
+  const optimistic = { id: null, speaker: "あなた", provider: "user", content: msg, isChat: true, createdAt: new Date().toISOString() };
+  state.messages.push(optimistic);
+  renderChatThread();
+  try {
+    const { user, assistant } = await api("POST", `/api/kaigi/sessions/${state.sessionId}/chat`, { message: msg });
+    // 楽観追加を削除して、サーバーから返ってきた正規レコードに置換
+    state.messages = state.messages.filter((m) => m !== optimistic);
+    state.messages.push({ ...user, isChat: true });
+    state.messages.push({ ...assistant, isChat: true });
+    renderChatThread();
+  } catch (e) {
+    state.messages = state.messages.filter((m) => m !== optimistic);
+    errSession("チャット失敗: " + e.message);
+    renderChatThread();
+  } finally {
+    state.busy = false;
+    const sb = document.getElementById("chatSendBtn");
+    if (sb) sb.disabled = false;
+  }
+}
+window.sendChat = sendChat;
+
+async function startFromChat() {
+  if (state.busy || !state.sessionId) return;
+  if (!confirm("このチャットから次の議題を自動生成して次のラウンドを始めますか？")) return;
+  errSession("");
+  state.busy = true;
+  renderSession();
+  try {
+    await api("POST", `/api/kaigi/sessions/${state.sessionId}/start-from-chat`, { rounds: 3 });
+    await refreshSession();
+  } catch (e) {
+    errSession("次の議題生成失敗: " + e.message);
+  } finally {
+    state.busy = false;
+  }
+}
+window.startFromChat = startFromChat;
 
 // 会議スタート（3R + 自動結論）
 async function startKaigi() {
