@@ -307,7 +307,7 @@ function parseConclusion(raw) {
   return out;
 }
 
-function renderConclusion(content, ext) {
+function renderConclusion(content, ext, isLast = true) {
   const parts = parseConclusion(content);
   const extLabel = ext > 0 ? `（延長 ${ext} 回後）` : "";
   let html = `<div class="summary-card"><div class="label">結論${extLabel}</div>`;
@@ -320,7 +320,10 @@ function renderConclusion(content, ext) {
   if (parts.unresolved && !/^無し$/i.test(parts.unresolved.trim())) {
     html += `<div class="sub-label">未解決の論点</div><div class="sub-text">${escapeHtml(parts.unresolved)}</div>`;
   }
-  html += `<button class="next-topic-btn" onclick="openNextTopic()">▶️ この結論を踏まえて次の議題へ</button>`;
+  // 最新の結論にだけ「次の議題へ」ボタン。過去の結論は表示のみで邪魔しない
+  if (isLast) {
+    html += `<button class="next-topic-btn" onclick="openNextTopic()">▶️ この結論を踏まえて次の議題へ</button>`;
+  }
   html += `</div>`;
   return html;
 }
@@ -476,8 +479,17 @@ async function createSession() {
 window.createSession = createSession;
 
 // ─── セッション詳細 ───
+function isNearBottom() {
+  return (window.innerHeight + window.scrollY) >= (document.documentElement.scrollHeight - 200);
+}
+function scrollToBottom() {
+  window.scrollTo({ top: document.documentElement.scrollHeight, behavior: "smooth" });
+}
+
 async function refreshSession() {
   if (!state.sessionId) return;
+  const wasAtBottom = isNearBottom();
+  const oldLen = state.messages.length;
   try {
     const { session, messages } = await api("GET", `/api/kaigi/sessions/${state.sessionId}`);
     state.session = session;
@@ -488,6 +500,10 @@ async function refreshSession() {
       if (session.status === "auto") resetThinkingTimer();
     }
     renderSession();
+    // 新着あり && 下端付近にいた時のみ自動スクロール（読んでる最中に飛ばない）
+    if (messages.length > oldLen && wasAtBottom) {
+      requestAnimationFrame(scrollToBottom);
+    }
     if (session.status === "auto") {
       ensurePoll();
       if (!thinkingStartedAt) resetThinkingTimer();
@@ -604,12 +620,21 @@ function renderSession() {
   // チャット
   const chat = $("chat");
   // 表示は speech + systemNote（順番通り）
-  const visible = state.messages.filter((m) => !m.isConclusion);
+  const visible = state.messages;  // 結論カードも時系列でインライン挿入する
+  const conclMsgs = state.messages.filter((m) => m.isConclusion);
+  const lastConclId = conclMsgs.length ? conclMsgs[conclMsgs.length - 1].id : null;
   if (!visible.length) {
     chat.innerHTML = `<div class="empty">下の「会議スタート」を押すと検討が始まります</div>`;
   } else {
     chat.innerHTML = "";
     for (const m of visible) {
+      if (m.isConclusion) {
+        // 結論カードを時系列で挿入（最後の結論にだけ next-topic ボタン）
+        const wrap = document.createElement("div");
+        wrap.innerHTML = renderConclusion(m.content, ext, m.id === lastConclId);
+        if (wrap.firstElementChild) chat.appendChild(wrap.firstElementChild);
+        continue;
+      }
       const div = document.createElement("div");
       if (m.isSystemNote) {
         div.className = "msg system";
@@ -647,13 +672,9 @@ function renderSession() {
     updateThinkingElapsed();
   }
 
-  // 結論
-  if (concl) {
-    $("conclusionWrap").innerHTML = renderConclusion(concl.content, ext);
-  } else {
-    $("conclusionWrap").innerHTML = "";
-  }
-  chat.scrollIntoView({ behavior: "smooth", block: "end" });
+  // 結論カードはチャット内に時系列でインライン表示するので、独立カードは未使用
+  $("conclusionWrap").innerHTML = "";
+  // 自動スクロールは refreshSession 側で「下端付近にいた && 新着あり」時のみ実行
 }
 
 // 会議スタート（3R + 自動結論）
