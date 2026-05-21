@@ -166,20 +166,14 @@ select.nm-field { background: var(--bg2) url("data:image/svg+xml,%3Csvg xmlns='h
     <button class="pill-btn" type="button" onclick="location.href='/'">← トップ</button>
     <button class="pill-btn" id="listBtn" type="button">一覧 <span id="mainCount">0</span>件 →</button>
   </div>
-  <p class="hint-text">向きを選ぶ</p>
   <div class="dir-row">
-    <button class="dir-btn" data-dir="in" type="button">支払<span class="lab">払うやつ</span></button>
-    <button class="dir-btn" data-dir="out" type="button">受取<span class="lab">もらうやつ</span></button>
+    <button class="dir-btn" data-dir="in" type="button">支払</button>
+    <button class="dir-btn" data-dir="out" type="button">受取</button>
   </div>
-  <p class="hint-text" id="srcHint" style="display:none;">読み込み方法</p>
   <div class="src-row" id="srcRow" style="display:none;">
     <button class="src-btn" id="srcCamBtn" type="button">カメラ</button>
-    <button class="src-btn" id="srcFileBtn" type="button">ファイル<br><span style="font-size:10px;color:var(--text2);">PDF / 画像</span></button>
+    <button class="src-btn" id="srcFileBtn" type="button">ファイル</button>
   </div>
-  <p class="hint-text" id="mainSummaryHint" style="text-align:center;line-height:1.7;">
-    未払い <span id="mainUnpaidCount">0</span>件 ¥<span id="mainUnpaidTotal">0</span><br>
-    未入金 <span id="mainUnreceivedCount">0</span>件 ¥<span id="mainUnreceivedTotal">0</span>
-  </p>
   <input type="file" id="fileInputCam" accept="image/*" capture="environment" style="display:none">
   <input type="file" id="fileInputAny" accept="image/*,application/pdf" style="display:none">
 </div>
@@ -266,14 +260,14 @@ select.nm-field { background: var(--bg2) url("data:image/svg+xml,%3Csvg xmlns='h
       <div class="summary-count" id="summaryCount">0件</div>
     </div>
     <div class="tab-group">
-      <div class="tab-group-title">支払（払うやつ）</div>
+      <div class="tab-group-title">支払</div>
       <div class="tabs">
         <button class="tab active" data-dir="in" data-status="unpaid" type="button">未払い <span id="cntInUnpaid">0</span></button>
         <button class="tab paid-tab" data-dir="in" data-status="paid" type="button">支払済 <span id="cntInPaid">0</span></button>
       </div>
     </div>
     <div class="tab-group">
-      <div class="tab-group-title">受取（もらうやつ）</div>
+      <div class="tab-group-title">受取</div>
       <div class="tabs">
         <button class="tab" data-dir="out" data-status="unpaid" type="button">未入金 <span id="cntOutUnpaid">0</span></button>
         <button class="tab paid-tab" data-dir="out" data-status="paid" type="button">入金済 <span id="cntOutPaid">0</span></button>
@@ -471,7 +465,6 @@ document.querySelectorAll(".dir-btn").forEach((btn) => {
     document.querySelectorAll(".dir-btn").forEach((b) => b.classList.remove("selected"));
     btn.classList.add("selected");
     currentDirection = btn.dataset.dir;
-    $("srcHint").style.display = "";
     $("srcRow").style.display = "";
   });
 });
@@ -523,7 +516,7 @@ async function handleFile(input) {
 function applyDirectionLabels(direction) {
   const L = LABELS[direction] || LABELS.in;
   // 確認シートのラベル切替
-  $("formCardTitle").textContent = `${L.emoji} ${L.noun}`;
+  $("formCardTitle").textContent = `${L.emoji ? L.emoji + " " : ""}${L.noun}`;
   $("lblIssuer").textContent = direction === "out" ? "請求先（宛先）" : "発行元";
   $("lblDueDate").textContent = L.state1;
   $("fIssuer").placeholder = direction === "out" ? "例：〇〇工務店 様" : "例：東京電力";
@@ -719,7 +712,6 @@ $("submitBtn").addEventListener("click", async () => {
       currentDirection = "";
       document.querySelectorAll(".dir-btn").forEach((b) => b.classList.remove("selected"));
       $("srcRow").style.display = "none";
-      $("srcHint").style.display = "none";
       showMain();
     }
   } catch (e) {
@@ -746,13 +738,7 @@ function dirOf(b) { return b.direction || "in"; }
 
 function showMain() {
   loadBills();
-  const inUnpaid = bills.filter((b) => dirOf(b) === "in" && b.status !== "paid");
-  const outUnpaid = bills.filter((b) => dirOf(b) === "out" && b.status !== "paid");
   $("mainCount").textContent = bills.length;
-  $("mainUnpaidCount").textContent = inUnpaid.length;
-  $("mainUnpaidTotal").textContent = inUnpaid.reduce((s, b) => s + (Number(b.total) || 0), 0).toLocaleString();
-  $("mainUnreceivedCount").textContent = outUnpaid.length;
-  $("mainUnreceivedTotal").textContent = outUnpaid.reduce((s, b) => s + (Number(b.total) || 0), 0).toLocaleString();
   show("mainScreen");
 }
 
@@ -789,7 +775,7 @@ function renderList() {
   const total = filtered.reduce((s, b) => s + (Number(b.total) || 0), 0);
   const L = LABELS[tabDir];
   const tabLbl = tabStatus === "paid" ? L.tab2 : L.tab1;
-  $("summaryLabel").textContent = `${L.emoji} ${tabLbl} 合計`;
+  $("summaryLabel").textContent = `${L.emoji ? L.emoji + " " : ""}${tabLbl} 合計`;
   $("summaryTotal").textContent = total.toLocaleString();
   $("summaryCount").textContent = filtered.length + "件";
 
@@ -846,12 +832,36 @@ function makeBillCard(b) {
     meta.appendChild(sp);
   }
   const acc = b.account || {};
-  if (acc.bank || acc.number) {
+  if (acc.bank || acc.number || acc.holder) {
     const sp = document.createElement("span");
-    sp.style.cssText = "font-family:ui-monospace,Menlo,monospace;letter-spacing:-0.2px;";
+    sp.style.cssText = "font-family:ui-monospace,Menlo,monospace;letter-spacing:-0.2px;cursor:pointer;";
     const parts = [acc.bank, acc.branch, acc.type, acc.number].filter(Boolean);
-    sp.textContent = `振込先: ${parts.join(" ")}`;
+    sp.textContent = `振込先: ${parts.join(" ")}${acc.number ? "  [コピー]" : ""}`;
+    if (acc.number) {
+      sp.title = "タップで口座番号をコピー";
+      sp.addEventListener("click", (e) => {
+        e.stopPropagation();
+        navigator.clipboard?.writeText(acc.number).then(
+          () => toast(`コピーしました: ${acc.number}`),
+          () => toast("コピー失敗", true),
+        );
+      });
+    }
     meta.appendChild(sp);
+    if (acc.holder) {
+      const hsp = document.createElement("span");
+      hsp.style.cssText = "cursor:pointer;";
+      hsp.textContent = `名義: ${acc.holder}  [コピー]`;
+      hsp.title = "タップで名義をコピー";
+      hsp.addEventListener("click", (e) => {
+        e.stopPropagation();
+        navigator.clipboard?.writeText(acc.holder).then(
+          () => toast(`コピーしました: ${acc.holder}`),
+          () => toast("コピー失敗", true),
+        );
+      });
+      meta.appendChild(hsp);
+    }
   }
   if (b.dueDate) {
     const today = new Date().toISOString().slice(0, 10);
