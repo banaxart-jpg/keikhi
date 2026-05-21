@@ -83,6 +83,14 @@ textarea:focus, input:focus { outline: none; }
 .session-row .row-del:hover { color: var(--err); }
 .session-row .row-del:active { transform: scale(0.85); background: rgba(176,64,64,0.1); }
 .session-row .conclusion { font-size: 13.5px; font-weight: 800; color: var(--text); line-height: 1.45; padding-top: 2px; border-top: 1px solid rgba(168,172,192,0.25); padding-top: 8px; }
+
+.session-row .thread { display: flex; flex-direction: column; gap: 12px; margin-top: 8px; }
+.session-row .turn { padding-top: 10px; border-top: 1px solid rgba(168,172,192,0.3); }
+.session-row .turn:first-child { padding-top: 0; border-top: none; }
+.session-row .turn-label { font-size: 9px; font-weight: 800; letter-spacing: 0.12em; color: var(--text3); text-transform: uppercase; margin-bottom: 4px; }
+.session-row .turn-topic { font-size: 11px; color: var(--text2); font-weight: 600; line-height: 1.4; margin-bottom: 6px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.session-row .turn-headline { font-size: 13.5px; font-weight: 800; color: var(--text); line-height: 1.45; }
+.session-row .turn-pending { font-size: 12px; color: var(--text3); font-style: italic; }
 .session-row .meta { font-size: 10px; color: var(--text3); font-weight: 600; text-align: right; min-width: 90px; flex-shrink: 0; }
 .session-row .badge { display: inline-block; font-size: 9px; font-weight: 800; padding: 2px 7px; border-radius: 10px; margin-bottom: 4px; }
 .session-row .badge.active { background: #e0e7ff; color: #4961ff; }
@@ -230,6 +238,54 @@ const escapeHtml = (s) => String(s).replace(/[&<>"']/g, (c) => ({
 }[c]));
 
 // 結論テキストを【ひと言結論】【結論】【3者の立場の違い / 未解決の論点】に分解
+// system note の content から「新しい議題」を抽出
+function extractNewTopicFromNote(content) {
+  const c = String(content || "");
+  // 議題編集: 「新議題:「◯◯」」
+  let m = c.match(/新議題[:：]\s*[「『]([^」』]+)[」』]/);
+  if (m) return m[1].trim();
+  // 次の議題に進む: 「【新しい議題】\n◯◯」
+  m = c.match(/【新しい議題】\s*\n?([\s\S]+?)(?=\n【|$)/);
+  if (m) return m[1].trim().slice(0, 300);
+  return null;
+}
+
+// セッションの議題変更履歴と結論を時系列でマージし、各「ターン」(議題＋結論ペア) を構築
+function buildTurns(session, conclusions, topicChanges) {
+  const turns = [];
+  let initialTopic = session.topic;
+  const sortedChanges = [...topicChanges].sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
+  for (let i = 0; i < conclusions.length; i++) {
+    const concl = conclusions[i];
+    const conclTime = new Date(concl.createdAt).getTime();
+    let topic = initialTopic;
+    for (const tc of sortedChanges) {
+      const tcTime = new Date(tc.createdAt).getTime();
+      if (tcTime < conclTime) topic = tc.topic;
+      else break;
+    }
+    const parsed = parseConclusion(concl.content);
+    turns.push({ topic, headline: parsed.headline || "", conclusionId: concl.id });
+  }
+  // 最後の結論より後にも議題変更があれば、未結論ターンを追加
+  const lastConclTime = conclusions.length ? new Date(conclusions[conclusions.length - 1].createdAt).getTime() : 0;
+  const pending = sortedChanges.filter((tc) => new Date(tc.createdAt).getTime() > lastConclTime);
+  if (pending.length > 0) {
+    turns.push({
+      topic: pending[pending.length - 1].topic,
+      headline: null,
+      pendingLabel: session.status === "auto" ? "検討中…" : session.status === "completed" ? "" : "未完",
+    });
+  } else if (conclusions.length === 0) {
+    turns.push({
+      topic: initialTopic,
+      headline: null,
+      pendingLabel: session.status === "auto" ? "検討中…" : "未開始",
+    });
+  }
+  return turns;
+}
+
 function parseConclusion(raw) {
   const text = String(raw || "");
   const headers = [
@@ -341,23 +397,38 @@ async function loadSessionList() {
         completed: ext > 0 ? `完了（延長${ext}回）` : "完了",
         failed: "失敗",
       })[s.status] || s.status;
-      const headline = s.conclusion_preview
-        ? (parseConclusion(s.conclusion_preview).headline || "").trim()
-        : "";
-      const conclusionHTML = headline
-        ? `<div class="conclusion">${escapeHtml(headline)}</div>`
-        : "";
+      // 議題と結論のスレッドを組み立てる（延長で複数の議題・結論が積まれている場合）
+      const conclusions = s.conclusions || [];
+      const topicChanges = (s.topic_changes || []).map((tc) => ({
+        topic: extractNewTopicFromNote(tc.content),
+        createdAt: tc.createdAt,
+      })).filter((t) => t.topic);
+
+      // 議題変更時刻と結論時刻を時系列でマージして、各ターンを構築
+      // 初期議題は session 作成時に登場、その後は topic_changes が新議題を提供
+      const turns = buildTurns(s, conclusions, topicChanges);
+
+      const threadHTML = `<div class="thread">${turns.map((t, i) => `
+        <div class="turn">
+          <div class="turn-label">テーマ ${i + 1}${turns.length > 1 ? "" : ""}</div>
+          <div class="turn-topic">${escapeHtml(t.topic)}</div>
+          ${t.headline
+            ? `<div class="turn-headline">${escapeHtml(t.headline)}</div>`
+            : `<div class="turn-pending">${escapeHtml(t.pendingLabel || "検討中…")}</div>`
+          }
+        </div>
+      `).join("")}</div>`;
+
       div.innerHTML = `
         <div class="row-top">
-          <div class="topic">${escapeHtml(s.topic)}</div>
-          <div class="meta">
+          <div class="meta" style="text-align: right; min-width: auto;">
             <div class="badge ${badgeClass}">${badgeLabel}</div>
             <div>${s.msg_count}発言</div>
             <div>${fmtDate(s.updated_at)}</div>
           </div>
           <button class="row-del" title="削除" aria-label="削除">×</button>
         </div>
-        ${conclusionHTML}`;
+        ${threadHTML}`;
       div.onclick = () => openSession(s.id);
       div.querySelector(".row-del").addEventListener("click", async (e) => {
         e.stopPropagation();

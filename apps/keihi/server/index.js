@@ -663,7 +663,25 @@ app.get("/api/kaigi/sessions", async (req, res) => {
               EXISTS(SELECT 1 FROM kaigi_messages m WHERE m.session_id = s.id AND m.is_conclusion) AS has_conclusion,
               (SELECT LEFT(m.content, 500) FROM kaigi_messages m
                  WHERE m.session_id = s.id AND m.is_conclusion
-                 ORDER BY m.created_at DESC LIMIT 1) AS conclusion_preview
+                 ORDER BY m.created_at DESC LIMIT 1) AS conclusion_preview,
+              COALESCE(
+                (SELECT json_agg(json_build_object(
+                  'id', m.id, 'content', LEFT(m.content, 800),
+                  'createdAt', m.created_at
+                ) ORDER BY m.created_at ASC)
+                  FROM kaigi_messages m WHERE m.session_id = s.id AND m.is_conclusion),
+                '[]'::json
+              ) AS conclusions,
+              COALESCE(
+                (SELECT json_agg(json_build_object(
+                  'content', LEFT(m.content, 400),
+                  'createdAt', m.created_at
+                ) ORDER BY m.created_at ASC)
+                  FROM kaigi_messages m
+                  WHERE m.session_id = s.id AND m.is_system_note
+                    AND (m.content LIKE '%新しい議題%' OR m.content LIKE '%新議題%')),
+                '[]'::json
+              ) AS topic_changes
          FROM kaigi_sessions s
         WHERE s.user_email = $1
         ORDER BY s.updated_at DESC
