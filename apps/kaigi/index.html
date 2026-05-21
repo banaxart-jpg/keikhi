@@ -179,6 +179,11 @@ textarea:focus, input:focus { outline: none; }
   <div class="row" id="autoRow" style="display:none;">
     <button class="btn" id="stopAutoBtn" onclick="stopAuto()">⏸ 自動進行を止める</button>
   </div>
+  <!-- 途中停止: 続きから or 強制結論 -->
+  <div class="row" id="resumeRow" style="display:none;">
+    <button class="btn primary" id="resumeBtn" onclick="resumeAuto()">▶️ 続きから進める</button>
+    <button class="btn" id="forceConcludeBtn" onclick="doForceConclude()">🏁 ここで結論を出す</button>
+  </div>
   <!-- 完了後: 結論に不満なときの再検討（次の議題は結論カード内のボタンへ） -->
   <div class="row" id="extendRow" style="display:none;">
     <button class="btn" id="editExtendBtn" onclick="openEditExtend()">✏️ 議題編集して再検討</button>
@@ -456,8 +461,14 @@ function renderSession() {
   const isCompleted = state.session.status === "completed" || !!concl;
 
   // フッターの出し分け
+  // フッターの出し分け
+  const speakerCnt = (state.session.speakers || SPEAKERS).length;
+  const speechCnt = state.messages.filter((m) => !m.isConclusion && !m.isSystemNote).length;
+  const isStalled = !isAuto && !isCompleted && speechCnt > 0;  // 途中まで進んで止まってる
+
   $("startRow").style.display = "none";
   $("autoRow").style.display = "none";
+  $("resumeRow").style.display = "none";
   $("extendRow").style.display = "none";
   $("editRow").style.display = "none";
   $("topicEdit").style.display = "none";
@@ -470,6 +481,8 @@ function renderSession() {
     $("autoRow").style.display = "flex";
   } else if (isCompleted) {
     $("extendRow").style.display = "flex";
+  } else if (isStalled) {
+    $("resumeRow").style.display = "flex";
   } else {
     $("startRow").style.display = "flex";
   }
@@ -623,6 +636,45 @@ async function confirmEdit() {
   }
 }
 window.confirmEdit = confirmEdit;
+
+// 途中停止からの再開（残りラウンドを推測して auto を再開）
+async function resumeAuto() {
+  if (state.busy || !state.sessionId) return;
+  errSession("");
+  state.busy = true;
+  renderSession();
+  try {
+    // 残りラウンド = 3 - 完了済みラウンド（最小1）
+    const speakerCnt = (state.session.speakers || SPEAKERS).length;
+    const speechCnt = state.messages.filter((m) => !m.isConclusion && !m.isSystemNote).length;
+    const doneRounds = Math.floor(speechCnt / speakerCnt);
+    const remaining = Math.max(1, 3 - doneRounds);
+    await api("POST", `/api/kaigi/sessions/${state.sessionId}/auto`, { rounds: remaining });
+    await refreshSession();
+  } catch (e) {
+    errSession(e.message);
+  } finally {
+    state.busy = false;
+  }
+}
+window.resumeAuto = resumeAuto;
+
+// 途中で強制的に結論生成（残りラウンドを諦めて、今ある発言で結論を出す）
+async function doForceConclude() {
+  if (state.busy || !state.sessionId) return;
+  errSession("");
+  state.busy = true;
+  renderSession();
+  try {
+    await api("POST", `/api/kaigi/sessions/${state.sessionId}/conclude`);
+    await refreshSession();
+  } catch (e) {
+    errSession(e.message);
+  } finally {
+    state.busy = false;
+  }
+}
+window.doForceConclude = doForceConclude;
 
 async function stopAuto() {
   if (!state.sessionId) return;
