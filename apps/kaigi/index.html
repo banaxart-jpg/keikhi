@@ -248,6 +248,21 @@ const escapeHtml = (s) => String(s).replace(/[&<>"']/g, (c) => ({
 }[c]));
 
 // 結論テキストを【ひと言結論】【結論】【3者の立場の違い / 未解決の論点】に分解
+// topic_summary から「【核の問い】」部分だけを取り出す（一覧の見出し用）
+function extractCoreQuestion(topicSummary) {
+  if (!topicSummary) return null;
+  const m = String(topicSummary).match(/【核の問い】\s*\n?([\s\S]+?)(?=\n【|$)/);
+  return m ? m[1].trim() : null;
+}
+
+// 表示用の議題: 長文お題なら topic_summary の核の問いを優先、なければ topic
+// 一覧 API は topicSummary (camel)、詳細 API は SELECT * のため topic_summary (snake) で返るので両対応
+function displayTopic(session) {
+  if (!session) return "";
+  const ts = session.topicSummary || session.topic_summary;
+  return extractCoreQuestion(ts) || session.topic || "";
+}
+
 // system note の content から「新しい議題」を抽出
 function extractNewTopicFromNote(content) {
   const c = String(content || "");
@@ -263,7 +278,8 @@ function extractNewTopicFromNote(content) {
 // セッションの議題変更履歴と結論を時系列でマージし、各「ターン」(議題＋結論ペア) を構築
 function buildTurns(session, conclusions, topicChanges) {
   const turns = [];
-  let initialTopic = session.topic;
+  // 最初の議題は長文の可能性が高いので core question を優先
+  let initialTopic = displayTopic(session);
   const sortedChanges = [...topicChanges].sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
   for (let i = 0; i < conclusions.length; i++) {
     const concl = conclusions[i];
@@ -553,7 +569,8 @@ async function autoConcludeIfReady() {
 
 function renderSession() {
   if (!state.session) return;
-  $("topicView").textContent = state.session.topic;
+  // 長文お題は topic_summary の核の問いを優先表示（読みやすさ重視）
+  $("topicView").textContent = displayTopic(state.session);
   const ext = state.session.extension_count || 0;
   const remaining = state.session.auto_rounds_remaining;
   const speakerCount = (state.session.speakers || SPEAKERS).length;

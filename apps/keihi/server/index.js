@@ -691,7 +691,7 @@ app.get("/api/kaigi/sessions", async (req, res) => {
   if (!p) return res.status(503).json({ error: "DB not configured" });
   try {
     const { rows } = await p.query(
-      `SELECT s.id, s.topic, s.status, s.auto_rounds_remaining, s.extension_count, s.last_error, s.created_at, s.updated_at,
+      `SELECT s.id, s.topic, s.topic_summary AS "topicSummary", s.status, s.auto_rounds_remaining, s.extension_count, s.last_error, s.created_at, s.updated_at,
               (SELECT count(*)::int FROM kaigi_messages m WHERE m.session_id = s.id AND NOT m.is_conclusion AND NOT m.is_system_note) AS msg_count,
               EXISTS(SELECT 1 FROM kaigi_messages m WHERE m.session_id = s.id AND m.is_conclusion) AS has_conclusion,
               (SELECT LEFT(m.content, 500) FROM kaigi_messages m
