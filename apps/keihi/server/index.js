@@ -1287,7 +1287,9 @@ ${question}
 
     const { result, modelUsed } = await callGeminiWithFallback(content, {
       primaryModel: "gemini-2.5-pro",
-      maxOutputTokens: 600,
+      // Pro は内部 reasoning (thinking tokens) を消費するので、600 だと
+      // visible output が 0 になることがある。4000 確保しておけば余裕。
+      maxOutputTokens: 4000,
     });
     const answer = (result.response.text() || "").trim();
     if (!answer) {
