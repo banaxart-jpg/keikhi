@@ -1261,59 +1261,6 @@ app.post("/api/internal/kaigi/tick", async (req, res) => {
   }
 });
 
-// ─────────────────────────────
-// zumen: 図面読み取り精度の確認用 (画像 + Q&A、一問一答)
-// ─────────────────────────────
-app.post("/api/zumen/ask", async (req, res) => {
-  try {
-    if (!genAI) return res.status(503).json({ error: "GEMINI_API_KEY not configured" });
-    const { image, mimeType = "image/jpeg", question, history = [] } = req.body || {};
-    if (!question || !String(question).trim()) return res.status(400).json({ error: "question required" });
-    if (!image && !history.length) return res.status(400).json({ error: "image required (初回は画像必須)" });
-
-    const turns = (Array.isArray(history) ? history : [])
-      .filter((h) => h && h.question && h.answer)
-      .map((h) => `Q: ${h.question}\nA: ${h.answer}`).join("\n\n");
-
-    const prompt = `あなたは建築図面・間取り図を読む AI です。ユーザーの質問に対して、図面から読み取れる事実だけを答えてください。
-
-【ルール】
-- 一問一答で簡潔に答える。**50〜150 文字以内**。長く語らない、前置きや結論の繰り返しを付けない
-- 数値や寸法を答える時は単位を必ず付ける（㎡、m、mm、人 等）
-- 図面に明示的に書かれていない数値を聞かれた場合は「図面から正確には読み取れない」と素直に答え、可能なら大まかな目安だけ付ける
-- 推測になる場合は「推測ですが」と前置きする
-- マークダウン記号・箇条書きは使わない、自然な文章
-- 「ご質問ありがとうございます」「お役に立てれば幸いです」みたいな枕詞・締め禁止
-
-${turns ? `【これまでの質問と回答】\n${turns}\n\n` : ""}【今の質問】
-${question}
-
-【回答】`;
-
-    const content = [prompt];
-    if (image) content.push({ inlineData: { data: image, mimeType } });
-
-    const { result, modelUsed } = await callGeminiWithFallback(content, {
-      primaryModel: "gemini-2.5-pro",
-      // Pro は内部 reasoning (thinking tokens) を消費するので、600 だと
-      // visible output が 0 になることがある。4000 確保しておけば余裕。
-      maxOutputTokens: 4000,
-    });
-    const answer = (result.response.text() || "").trim();
-    if (!answer) {
-      const fr = result.response?.candidates?.[0]?.finishReason || "unknown";
-      throw new Error(`gemini 応答が空 (finishReason=${fr})`);
-    }
-    res.json({ answer, modelUsed });
-  } catch (err) {
-    console.error("zumen ask", err);
-    const msg = String(err?.message || err);
-    const isTransient = /\b(503|429|500)\b|UNAVAILABLE|overload|high demand/i.test(msg);
-    res.status(isTransient ? 503 : 500).json({
-      error: isTransient ? `Gemini が混雑中: ${msg.slice(0, 200)}` : msg,
-    });
-  }
-});
 
 // ─────────────────────────────
 // Records
