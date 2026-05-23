@@ -340,6 +340,17 @@ async function idToken() {
       sessionStorage.removeItem("authBounce");
       document.getElementById("signinOverlay").style.display = "none";
       try { await loadData(); } catch (e) { console.error(e); }
+      // ?view=<id>: スプレッドシートからのリンク経由。一覧を開いて画像を全画面表示
+      const viewId = new URLSearchParams(location.search).get("view");
+      if (viewId && /^\d+$/.test(viewId)) {
+        try {
+          renderList();
+          show("listScreen");
+          await viewImage(viewId);
+          history.replaceState({}, "", location.pathname); // 再表示防止
+          return;
+        } catch (e) { console.warn("view param failed", e); }
+      }
       showBuyer();
     }
 
@@ -896,9 +907,11 @@ $("submitBtn").addEventListener("click", async () => {
       await api("PUT", `/api/records/${editingId}`, record);
       const idx = records.findIndex((x) => x.id === editingId);
       if (idx >= 0) records[idx] = { ...records[idx], ...record };
+      const savedId = editingId;
       editingId = null;
       // 編集時もシートに送る（過去データの流し込みにも使える）
-      const sheetRes = await postToSheet(record);
+      const viewUrl = `${location.origin}/keihi/?view=${savedId}`;
+      const sheetRes = await postToSheet({ ...record, id: savedId, viewUrl });
       const okMsg = sheetRes.skipped
         ? "更新しました"
         : sheetRes.ok
@@ -910,7 +923,8 @@ $("submitBtn").addEventListener("click", async () => {
     } else {
       const saved = await api("POST", "/api/records", record);
       records.unshift({ ...record, id: saved.id, createdAt: saved.created_at });
-      const sheetRes = await postToSheet(record);
+      const viewUrl = `${location.origin}/keihi/?view=${saved.id}`;
+      const sheetRes = await postToSheet({ ...record, id: saved.id, viewUrl });
       const okMsg = sheetRes.skipped
         ? "登録しました"
         : sheetRes.ok

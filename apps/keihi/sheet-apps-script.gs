@@ -23,11 +23,10 @@
  *
  * ─── 仕様 ───
  *  - 経費登録1件ごとに 1 行追加される
- *  - 購入日の「年月」(例: 2026-05) でタブ（シート）が自動で分かれる
- *  - 新しい月のタブは先頭（左）に追加
- *  - 列: 購入日 / 購入者 / 現場 / 店舗 / 金額 / 費目 / 工種 / 支払方法 / メモ
- *  - 新規タブは「折り返しオフ + 行高さ22px + 列幅最適化」で
- *    メモが長くても行サイズがガタガタしない
+ *  - 購入日の「年月」(例: 2026-05) でタブが自動で分かれる (新しい月が左)
+ *  - 列: 購入日 / 購入者 / 現場 / 店舗 / 金額 / 費目 / 工種 / 支払方法 / メモ / 写真
+ *  - 「写真」セルをクリックすると経費アプリが開き、ログイン後にレシート画像表示
+ *  - 折り返しオフ + 行高さ22pxで200件規模でもガタガタしない
  */
 
 function doPost(e) {
@@ -38,7 +37,7 @@ function doPost(e) {
     let sheet = ss.getSheetByName(ym);
     if (!sheet) {
       sheet = ss.insertSheet(ym, 0);
-      sheet.appendRow(["購入日", "購入者", "現場", "店舗", "金額", "費目", "工種", "支払方法", "メモ"]);
+      sheet.appendRow(["購入日", "購入者", "現場", "店舗", "金額", "費目", "工種", "支払方法", "メモ", "写真"]);
       sheet.setFrozenRows(1);
       sheet.setColumnWidth(1, 90);   // 購入日
       sheet.setColumnWidth(2, 70);   // 購入者
@@ -48,14 +47,14 @@ function doPost(e) {
       sheet.setColumnWidth(6, 100);  // 費目
       sheet.setColumnWidth(7, 80);   // 工種
       sheet.setColumnWidth(8, 80);   // 支払方法
-      sheet.setColumnWidth(9, 240);  // メモ
+      sheet.setColumnWidth(9, 220);  // メモ
+      sheet.setColumnWidth(10, 60);  // 写真 (リンク)
       sheet.getRange("E:E").setNumberFormat("¥#,##0");
-      // 折り返しオフ: メモが長くても1行表示 (はみ出し分はクリップ)
-      sheet.getRange(1, 1, sheet.getMaxRows(), 9).setWrapStrategy(SpreadsheetApp.WrapStrategy.CLIP);
-      // 行高さを22pxに固定 (2行目以降。1行目はヘッダーで自動)
+      sheet.getRange(1, 1, sheet.getMaxRows(), 10).setWrapStrategy(SpreadsheetApp.WrapStrategy.CLIP);
       sheet.setRowHeights(2, sheet.getMaxRows() - 1, 22);
     }
-    sheet.appendRow([
+    const row = sheet.getLastRow() + 1;
+    sheet.getRange(row, 1, 1, 9).setValues([[
       data.date || "",
       data.buyer || "",
       data.site || "",
@@ -65,7 +64,11 @@ function doPost(e) {
       data.workType || "",
       data.payment || "",
       data.memo || "",
-    ]);
+    ]]);
+    if (data.viewUrl) {
+      const safeUrl = String(data.viewUrl).replace(/"/g, '""');
+      sheet.getRange(row, 10).setFormula('=HYPERLINK("' + safeUrl + '","🧾")');
+    }
     return ContentService
       .createTextOutput(JSON.stringify({ ok: true }))
       .setMimeType(ContentService.MimeType.JSON);
