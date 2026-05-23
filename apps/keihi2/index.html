@@ -20,34 +20,34 @@
   --bulb-glow: rgba(255,170,40,0.55); --bulb-glow2: rgba(255,140,20,0.25);
   --ok: #16a34a; --err: #b04040;
 }
-body { font-family: 'Outfit', -apple-system, sans-serif; background: #1e2940; color: white; min-height: 100vh; overflow-x: hidden; }
+body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; overflow-x: hidden; }
 
 .top-bar { position: absolute; top: 0; left: 0; right: 0; display: flex; justify-content: space-between; align-items: center; padding: 54px 18px 0; z-index: 10; gap: 8px; }
-.pill-btn { padding: 9px 16px; border-radius: 30px; font-size: 12px; font-weight: 700; cursor: pointer; border: none; color: rgba(255,255,255,0.85); font-family: 'Outfit', sans-serif; background: rgba(255,255,255,0.1); box-shadow: none; backdrop-filter: blur(8px); transition: all 0.12s; }
-.pill-btn:active { background: rgba(255,255,255,0.22); transform: scale(0.96); }
-.pill-btn.accent { color: #ffd58a; text-shadow: 0 0 8px rgba(255,170,40,0.5); }
+.pill-btn { padding: 9px 16px; border-radius: 30px; font-size: 12px; font-weight: 700; cursor: pointer; border: none; color: var(--text2); font-family: 'Outfit', sans-serif; background: var(--bg); box-shadow: 5px 5px 12px var(--sd), -5px -5px 12px var(--sl); transition: all 0.12s; }
+.pill-btn:active { box-shadow: inset 3px 3px 8px var(--sd), inset -3px -3px 8px var(--sl); transform: scale(0.96); }
+.pill-btn.accent { color: var(--bulb2); text-shadow: 0 0 8px var(--bulb-glow2); }
 
 /* 名前選択 */
 #buyerScreen { position: fixed; inset: 0; display: none; flex-direction: column; align-items: center; justify-content: center; gap: 24px; padding: 24px; }
 .buyers-row { display: flex; gap: 16px; width: 100%; max-width: 300px; }
-.buyer-btn { flex: 1; padding: 22px 0; border-radius: 20px; font-size: 22px; font-weight: 700; color: white; border: none; cursor: pointer; font-family: 'Outfit', sans-serif; background: #2d3a52; position: relative; overflow: hidden; box-shadow: 0 8px 22px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.1); transition: all 0.18s; }
-.buyer-btn::before { content: ""; position: absolute; top: 0; left: 8%; right: 8%; height: 44%; background: linear-gradient(180deg, rgba(255,255,255,0.1), rgba(255,255,255,0)); border-radius: 30px 30px 50% 50%; pointer-events: none; }
-.buyer-btn:active { box-shadow: inset 0 4px 12px rgba(0,0,0,0.5); transform: scale(0.96); color: var(--bulb); }
+.buyer-btn { flex: 1; padding: 22px 0; border-radius: 20px; font-size: 22px; font-weight: 600; color: var(--text); border: none; cursor: pointer; font-family: 'Outfit', sans-serif; background: var(--bg); position: relative; overflow: hidden; box-shadow: 10px 10px 24px var(--sd), -8px -8px 20px var(--sl); transition: all 0.18s; }
+.buyer-btn::before { content: ""; position: absolute; top: 0; left: 8%; right: 8%; height: 44%; background: linear-gradient(180deg, rgba(255,255,255,0.55), rgba(255,255,255,0)); border-radius: 30px 30px 50% 50%; pointer-events: none; }
+.buyer-btn:active { box-shadow: inset 7px 7px 18px var(--sd), inset -5px -5px 14px var(--sl); transform: scale(0.96); color: var(--bulb2); }
 
 /* 撮影画面 */
 #shootScreen { position: fixed; inset: 0; display: none; flex-direction: column; padding: 100px 0 0; }
 .shoot-top { text-align: center; padding: 0 18px 14px; }
-.buyer-tag { display: inline-block; padding: 6px 14px; border-radius: 14px; font-size: 12px; font-weight: 700; color: rgba(255,255,255,0.85); background: rgba(255,255,255,0.1); box-shadow: none; }
+.buyer-tag { display: inline-block; padding: 6px 14px; border-radius: 14px; font-size: 12px; font-weight: 700; color: var(--text2); background: var(--bg2); box-shadow: inset 2px 2px 6px var(--sd), inset -2px -2px 6px var(--sl); }
 .shoot-meta { display: flex; align-items: center; justify-content: center; gap: 14px; padding: 0 18px 14px; flex-wrap: wrap; }
-.queue-stats { font-size: 11px; color: rgba(255,255,255,0.55); font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; }
-.queue-stats b { color: #ffd58a; font-weight: 800; }
+.queue-stats { font-size: 11px; color: var(--text3); font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; }
+.queue-stats b { color: var(--bulb2); font-weight: 800; }
 /* 右下固定の撮影 FAB (カメラアプリのシャッターっぽく) */
-.fab-shoot { position: fixed; right: 20px; bottom: calc(24px + env(safe-area-inset-bottom)); width: 76px; height: 76px; border-radius: 50%; font-size: 32px; padding: 0; border: none; cursor: pointer; font-family: 'Outfit', sans-serif; background: #2d3a52; color: white; box-shadow: 0 10px 24px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.12); z-index: 30; transition: all 0.14s; display: flex; align-items: center; justify-content: center; }
+.fab-shoot { position: fixed; right: 20px; bottom: calc(24px + env(safe-area-inset-bottom)); width: 76px; height: 76px; border-radius: 50%; font-size: 32px; padding: 0; border: none; cursor: pointer; font-family: 'Outfit', sans-serif; background: var(--bg); color: var(--text); box-shadow: 9px 9px 22px var(--sd), -7px -7px 18px var(--sl), inset 0 1px 0 rgba(255,255,255,0.55); z-index: 30; transition: all 0.14s; display: flex; align-items: center; justify-content: center; }
 .fab-shoot::before { content: ""; position: absolute; inset: 6px; border-radius: 50%; border: 2.5px solid rgba(255,255,255,0.5); pointer-events: none; }
-.fab-shoot:active { background: #1e2940; transform: scale(0.93); }
+.fab-shoot:active { box-shadow: inset 6px 6px 14px var(--sd), inset -4px -4px 12px var(--sl); transform: scale(0.93); color: var(--bulb2); }
 
 .queue-grid { flex: 1; overflow-y: auto; padding: 0 18px 130px; display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; }
-.q-thumb { position: relative; aspect-ratio: 3/4; border-radius: 14px; overflow: hidden; box-shadow: 0 4px 14px rgba(0,0,0,0.35); background: #2d3a52; }
+.q-thumb { position: relative; aspect-ratio: 3/4; border-radius: 14px; overflow: hidden; box-shadow: 5px 5px 13px var(--sd), -3px -3px 10px var(--sl); background: var(--bg); }
 .q-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .q-status { position: absolute; bottom: 0; left: 0; right: 0; padding: 4px 6px; font-size: 10px; font-weight: 800; color: white; background: rgba(0,0,0,0.6); display: flex; align-items: center; gap: 4px; }
 .q-status.uploading { background: rgba(60,80,140,0.7); }
@@ -99,16 +99,16 @@ body { font-family: 'Outfit', -apple-system, sans-serif; background: #1e2940; co
 .site-add button:active { box-shadow: inset 3px 3px 8px var(--sd), inset -3px -3px 8px var(--sl); }
 .gear-btn { padding: 9px 14px; border-radius: 30px; font-size: 12px; font-weight: 700; cursor: pointer; border: none; color: var(--text2); font-family: 'Outfit', sans-serif; background: var(--bg); box-shadow: 5px 5px 12px var(--sd), -5px -5px 12px var(--sl); }
 .gear-btn:active { box-shadow: inset 3px 3px 8px var(--sd), inset -3px -3px 8px var(--sl); transform: scale(0.96); }
-.sw-site.new { background: rgba(255,255,255,0.05); color: rgba(255,255,255,0.6); border: 1.5px dashed rgba(255,255,255,0.25); }
+.sw-site.new { background: var(--bg); color: var(--text2); box-shadow: none; border: 1.5px dashed var(--text3); }
 
 /* 支払方法選択 (スワイプカード内) */
-.sw-pay { display: flex; gap: 6px; padding: 0 14px 8px; background: #2d3a52; }
-.sw-pay-btn { flex: 1; padding: 9px 0; border-radius: 11px; font-size: 12px; font-weight: 700; border: none; cursor: pointer; font-family: 'Outfit', sans-serif; color: rgba(255,255,255,0.65); background: rgba(255,255,255,0.07); transition: all 0.12s; }
-.sw-pay-btn.active { background: var(--bulb); color: #1a1c28; box-shadow: inset 0 1px 0 rgba(255,255,255,0.35); }
+.sw-pay { display: flex; gap: 6px; padding: 0 14px 8px; background: var(--bg); }
+.sw-pay-btn { flex: 1; padding: 9px 0; border-radius: 11px; font-size: 12px; font-weight: 700; border: none; cursor: pointer; font-family: 'Outfit', sans-serif; color: var(--text2); background: var(--bg2); box-shadow: inset 3px 3px 8px var(--sd), inset -3px -3px 8px var(--sl); transition: all 0.12s; }
+.sw-pay-btn.active { background: linear-gradient(145deg, #ffb940, #e08800); color: white; box-shadow: 4px 4px 10px rgba(190,120,0,0.4); }
 
 /* 編集ボタン (スワイプカード) */
-.sw-edit { position: absolute; top: 12px; right: 12px; padding: 6px 12px; border-radius: 14px; font-size: 11px; font-weight: 800; border: none; cursor: pointer; color: rgba(255,255,255,0.85); background: rgba(255,255,255,0.12); backdrop-filter: blur(8px); z-index: 6; }
-.sw-edit:active { transform: scale(0.95); background: rgba(255,255,255,0.2); }
+.sw-edit { position: absolute; top: 12px; right: 12px; padding: 6px 12px; border-radius: 14px; font-size: 11px; font-weight: 800; border: none; cursor: pointer; color: var(--text); background: var(--bg); box-shadow: 3px 3px 9px var(--sd), -3px -3px 9px var(--sl); z-index: 6; }
+.sw-edit:active { transform: scale(0.95); box-shadow: inset 2px 2px 7px var(--sd), inset -2px -2px 7px var(--sl); }
 
 /* 編集シート (モーダル) */
 #editOverlay { display: none; position: fixed; inset: 0; z-index: 100; background: rgba(0,0,0,0.55); flex-direction: column; justify-content: flex-end; }
@@ -137,30 +137,29 @@ select.edit-input { background: var(--bg2) url("data:image/svg+xml,%3Csvg xmlns=
 .sort-card.b-konishi .sort-thumb.empty { color: rgba(255,255,255,0.5); background: rgba(0,0,0,0.15); box-shadow: none; }
 
 /* スワイプ SORT 画面 */
-#swipeScreen { position: fixed; inset: 0; display: none; flex-direction: column; background: #1e2940; }
-.swipe-top { padding: 54px 18px 0; display: flex; justify-content: space-between; align-items: center; color: white; z-index: 10; }
-.swipe-top .pill-btn { background: rgba(255,255,255,0.1); color: rgba(255,255,255,0.85); box-shadow: none; backdrop-filter: blur(8px); }
-.swipe-progress { font-size: 12px; font-weight: 800; letter-spacing: 0.1em; color: rgba(255,255,255,0.75); }
+#swipeScreen { position: fixed; inset: 0; display: none; flex-direction: column; background: var(--bg); }
+.swipe-top { padding: 54px 18px 0; display: flex; justify-content: space-between; align-items: center; color: var(--text); z-index: 10; }
+.swipe-progress { font-size: 12px; font-weight: 800; letter-spacing: 0.1em; color: var(--text3); }
 .swipe-stack { flex: 1; position: relative; overflow: hidden; }
-.swipe-card { position: absolute; inset: 14px 14px 14px 14px; border-radius: 24px; background: #2d3a52; overflow: hidden; display: flex; flex-direction: column; box-shadow: 0 8px 32px rgba(0,0,0,0.4); touch-action: pan-y; will-change: transform; }
+.swipe-card { position: absolute; inset: 14px 14px 14px 14px; border-radius: 24px; background: var(--bg); overflow: hidden; display: flex; flex-direction: column; box-shadow: 10px 10px 26px var(--sd), -8px -8px 22px var(--sl); touch-action: pan-y; will-change: transform; }
 .swipe-card.back { transform: scale(0.94); opacity: 0.5; z-index: 0; }
 .swipe-card.front { z-index: 2; }
-.sw-img-wrap { flex: 1; min-height: 0; background: #1e2940; display: flex; align-items: center; justify-content: center; position: relative; }
+.sw-img-wrap { flex: 1; min-height: 0; background: var(--bg2); display: flex; align-items: center; justify-content: center; position: relative; box-shadow: inset 4px 4px 12px var(--sd), inset -4px -4px 12px var(--sl); }
 .sw-img-wrap img { max-width: 100%; max-height: 100%; object-fit: contain; cursor: pointer; }
-.sw-img-placeholder { color: rgba(255,255,255,0.25); font-size: 60px; }
-.sw-img-loading { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: rgba(255,255,255,0.5); font-size: 13px; }
-.sw-info { padding: 14px 18px 10px; background: linear-gradient(to top, #2d3a52, rgba(45,58,82,0.85)); color: white; }
+.sw-img-placeholder { color: var(--text3); font-size: 60px; }
+.sw-img-loading { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--text2); font-size: 13px; }
+.sw-info { padding: 14px 18px 10px; background: var(--bg); color: var(--text); }
 .sw-amount { font-size: 32px; font-weight: 900; letter-spacing: -1.5px; line-height: 1; }
-.sw-store { font-size: 14px; color: rgba(255,255,255,0.75); margin-top: 4px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.sw-meta { font-size: 11px; color: rgba(255,255,255,0.5); margin-top: 4px; font-weight: 600; }
-.sw-sites { padding: 4px 14px 18px; background: #2d3a52; display: flex; flex-wrap: wrap; gap: 8px; max-height: 38vh; overflow-y: auto; }
-.sw-site { padding: 12px 16px; border-radius: 14px; font-size: 14px; font-weight: 700; border: none; cursor: pointer; font-family: 'Outfit', sans-serif; color: white; background: rgba(255,255,255,0.1); transition: all 0.12s; }
-.sw-site.predicted { background: rgba(255,170,40,0.25); color: #ffd58a; box-shadow: 0 0 0 1.5px rgba(255,170,40,0.6); }
-.sw-site:active { background: var(--bulb); color: #1a1c28; transform: scale(0.96); }
-.sw-site.danger { background: rgba(176,64,64,0.3); color: #ffb0b0; }
-.sw-hint { position: absolute; top: 14px; left: 50%; transform: translateX(-50%); font-size: 11px; color: rgba(255,255,255,0.7); letter-spacing: 0.15em; pointer-events: none; z-index: 5; font-weight: 700; padding: 6px 14px; border-radius: 12px; background: rgba(255,170,40,0.15); white-space: nowrap; }
-.sw-hint.skip { background: rgba(255,255,255,0.08); color: rgba(255,255,255,0.5); }
-.sw-done { color: white; font-size: 20px; font-weight: 800; text-align: center; padding: 80px 20px; }
+.sw-store { font-size: 14px; color: var(--text2); margin-top: 4px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sw-meta { font-size: 11px; color: var(--text3); margin-top: 4px; font-weight: 600; }
+.sw-sites { padding: 4px 14px 18px; background: var(--bg); display: flex; flex-wrap: wrap; gap: 8px; max-height: 38vh; overflow-y: auto; }
+.sw-site { padding: 12px 16px; border-radius: 14px; font-size: 14px; font-weight: 700; border: none; cursor: pointer; font-family: 'Outfit', sans-serif; color: var(--text); background: var(--bg); box-shadow: 4px 4px 11px var(--sd), -4px -4px 11px var(--sl); transition: all 0.12s; }
+.sw-site.predicted { color: var(--bulb2); background: var(--bg); box-shadow: 4px 4px 11px var(--sd), -4px -4px 11px var(--sl), 0 0 0 1.5px var(--bulb); text-shadow: 0 0 8px var(--bulb-glow2); }
+.sw-site:active { box-shadow: inset 3px 3px 9px var(--sd), inset -3px -3px 9px var(--sl); transform: scale(0.96); color: var(--bulb2); }
+.sw-site.danger { color: #b04040; }
+.sw-hint { position: absolute; top: 14px; left: 50%; transform: translateX(-50%); font-size: 11px; color: var(--bulb2); letter-spacing: 0.15em; pointer-events: none; z-index: 5; font-weight: 800; padding: 6px 14px; border-radius: 12px; background: var(--bg); box-shadow: 3px 3px 9px var(--sd), -3px -3px 9px var(--sl); text-shadow: 0 0 6px var(--bulb-glow2); white-space: nowrap; }
+.sw-hint.skip { color: var(--text3); text-shadow: none; }
+.sw-done { color: var(--text); font-size: 20px; font-weight: 800; text-align: center; padding: 80px 20px; }
 
 /* リスト型 SORT 画面のタブ */
 .sort-tabs { display: flex; gap: 10px; padding: 0 18px 14px; }
