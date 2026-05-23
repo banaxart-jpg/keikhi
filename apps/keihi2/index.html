@@ -133,7 +133,7 @@ body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); 
 <div id="buyerScreen">
   <div class="top-bar">
     <button class="pill-btn" type="button" onclick="location.href='/'">← トップ</button>
-    <button class="pill-btn accent" id="sortBtn" type="button">仕分け <span id="unsortedCount">0</span> →</button>
+    <button class="pill-btn accent" id="sortBtn" type="button">SORT <span id="unsortedCount">0</span> →</button>
   </div>
   <div class="buyers-row">
     <button class="buyer-btn" data-buyer="小西" type="button">小西</button>
@@ -145,7 +145,7 @@ body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); 
 <div id="shootScreen">
   <div class="top-bar">
     <button class="pill-btn" id="backToBuyerBtn" type="button">← 名前</button>
-    <button class="pill-btn accent" id="goSortBtn" type="button">仕分け <span id="unsortedCount2">0</span> →</button>
+    <button class="pill-btn accent" id="goSortBtn" type="button">SORT <span id="unsortedCount2">0</span> →</button>
   </div>
   <div class="shoot-top">
     <span class="buyer-tag" id="buyerTag">名取</span>
@@ -172,7 +172,7 @@ body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); 
 <div id="sortScreen">
   <div class="top-bar">
     <button class="pill-btn" id="sortBackBtn" type="button">← 撮影</button>
-    <span style="font-size:15px;font-weight:800;">仕分け</span>
+    <span style="font-size:15px;font-weight:800;">SORT</span>
     <button class="pill-btn" id="reloadBtn" type="button">🔄</button>
   </div>
   <div class="sort-summary" id="sortSummary">未仕分け 0 件</div>
@@ -454,8 +454,8 @@ function renderSwipe() {
     const done = document.createElement("div");
     done.className = "sw-done";
     done.innerHTML = swipeQueue.length === 0
-      ? "📋 未仕分けはありません"
-      : `🎉 全 ${swipeQueue.length} 件 仕分け完了！`;
+      ? "📋 SORT 待ちはありません"
+      : `🎉 全 ${swipeQueue.length} 件 SORT 完了！`;
     stack.appendChild(done);
     return;
   }
@@ -619,10 +619,10 @@ function renderSort() {
   const list = $("sortList");
   list.textContent = "";
   const unsorted = unsortedRecords();
-  $("sortSummary").textContent = unsorted.length ? `未仕分け ${unsorted.length} 件` : "未仕分けはありません";
+  $("sortSummary").textContent = unsorted.length ? `SORT 待ち ${unsorted.length} 件` : "SORT 待ちはありません";
   refreshUnsortedCount();
   if (!unsorted.length) {
-    list.innerHTML = `<div class="empty"><div class="empty-icon">📋</div>全部仕分け済みです</div>`;
+    list.innerHTML = `<div class="empty"><div class="empty-icon">📋</div>全部 SORT 済みです</div>`;
     return;
   }
   for (const r of unsorted) list.appendChild(makeSortCard(r));
@@ -683,7 +683,7 @@ async function assignSite(r, siteName) {
     });
     const idx = records.findIndex((x) => x.id === r.id);
     if (idx >= 0) records[idx] = updated;
-    toast(`「${siteName}」に仕分け`);
+    toast(`→ ${siteName}`);
     // スプレッドシートに送る (仕分け確定したタイミング)
     const viewUrl = `${location.origin}/keihi/?view=${r.id}`;
     postToSheet({ ...updated, viewUrl }).catch(() => {});
