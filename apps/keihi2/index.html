@@ -83,6 +83,30 @@ body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); 
 .empty { text-align: center; padding: 80px 0; color: var(--text3); font-size: 14px; font-weight: 700; }
 .empty-icon { font-size: 48px; opacity: 0.18; margin-bottom: 10px; }
 
+/* スワイプ仕分け画面 */
+#swipeScreen { position: fixed; inset: 0; display: none; flex-direction: column; background: #1a1c28; }
+.swipe-top { padding: 54px 18px 0; display: flex; justify-content: space-between; align-items: center; color: white; z-index: 10; }
+.swipe-top .pill-btn { background: rgba(255,255,255,0.08); color: rgba(255,255,255,0.85); box-shadow: none; backdrop-filter: blur(8px); }
+.swipe-progress { font-size: 12px; font-weight: 800; letter-spacing: 0.1em; color: rgba(255,255,255,0.7); }
+.swipe-stack { flex: 1; position: relative; overflow: hidden; }
+.swipe-card { position: absolute; inset: 14px 14px 14px 14px; border-radius: 24px; background: #2a2d3a; overflow: hidden; display: flex; flex-direction: column; box-shadow: 0 8px 32px rgba(0,0,0,0.4); touch-action: pan-y; will-change: transform; }
+.swipe-card.back { transform: scale(0.94); opacity: 0.5; z-index: 0; }
+.swipe-card.front { z-index: 2; }
+.sw-img-wrap { flex: 1; min-height: 0; background: #1a1c28; display: flex; align-items: center; justify-content: center; position: relative; }
+.sw-img-wrap img { max-width: 100%; max-height: 100%; object-fit: contain; cursor: pointer; }
+.sw-img-placeholder { color: rgba(255,255,255,0.25); font-size: 60px; }
+.sw-img-loading { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: rgba(255,255,255,0.5); font-size: 13px; }
+.sw-info { padding: 14px 18px 10px; background: linear-gradient(to top, #2a2d3a, rgba(42,45,58,0.85)); color: white; }
+.sw-amount { font-size: 32px; font-weight: 900; letter-spacing: -1.5px; line-height: 1; }
+.sw-store { font-size: 14px; color: rgba(255,255,255,0.75); margin-top: 4px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sw-meta { font-size: 11px; color: rgba(255,255,255,0.5); margin-top: 4px; font-weight: 600; }
+.sw-sites { padding: 4px 14px 18px; background: #2a2d3a; display: flex; flex-wrap: wrap; gap: 8px; max-height: 38vh; overflow-y: auto; }
+.sw-site { padding: 12px 16px; border-radius: 14px; font-size: 14px; font-weight: 700; border: none; cursor: pointer; font-family: 'Outfit', sans-serif; color: white; background: rgba(255,255,255,0.1); transition: all 0.12s; }
+.sw-site:active { background: var(--bulb); color: #1a1c28; transform: scale(0.96); }
+.sw-site.danger { background: rgba(176,64,64,0.3); color: #ffb0b0; }
+.sw-hint { position: absolute; top: 14px; left: 50%; transform: translateX(-50%); font-size: 10px; color: rgba(255,255,255,0.5); letter-spacing: 0.2em; pointer-events: none; z-index: 5; font-weight: 700; }
+.sw-done { color: white; font-size: 20px; font-weight: 800; text-align: center; padding: 80px 20px; }
+
 .toast { position: fixed; top: 60px; left: 50%; transform: translateX(-50%); padding: 11px 22px; border-radius: 26px; font-size: 13px; font-weight: 800; z-index: 200; display: none; white-space: nowrap; color: white; background: linear-gradient(135deg, #60c88a, #38a86a); box-shadow: 6px 6px 16px rgba(40,140,80,0.35); }
 .toast.err { background: linear-gradient(135deg, #d88080, #b04040); white-space: pre-wrap; max-width: 86vw; font-size: 11px; font-weight: 600; text-align: left; }
 
@@ -134,7 +158,17 @@ body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); 
   <input type="file" id="fileInput" accept="image/*" capture="environment" style="display:none">
 </div>
 
-<!-- 仕分け画面 -->
+<!-- スワイプ仕分け画面 (メイン) -->
+<div id="swipeScreen">
+  <div class="swipe-top">
+    <button class="pill-btn" id="swipeBackBtn" type="button">← 撮影</button>
+    <span class="swipe-progress" id="swipeProgress">0 / 0</span>
+    <button class="pill-btn" id="swipeListBtn" type="button">📋 一覧</button>
+  </div>
+  <div class="swipe-stack" id="swipeStack"></div>
+</div>
+
+<!-- 仕分け画面 (リスト型: バックアップとして残す) -->
 <div id="sortScreen">
   <div class="top-bar">
     <button class="pill-btn" id="sortBackBtn" type="button">← 撮影</button>
@@ -191,7 +225,7 @@ let processing = false;
 const $ = (id) => document.getElementById(id);
 
 // ───────── Screens ─────────
-const screens = ["buyerScreen", "shootScreen", "sortScreen"];
+const screens = ["buyerScreen", "shootScreen", "swipeScreen", "sortScreen"];
 function show(id) { for (const s of screens) $(s).style.display = s === id ? "flex" : "none"; }
 
 let _toastTimer = null;
@@ -373,14 +407,197 @@ function renderQueue() {
   $("qFailed").textContent = f;
 }
 
-// ───────── Sort screen ─────────
-$("sortBtn").addEventListener("click", showSort);
-$("goSortBtn").addEventListener("click", showSort);
-$("sortBackBtn").addEventListener("click", () => show("shootScreen"));
+// ───────── Sort / Swipe screen ─────────
+// 「仕分け」ボタンの行先はスワイプ式 (showSwipe)。リスト型 (showSort) は
+// スワイプ画面の 📋 ボタンから入る予備動線として残してある。
+$("sortBtn").addEventListener("click", showSwipe);
+$("goSortBtn").addEventListener("click", showSwipe);
+$("swipeBackBtn").addEventListener("click", () => show("shootScreen"));
+$("swipeListBtn").addEventListener("click", showSort);
+$("sortBackBtn").addEventListener("click", () => show("swipeScreen"));
 $("reloadBtn").addEventListener("click", async () => {
   await loadData();
   renderSort();
 });
+
+// 画像 URL キャッシュ (署名 URL は時間内なら使い回せる)
+const imageCache = new Map();
+async function loadImage(recordId) {
+  if (imageCache.has(recordId)) return imageCache.get(recordId);
+  try {
+    const { url } = await api("GET", `/api/records/${recordId}/image`);
+    imageCache.set(recordId, url);
+    return url;
+  } catch { return ""; }
+}
+
+// ───────── Swipe ─────────
+let swipeQueue = [];
+let swipeIndex = 0;
+
+async function showSwipe() {
+  await loadData();
+  swipeQueue = unsortedRecords();
+  swipeIndex = 0;
+  refreshUnsortedCount();
+  renderSwipe();
+  show("swipeScreen");
+}
+
+function renderSwipe() {
+  const stack = $("swipeStack");
+  stack.textContent = "";
+  $("swipeProgress").textContent = swipeQueue.length === 0
+    ? "完了"
+    : `${Math.min(swipeIndex + 1, swipeQueue.length)} / ${swipeQueue.length}`;
+  if (swipeIndex >= swipeQueue.length) {
+    const done = document.createElement("div");
+    done.className = "sw-done";
+    done.innerHTML = swipeQueue.length === 0
+      ? "📋 未仕分けはありません"
+      : `🎉 全 ${swipeQueue.length} 件 仕分け完了！`;
+    stack.appendChild(done);
+    return;
+  }
+  // 次のカード (背面・プリロード用) を先に積んで、その上に現在カード
+  if (swipeIndex + 1 < swipeQueue.length) {
+    const back = createSwipeCard(swipeQueue[swipeIndex + 1], true);
+    stack.appendChild(back);
+  }
+  const front = createSwipeCard(swipeQueue[swipeIndex], false);
+  stack.appendChild(front);
+  // さらに次のカードの画像をプリロード
+  if (swipeIndex + 2 < swipeQueue.length) {
+    loadImage(swipeQueue[swipeIndex + 2].id);
+  }
+}
+
+function createSwipeCard(r, isBack) {
+  const card = document.createElement("div");
+  card.className = "swipe-card " + (isBack ? "back" : "front");
+
+  // 画像エリア
+  const imgWrap = document.createElement("div");
+  imgWrap.className = "sw-img-wrap";
+  if (r.imageUrl) {
+    const loading = document.createElement("div");
+    loading.className = "sw-img-loading"; loading.textContent = "読み込み中…";
+    imgWrap.appendChild(loading);
+    const img = document.createElement("img");
+    loadImage(r.id).then((url) => {
+      if (url) {
+        img.src = url;
+        img.addEventListener("click", () => { $("imgOverlayImg").src = url; $("imgOverlay").style.display = "flex"; });
+        imgWrap.appendChild(img);
+      }
+      loading.remove();
+    });
+  } else {
+    const ph = document.createElement("div");
+    ph.className = "sw-img-placeholder"; ph.textContent = "🧾";
+    imgWrap.appendChild(ph);
+  }
+  card.appendChild(imgWrap);
+
+  // AI 読取情報
+  const info = document.createElement("div");
+  info.className = "sw-info";
+  info.innerHTML = `
+    <div class="sw-amount">¥${(Number(r.total) || 0).toLocaleString()}</div>
+    <div class="sw-store">${escapeHtml(r.store || "店舗不明")}</div>
+    <div class="sw-meta">${(r.date || "").slice(0, 10)} ・ ${escapeHtml(r.category || "")} ・ ${escapeHtml(r.buyer || "")}</div>
+  `;
+  card.appendChild(info);
+
+  // 現場ボタン (タップで仕分け確定 → 次へ)
+  const sitesRow = document.createElement("div");
+  sitesRow.className = "sw-sites";
+  for (const s of sites) {
+    const b = document.createElement("button");
+    b.type = "button"; b.className = "sw-site"; b.textContent = s.name;
+    b.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      try {
+        await assignSite(r, s.name);
+        swipeOutNext(card);
+      } catch (err) { toast("失敗: " + err.message, true); }
+    });
+    sitesRow.appendChild(b);
+  }
+  // 削除
+  const del = document.createElement("button");
+  del.type = "button"; del.className = "sw-site danger"; del.textContent = "🗑 削除";
+  del.addEventListener("click", async (e) => {
+    e.stopPropagation();
+    if (!confirm(`¥${(r.total||0).toLocaleString()} を削除？`)) return;
+    try { await deleteRecord(r); swipeOutNext(card); }
+    catch (err) { toast("削除失敗: " + err.message, true); }
+  });
+  sitesRow.appendChild(del);
+  card.appendChild(sitesRow);
+
+  if (!isBack) {
+    const hint = document.createElement("div");
+    hint.className = "sw-hint"; hint.textContent = "↑ SWIPE TO SKIP";
+    card.appendChild(hint);
+    attachSwipe(card);
+  }
+  return card;
+}
+
+function swipeOutNext(card) {
+  // カードを上にスルッと飛ばして次へ
+  card.style.transition = "transform 0.28s ease-out, opacity 0.28s";
+  card.style.transform = "translateY(-110vh)";
+  card.style.opacity = "0";
+  setTimeout(() => {
+    swipeIndex++;
+    renderSwipe();
+  }, 240);
+}
+
+// touch / mouse スワイプハンドラ
+function attachSwipe(card) {
+  let startY = 0, startX = 0, deltaY = 0, dragging = false, longPress = false;
+  const TH = 120; // この px 以上上にスワイプで「次へ」
+  function down(y, x) { startY = y; startX = x; deltaY = 0; dragging = true; card.style.transition = "none"; }
+  function move(y, x) {
+    if (!dragging) return;
+    const dx = x - startX;
+    deltaY = y - startY;
+    // 横スワイプはスクロール扱いで無視
+    if (Math.abs(dx) > Math.abs(deltaY) && Math.abs(dx) > 10) { dragging = false; card.style.transform = ""; return; }
+    if (deltaY < 0) {
+      const fade = Math.min(1, -deltaY / 400);
+      card.style.transform = `translateY(${deltaY}px) scale(${1 - fade * 0.05})`;
+      card.style.opacity = String(1 - fade * 0.4);
+    } else {
+      // 下方向は無視 (跳ねさせない)
+      card.style.transform = "";
+      card.style.opacity = "1";
+    }
+  }
+  function up() {
+    if (!dragging) return;
+    dragging = false;
+    if (deltaY < -TH) {
+      // 「スキップ」: 仕分けせずに次のカードへ (元のレコードはそのまま未仕分け)
+      swipeOutNext(card);
+    } else {
+      card.style.transition = "transform 0.18s, opacity 0.18s";
+      card.style.transform = "";
+      card.style.opacity = "1";
+    }
+  }
+  card.addEventListener("touchstart", (e) => down(e.touches[0].clientY, e.touches[0].clientX), { passive: true });
+  card.addEventListener("touchmove", (e) => move(e.touches[0].clientY, e.touches[0].clientX), { passive: true });
+  card.addEventListener("touchend", up);
+  card.addEventListener("touchcancel", up);
+}
+
+function escapeHtml(s) {
+  return String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
+}
 
 async function showSort() {
   await loadData();
