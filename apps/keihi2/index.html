@@ -38,8 +38,7 @@ body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); 
 #shootScreen { position: fixed; inset: 0; display: none; flex-direction: column; padding: 100px 0 0; }
 .shoot-top { text-align: center; padding: 0 18px 14px; }
 .buyer-tag { display: inline-block; padding: 6px 14px; border-radius: 14px; font-size: 12px; font-weight: 700; color: var(--text2); background: var(--bg2); box-shadow: inset 2px 2px 6px var(--sd), inset -2px -2px 6px var(--sl); }
-.shoot-meta { display: flex; align-items: center; justify-content: center; gap: 14px; padding: 0 18px 14px; flex-wrap: wrap; }
-.queue-stats { font-size: 11px; color: var(--text3); font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; }
+.shoot-meta { display: flex; align-items: center; justify-content: center; gap: 14px; padding: 0 18px 14px; flex-wrap: wrap; }.queue-stats { font-size: 11px; color: var(--text3); font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; }
 .queue-stats b { color: var(--bulb2); font-weight: 800; }
 /* 右下固定の撮影 FAB (カメラアプリのシャッターっぽく) */
 .fab-shoot { position: fixed; right: 20px; bottom: calc(24px + env(safe-area-inset-bottom)); width: 76px; height: 76px; border-radius: 50%; font-size: 32px; padding: 0; border: none; cursor: pointer; font-family: 'Outfit', sans-serif; background: var(--bg); color: var(--text); box-shadow: 9px 9px 22px var(--sd), -7px -7px 18px var(--sl), inset 0 1px 0 rgba(255,255,255,0.55); z-index: 30; transition: all 0.14s; display: flex; align-items: center; justify-content: center; }
@@ -83,6 +82,23 @@ body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); 
 
 .empty { text-align: center; padding: 80px 0; color: var(--text3); font-size: 14px; font-weight: 700; }
 .empty-icon { font-size: 48px; opacity: 0.18; margin-bottom: 10px; }
+
+/* 現場管理画面 */
+#siteScreen { position: fixed; inset: 0; display: none; flex-direction: column; background: var(--bg); padding-top: 100px; }
+.site-mgmt-intro { padding: 0 22px 14px; font-size: 13px; color: var(--text2); font-weight: 700; }
+.site-mgmt-intro b { color: var(--bulb2); }
+.site-list { padding: 0 18px 140px; display: flex; flex-direction: column; gap: 10px; }
+.site-check-row { display: flex; align-items: center; gap: 14px; padding: 14px 18px; border-radius: 16px; background: var(--bg); box-shadow: 5px 5px 13px var(--sd), -5px -5px 13px var(--sl); cursor: pointer; font-size: 15px; font-weight: 700; }
+.site-check-row input[type="checkbox"] { width: 22px; height: 22px; accent-color: var(--bulb2); }
+.site-check-row.checked { color: var(--bulb2); text-shadow: 0 0 8px var(--bulb-glow2); }
+.site-check-row .del-x { margin-left: auto; font-size: 18px; color: var(--text3); background: none; border: none; cursor: pointer; padding: 4px 8px; }
+.site-add { position: fixed; left: 18px; right: 18px; bottom: calc(20px + env(safe-area-inset-bottom)); display: flex; gap: 10px; padding: 12px; border-radius: 18px; background: var(--bg); box-shadow: 6px 6px 18px var(--sd), -6px -6px 18px var(--sl); }
+.site-add input { flex: 1; padding: 11px 14px; border: none; border-radius: 12px; font-size: 14px; font-family: 'Outfit', sans-serif; background: var(--bg2); box-shadow: inset 3px 3px 9px var(--sd), inset -3px -3px 9px var(--sl); outline: none; color: var(--text); font-weight: 600; }
+.site-add button { padding: 11px 16px; border-radius: 12px; border: none; font-size: 14px; font-weight: 800; color: var(--bulb2); font-family: 'Outfit', sans-serif; background: var(--bg); box-shadow: 4px 4px 11px var(--sd), -4px -4px 11px var(--sl); text-shadow: 0 0 8px var(--bulb-glow2); cursor: pointer; }
+.site-add button:active { box-shadow: inset 3px 3px 8px var(--sd), inset -3px -3px 8px var(--sl); }
+.gear-btn { padding: 9px 14px; border-radius: 30px; font-size: 12px; font-weight: 700; cursor: pointer; border: none; color: var(--text2); font-family: 'Outfit', sans-serif; background: var(--bg); box-shadow: 5px 5px 12px var(--sd), -5px -5px 12px var(--sl); }
+.gear-btn:active { box-shadow: inset 3px 3px 8px var(--sd), inset -3px -3px 8px var(--sl); transform: scale(0.96); }
+.sw-site.new { background: rgba(255,255,255,0.05); color: rgba(255,255,255,0.6); border: 1.5px dashed rgba(255,255,255,0.25); }
 
 /* スワイプ SORT 画面 */
 #swipeScreen { position: fixed; inset: 0; display: none; flex-direction: column; background: #1e2940; }
@@ -153,7 +169,10 @@ body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); 
 <div id="shootScreen">
   <div class="top-bar">
     <button class="pill-btn" id="backToBuyerBtn" type="button">← 名前</button>
-    <button class="pill-btn accent" id="goSortBtn" type="button">SORT <span id="unsortedCount2">0</span> →</button>
+    <div style="display:flex;gap:6px;">
+      <button class="gear-btn" id="openSiteMgmtBtn" type="button">⚙️ 現場</button>
+      <button class="pill-btn accent" id="goSortBtn" type="button">SORT <span id="unsortedCount2">0</span> →</button>
+    </div>
   </div>
   <div class="shoot-meta">
     <span class="buyer-tag" id="buyerTag">名取</span>
@@ -162,6 +181,21 @@ body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); 
   <div class="queue-grid" id="queueGrid"></div>
   <button class="fab-shoot" id="shootBtn" type="button">📷</button>
   <input type="file" id="fileInput" accept="image/*" capture="environment" style="display:none">
+</div>
+
+<!-- 現場管理画面 -->
+<div id="siteScreen">
+  <div class="top-bar">
+    <button class="pill-btn" id="siteBackBtn" type="button">← 戻る</button>
+    <span style="font-size:15px;font-weight:800;">現場の管理</span>
+    <span style="width:60px;"></span>
+  </div>
+  <p class="site-mgmt-intro"><b id="siteMgmtBuyer">名取</b> 用の現場を選んでください。チェック ON の現場だけが SORT 画面に出ます。</p>
+  <div class="site-list" id="siteMgmtList"></div>
+  <div class="site-add">
+    <input type="text" id="newSiteInput" placeholder="新しい現場名を入力" autocomplete="off">
+    <button id="newSiteBtn" type="button">+ 追加</button>
+  </div>
 </div>
 
 <!-- スワイプ仕分け画面 (メイン) -->
@@ -235,7 +269,7 @@ let processing = false;
 const $ = (id) => document.getElementById(id);
 
 // ───────── Screens ─────────
-const screens = ["buyerScreen", "shootScreen", "swipeScreen", "sortScreen"];
+const screens = ["buyerScreen", "shootScreen", "swipeScreen", "sortScreen", "siteScreen"];
 function show(id) { for (const s of screens) $(s).style.display = s === id ? "flex" : "none"; }
 
 let _toastTimer = null;
@@ -460,6 +494,32 @@ function getPredictedSite(recordId) {
   } catch { return ""; }
 }
 
+// 購入者ごとの「自分用の現場リスト」(小西と名取で分けるため)
+// 空配列 / 未定義なら「全現場を表示」(後方互換)
+function getMySites(b) {
+  try {
+    const map = JSON.parse(localStorage.getItem("keihi2_my_sites") || "{}");
+    return map[b || buyer] || [];
+  } catch { return []; }
+}
+function saveMySites(arr) {
+  try {
+    const map = JSON.parse(localStorage.getItem("keihi2_my_sites") || "{}");
+    map[buyer] = arr;
+    localStorage.setItem("keihi2_my_sites", JSON.stringify(map));
+  } catch {}
+}
+// 表示する現場 (自分用 + 必要なら AI 推定の現場を上乗せ)
+function visibleSites(extra) {
+  const my = getMySites();
+  let base = my.length === 0 ? sites : sites.filter((s) => my.includes(s.name));
+  if (extra && !base.find((s) => s.name === extra)) {
+    const found = sites.find((s) => s.name === extra);
+    if (found) base = [found, ...base];
+  }
+  return base;
+}
+
 // ───────── Swipe ─────────
 let swipeQueue = [];
 let swipeIndex = 0;
@@ -539,10 +599,11 @@ function createSwipeCard(r, isBack) {
   card.appendChild(info);
 
   // 現場ボタン (タップで SORT 確定 → 次へ)。AI 推定の現場は目立たせる
+  // 表示は自分用にフィルタ。推定された現場が自分用に無くてもボタンには出す
   const predicted = getPredictedSite(r.id);
   const sitesRow = document.createElement("div");
   sitesRow.className = "sw-sites";
-  for (const s of sites) {
+  for (const s of visibleSites(predicted)) {
     const b = document.createElement("button");
     b.type = "button";
     b.className = "sw-site" + (s.name === predicted ? " predicted" : "");
@@ -556,6 +617,24 @@ function createSwipeCard(r, isBack) {
     });
     sitesRow.appendChild(b);
   }
+  // 「+ 新規」ボタン: その場で現場を追加して即適用
+  const addBtn = document.createElement("button");
+  addBtn.type = "button"; addBtn.className = "sw-site new"; addBtn.textContent = "+ 新規";
+  addBtn.addEventListener("click", async (e) => {
+    e.stopPropagation();
+    const name = (prompt("新しい現場名:") || "").trim();
+    if (!name) return;
+    try {
+      const created = await api("POST", "/api/sites", { name });
+      if (!sites.find((s) => s.name === created.name)) sites.push(created);
+      // 自分用リストにも追加 (空 = 全表示モード のときは何もしない)
+      const my = getMySites();
+      if (my.length) saveMySites([...my, created.name]);
+      await assignSite(r, created.name);
+      swipeOutNext(card);
+    } catch (err) { toast("追加失敗: " + err.message, true); }
+  });
+  sitesRow.appendChild(addBtn);
   // 削除
   const del = document.createElement("button");
   del.type = "button"; del.className = "sw-site danger"; del.textContent = "🗑 削除";
@@ -717,7 +796,7 @@ function makeSortCard(r) {
   // 現場ボタン
   const sitesRow = document.createElement("div");
   sitesRow.className = "sort-sites";
-  for (const s of sites) {
+  for (const s of visibleSites(r.site)) {
     const b = document.createElement("button");
     b.type = "button";
     b.className = "s-btn" + (r.site === s.name ? " current" : "");
@@ -772,6 +851,84 @@ async function viewImage(id) {
   } catch (e) { toast("画像取得失敗", true); }
 }
 $("imgOverlayClose").addEventListener("click", () => { $("imgOverlay").style.display = "none"; $("imgOverlayImg").src = ""; });
+
+// ───────── 現場の管理画面 ─────────
+$("openSiteMgmtBtn").addEventListener("click", showSiteMgmt);
+$("siteBackBtn").addEventListener("click", () => show("shootScreen"));
+$("newSiteBtn").addEventListener("click", addNewSite);
+$("newSiteInput").addEventListener("keydown", (e) => { if (e.key === "Enter") addNewSite(); });
+
+async function showSiteMgmt() {
+  await loadData(); // sites を最新に
+  $("siteMgmtBuyer").textContent = buyer || "未選択";
+  renderSiteMgmt();
+  show("siteScreen");
+}
+
+function renderSiteMgmt() {
+  const list = $("siteMgmtList");
+  list.textContent = "";
+  const my = new Set(getMySites());
+  const allOff = my.size === 0; // 初期状態 (空 = 全表示扱い)
+  for (const s of sites) {
+    const row = document.createElement("label");
+    const checked = allOff || my.has(s.name);
+    row.className = "site-check-row" + (checked ? " checked" : "");
+    const cb = document.createElement("input");
+    cb.type = "checkbox";
+    cb.checked = checked;
+    cb.addEventListener("change", () => {
+      let cur = getMySites();
+      if (cur.length === 0) {
+        // 「全 ON 状態」→ チェック外したものだけ除外したリストにする
+        cur = sites.map((x) => x.name);
+      }
+      const next = cb.checked
+        ? Array.from(new Set([...cur, s.name]))
+        : cur.filter((x) => x !== s.name);
+      // 全部 ON に戻ったら空配列に正規化
+      saveMySites(next.length === sites.length ? [] : next);
+      renderSiteMgmt();
+    });
+    const name = document.createElement("span");
+    name.textContent = s.name;
+    name.style.flex = "1";
+    const del = document.createElement("button");
+    del.type = "button"; del.className = "del-x"; del.textContent = "×";
+    del.title = "全員の現場リストから削除";
+    del.addEventListener("click", async (e) => {
+      e.preventDefault();
+      if (!confirm(`「${s.name}」を全員の現場リストから削除しますか？\n(過去のレコードはそのまま残ります)`)) return;
+      try {
+        await api("DELETE", `/api/sites/${s.id}`);
+        sites = sites.filter((x) => x.id !== s.id);
+        // 自分用リストからも除く
+        const cur = getMySites().filter((n) => n !== s.name);
+        saveMySites(cur);
+        renderSiteMgmt();
+      } catch (err) { toast("削除失敗: " + err.message, true); }
+    });
+    row.append(cb, name, del);
+    list.appendChild(row);
+  }
+}
+
+async function addNewSite() {
+  const name = $("newSiteInput").value.trim();
+  if (!name) return;
+  try {
+    const created = await api("POST", "/api/sites", { name });
+    if (!sites.find((s) => s.name === created.name)) sites.push(created);
+    // 新規追加は自動で自分用に入れる
+    let cur = getMySites();
+    if (cur.length === 0) cur = sites.map((x) => x.name); // 全 ON 状態を展開
+    if (!cur.includes(created.name)) cur.push(created.name);
+    saveMySites(cur.length === sites.length ? [] : cur);
+    $("newSiteInput").value = "";
+    renderSiteMgmt();
+    toast(`「${created.name}」追加`);
+  } catch (e) { toast("追加失敗: " + e.message, true); }
+}
 
 // ───────── Data ─────────
 async function loadData() {
