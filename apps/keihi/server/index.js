@@ -1329,6 +1329,8 @@ app.get("/api/records", async (req, res) => {
          FROM records
         ORDER BY date DESC, id DESC LIMIT 1000`
     );
+    const withImage = rows.filter((r) => r.imageUrl).length;
+    console.log(`[records] GET returned ${rows.length} records, ${withImage} with imageUrl (latest 3: ${rows.slice(0, 3).map((r) => `id=${r.id} img=${r.imageUrl ? "yes" : "NO"}`).join(", ")})`);
     res.json(rows);
   } catch (err) {
     console.error("list error", err);
@@ -1341,6 +1343,7 @@ app.post("/api/records", async (req, res) => {
   if (!p) return res.status(503).json({ error: "DB not configured" });
   try {
     const r = req.body || {};
+    console.log(`[records] POST imageUrl=${r.imageUrl ? r.imageUrl.slice(0, 80) : "(none)"} store="${r.store}" total=${r.total}`);
     const { rows } = await p.query(
       `INSERT INTO records (date, store, total, category, work_type, payment, buyer, site, memo, image_url)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
