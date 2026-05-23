@@ -532,7 +532,7 @@ function resizeImage(file, maxSize) {
       canvas.height = Math.round(img.height * ratio);
       canvas.getContext("2d").drawImage(img, 0, 0, canvas.width, canvas.height);
       URL.revokeObjectURL(url);
-      resolve(canvas.toDataURL("image/jpeg", 0.85).split(",")[1]);
+      resolve(canvas.toDataURL("image/jpeg", 0.7).split(",")[1]);
     };
     img.onerror = () => { URL.revokeObjectURL(url); reject(new Error("画像読込失敗")); };
     img.src = url;
@@ -646,7 +646,7 @@ async function sendTray() {
     while (next < total) {
       const i = next++;
       try {
-        const b64 = await resizeImage(trayItems[i].file, 1600);
+        const b64 = await resizeImage(trayItems[i].file, 1200);
         const resp = await api("POST", "/api/scan", {
           image: b64, mimeType: "image/jpeg",
           sites: sites.map((s) => s.name),
