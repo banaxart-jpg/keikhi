@@ -895,7 +895,14 @@ $("submitBtn").addEventListener("click", async () => {
       const idx = records.findIndex((x) => x.id === editingId);
       if (idx >= 0) records[idx] = { ...records[idx], ...record };
       editingId = null;
-      toast("更新しました");
+      // 編集時もシートに送る（過去データの流し込みにも使える）
+      const sheetRes = await postToSheet(record);
+      const okMsg = sheetRes.skipped
+        ? "更新しました"
+        : sheetRes.ok
+          ? "更新しました（シートにも追加）"
+          : "更新しました（シートへの追加は失敗）";
+      toast(okMsg);
       renderList();
       show("listScreen");
     } else {

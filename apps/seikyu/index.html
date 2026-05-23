@@ -684,9 +684,15 @@ $("submitBtn").addEventListener("click", async () => {
       const idx = bills.findIndex((x) => x.id === editingId);
       if (idx >= 0) bills[idx] = { ...bills[idx], ...rec };
       saveBills();
-      toast("更新しました");
+      // 編集時もシートに送る（過去データの流し込みにも使える）
+      const sheetRes = await postToSheet(idx >= 0 ? bills[idx] : rec);
+      const okMsg = sheetRes.skipped
+        ? "更新しました"
+        : sheetRes.ok
+          ? "更新しました（シートにも追加）"
+          : "更新しました（シートへの追加は失敗）";
+      toast(okMsg);
       editingId = null;
-      // 編集後はそのレコードが属するタブを表示
       tabDir = rec.direction;
       showList();
     } else {
