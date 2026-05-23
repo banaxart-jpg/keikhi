@@ -1,0 +1,516 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="経費2">
+<title>経費2</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+:root {
+  --bg: #e4e6ee; --bg2: #d8dae4;
+  --sl: rgba(255,255,255,1); --sd: rgba(168,172,192,0.75); --sd2: rgba(148,152,176,0.55);
+  --text: #42455e; --text2: rgba(66,69,94,0.42); --text3: rgba(66,69,94,0.22);
+  --bulb: #ffb940; --bulb2: #ff9a10;
+  --bulb-glow: rgba(255,170,40,0.55); --bulb-glow2: rgba(255,140,20,0.25);
+  --ok: #16a34a; --err: #b04040;
+}
+body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; overflow-x: hidden; }
+
+.top-bar { position: absolute; top: 0; left: 0; right: 0; display: flex; justify-content: space-between; align-items: center; padding: 54px 18px 0; z-index: 10; gap: 8px; }
+.pill-btn { padding: 9px 16px; border-radius: 30px; font-size: 12px; font-weight: 700; cursor: pointer; border: none; color: var(--text2); font-family: 'Outfit', sans-serif; background: var(--bg); box-shadow: 5px 5px 12px var(--sd), -5px -5px 12px var(--sl); transition: all 0.12s; }
+.pill-btn:active { box-shadow: inset 3px 3px 8px var(--sd), inset -3px -3px 8px var(--sl); transform: scale(0.96); }
+.pill-btn.accent { color: var(--bulb2); text-shadow: 0 0 8px var(--bulb-glow2); }
+
+/* 名前選択 */
+#buyerScreen { position: fixed; inset: 0; display: none; flex-direction: column; align-items: center; justify-content: center; gap: 24px; padding: 24px; }
+.buyers-row { display: flex; gap: 16px; width: 100%; max-width: 300px; }
+.buyer-btn { flex: 1; padding: 22px 0; border-radius: 20px; font-size: 22px; font-weight: 600; color: var(--text); border: none; cursor: pointer; font-family: 'Outfit', sans-serif; background: var(--bg); position: relative; overflow: hidden; box-shadow: 10px 10px 24px var(--sd), -8px -8px 20px var(--sl); transition: all 0.18s; }
+.buyer-btn::before { content: ""; position: absolute; top: 0; left: 8%; right: 8%; height: 44%; background: linear-gradient(180deg, rgba(255,255,255,0.55), rgba(255,255,255,0)); border-radius: 30px 30px 50% 50%; pointer-events: none; }
+.buyer-btn:active { box-shadow: inset 7px 7px 18px var(--sd), inset -5px -5px 14px var(--sl); transform: scale(0.96); color: var(--bulb2); }
+
+/* 撮影画面 */
+#shootScreen { position: fixed; inset: 0; display: none; flex-direction: column; padding: 100px 0 0; }
+.shoot-top { text-align: center; padding: 0 18px 14px; }
+.buyer-tag { display: inline-block; padding: 6px 14px; border-radius: 14px; font-size: 12px; font-weight: 700; color: var(--text2); background: var(--bg2); box-shadow: inset 2px 2px 6px var(--sd), inset -2px -2px 6px var(--sl); }
+.shoot-cta { display: flex; flex-direction: column; align-items: center; gap: 18px; padding: 16px 18px 28px; }
+.big-shoot { width: 200px; padding: 28px 0; border-radius: 32px; font-size: 19px; font-weight: 800; color: var(--text); border: none; cursor: pointer; font-family: 'Outfit', sans-serif; background: var(--bg); position: relative; overflow: hidden; box-shadow: 12px 12px 28px var(--sd), -8px -8px 22px var(--sl), inset 0 1px 0 rgba(255,255,255,0.5); transition: all 0.16s; }
+.big-shoot::before { content: ""; position: absolute; top: 0; left: 8%; right: 8%; height: 44%; background: linear-gradient(180deg, rgba(255,255,255,0.55), rgba(255,255,255,0)); border-radius: 30px 30px 50% 50%; pointer-events: none; }
+.big-shoot:active { box-shadow: inset 8px 8px 20px var(--sd), inset -5px -5px 14px var(--sl); transform: scale(0.97); color: var(--bulb2); }
+.queue-stats { font-size: 12px; color: var(--text3); font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; }
+.queue-stats b { color: var(--bulb2); font-weight: 800; }
+
+.queue-grid { flex: 1; overflow-y: auto; padding: 0 18px 100px; display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; }
+.q-thumb { position: relative; aspect-ratio: 3/4; border-radius: 14px; overflow: hidden; box-shadow: 5px 5px 13px var(--sd), -3px -3px 10px var(--sl); background: var(--bg); }
+.q-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.q-status { position: absolute; bottom: 0; left: 0; right: 0; padding: 4px 6px; font-size: 10px; font-weight: 800; color: white; background: rgba(0,0,0,0.6); display: flex; align-items: center; gap: 4px; }
+.q-status.uploading { background: rgba(60,80,140,0.7); }
+.q-status.scanning  { background: rgba(60,120,160,0.7); }
+.q-status.done      { background: rgba(22,163,74,0.7); }
+.q-status.failed    { background: rgba(176,64,64,0.85); cursor: pointer; }
+.q-spinner { width: 10px; height: 10px; border-radius: 50%; border: 2px solid rgba(255,255,255,0.3); border-top-color: white; animation: spin 0.7s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.q-del { position: absolute; top: 4px; right: 4px; width: 22px; height: 22px; border-radius: 50%; border: none; background: rgba(0,0,0,0.55); color: #fff; font-size: 13px; cursor: pointer; padding: 0; }
+
+/* 仕分け画面 */
+#sortScreen { position: fixed; inset: 0; display: none; flex-direction: column; padding: 100px 0 0; overflow-y: auto; }
+.sort-summary { padding: 0 18px 14px; text-align: center; font-size: 13px; color: var(--text2); font-weight: 700; }
+.sort-list { padding: 0 14px 140px; display: flex; flex-direction: column; gap: 10px; }
+.sort-card { border-radius: 18px; padding: 12px; background: var(--bg); box-shadow: 6px 6px 16px var(--sd), -4px -4px 12px var(--sl); display: flex; gap: 10px; }
+.sort-card.done { opacity: 0.6; }
+.sort-thumb { width: 60px; height: 80px; border-radius: 12px; overflow: hidden; flex-shrink: 0; background: var(--bg2); box-shadow: inset 2px 2px 6px var(--sd), inset -2px -2px 6px var(--sl); cursor: pointer; }
+.sort-thumb img { width: 100%; height: 100%; object-fit: cover; }
+.sort-thumb.empty { display: flex; align-items: center; justify-content: center; font-size: 24px; color: var(--text3); }
+.sort-body { flex: 1; min-width: 0; }
+.sort-amount { font-size: 19px; font-weight: 800; letter-spacing: -0.5px; }
+.sort-store { font-size: 12px; color: var(--text2); font-weight: 600; margin: 2px 0 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sort-meta { font-size: 10px; color: var(--text3); font-weight: 700; margin-bottom: 8px; }
+.sort-sites { display: flex; flex-wrap: wrap; gap: 6px; }
+.s-btn { padding: 7px 10px; border-radius: 11px; font-size: 11px; font-weight: 700; color: var(--text2); border: none; cursor: pointer; font-family: 'Outfit', sans-serif; background: var(--bg); box-shadow: 3px 3px 8px var(--sd), -3px -3px 8px var(--sl); transition: all 0.12s; }
+.s-btn.current { box-shadow: inset 3px 3px 8px var(--sd), inset -3px -3px 8px var(--sl); color: var(--bulb2); text-shadow: 0 0 8px var(--bulb-glow); }
+.s-btn:active { transform: scale(0.95); }
+.s-btn.danger { color: var(--err); }
+
+.list-add-btn { position: fixed; bottom: 0; left: 0; right: 0; padding: 14px 20px 36px; background: linear-gradient(to top, var(--bg) 55%, transparent); }
+.submit-btn { width: 100%; padding: 18px; border: none; border-radius: 24px; cursor: pointer; font-size: 17px; font-weight: 900; color: white; font-family: 'Outfit', sans-serif; background: linear-gradient(145deg, #ffb940, #e08800); box-shadow: 8px 8px 22px rgba(190,120,0,0.45), -4px -4px 14px rgba(255,230,140,0.55); transition: all 0.15s; }
+.submit-btn:active { transform: scale(0.97); }
+
+.empty { text-align: center; padding: 80px 0; color: var(--text3); font-size: 14px; font-weight: 700; }
+.empty-icon { font-size: 48px; opacity: 0.18; margin-bottom: 10px; }
+
+.toast { position: fixed; top: 60px; left: 50%; transform: translateX(-50%); padding: 11px 22px; border-radius: 26px; font-size: 13px; font-weight: 800; z-index: 200; display: none; white-space: nowrap; color: white; background: linear-gradient(135deg, #60c88a, #38a86a); box-shadow: 6px 6px 16px rgba(40,140,80,0.35); }
+.toast.err { background: linear-gradient(135deg, #d88080, #b04040); white-space: pre-wrap; max-width: 86vw; font-size: 11px; font-weight: 600; text-align: left; }
+
+#imgOverlay { display: none; position: fixed; inset: 0; z-index: 300; background: rgba(20,22,32,0.92); align-items: center; justify-content: center; flex-direction: column; gap: 16px; padding: 24px; }
+#imgOverlay img { max-width: 100%; max-height: 80vh; border-radius: 14px; object-fit: contain; }
+</style>
+</head>
+<body>
+
+<div class="toast" id="toast"></div>
+
+<div id="signinOverlay" style="display:none;position:fixed;inset:0;z-index:400;background:var(--bg);flex-direction:column;align-items:center;justify-content:center;padding:32px;text-align:center;gap:18px;">
+  <div style="font-size:24px;font-weight:800;">経費2</div>
+  <button class="submit-btn" style="max-width:280px;" onclick="location.href='/'">トップに戻る</button>
+  <div id="signinErr" style="font-size:11px;color:#b04040;font-family:monospace;"></div>
+</div>
+
+<div id="imgOverlay">
+  <img id="imgOverlayImg" src="" alt="">
+  <button class="pill-btn" id="imgOverlayClose" type="button">閉じる</button>
+</div>
+
+<!-- 名前選択 -->
+<div id="buyerScreen">
+  <div class="top-bar">
+    <button class="pill-btn" type="button" onclick="location.href='/'">← トップ</button>
+    <button class="pill-btn accent" id="sortBtn" type="button">仕分け <span id="unsortedCount">0</span> →</button>
+  </div>
+  <div class="buyers-row">
+    <button class="buyer-btn" data-buyer="小西" type="button">小西</button>
+    <button class="buyer-btn" data-buyer="名取" type="button">名取</button>
+  </div>
+</div>
+
+<!-- 撮影画面 -->
+<div id="shootScreen">
+  <div class="top-bar">
+    <button class="pill-btn" id="backToBuyerBtn" type="button">← 名前</button>
+    <button class="pill-btn accent" id="goSortBtn" type="button">仕分け <span id="unsortedCount2">0</span> →</button>
+  </div>
+  <div class="shoot-top">
+    <span class="buyer-tag" id="buyerTag">名取</span>
+  </div>
+  <div class="shoot-cta">
+    <button class="big-shoot" id="shootBtn" type="button">📷 撮影</button>
+    <div class="queue-stats">処理中 <b id="qProcessing">0</b> / 完了 <b id="qDone">0</b> / 失敗 <b id="qFailed">0</b></div>
+  </div>
+  <div class="queue-grid" id="queueGrid"></div>
+  <input type="file" id="fileInput" accept="image/*" capture="environment" style="display:none">
+</div>
+
+<!-- 仕分け画面 -->
+<div id="sortScreen">
+  <div class="top-bar">
+    <button class="pill-btn" id="sortBackBtn" type="button">← 撮影</button>
+    <span style="font-size:15px;font-weight:800;">仕分け</span>
+    <button class="pill-btn" id="reloadBtn" type="button">🔄</button>
+  </div>
+  <div class="sort-summary" id="sortSummary">未仕分け 0 件</div>
+  <div class="sort-list" id="sortList"></div>
+</div>
+
+<script src="/config.js"></script>
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js";
+import {
+  getAuth, setPersistence, browserLocalPersistence,
+  onAuthStateChanged, signOut,
+} from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
+
+const API_BASE = (window.API_BASE || "").replace(/\/$/, "");
+let fbAuth = null;
+async function idToken() { const u = fbAuth?.currentUser; return u ? await u.getIdToken() : null; }
+
+(async function initAuth() {
+  if (window.DEV_NO_AUTH) {
+    document.getElementById("signinOverlay").style.display = "none";
+    boot();
+    return;
+  }
+  try {
+    const cfg = await fetch("/__/firebase/init.json").then((r) => r.json());
+    cfg.authDomain = location.hostname;
+    fbAuth = getAuth(initializeApp(cfg));
+    await setPersistence(fbAuth, browserLocalPersistence);
+    let entered = false;
+    onAuthStateChanged(fbAuth, async (user) => {
+      if (user) { if (!entered) { entered = true; sessionStorage.removeItem("authBounce"); document.getElementById("signinOverlay").style.display = "none"; boot(); } return; }
+      if (sessionStorage.getItem("authBounce")) { document.getElementById("signinOverlay").style.display = "flex"; return; }
+      sessionStorage.setItem("authBounce", "1");
+      location.replace("/?next=" + encodeURIComponent("/keihi2/"));
+    });
+  } catch (e) {
+    document.getElementById("signinOverlay").style.display = "flex";
+    document.getElementById("signinErr").textContent = "init失敗: " + e.message;
+  }
+})();
+
+// ───────── State ─────────
+let buyer = localStorage.getItem("buyer") || "";
+let records = [];
+let sites = [];
+let queue = []; // 撮影キュー [{tempId, blobUrl, status, recordId?, parsed?, error?}]
+let processing = false;
+
+const $ = (id) => document.getElementById(id);
+
+// ───────── Screens ─────────
+const screens = ["buyerScreen", "shootScreen", "sortScreen"];
+function show(id) { for (const s of screens) $(s).style.display = s === id ? "flex" : "none"; }
+
+let _toastTimer = null;
+function toast(msg, isErr = false) {
+  const t = $("toast");
+  t.textContent = msg;
+  t.classList.toggle("err", !!isErr);
+  t.style.display = "block";
+  clearTimeout(_toastTimer);
+  _toastTimer = setTimeout(() => { t.style.display = "none"; }, isErr ? 5000 : 2000);
+}
+
+// ───────── API ─────────
+async function api(method, url, body) {
+  const opts = { method, headers: {} };
+  const tok = await idToken();
+  if (tok) opts.headers["Authorization"] = "Bearer " + tok;
+  if (body !== undefined) { opts.headers["content-type"] = "application/json"; opts.body = JSON.stringify(body); }
+  const r = await fetch(API_BASE + url, opts);
+  if (r.status === 401) { document.getElementById("signinOverlay").style.display = "flex"; throw new Error("401"); }
+  if (!r.ok) {
+    let raw = ""; try { raw = await r.text(); } catch {}
+    let msg = ""; try { const j = JSON.parse(raw); if (j.error) msg = j.error; } catch {}
+    throw new Error(msg || `HTTP ${r.status}`);
+  }
+  return r.status === 204 ? null : r.json();
+}
+
+// ───────── Image utils ─────────
+function resizeImage(file, maxSize) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+    img.onload = () => {
+      const ratio = Math.min(maxSize / img.width, maxSize / img.height, 1);
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.round(img.width * ratio);
+      canvas.height = Math.round(img.height * ratio);
+      canvas.getContext("2d").drawImage(img, 0, 0, canvas.width, canvas.height);
+      URL.revokeObjectURL(url);
+      resolve(canvas.toDataURL("image/jpeg", 0.7).split(",")[1]);
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error("画像読込失敗")); };
+    img.src = url;
+  });
+}
+
+// ───────── Spreadsheet (経費1 と共有) ─────────
+function getSheetUrl() { return (localStorage.getItem("sheetUrl") || "").trim(); }
+async function postToSheet(rec) {
+  const url = getSheetUrl();
+  if (!url) return { skipped: true };
+  try {
+    await fetch(url, { method: "POST", body: JSON.stringify(rec), redirect: "follow" });
+    return { ok: true };
+  } catch (e) { return { ok: false, error: e.message }; }
+}
+
+// ───────── Buyer screen ─────────
+document.querySelectorAll(".buyer-btn").forEach((b) => {
+  b.addEventListener("click", () => {
+    buyer = b.dataset.buyer;
+    localStorage.setItem("buyer", buyer);
+    $("buyerTag").textContent = buyer;
+    show("shootScreen");
+  });
+});
+
+// ───────── Shoot screen ─────────
+$("backToBuyerBtn").addEventListener("click", () => show("buyerScreen"));
+$("shootBtn").addEventListener("click", () => $("fileInput").click());
+$("fileInput").addEventListener("change", (ev) => {
+  const file = ev.target.files?.[0];
+  if (!file) return;
+  ev.target.value = "";
+  enqueueShot(file);
+});
+
+function enqueueShot(file) {
+  const item = {
+    tempId: crypto.randomUUID(),
+    file,
+    blobUrl: URL.createObjectURL(file),
+    status: "uploading", // uploading -> scanning -> done | failed
+    error: "",
+  };
+  queue.unshift(item); // 新しいのを先頭に
+  renderQueue();
+  processQueue();
+}
+
+async function processQueue() {
+  if (processing) return;
+  processing = true;
+  while (true) {
+    const next = queue.find((q) => q.status === "uploading" || q.status === "queued");
+    if (!next) break;
+    next.status = "scanning";
+    renderQueue();
+    try {
+      const b64 = await resizeImage(next.file, 1200);
+      const resp = await api("POST", "/api/scan", {
+        image: b64, mimeType: "image/jpeg", kind: "receipt",
+        sites: sites.map((s) => s.name),
+      });
+      const parsed = resp?.receipts?.[0] || {};
+      const today = new Date().toISOString().slice(0, 10);
+      const record = {
+        date: parsed.date || today,
+        store: parsed.store || "",
+        total: Number(parsed.total) || 0,
+        category: parsed.category || "材料費",
+        workType: parsed.workType || "その他",
+        payment: "現金",
+        buyer,
+        site: "", // 未仕分け
+        memo: "",
+        imageUrl: resp?.imageUrl || null,
+      };
+      const saved = await api("POST", "/api/records", record);
+      next.recordId = saved.id;
+      next.record = { ...record, id: saved.id };
+      next.status = "done";
+      records.unshift(next.record);
+    } catch (e) {
+      next.status = "failed";
+      next.error = e.message || "失敗";
+      console.error(e);
+    }
+    renderQueue();
+    refreshUnsortedCount();
+  }
+  processing = false;
+}
+
+function renderQueue() {
+  const grid = $("queueGrid");
+  grid.textContent = "";
+  let p = 0, d = 0, f = 0;
+  for (const q of queue) {
+    if (q.status === "scanning" || q.status === "uploading" || q.status === "queued") p++;
+    else if (q.status === "done") d++;
+    else if (q.status === "failed") f++;
+    const wrap = document.createElement("div");
+    wrap.className = "q-thumb";
+    const img = document.createElement("img");
+    img.src = q.blobUrl;
+    wrap.appendChild(img);
+    const st = document.createElement("div");
+    st.className = "q-status " + q.status;
+    if (q.status === "scanning") {
+      st.innerHTML = '<div class="q-spinner"></div>読取中…';
+    } else if (q.status === "uploading") {
+      st.innerHTML = '<div class="q-spinner"></div>待機中';
+    } else if (q.status === "done") {
+      const yen = (q.record?.total || 0).toLocaleString();
+      st.textContent = `✓ ¥${yen}`;
+    } else if (q.status === "failed") {
+      st.textContent = "⚠️ " + (q.error || "失敗").slice(0, 12);
+      st.title = q.error || "";
+      st.addEventListener("click", () => toast("失敗: " + q.error, true));
+    }
+    wrap.appendChild(st);
+    if (q.status === "failed") {
+      const del = document.createElement("button");
+      del.type = "button"; del.className = "q-del"; del.textContent = "×";
+      del.addEventListener("click", (e) => {
+        e.stopPropagation();
+        URL.revokeObjectURL(q.blobUrl);
+        queue = queue.filter((x) => x.tempId !== q.tempId);
+        renderQueue();
+      });
+      wrap.appendChild(del);
+    }
+    grid.appendChild(wrap);
+  }
+  $("qProcessing").textContent = p;
+  $("qDone").textContent = d;
+  $("qFailed").textContent = f;
+}
+
+// ───────── Sort screen ─────────
+$("sortBtn").addEventListener("click", showSort);
+$("goSortBtn").addEventListener("click", showSort);
+$("sortBackBtn").addEventListener("click", () => show("shootScreen"));
+$("reloadBtn").addEventListener("click", async () => {
+  await loadData();
+  renderSort();
+});
+
+async function showSort() {
+  await loadData();
+  renderSort();
+  show("sortScreen");
+}
+
+function unsortedRecords() {
+  return records.filter((r) => !r.site || r.site === "");
+}
+
+function refreshUnsortedCount() {
+  const n = unsortedRecords().length;
+  $("unsortedCount").textContent = n;
+  $("unsortedCount2").textContent = n;
+}
+
+function renderSort() {
+  const list = $("sortList");
+  list.textContent = "";
+  const unsorted = unsortedRecords();
+  $("sortSummary").textContent = unsorted.length ? `未仕分け ${unsorted.length} 件` : "未仕分けはありません";
+  refreshUnsortedCount();
+  if (!unsorted.length) {
+    list.innerHTML = `<div class="empty"><div class="empty-icon">📋</div>全部仕分け済みです</div>`;
+    return;
+  }
+  for (const r of unsorted) list.appendChild(makeSortCard(r));
+}
+
+function makeSortCard(r) {
+  const card = document.createElement("div");
+  card.className = "sort-card";
+  // サムネ
+  const thumb = document.createElement("div");
+  thumb.className = "sort-thumb" + (r.imageUrl ? "" : " empty");
+  if (r.imageUrl) {
+    thumb.addEventListener("click", () => viewImage(r.id));
+    const img = document.createElement("img");
+    // GCS URL は直接は見れないので、空 src のまま (タップで全画面表示)
+    thumb.appendChild(img);
+    thumb.textContent = "🧾";
+    thumb.style.fontSize = "20px";
+    thumb.style.color = "var(--text2)";
+  } else {
+    thumb.textContent = "—";
+  }
+  // 本体
+  const body = document.createElement("div");
+  body.className = "sort-body";
+  const amt = document.createElement("div");
+  amt.className = "sort-amount"; amt.textContent = `¥${(Number(r.total)||0).toLocaleString()}`;
+  const store = document.createElement("div");
+  store.className = "sort-store"; store.textContent = r.store || "—";
+  const meta = document.createElement("div");
+  meta.className = "sort-meta"; meta.textContent = `${(r.date||"").slice(0,10)} ・ ${r.category} ・ ${r.buyer || "?"}`;
+  // 現場ボタン
+  const sitesRow = document.createElement("div");
+  sitesRow.className = "sort-sites";
+  for (const s of sites) {
+    const b = document.createElement("button");
+    b.type = "button"; b.className = "s-btn"; b.textContent = s.name;
+    b.addEventListener("click", () => assignSite(r, s.name));
+    sitesRow.appendChild(b);
+  }
+  const del = document.createElement("button");
+  del.type = "button"; del.className = "s-btn danger"; del.textContent = "削除";
+  del.addEventListener("click", () => deleteRecord(r));
+  sitesRow.appendChild(del);
+  body.append(amt, store, meta, sitesRow);
+  card.append(thumb, body);
+  return card;
+}
+
+async function assignSite(r, siteName) {
+  try {
+    const updated = { ...r, site: siteName };
+    await api("PUT", `/api/records/${r.id}`, {
+      date: updated.date, store: updated.store, total: updated.total,
+      category: updated.category, workType: updated.workType,
+      payment: updated.payment, buyer: updated.buyer, site: siteName,
+      memo: updated.memo || "", imageUrl: updated.imageUrl || null,
+    });
+    const idx = records.findIndex((x) => x.id === r.id);
+    if (idx >= 0) records[idx] = updated;
+    toast(`「${siteName}」に仕分け`);
+    // スプレッドシートに送る (仕分け確定したタイミング)
+    const viewUrl = `${location.origin}/keihi/?view=${r.id}`;
+    postToSheet({ ...updated, viewUrl }).catch(() => {});
+    renderSort();
+    refreshUnsortedCount();
+  } catch (e) { toast("更新失敗: " + e.message, true); }
+}
+
+async function deleteRecord(r) {
+  if (!confirm(`この ¥${(r.total||0).toLocaleString()} を削除しますか？`)) return;
+  try {
+    await api("DELETE", `/api/records/${r.id}`);
+    records = records.filter((x) => x.id !== r.id);
+    renderSort();
+    refreshUnsortedCount();
+  } catch (e) { toast("削除失敗: " + e.message, true); }
+}
+
+async function viewImage(id) {
+  try {
+    const { url } = await api("GET", `/api/records/${id}/image`);
+    $("imgOverlayImg").src = url;
+    $("imgOverlay").style.display = "flex";
+  } catch (e) { toast("画像取得失敗", true); }
+}
+$("imgOverlayClose").addEventListener("click", () => { $("imgOverlay").style.display = "none"; $("imgOverlayImg").src = ""; });
+
+// ───────── Data ─────────
+async function loadData() {
+  try {
+    [records, sites] = await Promise.all([
+      api("GET", "/api/records").catch(() => []),
+      api("GET", "/api/sites").catch(() => []),
+    ]);
+  } catch (e) { console.warn(e); }
+}
+
+// ───────── Boot ─────────
+async function boot() {
+  await loadData();
+  refreshUnsortedCount();
+  if (buyer) { $("buyerTag").textContent = buyer; show("shootScreen"); }
+  else show("buyerScreen");
+}
+</script>
+</body>
+</html>
