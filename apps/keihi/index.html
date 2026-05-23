@@ -778,7 +778,9 @@ function makeTag(text, cls = "") {
 // Open the confirm sheet pre-filled to edit an existing record.
 function openEdit(r) {
   editingId = r.id;
-  scanResult = null;
+  // 既存レコードの imageUrl を保持しておかないと、編集→登録で
+  // imageUrl=null が上書きされ 🧾 アイコンが消えてしまう。
+  scanResult = r.imageUrl ? { imageUrl: r.imageUrl } : null;
   $("sheetTitle").textContent = "記録を編集";
   $("retakeBtn").style.display = "";
   $("retakeBtn").textContent = "キャンセル";
