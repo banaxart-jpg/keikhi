@@ -198,14 +198,22 @@ app.post("/api/scan", async (req, res) => {
 
     let imageUrl = null;
     // PDF は GCS にもアップロードしておく（後から見返せる用）
+    // 保存に失敗しても AI 読取は続行（一覧の 🧾 アイコンが出ない不具合を切り分け易く）
     if (storage && RECEIPTS_BUCKET) {
       const ext = mimeType === "application/pdf" ? "pdf" : "jpg";
       const key = `${new Date().toISOString().slice(0, 10)}/${crypto.randomUUID()}.${ext}`;
-      await storage
-        .bucket(RECEIPTS_BUCKET)
-        .file(key)
-        .save(Buffer.from(image, "base64"), { contentType: mimeType, resumable: false });
-      imageUrl = `gs://${RECEIPTS_BUCKET}/${key}`;
+      try {
+        await storage
+          .bucket(RECEIPTS_BUCKET)
+          .file(key)
+          .save(Buffer.from(image, "base64"), { contentType: mimeType, resumable: false });
+        imageUrl = `gs://${RECEIPTS_BUCKET}/${key}`;
+        console.log(`[scan] uploaded ${imageUrl} (${Buffer.from(image, "base64").length} bytes, ${mimeType})`);
+      } catch (e) {
+        console.warn(`[scan] GCS upload FAILED (bucket=${RECEIPTS_BUCKET}, key=${key}): ${e.code || ""} ${e.message}`);
+      }
+    } else {
+      console.warn(`[scan] image not saved (storage=${!!storage}, bucket=${RECEIPTS_BUCKET || "(empty)"})`);
     }
 
     const today = new Date().toISOString().slice(0, 10);
