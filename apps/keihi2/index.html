@@ -100,6 +100,34 @@ body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); 
 .gear-btn:active { box-shadow: inset 3px 3px 8px var(--sd), inset -3px -3px 8px var(--sl); transform: scale(0.96); }
 .sw-site.new { background: rgba(255,255,255,0.05); color: rgba(255,255,255,0.6); border: 1.5px dashed rgba(255,255,255,0.25); }
 
+/* 支払方法選択 (スワイプカード内) */
+.sw-pay { display: flex; gap: 6px; padding: 0 14px 8px; background: #2d3a52; }
+.sw-pay-btn { flex: 1; padding: 9px 0; border-radius: 11px; font-size: 12px; font-weight: 700; border: none; cursor: pointer; font-family: 'Outfit', sans-serif; color: rgba(255,255,255,0.65); background: rgba(255,255,255,0.07); transition: all 0.12s; }
+.sw-pay-btn.active { background: var(--bulb); color: #1a1c28; box-shadow: inset 0 1px 0 rgba(255,255,255,0.35); }
+
+/* 編集ボタン (スワイプカード) */
+.sw-edit { position: absolute; top: 12px; right: 12px; padding: 6px 12px; border-radius: 14px; font-size: 11px; font-weight: 800; border: none; cursor: pointer; color: rgba(255,255,255,0.85); background: rgba(255,255,255,0.12); backdrop-filter: blur(8px); z-index: 6; }
+.sw-edit:active { transform: scale(0.95); background: rgba(255,255,255,0.2); }
+
+/* 編集シート (モーダル) */
+#editOverlay { display: none; position: fixed; inset: 0; z-index: 100; background: rgba(0,0,0,0.55); flex-direction: column; justify-content: flex-end; }
+.edit-sheet { background: var(--bg); border-radius: 30px 30px 0 0; padding: 14px 20px 32px; box-shadow: 0 -8px 32px rgba(0,0,0,0.3); max-height: 92vh; overflow-y: auto; }
+.edit-handle { width: 46px; height: 5px; border-radius: 3px; background: rgba(100,104,130,0.16); margin: 0 auto 16px; }
+.edit-sheet h3 { font-size: 18px; font-weight: 800; margin-bottom: 16px; }
+.edit-row { margin-bottom: 14px; }
+.edit-row label { display: block; font-size: 11px; color: var(--text2); font-weight: 700; margin-bottom: 6px; }
+.edit-input { width: 100%; padding: 11px 14px; font-size: 15px; color: var(--text); outline: none; border: none; border-radius: 13px; font-family: 'Outfit', sans-serif; font-weight: 600; background: var(--bg2); box-shadow: inset 4px 4px 10px var(--sd), inset -4px -4px 10px var(--sl); -webkit-appearance: none; appearance: none; }
+.edit-input:focus { box-shadow: inset 3px 3px 9px var(--sd), inset -3px -3px 9px var(--sl), 0 0 0 2px var(--bulb); }
+select.edit-input { background: var(--bg2) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1l5 5 5-5' stroke='rgba(66,69,94,0.3)' stroke-width='2' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") no-repeat right 14px center; padding-right: 36px; }
+.edit-actions { display: flex; gap: 10px; margin-top: 18px; }
+.edit-actions button { flex: 1; padding: 14px; border-radius: 16px; font-size: 15px; font-weight: 800; border: none; cursor: pointer; font-family: 'Outfit', sans-serif; }
+.edit-save { background: linear-gradient(145deg, #ffb940, #e08800); color: white; box-shadow: 6px 6px 14px rgba(190,120,0,0.4); }
+.edit-cancel { background: var(--bg); color: var(--text2); box-shadow: 4px 4px 11px var(--sd), -4px -4px 11px var(--sl); }
+
+/* 一覧の購入者別うっすら色分け */
+.sort-card.b-konishi { background: linear-gradient(90deg, rgba(120,170,220,0.18), var(--bg) 40%); }
+.sort-card.b-natori  { background: linear-gradient(90deg, rgba(220,150,170,0.18), var(--bg) 40%); }
+
 /* スワイプ SORT 画面 */
 #swipeScreen { position: fixed; inset: 0; display: none; flex-direction: column; background: #1e2940; }
 .swipe-top { padding: 54px 18px 0; display: flex; justify-content: space-between; align-items: center; color: white; z-index: 10; }
@@ -151,6 +179,34 @@ body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); 
 <div id="imgOverlay">
   <img id="imgOverlayImg" src="" alt="">
   <button class="pill-btn" id="imgOverlayClose" type="button">閉じる</button>
+</div>
+
+<!-- 編集シート (金額・店舗・日付・費目・工種・メモ) -->
+<div id="editOverlay">
+  <div class="edit-sheet">
+    <div class="edit-handle"></div>
+    <h3>内容を編集</h3>
+    <div class="edit-row"><label>金額（円）</label><input type="number" class="edit-input" id="eTotal" placeholder="0"></div>
+    <div class="edit-row"><label>店舗 / 発行元</label><input type="text" class="edit-input" id="eStore" placeholder="例：コメリ"></div>
+    <div class="edit-row"><label>日付</label><input type="date" class="edit-input" id="eDate"></div>
+    <div class="edit-row"><label>費目</label>
+      <select class="edit-input" id="eCat">
+        <option>材料費</option><option>接待交際費</option><option>ガソリン代</option>
+        <option>駐車場代</option><option>工具・備品</option><option>外注費</option><option>その他</option>
+      </select>
+    </div>
+    <div class="edit-row"><label>工種</label>
+      <select class="edit-input" id="eWork">
+        <option>水道</option><option>電気</option><option>木工</option><option>塗装</option>
+        <option>左官</option><option>内装</option><option>外構</option><option>解体</option><option>設備</option><option>その他</option>
+      </select>
+    </div>
+    <div class="edit-row"><label>メモ</label><textarea class="edit-input" id="eMemo" rows="2"></textarea></div>
+    <div class="edit-actions">
+      <button class="edit-cancel" id="editCancelBtn" type="button">キャンセル</button>
+      <button class="edit-save" id="editSaveBtn" type="button">保存</button>
+    </div>
+  </div>
 </div>
 
 <!-- 名前選択 -->
@@ -564,6 +620,8 @@ function renderSwipe() {
 function createSwipeCard(r, isBack) {
   const card = document.createElement("div");
   card.className = "swipe-card " + (isBack ? "back" : "front");
+  // カード内ローカル state: 確定時に使う支払方法
+  let currentPay = r.payment || "現金";
 
   // 画像エリア
   const imgWrap = document.createElement("div");
@@ -598,6 +656,31 @@ function createSwipeCard(r, isBack) {
   `;
   card.appendChild(info);
 
+  // 編集ボタン (右上)
+  if (!isBack) {
+    const editBtn = document.createElement("button");
+    editBtn.type = "button"; editBtn.className = "sw-edit"; editBtn.textContent = "✏️ 編集";
+    editBtn.addEventListener("click", (e) => { e.stopPropagation(); openEdit(r); });
+    card.appendChild(editBtn);
+  }
+
+  // 支払方法 (現金 / カード / 振込)
+  const payRow = document.createElement("div");
+  payRow.className = "sw-pay";
+  for (const p of ["現金", "カード", "振込"]) {
+    const pb = document.createElement("button");
+    pb.type = "button"; pb.dataset.pay = p;
+    pb.className = "sw-pay-btn" + (currentPay === p ? " active" : "");
+    pb.textContent = (p === "現金" ? "💵 " : p === "カード" ? "💳 " : "🏦 ") + p;
+    pb.addEventListener("click", (e) => {
+      e.stopPropagation();
+      currentPay = p;
+      payRow.querySelectorAll(".sw-pay-btn").forEach((x) => x.classList.toggle("active", x.dataset.pay === p));
+    });
+    payRow.appendChild(pb);
+  }
+  card.appendChild(payRow);
+
   // 現場ボタン (タップで SORT 確定 → 次へ)。AI 推定の現場は目立たせる
   // 表示は自分用にフィルタ。推定された現場が自分用に無くてもボタンには出す
   const predicted = getPredictedSite(r.id);
@@ -611,7 +694,7 @@ function createSwipeCard(r, isBack) {
     b.addEventListener("click", async (e) => {
       e.stopPropagation();
       try {
-        await assignSite(r, s.name);
+        await assignSite(r, s.name, currentPay);
         swipeOutNext(card);
       } catch (err) { toast("失敗: " + err.message, true); }
     });
@@ -630,7 +713,7 @@ function createSwipeCard(r, isBack) {
       // 自分用リストにも追加 (空 = 全表示モード のときは何もしない)
       const my = getMySites();
       if (my.length) saveMySites([...my, created.name]);
-      await assignSite(r, created.name);
+      await assignSite(r, created.name, currentPay);
       swipeOutNext(card);
     } catch (err) { toast("追加失敗: " + err.message, true); }
   });
@@ -694,9 +777,10 @@ function attachSwipe(card, record, predicted) {
     dragging = false;
     if (deltaY < -TH) {
       if (predicted && sites.some((s) => s.name === predicted)) {
-        // AI 推定の現場で SORT 確定
+        // AI 推定の現場で SORT 確定 (現在カード内で選択中の支払方法を引き継ぐ)
+        const curPay = card.querySelector(".sw-pay-btn.active")?.dataset.pay || record.payment || "現金";
         try {
-          await assignSite(record, predicted);
+          await assignSite(record, predicted, curPay);
           swipeOutNext(card);
         } catch (err) {
           toast("失敗: " + err.message, true);
@@ -769,7 +853,9 @@ function renderSort() {
 
 function makeSortCard(r) {
   const card = document.createElement("div");
-  card.className = "sort-card";
+  // 購入者ごとに薄く色分け (小西=薄い青, 名取=薄いピンク)
+  const buyerClass = r.buyer === "小西" ? " b-konishi" : r.buyer === "名取" ? " b-natori" : "";
+  card.className = "sort-card" + buyerClass;
   // サムネ
   const thumb = document.createElement("div");
   thumb.className = "sort-thumb" + (r.imageUrl ? "" : " empty");
@@ -813,18 +899,19 @@ function makeSortCard(r) {
   return card;
 }
 
-async function assignSite(r, siteName) {
+async function assignSite(r, siteName, payment) {
   try {
-    const updated = { ...r, site: siteName };
+    const pay = payment || r.payment || "現金";
+    const updated = { ...r, site: siteName, payment: pay };
     await api("PUT", `/api/records/${r.id}`, {
       date: updated.date, store: updated.store, total: updated.total,
       category: updated.category, workType: updated.workType,
-      payment: updated.payment, buyer: updated.buyer, site: siteName,
+      payment: pay, buyer: updated.buyer, site: siteName,
       memo: updated.memo || "", imageUrl: updated.imageUrl || null,
     });
     const idx = records.findIndex((x) => x.id === r.id);
     if (idx >= 0) records[idx] = updated;
-    toast(`→ ${siteName}`);
+    toast(`→ ${siteName} (${pay})`);
     // スプレッドシートに送る (仕分け確定したタイミング)
     const viewUrl = `${location.origin}/keihi/?view=${r.id}`;
     postToSheet({ ...updated, viewUrl }).catch(() => {});
@@ -912,6 +999,45 @@ function renderSiteMgmt() {
     list.appendChild(row);
   }
 }
+
+// ───────── 編集モーダル ─────────
+let editingRecordId = null;
+function openEdit(r) {
+  editingRecordId = r.id;
+  $("eTotal").value = Number(r.total) || 0;
+  $("eStore").value = r.store || "";
+  $("eDate").value = (r.date || "").slice(0, 10);
+  $("eCat").value = r.category || "材料費";
+  $("eWork").value = r.workType || "その他";
+  $("eMemo").value = r.memo || "";
+  $("editOverlay").style.display = "flex";
+}
+function closeEdit() { editingRecordId = null; $("editOverlay").style.display = "none"; }
+$("editCancelBtn").addEventListener("click", closeEdit);
+$("editSaveBtn").addEventListener("click", async () => {
+  if (editingRecordId == null) return;
+  const r = records.find((x) => x.id === editingRecordId);
+  if (!r) { closeEdit(); return; }
+  const patch = {
+    total: Number($("eTotal").value) || 0,
+    store: $("eStore").value.trim(),
+    date: $("eDate").value || r.date,
+    category: $("eCat").value,
+    workType: $("eWork").value,
+    memo: $("eMemo").value,
+  };
+  try {
+    await api("PUT", `/api/records/${r.id}`, {
+      ...r, ...patch,
+      imageUrl: r.imageUrl || null,
+    });
+    Object.assign(r, patch);
+    toast("保存しました");
+    closeEdit();
+    renderSwipe();
+    if ($("sortScreen").style.display === "flex") renderSort();
+  } catch (e) { toast("保存失敗: " + e.message, true); }
+});
 
 async function addNewSite() {
   const name = $("newSiteInput").value.trim();
