@@ -962,8 +962,7 @@ $("sheetClearBtn").addEventListener("click", () => {
 $("sheetTestBtn").addEventListener("click", async () => {
   const u = $("sheetUrlInput").value.trim();
   if (!u) { $("sheetStatusMsg").textContent = "URL を先に入れてください"; return; }
-  // 入力中の URL を一時保存して送る
-  const prev = getSheetUrl();
+  // 送信成功したらそのまま保存（テスト送信 = 接続確認 + 自動保存）
   localStorage.setItem("sheetUrl", u);
   $("sheetStatusMsg").textContent = "テスト送信中…";
   const today = new Date().toISOString().slice(0, 10);
@@ -972,11 +971,15 @@ $("sheetTestBtn").addEventListener("click", async () => {
     total: 1, category: "その他", workType: "その他", payment: "現金",
     memo: "経費アプリからの接続テスト",
   });
-  // 元に戻す（保存ボタン押さなきゃ反映しない方針）
-  if (prev) localStorage.setItem("sheetUrl", prev); else localStorage.removeItem("sheetUrl");
-  refreshSheetState();
-  if (res.ok) $("sheetStatusMsg").textContent = "送信できました（スプレッドシート開いて確認してみて）";
-  else $("sheetStatusMsg").textContent = "送信失敗: " + (res.error || "不明");
+  if (res.ok) {
+    refreshSheetState();
+    $("sheetStatusMsg").textContent = "送信できました & URL を保存しました（スプレッドシート開いて確認してみて）";
+  } else {
+    // 失敗したら保存を取り消し
+    localStorage.removeItem("sheetUrl");
+    refreshSheetState();
+    $("sheetStatusMsg").textContent = "送信失敗: " + (res.error || "不明") + "（URL は保存していません）";
+  }
 });
 refreshSheetState();
 $("filterSite").addEventListener("change", renderList);

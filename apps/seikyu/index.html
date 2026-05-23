@@ -965,7 +965,7 @@ $("sheetClearBtn").addEventListener("click", () => {
 $("sheetTestBtn").addEventListener("click", async () => {
   const u = $("sheetUrlInput").value.trim();
   if (!u) { $("sheetStatusMsg").textContent = "URL を先に入れてください"; return; }
-  const prev = getSheetUrl();
+  // 送信成功したらそのまま保存（テスト送信 = 接続確認 + 自動保存）
   localStorage.setItem("seikyuSheetUrl", u);
   $("sheetStatusMsg").textContent = "テスト送信中…";
   const today = new Date().toISOString().slice(0, 10);
@@ -974,10 +974,14 @@ $("sheetTestBtn").addEventListener("click", async () => {
     issuer: "テスト発行元", total: 1, dueDate: today, issueDate: today,
     category: "その他", memo: "請求書アプリからの接続テスト",
   });
-  if (prev) localStorage.setItem("seikyuSheetUrl", prev); else localStorage.removeItem("seikyuSheetUrl");
-  refreshSheetState();
-  if (res.ok) $("sheetStatusMsg").textContent = "送信できました（スプレッドシート開いて確認してみて）";
-  else $("sheetStatusMsg").textContent = "送信失敗: " + (res.error || "不明");
+  if (res.ok) {
+    refreshSheetState();
+    $("sheetStatusMsg").textContent = "送信できました & URL を保存しました（スプレッドシート開いて確認してみて）";
+  } else {
+    localStorage.removeItem("seikyuSheetUrl");
+    refreshSheetState();
+    $("sheetStatusMsg").textContent = "送信失敗: " + (res.error || "不明") + "（URL は保存していません）";
+  }
 });
 
 // ───────── CSV ─────────
