@@ -159,6 +159,8 @@ select.edit-input { background: var(--bg2) url("data:image/svg+xml,%3Csvg xmlns=
 .tab-pill.active { box-shadow: inset 3px 3px 9px var(--sd), inset -3px -3px 9px var(--sl); color: var(--bulb2); text-shadow: 0 0 8px var(--bulb-glow2); }
 
 .toast { position: fixed; top: 60px; left: 50%; transform: translateX(-50%); padding: 11px 22px; border-radius: 26px; font-size: 13px; font-weight: 800; z-index: 200; display: none; white-space: nowrap; color: white; background: linear-gradient(135deg, #60c88a, #38a86a); box-shadow: 6px 6px 16px rgba(40,140,80,0.35); }
+.undo-btn { background: rgba(255,255,255,0.3); border: none; color: white; padding: 5px 14px; border-radius: 12px; font-weight: 800; cursor: pointer; margin-left: 12px; font-family: 'Outfit', sans-serif; font-size: 12px; }
+.undo-btn:active { background: rgba(255,255,255,0.45); transform: scale(0.96); }
 .toast.err { background: linear-gradient(135deg, #d88080, #b04040); white-space: pre-wrap; max-width: 86vw; font-size: 11px; font-weight: 600; text-align: left; }
 
 #imgOverlay { display: none; position: fixed; inset: 0; z-index: 300; background: rgba(20,22,32,0.92); align-items: center; justify-content: center; flex-direction: column; gap: 16px; padding: 24px; }
@@ -901,14 +903,10 @@ function makeSortCard(r) {
     if (!dragging) return;
     dragging = false;
     if (deltaX < -TH) {
-      if (confirm(`¥${(r.total||0).toLocaleString()} (${r.store||r.site||"-"}) を削除？`)) {
-        card.style.transition = "transform 0.25s, opacity 0.25s";
-        card.style.transform = "translateX(-100vw)";
-        card.style.opacity = "0";
-        setTimeout(() => deleteRecord(r), 220);
-      } else {
-        card.style.transition = "transform 0.2s"; card.style.transform = "";
-      }
+      card.style.transition = "transform 0.25s, opacity 0.25s";
+      card.style.transform = "translateX(-100vw)";
+      card.style.opacity = "0";
+      setTimeout(() => deleteRecord(r), 220);
     } else {
       card.style.transition = "transform 0.2s"; card.style.transform = "";
     }
@@ -944,14 +942,45 @@ async function assignSite(r, siteName, payment) {
   } catch (e) { toast("更新失敗: " + e.message, true); }
 }
 
+let lastDeleted = null;
 async function deleteRecord(r) {
-  if (!confirm(`この ¥${(r.total||0).toLocaleString()} を削除しますか？`)) return;
   try {
     await api("DELETE", `/api/records/${r.id}`);
     records = records.filter((x) => x.id !== r.id);
+    lastDeleted = { ...r };
     renderSort();
     refreshUnsortedCount();
+    showUndoToast();
   } catch (e) { toast("削除失敗: " + e.message, true); }
+}
+
+function showUndoToast() {
+  const t = $("toast");
+  t.classList.remove("err");
+  t.innerHTML = '削除しました <button class="undo-btn" id="undoBtn" type="button">元に戻す</button>';
+  t.style.cursor = "default";
+  t.style.display = "block";
+  $("undoBtn").addEventListener("click", undoDelete);
+  clearTimeout(_toastTimer);
+  _toastTimer = setTimeout(() => { t.style.display = "none"; lastDeleted = null; }, 6000);
+}
+
+async function undoDelete() {
+  if (!lastDeleted) return;
+  const r = lastDeleted;
+  lastDeleted = null;
+  $("toast").style.display = "none";
+  try {
+    const saved = await api("POST", "/api/records", {
+      date: r.date, store: r.store, total: r.total, category: r.category,
+      workType: r.workType, payment: r.payment, buyer: r.buyer, site: r.site,
+      memo: r.memo, imageUrl: r.imageUrl,
+    });
+    records.unshift({ ...r, id: saved.id, createdAt: saved.created_at });
+    toast("元に戻しました");
+    renderSort();
+    refreshUnsortedCount();
+  } catch (e) { toast("復元失敗: " + e.message, true); }
 }
 
 async function viewImage(id) {
@@ -1081,11 +1110,8 @@ $("editDeleteBtn").addEventListener("click", async () => {
   if (editingRecordId == null) return;
   const r = records.find((x) => x.id === editingRecordId);
   if (!r) { closeEdit(); return; }
-  if (!confirm(`¥${(r.total||0).toLocaleString()} を削除しますか？`)) return;
-  try {
-    await deleteRecord(r);
-    closeEdit();
-  } catch (e) { toast("削除失敗: " + e.message, true); }
+  closeEdit();
+  await deleteRecord(r);
 });
 $("editSaveBtn").addEventListener("click", async () => {
   if (editingRecordId == null) return;
