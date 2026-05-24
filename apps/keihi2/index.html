@@ -62,9 +62,12 @@ body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); 
 #sortScreen { position: fixed; inset: 0; display: none; flex-direction: column; padding: 100px 0 0; overflow-y: auto; }
 .sort-summary { padding: 0 18px 14px; text-align: center; font-size: 13px; color: var(--text2); font-weight: 700; }
 .sort-list { padding: 0 14px 140px; display: flex; flex-direction: column; gap: 10px; }
-.sort-card { border-radius: 14px; padding: 10px 14px; background: var(--bg); box-shadow: 4px 4px 12px var(--sd), -3px -3px 10px var(--sl); display: flex; align-items: center; gap: 12px; cursor: pointer; transition: transform 0.1s; }
+.sort-card { border-radius: 14px; padding: 10px 14px; background: var(--bg); box-shadow: 4px 4px 12px var(--sd), -3px -3px 10px var(--sl); display: flex; align-items: center; gap: 12px; cursor: pointer; transition: transform 0.1s; position: relative; z-index: 1; will-change: transform; }
 .sort-card:active { transform: scale(0.99); box-shadow: inset 3px 3px 9px var(--sd), inset -3px -3px 9px var(--sl); }
 .sort-card.done { opacity: 0.6; }
+/* 左スワイプ削除用の背景 */
+.sort-row { position: relative; }
+.sort-row .swipe-bg { position: absolute; inset: 0; border-radius: 14px; background: linear-gradient(90deg, transparent 40%, #b04040); display: flex; align-items: center; justify-content: flex-end; padding-right: 22px; color: white; font-weight: 800; font-size: 13px; letter-spacing: 0.1em; }
 .sort-amount { font-size: 16px; font-weight: 800; letter-spacing: -0.4px; color: var(--text); flex: 0 0 auto; min-width: 80px; }
 .sort-site { font-size: 13px; color: var(--text); font-weight: 700; flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .sort-site.empty { color: var(--text3); font-weight: 600; font-style: italic; }
@@ -856,6 +859,10 @@ function renderSort() {
 }
 
 function makeSortCard(r) {
+  const wrap = document.createElement("div");
+  wrap.className = "sort-row";
+  const bg = document.createElement("div");
+  bg.className = "swipe-bg"; bg.textContent = "削除";
   const card = document.createElement("div");
   const buyerClass = r.buyer === "小西" ? " b-konishi" : r.buyer === "名取" ? " b-natori" : "";
   card.className = "sort-card" + buyerClass;
@@ -869,8 +876,51 @@ function makeSortCard(r) {
   date.className = "sort-date";
   date.textContent = (r.date || "").slice(0, 10);
   card.append(amt, site, date);
-  card.addEventListener("click", () => openEdit(r));
-  return card;
+
+  // 左スワイプで削除、タップで編集モーダル
+  let startX = 0, startY = 0, deltaX = 0, dragging = false, movedAway = false;
+  const TH = 130;
+  card.addEventListener("touchstart", (e) => {
+    startX = e.touches[0].clientX; startY = e.touches[0].clientY;
+    deltaX = 0; dragging = true; movedAway = false;
+    card.style.transition = "none";
+  }, { passive: true });
+  card.addEventListener("touchmove", (e) => {
+    if (!dragging) return;
+    const dx = e.touches[0].clientX - startX;
+    const dy = e.touches[0].clientY - startY;
+    if (Math.abs(dy) > Math.abs(dx) && Math.abs(dy) > 10) {
+      dragging = false; card.style.transform = ""; return;
+    }
+    deltaX = dx;
+    if (Math.abs(deltaX) > 10) movedAway = true;
+    if (deltaX < 0) card.style.transform = `translateX(${deltaX}px)`;
+    else card.style.transform = "";
+  }, { passive: true });
+  card.addEventListener("touchend", () => {
+    if (!dragging) return;
+    dragging = false;
+    if (deltaX < -TH) {
+      if (confirm(`¥${(r.total||0).toLocaleString()} (${r.store||r.site||"-"}) を削除？`)) {
+        card.style.transition = "transform 0.25s, opacity 0.25s";
+        card.style.transform = "translateX(-100vw)";
+        card.style.opacity = "0";
+        setTimeout(() => deleteRecord(r), 220);
+      } else {
+        card.style.transition = "transform 0.2s"; card.style.transform = "";
+      }
+    } else {
+      card.style.transition = "transform 0.2s"; card.style.transform = "";
+    }
+    setTimeout(() => { movedAway = false; }, 60);
+  });
+  card.addEventListener("click", () => {
+    if (movedAway) return;
+    openEdit(r);
+  });
+
+  wrap.append(bg, card);
+  return wrap;
 }
 
 async function assignSite(r, siteName, payment) {
