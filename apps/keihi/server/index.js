@@ -1642,6 +1642,52 @@ app.post("/api/kotonoha/sessions/start", async (req, res) => {
           LEFT JOIN mastered_q mq ON mq.question_id = q.id
       )`;
 
+    // ─── 同期生成: フレッシュ問題プールが SESSION_SIZE 未満なら、その場で並列生成 ───
+    // Cloud Run の fire-and-forget は CPU throttle で殺されるので、確実性のために sync。
+    // 並列 (Promise.all) で実行時間を圧縮 (各 2-5sec × 並列 → 合計 ~5-8sec で済む)。
+    try {
+      const { rows: pcr } = await p.query(
+        `${baseSelectSql}
+         SELECT COUNT(*)::int AS n FROM eligible
+          WHERE difficulty <= $3 AND priority <= 2
+            ${focusGenre ? "AND genre = $4" : ""}`,
+        focusGenre
+          ? [req.user.email, MASTERY, maxDiff, focusGenre]
+          : [req.user.email, MASTERY, maxDiff]
+      );
+      const freshCount = pcr[0]?.n || 0;
+      if (freshCount < SESSION_SIZE) {
+        const need = Math.min(SESSION_SIZE - freshCount + 3, 12);
+        const { rows: ansRows } = await p.query(
+          `SELECT answer FROM kotonoha_questions ORDER BY id DESC LIMIT 200`
+        );
+        const excludeAnswers = ansRows.map((r) => r.answer);
+        let targets;
+        if (focusGenre) {
+          targets = Array(need).fill(focusGenre);
+        } else {
+          targets = await pickWeakGenres(p, req.user.email, need);
+          if (targets.length < need) {
+            const all = Array.from(KOTONOHA_GENRE_TO_GROUP.keys()).filter((g) => !targets.includes(g));
+            for (let i = all.length - 1; i > 0; i--) {
+              const j = Math.floor(Math.random() * (i + 1));
+              [all[i], all[j]] = [all[j], all[i]];
+            }
+            targets.push(...all.slice(0, need - targets.length));
+          }
+        }
+        console.log(`[kotonoha] sync gen: fresh=${freshCount} need=${need} targets=${targets.length}`);
+        await Promise.all(
+          targets.slice(0, need).map((g) =>
+            generateKotonohaQuestion(p, { level, genre: g, excludeAnswers })
+              .catch((e) => console.warn("[kotonoha] sync gen failed:", g, e.message))
+          )
+        );
+      }
+    } catch (e) {
+      console.warn("[kotonoha] sync gen check skipped:", e.message);
+    }
+
     let newRows = [];
     if (focusGenre) {
       const { rows } = await p.query(
