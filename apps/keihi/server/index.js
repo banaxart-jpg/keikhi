@@ -94,7 +94,7 @@ async function getSheetsApi() {
   sheetsApi = google.sheets({ version: "v4", auth: await auth.getClient() });
   return sheetsApi;
 }
-const SHEET_HEADER = ["ID", "購入日", "購入者", "現場", "店舗", "金額", "費目", "工種", "支払方法", "メモ"];
+const SHEET_HEADER = ["購入日", "購入者", "現場", "店舗", "金額", "費目", "工種", "支払方法", "メモ", "写真"];
 const sheetEnsuredCache = new Set(); // 1 度ヘッダー作ったタブはキャッシュ
 async function ensureSheetTab(sheets, ym) {
   if (sheetEnsuredCache.has(ym)) return;
@@ -122,6 +122,9 @@ async function appendRecordToSheet(r) {
     const sheets = await getSheetsApi();
     const ym = String(r.date || "").slice(0, 7) || "unknown";
     await ensureSheetTab(sheets, ym);
+    // 「写真」セルはアプリ内ビューアへの HYPERLINK
+    const viewUrl = r.id ? `https://keihi-496002.web.app/keihi/?view=${r.id}` : "";
+    const photoCell = viewUrl ? `=HYPERLINK("${String(viewUrl).replace(/"/g, '""')}","🧾")` : "";
     await sheets.spreadsheets.values.append({
       spreadsheetId: SHEET_ID,
       range: `${ym}!A:J`,
@@ -129,9 +132,9 @@ async function appendRecordToSheet(r) {
       insertDataOption: "INSERT_ROWS",
       requestBody: {
         values: [[
-          r.id || "", r.date || "", r.buyer || "", r.site || "", r.store || "",
+          r.date || "", r.buyer || "", r.site || "", r.store || "",
           Number(r.total) || 0, r.category || "", r.workType || "",
-          r.payment || "", r.memo || "",
+          r.payment || "", r.memo || "", photoCell,
         ]],
       },
     });
