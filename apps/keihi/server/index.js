@@ -1419,27 +1419,57 @@ async function generateKotonohaQuestion(p, { level, genre, excludeAnswers = [] }
   const cat = groupId || "concept";
   const type = Math.random() < 0.6 ? "choice" : "free";
 
-  const prompt = `「Claude Codeに指示するための語彙」を学ぶアプリの問題を1問だけJSONで作って。
+  // 難易度別ガイド
+  const diffGuide = level <= 2
+    ? "完全初心者がこのジャンルに初めて触る想定。「そもそも〇〇って何のための道具?」「どんな時に必要?」レベル。専門用語禁止、例え話で説明。"
+    : level <= 4
+      ? "基本理解はある人向け。「いつ使うべき?」「どっち選ぶ?」「なぜ〇〇は△△より速い?」レベル。"
+      : level <= 7
+        ? "中級者向け。「仕組みは?」「もしも〇〇だったら何が起きる?」「歴史的にどう生まれた?」レベル。"
+        : "上級者向け。実装トリック、エッジケース、トレードオフを問う。";
+
+  const prompt = `「ITまわりの語彙・仕組み・歴史」を身につける学習アプリの問題を1問だけJSONで作って。
 
 ジャンル: ${targetGenre || "(自由)"}
-難易度: ${level} / 10 (1=超基本、3=入門卒業、5=中級、7=上級、10=エキスパート)
+難易度: ${level} / 10
+難易度ガイド: ${diffGuide}
 形式: ${type === "choice" ? "4択" : "自由記述（答えは1単語）"}
 
+【問題のスタイル - 厳守 (これが一番大事)】
+× 絶対禁止:
+  - 「Xって何という名前?」「3文字英略で?」「カタカナで何という?」のような単純名前暗記
+  - 「何文字?」「何年?」のような単なる事実記憶
+  - 「以下のうち〇〇なのは?」で正解が単にプロダクト名 (例: 「静的ファイル配信のGoogleサービスは? → Firebase Hosting」←ダメ。名前を覚えても何も身につかない)
+
+○ OK問題型 (以下のどれかで作る):
+  1. 【概念】「そもそも何のための道具/仕組み?」(役割を理解させる)
+     例: 「Webブラウザに静的ファイルを配信するサービスは、なぜサーバーで動的に処理しないで配信できるの?」→ 答え: 中身が変わらないファイルだから事前に置いておける
+  2. 【いつ使う】 シチュエーション → 適切な判断
+     例: 「リアルタイムで複数端末に同期したい場合、向いてるDBの種類は?」→ NoSQL / RDB / KVS
+  3. 【なぜ】 仕組み・理由
+     例: 「CDN が世界中で速い理由は?」→ コピーを各地に置いてユーザーの近くから返すから
+  4. 【どっち?】 比較判断
+     例: 「動画のリアルタイム配信、UDP と TCP どっちが向いてる? なぜ?」
+  5. 【もしも】 思考実験
+     例: 「もしHTTPS じゃなく HTTP でパスワード送ったら何が起きる?」
+  6. 【歴史・人物】「誰が・なぜ・どんな背景で生まれた?」
+     例: 「Unix を作った2人の研究者は?」「ビットコインの作者として知られる正体不明の人物は?」
+
+→ ユーザーが解いたあと「あ、なるほど、これ判断軸として使える」「次は自分で考えられる」と思える問題にする。
+→ 名前を暗記させるだけの問題は1問もダメ。
+
 ルール:
-- ジャンルにバッチリ関係ある問題にする (ジャンル名そのものを問うのも可、関連概念でも可)
-- 「プログラミング/技術って面白い」と思える問題にする
-- 達成感が出る難易度感に。難しすぎないこと
 - claude_example は実際の指示文を「」で囲む
 - 既出の答えと重複しないこと: ${excludeAnswers.slice(0, 40).join(", ")}
 
-【解説 (explanation) は必ず4-6文で、以下の3要素を全部含めること】
-1. **定義**: その用語が何か、1-2文で端的に
-2. **由来・歴史・人物**: 誰が・いつ・どんな背景で生まれたか
-   (例: 「ムーアの法則は Intel 共同創業者ゴードン・ムーアが1965年に提唱、トランジスタ数が約2年で倍になるという観察」「Unix はベル研究所のケン・トンプソンとデニス・リッチーが1969年に PDP-7 で開発」)
-3. **へぇー！トリビア**: 知らなくても困らないけど話せるとカッコイイ小ネタ
-   (例: 「PageRank は学術論文の引用数の真似」「JPEG が捨ててるのは人間の目に見えない高周波」「QRコードはトヨタの下請けデンソーが伝票管理用に作った国産技術」「ビットコインの作者中本哲史は今も正体不明」「Wi-Fi の語源は実は何の略でもない (Hi-Fi に語感を寄せただけ)」「ハミング符号はベル研究所の研究員が紙テープ読込エラーにイラついて発明」)
+【解説 (explanation) は4-6文、以下を必ず含める】
+1. **役割**: この概念は何のための道具/仕組みか (1-2文)
+2. **判断軸**: いつ使う? どんな時に選ぶ? どう判断する? (実用)
+3. **由来・人物・歴史**: 誰が・いつ・なぜ生まれたか
+4. **へぇー！トリビア**: 人に話したくなる小ネタ
+   (例: 「PageRank は学術論文の引用数の真似」「Wi-Fi の語源は実は何の略でもない (Hi-Fi に語感を寄せただけ)」「ビットコイン作者中本哲史は今も正体不明」「QRコードはトヨタの下請けデンソーが伝票管理用に作った国産技術」)
 
-→ 読み終わったとき「あ、これ覚えとこ」「人に話したい」と感じる濃度にすること。1ヶ月後にこの用語を見たとき『あ、知ってる』と思える解説。
+→ 解説を読んだら「この用語の本質と使いどころが分かった」と思える濃度。ただの定義の繰り返しは NG。
 
 JSON以外何も出力しないこと:
 ${type === "choice"
@@ -1514,24 +1544,26 @@ app.post("/api/kotonoha/sessions/start", async (req, res) => {
       focusGenre ? [req.user.email, focusGenre] : [req.user.email]
     );
 
-    // 2) 新規: 集中セッション→そのジャンル内優先、通常→「弱いジャンル」優先 + レベル近接。
-    const needNew = 10 - retryRows.length;
+    // 2) 新規: 集中セッション→そのジャンル内優先、通常→「弱いジャンル」優先 + 易しい順 + AI生成優先
+    //    難易度ASC (易しい順) で並べる: 概念紹介→基本→応用 の順序を保つ
+    //    AI生成優先 (DESC): seed には名前暗記型が多いので、新生成のWhy/How/比較型を先に出す
+    const SESSION_SIZE = 20;
+    const needNew = SESSION_SIZE - retryRows.length;
     let newRows = [];
     if (focusGenre) {
-      // 集中セッション: そのジャンル内未解答 (難易度近接)
+      // 集中セッション: そのジャンル内未解答 (難易度ASC、AI生成優先)
       const { rows } = await p.query(
-        `SELECT *, ABS(difficulty - $1) AS dd
+        `SELECT *
            FROM kotonoha_questions
-          WHERE genre = $2
-            AND id NOT IN (SELECT question_id FROM kotonoha_progress WHERE user_email = $3 AND is_correct)
-          ORDER BY dd ASC, random()
-          LIMIT $4`,
-        [level, focusGenre, req.user.email, needNew]
+          WHERE genre = $1
+            AND id NOT IN (SELECT question_id FROM kotonoha_progress WHERE user_email = $2 AND is_correct)
+          ORDER BY (source = 'generated') DESC, difficulty ASC, random()
+          LIMIT $3`,
+        [focusGenre, req.user.email, needNew]
       );
       newRows = rows;
     } else {
-      // 通常: 「100%に達してないジャンル」優先 + レベル近接。
-      // 各ジャンルで unique 正解数を見て、target_count 未満のジャンル優先で取る。
+      // 通常: 「100%に達してないジャンル」優先 + 易しい順 + AI生成優先
       const { rows } = await p.query(
         `WITH user_progress AS (
            SELECT q.genre,
@@ -1543,15 +1575,17 @@ app.post("/api/kotonoha/sessions/start", async (req, res) => {
             GROUP BY q.genre
          )
          SELECT q.*,
-                ABS(q.difficulty - $1) AS dd,
                 COALESCE(up.correct_uniq, 0) AS uniq_correct
            FROM kotonoha_questions q
            LEFT JOIN user_progress up ON up.genre = q.genre
           WHERE q.id NOT IN (SELECT question_id FROM kotonoha_progress WHERE user_email = $2)
-            AND q.difficulty BETWEEN $3 AND $4
-          ORDER BY uniq_correct ASC, dd ASC, random()
-          LIMIT $5`,
-        [level, req.user.email, Math.max(1, level - 1), Math.min(10, level + 2), needNew]
+            AND q.difficulty <= $3
+          ORDER BY uniq_correct ASC,
+                   (q.source = 'generated') DESC,
+                   q.difficulty ASC,
+                   random()
+          LIMIT $4`,
+        [level, req.user.email, Math.min(10, level + 2), needNew]
       );
       newRows = rows;
     }
@@ -1559,15 +1593,16 @@ app.post("/api/kotonoha/sessions/start", async (req, res) => {
     let questions = [...retryRows, ...newRows];
 
     // 不足したら全範囲から補充 (シード切れ等)
-    if (questions.length < 10) {
-      const need = 10 - questions.length;
+    if (questions.length < SESSION_SIZE) {
+      const need = SESSION_SIZE - questions.length;
       const usedIds = questions.map((q) => q.id);
       const { rows: fillRows } = await p.query(
-        `SELECT *, ABS(difficulty - $3) AS dd
+        `SELECT *
            FROM kotonoha_questions
           WHERE id <> ALL($1::bigint[])
-          ORDER BY dd ASC, random() LIMIT $2`,
-        [usedIds.length ? usedIds : [0], need, level]
+          ORDER BY (source = 'generated') DESC, difficulty ASC, random()
+          LIMIT $2`,
+        [usedIds.length ? usedIds : [0], need]
       );
       questions = questions.concat(fillRows);
     }
@@ -1576,7 +1611,8 @@ app.post("/api/kotonoha/sessions/start", async (req, res) => {
     //    レスポンスは待たない (fire-and-forget)。集中セッションならそのジャンルに集中生成。
     (async () => {
       try {
-        const targetGenres = focusGenre ? [focusGenre] : await pickWeakGenres(p, req.user.email, 2);
+        // 集中セッションはそのジャンル、通常は弱ジャンル 4 個に投資
+        const targetGenres = focusGenre ? [focusGenre] : await pickWeakGenres(p, req.user.email, 4);
         if (!targetGenres.length) return;
         const { rows: ansRows } = await p.query(
           `SELECT answer FROM kotonoha_questions ORDER BY id DESC LIMIT 200`
@@ -1714,7 +1750,7 @@ app.post("/api/kotonoha/sessions/end", async (req, res) => {
   try {
     const { rows: recent } = await p.query(
       `SELECT is_correct FROM kotonoha_progress
-        WHERE user_email = $1 ORDER BY answered_at DESC LIMIT 10`,
+        WHERE user_email = $1 ORDER BY answered_at DESC LIMIT 20`,
       [req.user.email]
     );
     if (!recent.length) return res.json({ ok: true, levelChanged: false });
