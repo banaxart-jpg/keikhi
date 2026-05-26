@@ -2071,19 +2071,29 @@ app.get("/api/kotonoha/me", async (req, res) => {
       buildKotonohaProgress(p, req.user.email),
       computeKotonohaStreak(p, req.user.email),
     ]);
+    // 最近覚えた言葉: ジャンル名で集約 (概念ベース)。長文回答や letter-only な
+    // 壊れ answer を chip にしないようにする。
     const { rows: recentWords } = await p.query(
-      `SELECT DISTINCT ON (q.id) q.answer, q.genre, q.group_id, q.category, pr.answered_at
+      `SELECT
+         COALESCE(NULLIF(q.genre, ''), q.answer) AS label,
+         q.genre,
+         q.group_id,
+         MAX(pr.answered_at) AS answered_at
          FROM kotonoha_progress pr
          JOIN kotonoha_questions q ON q.id = pr.question_id
-        WHERE pr.user_email = $1 AND pr.is_correct = true
-        ORDER BY q.id, pr.answered_at DESC`,
+        WHERE pr.user_email = $1
+          AND pr.is_correct = true
+          AND char_length(COALESCE(NULLIF(q.genre, ''), q.answer)) BETWEEN 2 AND 24
+        GROUP BY label, q.genre, q.group_id
+        ORDER BY MAX(pr.answered_at) DESC
+        LIMIT 12`,
       [req.user.email]
     );
     res.json({
       user,
       streak,
       groups,
-      recentWords: recentWords.sort((a, b) => new Date(b.answered_at) - new Date(a.answered_at)).slice(0, 10),
+      recentWords: recentWords.slice(0, 12),
     });
   } catch (err) {
     console.error("kotonoha me", err);
