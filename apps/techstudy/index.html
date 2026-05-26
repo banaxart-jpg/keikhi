@@ -49,18 +49,26 @@ body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); 
 .cat-count { text-align: right; color: var(--text2); font-weight: 700; font-variant-numeric: tabular-nums; }
 
 /* グループ × ジャンル */
-.group-list { display: flex; flex-direction: column; gap: 10px; }
-.group-card { background: var(--bg); border-radius: 16px; padding: 12px 14px; box-shadow: 4px 4px 10px var(--sd), -3px -3px 8px var(--sl); }
-.group-header { display: flex; justify-content: space-between; align-items: center; cursor: pointer; gap: 10px; }
+.group-list { display: flex; flex-direction: column; gap: 12px; }
+.group-card { background: var(--bg); border-radius: 18px; padding: 14px 16px; box-shadow: 5px 5px 12px var(--sd), -3px -3px 10px var(--sl); }
+.group-header { display: flex; justify-content: space-between; align-items: center; cursor: pointer; gap: 10px; margin-bottom: 10px; }
 .group-name { display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0; }
-.group-color { width: 10px; height: 10px; border-radius: 3px; flex-shrink: 0; }
-.group-title { font-size: 13px; font-weight: 700; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.group-pct { font-size: 12px; color: var(--text2); font-variant-numeric: tabular-nums; }
-.group-pct strong { font-size: 16px; color: var(--text); font-weight: 800; }
-.group-chev { font-size: 18px; color: var(--text3); transition: transform 0.2s; }
+.group-color { width: 12px; height: 12px; border-radius: 4px; flex-shrink: 0; box-shadow: 2px 2px 4px var(--sd); }
+.group-title { font-size: 14px; font-weight: 800; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.group-chev { font-size: 18px; color: var(--text3); transition: transform 0.2s; flex-shrink: 0; }
 .group-card.open .group-chev { transform: rotate(90deg); }
-.group-bar { height: 5px; background: rgba(154,160,184,0.2); border-radius: 3px; overflow: hidden; box-shadow: inset 1px 1px 3px var(--sd); margin-top: 8px; }
-.group-bar-fill { height: 100%; border-radius: 3px; transition: width 0.4s; }
+
+/* 比較バー: あなた vs peer */
+.compare-bars { display: flex; flex-direction: column; gap: 6px; }
+.compare-row { display: grid; grid-template-columns: 54px 1fr 42px; align-items: center; gap: 10px; font-size: 11px; }
+.compare-who { font-weight: 700; color: var(--text2); font-size: 10px; letter-spacing: 0.04em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.compare-who.me { color: var(--text); }
+.compare-bar { height: 14px; background: rgba(154,160,184,0.18); border-radius: 8px; overflow: hidden; box-shadow: inset 2px 2px 5px var(--sd), inset -1px -1px 3px var(--sl); position: relative; }
+.compare-bar-fill { height: 100%; border-radius: 8px; transition: width 0.5s ease; background-image: linear-gradient(180deg, rgba(255,255,255,0.32) 0%, rgba(255,255,255,0) 50%, rgba(0,0,0,0.08) 100%); position: relative; }
+.compare-bar-fill.me {}
+.compare-bar-fill.peer { opacity: 0.85; }
+.compare-pct { font-weight: 800; color: var(--text); font-size: 12px; text-align: right; font-variant-numeric: tabular-nums; }
+.compare-pct.peer { color: var(--text2); font-weight: 700; }
 .genre-list { margin-top: 12px; display: none; flex-direction: column; gap: 6px; padding-top: 4px; }
 .group-card.open .genre-list { display: flex; }
 .genre-row { display: grid; grid-template-columns: 1fr 80px 36px 24px; align-items: center; gap: 8px; padding: 6px 4px; border-radius: 8px; cursor: pointer; }
@@ -170,7 +178,7 @@ body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); 
 
     <button class="start-btn" id="startBtn" onclick="startSession()">
       <span class="icon" style="vertical-align:-0.18em;">play_circle</span>
-      10問にチャレンジ (弱いジャンル優先)
+      20問にチャレンジ (弱いジャンル優先)
     </button>
 
     <div class="card" style="margin-top: 16px;">
@@ -287,14 +295,14 @@ async function loadHome() {
       api("GET", "/api/kotonoha/me"),
       api("GET", "/api/kotonoha/peers"),
     ]);
-    renderMe(me);
+    renderMe(me, peers);
     renderPeers(peers);
   } catch (e) {
     $("homeErr").textContent = e.message;
   }
 }
 
-function renderMe(me) {
+function renderMe(me, peers) {
   $("myLevel").textContent = me.user.level;
   $("myLevelStats").textContent =
     `LEVEL  ・  正解 ${me.user.total_correct} / ${me.user.total_answers}`;
@@ -307,38 +315,62 @@ function renderMe(me) {
   }
   $("myTotalPct").textContent = totT ? Math.round((totC / totT) * 100) : 0;
 
-  // グループ × ジャンル
+  // 比較対象 peer (最初のメンバー)。複数いれば後で選べるように拡張可。
+  const peer = (peers || [])[0] || null;
+  const peerGroupMap = new Map();
+  if (peer) {
+    for (const g of (peer.groups || [])) peerGroupMap.set(g.id, g);
+  }
+  const myName = (me.user?.display_name) || "あなた";
+  const peerName = peer?.display_name || null;
+
+  // グループ × ジャンル (あなた + peer の二重バー)
   const root = $("myGroups");
   root.innerHTML = "";
   for (const g of (me.groups || [])) {
+    const pg = peerGroupMap.get(g.id);
     const card = document.createElement("div");
     card.className = "group-card";
     card.dataset.gid = g.id;
+    const peerRow = peer
+      ? `<div class="compare-row">
+           <div class="compare-who">${escapeHtml(peerName)}</div>
+           <div class="compare-bar"><div class="compare-bar-fill peer" style="width:${pg?.pct || 0}%; background:${g.color};"></div></div>
+           <div class="compare-pct peer">${pg?.pct || 0}%</div>
+         </div>`
+      : "";
     card.innerHTML = `
       <div class="group-header">
         <div class="group-name">
           <div class="group-color" style="background: ${g.color};"></div>
           <span class="group-title">${escapeHtml(g.name)}</span>
         </div>
-        <div class="group-pct"><strong>${g.pct}</strong>%</div>
         <span class="icon group-chev">chevron_right</span>
       </div>
-      <div class="group-bar"><div class="group-bar-fill" style="width:${g.pct}%; background:${g.color};"></div></div>
+      <div class="compare-bars">
+        <div class="compare-row">
+          <div class="compare-who me">${escapeHtml(myName)}</div>
+          <div class="compare-bar"><div class="compare-bar-fill me" style="width:${g.pct}%; background:${g.color};"></div></div>
+          <div class="compare-pct">${g.pct}%</div>
+        </div>
+        ${peerRow}
+      </div>
       <div class="genre-list">
-        ${g.genres.map((gen) => `
+        ${g.genres.map((gen) => {
+          const pgen = pg?.genres?.find((x) => x.name === gen.name);
+          const peerPct = pgen?.pct || 0;
+          return `
           <div class="genre-row ${gen.pct >= 100 ? "done" : ""}" data-genre="${escapeHtml(gen.name)}">
             <div class="genre-name-txt">${escapeHtml(gen.name)}</div>
             <div class="genre-bar"><div class="genre-bar-fill" style="width:${gen.pct}%; background:${g.color};"></div></div>
-            <div class="genre-pct">${gen.pct}%</div>
+            <div class="genre-pct">${gen.pct}%${peer ? ` <span style="color:var(--text3);">/ ${peerPct}%</span>` : ""}</div>
             <span class="icon genre-go">chevron_right</span>
           </div>
-        `).join("")}
+        `;}).join("")}
       </div>`;
-    // ヘッダタップで開閉
     card.querySelector(".group-header").addEventListener("click", () => {
       card.classList.toggle("open");
     });
-    // ジャンルタップで集中セッション
     for (const row of card.querySelectorAll(".genre-row")) {
       row.addEventListener("click", (e) => {
         e.stopPropagation();
