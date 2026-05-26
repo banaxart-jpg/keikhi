@@ -1,0 +1,192 @@
+{
+  "_comment": "ことのは: ジャンル定義。group=表示グループ, genres内の各要素=ジャンル名。target_count=そのジャンルを100%にするのに必要な正解unique問題数(基本10)。AI生成問題プールがここに紐付く。\nBANAX OS グループは別リポにある社内システム本体の技術スタックを学ぶ用。中身は要追記。",
+  "groups": [
+    {
+      "id": "banax_os",
+      "name": "BANAX OS 技術スタック",
+      "color": "#0ea5e9",
+      "genres": [
+        { "name": "BANAX OS 全体像",        "target_count": 10 },
+        { "name": "LINE Messaging API",     "target_count": 10 },
+        { "name": "LINE Webhook",           "target_count": 10 },
+        { "name": "LIFF",                   "target_count": 10 },
+        { "name": "見積もり生成パイプライン", "target_count": 10 },
+        { "name": "職人指示フロー",         "target_count": 10 },
+        { "name": "BANAX OS のデータモデル", "target_count": 10 },
+        { "name": "BANAX OS の認証 / 権限",  "target_count": 10 },
+        { "name": "BANAX OS のデプロイ構造", "target_count": 10 },
+        { "name": "建築 / リフォーム業務フロー", "target_count": 10 }
+      ]
+    },
+    {
+      "id": "ai_basics",
+      "name": "AI・LLM 基礎",
+      "color": "#7c3aed",
+      "genres": [
+        { "name": "LLM基礎",             "target_count": 10 },
+        { "name": "トークン",            "target_count": 10 },
+        { "name": "プロンプト",          "target_count": 10 },
+        { "name": "ハルシネーション",    "target_count": 10 },
+        { "name": "RAG",                 "target_count": 10 },
+        { "name": "マルチモーダル",      "target_count": 10 },
+        { "name": "ファインチューニング", "target_count": 10 },
+        { "name": "エンベディング",      "target_count": 10 },
+        { "name": "Chain of Thought",    "target_count": 10 },
+        { "name": "コンテキスト長",      "target_count": 10 }
+      ]
+    },
+    {
+      "id": "ai_agents",
+      "name": "AIエージェント・ツール連携",
+      "color": "#a855f7",
+      "genres": [
+        { "name": "AIエージェント",      "target_count": 10 },
+        { "name": "MCP",                 "target_count": 10 },
+        { "name": "Function calling",    "target_count": 10 },
+        { "name": "ReAct",               "target_count": 10 },
+        { "name": "LangChain",           "target_count": 10 },
+        { "name": "ベクトルDB",          "target_count": 10 },
+        { "name": "RLHF",                "target_count": 10 },
+        { "name": "AIプロバイダ比較",    "target_count": 10 },
+        { "name": "AI料金体系",          "target_count": 10 },
+        { "name": "プロンプトエンジニアリング", "target_count": 10 }
+      ]
+    },
+    {
+      "id": "web3",
+      "name": "ブロックチェーン・Web3",
+      "color": "#f97316",
+      "genres": [
+        { "name": "ブロックチェーン基礎", "target_count": 10 },
+        { "name": "スマートコントラクト", "target_count": 10 },
+        { "name": "EVM / Ethereum",      "target_count": 10 },
+        { "name": "NFT",                 "target_count": 10 },
+        { "name": "DeFi",                "target_count": 10 },
+        { "name": "ウォレット / 秘密鍵", "target_count": 10 },
+        { "name": "ガス代",              "target_count": 10 },
+        { "name": "ステーブルコイン",    "target_count": 10 },
+        { "name": "DAO",                 "target_count": 10 },
+        { "name": "トークノミクス",      "target_count": 10 }
+      ]
+    },
+    {
+      "id": "ui_parts",
+      "name": "UI 部品",
+      "color": "#ec4899",
+      "genres": [
+        { "name": "モーダル",            "target_count": 10 },
+        { "name": "トースト",            "target_count": 10 },
+        { "name": "FAB",                 "target_count": 10 },
+        { "name": "アコーディオン",      "target_count": 10 },
+        { "name": "ドロワー",            "target_count": 10 },
+        { "name": "タブ",                "target_count": 10 },
+        { "name": "スケルトン",          "target_count": 10 },
+        { "name": "ツールチップ",        "target_count": 10 },
+        { "name": "ステッパー",          "target_count": 10 },
+        { "name": "バナー / アラート",   "target_count": 10 }
+      ]
+    },
+    {
+      "id": "ui_design",
+      "name": "UI デザイン",
+      "color": "#f472b6",
+      "genres": [
+        { "name": "レスポンシブ",        "target_count": 10 },
+        { "name": "ダークモード",        "target_count": 10 },
+        { "name": "ニューモーフィズム",  "target_count": 10 },
+        { "name": "グラスモーフィズム",  "target_count": 10 },
+        { "name": "Material Design",     "target_count": 10 },
+        { "name": "アクセシビリティ",    "target_count": 10 },
+        { "name": "タイポグラフィ",      "target_count": 10 },
+        { "name": "カラーパレット",      "target_count": 10 },
+        { "name": "マイクロインタラクション", "target_count": 10 },
+        { "name": "アイコンシステム",    "target_count": 10 }
+      ]
+    },
+    {
+      "id": "db",
+      "name": "データベース",
+      "color": "#06b6d4",
+      "genres": [
+        { "name": "RDB基礎",             "target_count": 10 },
+        { "name": "NoSQL",               "target_count": 10 },
+        { "name": "SQL構文",             "target_count": 10 },
+        { "name": "インデックス",        "target_count": 10 },
+        { "name": "JOIN",                "target_count": 10 },
+        { "name": "トランザクション",    "target_count": 10 },
+        { "name": "スキーマ設計",        "target_count": 10 },
+        { "name": "マイグレーション",    "target_count": 10 },
+        { "name": "ORM",                 "target_count": 10 },
+        { "name": "バックアップ / 復元", "target_count": 10 }
+      ]
+    },
+    {
+      "id": "api",
+      "name": "API / 通信",
+      "color": "#f59e0b",
+      "genres": [
+        { "name": "HTTP",                "target_count": 10 },
+        { "name": "REST",                "target_count": 10 },
+        { "name": "GraphQL",             "target_count": 10 },
+        { "name": "WebSocket",           "target_count": 10 },
+        { "name": "gRPC",                "target_count": 10 },
+        { "name": "JSON",                "target_count": 10 },
+        { "name": "OpenAPI / Swagger",   "target_count": 10 },
+        { "name": "HTTPステータス",      "target_count": 10 },
+        { "name": "CORS",                "target_count": 10 },
+        { "name": "レートリミット",      "target_count": 10 }
+      ]
+    },
+    {
+      "id": "infra",
+      "name": "インフラ / クラウド",
+      "color": "#10b981",
+      "genres": [
+        { "name": "GCP / AWS比較",       "target_count": 10 },
+        { "name": "Cloud Run",           "target_count": 10 },
+        { "name": "Cloud SQL",           "target_count": 10 },
+        { "name": "Firebase",            "target_count": 10 },
+        { "name": "Docker",              "target_count": 10 },
+        { "name": "Kubernetes",          "target_count": 10 },
+        { "name": "CDN",                 "target_count": 10 },
+        { "name": "ロードバランサ",      "target_count": 10 },
+        { "name": "サーバーレス",        "target_count": 10 },
+        { "name": "IaC (Terraform等)",   "target_count": 10 }
+      ]
+    },
+    {
+      "id": "security",
+      "name": "セキュリティ",
+      "color": "#dc2626",
+      "genres": [
+        { "name": "HTTPS / TLS",         "target_count": 10 },
+        { "name": "OAuth / OIDC",        "target_count": 10 },
+        { "name": "JWT",                 "target_count": 10 },
+        { "name": "XSS",                 "target_count": 10 },
+        { "name": "CSRF",                "target_count": 10 },
+        { "name": "SQLインジェクション", "target_count": 10 },
+        { "name": "ハッシュ / 暗号",     "target_count": 10 },
+        { "name": "2FA / MFA",           "target_count": 10 },
+        { "name": "シークレット管理",    "target_count": 10 },
+        { "name": "ゼロトラスト",        "target_count": 10 }
+      ]
+    },
+    {
+      "id": "devflow",
+      "name": "開発フロー / Claude Code",
+      "color": "#6366f1",
+      "genres": [
+        { "name": "Git基礎",             "target_count": 10 },
+        { "name": "GitHub",              "target_count": 10 },
+        { "name": "PR / コードレビュー", "target_count": 10 },
+        { "name": "CI / CD",             "target_count": 10 },
+        { "name": "テスト",              "target_count": 10 },
+        { "name": "リファクタリング",    "target_count": 10 },
+        { "name": "デザインパターン",    "target_count": 10 },
+        { "name": "Claude Code",         "target_count": 10 },
+        { "name": "CLAUDE.md",           "target_count": 10 },
+        { "name": "アジャイル / スクラム", "target_count": 10 }
+      ]
+    }
+  ]
+}
