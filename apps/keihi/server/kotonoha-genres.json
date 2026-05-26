@@ -25,7 +25,42 @@
         { "name": "下請け業者管理",         "target_count": 10 },
         { "name": "建材データベース",       "target_count": 10 },
         { "name": "工程管理 / スケジュール", "target_count": 10 },
-        { "name": "BANAX OS の通知設計",    "target_count": 10 }
+        { "name": "BANAX OS の通知設計",    "target_count": 10 },
+        { "name": "BANAX OS の3D図面 (Three.js)", "target_count": 10 },
+        { "name": "立体図面の用途 (見積/施工確認)", "target_count": 10 }
+      ]
+    },
+    {
+      "id": "graphics3d",
+      "name": "3D / グラフィックス",
+      "_purpose": "BANAX OS の立体図面まわり (Three.js / WebGL) を技術として理解する。",
+      "color": "#0ea5e9",
+      "genres": [
+        { "name": "Three.js 全体像",         "target_count": 10 },
+        { "name": "WebGL 基礎",              "target_count": 10 },
+        { "name": "シーン / カメラ / レンダラ", "target_count": 10 },
+        { "name": "メッシュ / ジオメトリ",   "target_count": 10 },
+        { "name": "マテリアル / シェーダー", "target_count": 10 },
+        { "name": "テクスチャ / UVマッピング", "target_count": 10 },
+        { "name": "ライト (点/平行/環境光)", "target_count": 10 },
+        { "name": "影 (ShadowMap)",          "target_count": 10 },
+        { "name": "アニメーション / Tween",  "target_count": 10 },
+        { "name": "OrbitControls (カメラ操作)", "target_count": 10 },
+        { "name": "Raycaster (3D オブジェクト選択)", "target_count": 10 },
+        { "name": "GLTF / OBJ モデル形式",   "target_count": 10 },
+        { "name": "ボーン / リギング",       "target_count": 10 },
+        { "name": "物理エンジン (cannon-es)", "target_count": 10 },
+        { "name": "シェーダー (GLSL) 基礎",  "target_count": 10 },
+        { "name": "フラスタム / カリング",   "target_count": 10 },
+        { "name": "ベクトル / 行列 (3D数学)", "target_count": 10 },
+        { "name": "クォータニオン (回転)",   "target_count": 10 },
+        { "name": "座標系 (右手 / 左手)",    "target_count": 10 },
+        { "name": "BIM (Building Info Modeling)", "target_count": 10 },
+        { "name": "IFC (建築データ標準)",    "target_count": 10 },
+        { "name": "CAD vs BIM の違い",       "target_count": 10 },
+        { "name": "立体図面のレンダリング最適化", "target_count": 10 },
+        { "name": "VR / AR for 建築",        "target_count": 10 },
+        { "name": "ポイントクラウド (LiDAR)", "target_count": 10 }
       ]
     },
     {

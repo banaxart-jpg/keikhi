@@ -12,7 +12,9 @@
     ],
     "answer": "モーダル",
     "explanation": "モーダルは「他の操作を一時的に止めて、これに集中させる」UI。確認ダイアログ、設定画面、ログインフォームによく使われる。半透明の暗い背景 + 中央のカードが典型。",
-    "claude_example": "「保存ボタンを押したら『本当に保存しますか？』の確認モーダルを出して、はい/いいえで進めるようにして」"
+    "claude_example": "「保存ボタンを押したら『本当に保存しますか？』の確認モーダルを出して、はい/いいえで進めるようにして」",
+    "genre": "モーダル",
+    "group_id": "ui_parts"
   },
   {
     "category": "ui",
@@ -27,7 +29,9 @@
     ],
     "answer": "トースト",
     "explanation": "トースト（toast）は「保存しました」「コピーしました」みたいな短いフィードバックを 2〜3 秒だけ表示してフェードアウトする UI。トースターから食パンがポップアップする様子から。",
-    "claude_example": "「コピー成功したら『コピーしました』のトーストを 2 秒間出して」"
+    "claude_example": "「コピー成功したら『コピーしました』のトーストを 2 秒間出して」",
+    "genre": "トースト",
+    "group_id": "ui_parts"
   },
   {
     "category": "ui",
@@ -42,7 +46,9 @@
     ],
     "answer": "アコーディオン",
     "explanation": "アコーディオンは FAQ や設定画面で「項目をタップすると詳細が展開、もう一回タップで閉じる」UI。楽器のアコーディオンが伸び縮みする様子から。",
-    "claude_example": "「FAQ をアコーディオンで作って、質問タップしたら答えが下に展開するようにして」"
+    "claude_example": "「FAQ をアコーディオンで作って、質問タップしたら答えが下に展開するようにして」",
+    "genre": "アコーディオン",
+    "group_id": "ui_parts"
   },
   {
     "category": "db",
@@ -57,7 +63,9 @@
     ],
     "answer": "リレーショナルDB（RDB）",
     "explanation": "リレーショナルDB（RDB）は行と列のテーブルでデータを管理する。Postgres・MySQL・SQLite などが代表。「テーブル同士の関係（リレーション）」を JOIN で繋げて検索できるのが強み。",
-    "claude_example": "「経費記録は RDB の records テーブルに保存して、Cloud SQL の Postgres を使って」"
+    "claude_example": "「経費記録は RDB の records テーブルに保存して、Cloud SQL の Postgres を使って」",
+    "genre": "RDB 基礎",
+    "group_id": "db"
   },
   {
     "category": "db",
@@ -72,7 +80,9 @@
     ],
     "answer": "NoSQL",
     "explanation": "NoSQL は「決まった表形式じゃない DB」の総称。ドキュメント型（Firestore, MongoDB）、KV型（Redis）、グラフ型などある。スキーマ変更が柔軟で、構造が決まってないデータ向き。スマホアプリの即時同期にもよく使われる。",
-    "claude_example": "「ユーザー設定はリアルタイム同期したいから Firestore（NoSQL）に保存して」"
+    "claude_example": "「ユーザー設定はリアルタイム同期したいから Firestore（NoSQL）に保存して」",
+    "genre": "NoSQL",
+    "group_id": "db"
   },
   {
     "category": "db",
@@ -87,7 +97,9 @@
     ],
     "answer": "インデックス",
     "explanation": "インデックスは本の「索引」と同じで、特定の列の値から行を高速に見つけるための仕組み。WHERE や ORDER BY でよく使う列に貼る。貼りすぎると書き込みが遅くなるトレードオフあり。",
-    "claude_example": "「records テーブルに、日付で並べる検索が多いから date 列にインデックス貼って」"
+    "claude_example": "「records テーブルに、日付で並べる検索が多いから date 列にインデックス貼って」",
+    "genre": "インデックス",
+    "group_id": "db"
   },
   {
     "category": "api",
@@ -102,7 +114,9 @@
     ],
     "answer": "API リクエスト",
     "explanation": "API リクエストは「ブラウザがサーバーに何かをお願いする」仕組み。「これ取得して (GET)」「これ保存して (POST)」「これ削除して (DELETE)」など。事務所への注文書のやりとりの IT 版。",
-    "claude_example": "「ログインしたら API で /api/records からデータ取って画面に表示して」"
+    "claude_example": "「ログインしたら API で /api/records からデータ取って画面に表示して」",
+    "genre": "REST",
+    "group_id": "api"
   },
   {
     "category": "api",
@@ -117,7 +131,9 @@
     ],
     "answer": "200",
     "explanation": "HTTP ステータスコードは API の結果を 3 桁の数字で表す。200 = 成功、401 = 未認証（ログイン必要）、403 = 禁止（権限なし）、404 = 見つからない、500 = サーバー側のエラー。",
-    "claude_example": "「401 が返ってきたらログイン画面にリダイレクトして、500 ならエラーメッセージ表示して」"
+    "claude_example": "「401 が返ってきたらログイン画面にリダイレクトして、500 ならエラーメッセージ表示して」",
+    "genre": "HTTPステータス: 2xx",
+    "group_id": "api"
   },
   {
     "category": "ai",
@@ -132,7 +148,9 @@
     ],
     "answer": "LLM",
     "explanation": "LLM = Large Language Model（大規模言語モデル）。大量の文章で学習して「次に来る単語」を予測する仕組み。Gemini, GPT, Claude が代表。「自信満々に間違える」ハルシネーション現象もある。",
-    "claude_example": "「カスタマー対応に LLM を使いたい、Gemini と Claude どっちがいい？」"
+    "claude_example": "「カスタマー対応に LLM を使いたい、Gemini と Claude どっちがいい？」",
+    "genre": "LLM 基礎",
+    "group_id": "ai_basics"
   },
   {
     "category": "ai",
@@ -147,7 +165,9 @@
     ],
     "answer": "ハルシネーション",
     "explanation": "ハルシネーション（hallucination = 幻覚）は LLM が「もっともらしい嘘」を生成する現象。「2023 年に〇〇社が△△を発表した」みたいな、本当っぽいけど実在しない情報を出す。重要な事実は必ず一次情報で裏取りすべき。",
-    "claude_example": "「重要な数字を AI に聞いたら、ハルシネーションが心配だから web 検索ツール使って出典付きで答えさせて」"
+    "claude_example": "「重要な数字を AI に聞いたら、ハルシネーションが心配だから web 検索ツール使って出典付きで答えさせて」",
+    "genre": "ハルシネーション",
+    "group_id": "ai_basics"
   },
   {
     "category": "ai",
@@ -162,7 +182,9 @@
     ],
     "answer": "マルチモーダル",
     "explanation": "マルチモーダル AI は「テキスト + 画像 + 音声」など複数の種類のデータを扱える AI。Gemini, GPT-4o, Claude Opus 4 等。図面読取、レシート OCR、動画分析などに使える。",
-    "claude_example": "「レシート画像を AI に読ませて金額抽出したい、マルチモーダル対応のモデルでお願い」"
+    "claude_example": "「レシート画像を AI に読ませて金額抽出したい、マルチモーダル対応のモデルでお願い」",
+    "genre": "マルチモーダル",
+    "group_id": "ai_basics"
   },
   {
     "category": "infra",
@@ -177,7 +199,9 @@
     ],
     "answer": "Cloud Run",
     "explanation": "Cloud Run は Google Cloud の「Docker コンテナをそのまま動かす」サービス。アクセス来たときだけ起動・課金される（=安い）。サーバーレスの代表格。このプロジェクトの keihi-api が動いてるところ。",
-    "claude_example": "「経費の API は Cloud Run にデプロイして、自動スケール・無アクセス時は 0 円にして」"
+    "claude_example": "「経費の API は Cloud Run にデプロイして、自動スケール・無アクセス時は 0 円にして」",
+    "genre": "Cloud Run",
+    "group_id": "infra"
   },
   {
     "category": "infra",
@@ -192,7 +216,9 @@
     ],
     "answer": "サーバーレス",
     "explanation": "サーバーレスは「サーバーを自分で管理しない」スタイル。リクエスト来たときだけ起動、終わったら 0 に戻る。Cloud Run / AWS Lambda / Cloudflare Workers が代表。スパイクに強い、深夜は無料、保守の手間が少ない。",
-    "claude_example": "「アクセス予測できない社内ツール作るから、サーバーレスで組んで」"
+    "claude_example": "「アクセス予測できない社内ツール作るから、サーバーレスで組んで」",
+    "genre": "サーバーレス",
+    "group_id": "infra"
   },
   {
     "category": "concept",
@@ -207,7 +233,9 @@
     ],
     "answer": "async / await",
     "explanation": "async / await は「すぐ結果が返らない処理（API 呼び出し、DB 読み込み等）」を待つ書き方。await を付けると「終わるまで待ってから次の行へ」、async は「この関数は async な処理を含む」マーク。",
-    "claude_example": "「API 呼び出しは await で待ってから次の処理に行くようにして、エラーは try/catch で拾って」"
+    "claude_example": "「API 呼び出しは await で待ってから次の処理に行くようにして、エラーは try/catch で拾って」",
+    "genre": "async/await",
+    "group_id": "concept"
   },
   {
     "category": "concept",
@@ -222,7 +250,9 @@
     ],
     "answer": "パラレル / 並列",
     "explanation": "パラレル（並列）は「同時に複数の処理を進める」スタイル。Promise.all([api1, api2, api3]) で 3 つの API を一気に投げると、全部終わるまでの時間 = 一番遅い 1 個分。直列だと 3 倍の時間かかる。",
-    "claude_example": "「3 つの API 呼ぶ処理、直列じゃなく並列で投げて全部終わったらまとめて表示して」"
+    "claude_example": "「3 つの API 呼ぶ処理、直列じゃなく並列で投げて全部終わったらまとめて表示して」",
+    "genre": "並行 vs 並列",
+    "group_id": "algorithms"
   },
   {
     "category": "project",
@@ -237,7 +267,9 @@
     ],
     "answer": "Firebase Auth",
     "explanation": "Firebase Auth はメールアドレス・Google・Twitter 等の認証を簡単に組み込めるサービス。ログイン後に ID トークンを取得 → API リクエストに付ける → サーバー側で verifyIdToken で検証、の流れ。「入口の受付係」。",
-    "claude_example": "「ログイン画面作りたい、Firebase Auth の Google プロバイダで」"
+    "claude_example": "「ログイン画面作りたい、Firebase Auth の Google プロバイダで」",
+    "genre": "Firebase Auth",
+    "group_id": "infra"
   },
   {
     "category": "project",
@@ -252,7 +284,9 @@
     ],
     "answer": "CLAUDE.md",
     "explanation": "CLAUDE.md は Claude Code が自動で読み込む内部メモ。「触っちゃダメなファイル」「push 手順」「会話のトーン」を書いておくと、毎回の指示が省略できる。README.md は人間向け、CLAUDE.md は Claude 向けの役割分担。",
-    "claude_example": "「このリポ触り始める時は CLAUDE.md と README.md を読んでから始めて」"
+    "claude_example": "「このリポ触り始める時は CLAUDE.md と README.md を読んでから始めて」",
+    "genre": "CLAUDE.md",
+    "group_id": "devflow"
   },
   {
     "category": "prompt",
@@ -267,7 +301,9 @@
     ],
     "answer": "誰が・何を・どう使うアプリかを伝える",
     "explanation": "Claude Code は「目的（誰が・何のために・どう使う）」が分かると、適切な技術選択をしてくれる。逆に細かい実装手順を全部指定すると、もっといいやり方があっても従ってしまう。「経営者がスマホで使う、撮影 1 タップで完了する経費アプリ」みたいに目的中心で伝える。",
-    "claude_example": "「現場で職人が片手で使う、写真 1 枚撮ったら自動で日報になるアプリ作って」"
+    "claude_example": "「現場で職人が片手で使う、写真 1 枚撮ったら自動で日報になるアプリ作って」",
+    "genre": "プロンプトエンジニアリング",
+    "group_id": "ai_agents"
   },
   {
     "category": "prompt",
@@ -282,7 +318,9 @@
     ],
     "answer": "エラー全文 + 直前の操作 + 期待した挙動を伝える",
     "explanation": "AI に限らずデバッグの基本は「再現情報をセットで渡す」。エラーメッセージ全文 / その直前にどの操作をしたか / 本当は何が起きてほしかったか、の 3 点があると原因特定が一気に早くなる。「動かない」だけだと推測ゲームになって時間かかる。",
-    "claude_example": "「保存ボタン押したらエラー：『401 Unauthorized』。ログインはしてる。期待: 保存成功」"
+    "claude_example": "「保存ボタン押したらエラー：『401 Unauthorized』。ログインはしてる。期待: 保存成功」",
+    "genre": "プロンプトエンジニアリング",
+    "group_id": "ai_agents"
   },
   {
     "category": "prompt",
