@@ -1536,25 +1536,35 @@ app.post("/api/kotonoha/sessions/start", async (req, res) => {
     const MASTERY = MASTERY_LAST_N;
     const maxDiff = Math.min(10, level + 2);
 
+    // 適格ルール (飽き防止):
+    //   - 未回答 → 即出題 (priority 0)
+    //   - 答えたけど一度も正解してない → 即出題 (priority 1)
+    //   - 正解履歴あり → user の総回答数 − 直近正解位置 ≥ min_gap (50-100問)
+    //     min_gap は (user × 問題ID) の hash で 50-100 にランダム散らす (= ユーザーごと安定値)
     const baseSelectSql = `
       WITH ranked AS (
         SELECT question_id, is_correct, answered_at,
-               ROW_NUMBER() OVER (PARTITION BY question_id ORDER BY answered_at DESC) AS rn
+               ROW_NUMBER() OVER (PARTITION BY question_id ORDER BY answered_at DESC) AS rn_q,
+               ROW_NUMBER() OVER (ORDER BY answered_at) AS global_rn
           FROM kotonoha_progress
          WHERE user_email = $1
       ),
       mastered_q AS (
         SELECT question_id
           FROM ranked
-         WHERE rn <= $2
+         WHERE rn_q <= $2
          GROUP BY question_id
         HAVING count(*) >= $2 AND bool_and(is_correct)
       ),
       per_q AS (
-        SELECT question_id, max(answered_at) AS last_at
-          FROM kotonoha_progress
-         WHERE user_email = $1
+        SELECT question_id,
+               MAX(global_rn) FILTER (WHERE is_correct) AS last_correct_pos,
+               MAX(answered_at) AS last_at
+          FROM ranked
          GROUP BY question_id
+      ),
+      user_total AS (
+        SELECT COUNT(*)::int AS total FROM ranked
       ),
       eligible AS (
         SELECT q.*,
@@ -1562,7 +1572,7 @@ app.post("/api/kotonoha/sessions/start", async (req, res) => {
                (mq.question_id IS NOT NULL) AS is_mastered,
                CASE
                  WHEN pq.question_id IS NULL THEN 0
-                 WHEN mq.question_id IS NULL THEN 1
+                 WHEN pq.last_correct_pos IS NULL THEN 1
                  ELSE 2
                END AS priority
           FROM kotonoha_questions q
@@ -1570,13 +1580,9 @@ app.post("/api/kotonoha/sessions/start", async (req, res) => {
           LEFT JOIN mastered_q mq ON mq.question_id = q.id
          WHERE (
            pq.question_id IS NULL
-           OR (
-             pq.last_at < now() - interval '4 hours'
-             AND (
-               mq.question_id IS NULL
-               OR pq.last_at < now() - interval '30 days'
-             )
-           )
+           OR pq.last_correct_pos IS NULL
+           OR ((SELECT total FROM user_total) - pq.last_correct_pos)
+              >= (50 + (abs(hashtextextended(q.id::text || $1, 0)) % 51))::int
          )
       )`;
 
