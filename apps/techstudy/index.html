@@ -40,6 +40,13 @@ body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); 
 .level-hero { text-align: center; padding: 6px 0; }
 .level-num { font-size: 56px; font-weight: 900; color: var(--accent); line-height: 1; letter-spacing: -0.03em; }
 .level-lbl { font-size: 11px; color: var(--text2); font-weight: 700; letter-spacing: 0.2em; text-transform: uppercase; margin-top: 4px; }
+.hero-row { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; align-items: end; padding: 8px 0 0; }
+.hero-stat { display: flex; flex-direction: column; align-items: center; gap: 4px; }
+.hero-num { font-size: 36px; font-weight: 900; color: var(--accent); line-height: 1; letter-spacing: -0.02em; }
+.hero-num .hero-unit { font-size: 18px; font-weight: 800; margin-left: 2px; }
+.hero-lbl { font-size: 10px; color: var(--text2); font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase; }
+.streak-recovered { color: #f59e0b; }
+.streak-today-pending { opacity: 0.55; }
 
 .cats { display: flex; flex-direction: column; gap: 8px; }
 .cat-row { display: grid; grid-template-columns: 80px 1fr 50px; align-items: center; gap: 10px; font-size: 12px; }
@@ -167,12 +174,21 @@ body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); 
     <div class="card">
       <div class="label">あなた</div>
       <div class="level-hero">
-        <div class="level-num" id="myLevel">-</div>
-        <div class="level-lbl" id="myLevelStats"></div>
-        <div class="total-progress" style="justify-content:center;">
-          <div class="num" id="myTotalPct">0</div>
-          <div class="lbl">% 全ジャンル平均</div>
+        <div class="hero-row">
+          <div class="hero-stat">
+            <div class="hero-num" id="myLevel">-</div>
+            <div class="hero-lbl">LEVEL</div>
+          </div>
+          <div class="hero-stat">
+            <div class="hero-num" id="myTotalPct">0<span class="hero-unit">%</span></div>
+            <div class="hero-lbl">習得率</div>
+          </div>
+          <div class="hero-stat">
+            <div class="hero-num"><span id="myStreak">0</span><span class="hero-unit">🔥</span></div>
+            <div class="hero-lbl" id="myStreakLbl">連続0日</div>
+          </div>
         </div>
+        <div class="level-lbl" id="myLevelStats" style="margin-top:14px;"></div>
       </div>
     </div>
 
@@ -308,7 +324,7 @@ async function loadHome() {
 function renderMe(me, peers) {
   $("myLevel").textContent = me.user.level;
   $("myLevelStats").textContent =
-    `LEVEL  ・  正解 ${me.user.total_correct} / ${me.user.total_answers}`;
+    `通算 正解 ${me.user.total_correct} / ${me.user.total_answers}`;
 
   // 全ジャンル平均%
   let totT = 0, totC = 0;
@@ -316,7 +332,23 @@ function renderMe(me, peers) {
     state.groupColorMap.set(g.id, g.color);
     for (const gen of g.genres) { totT += gen.target; totC += gen.correct; }
   }
-  $("myTotalPct").textContent = totT ? Math.round((totC / totT) * 100) : 0;
+  $("myTotalPct").firstChild.textContent = totT ? Math.round((totC / totT) * 100) : 0;
+
+  // 連続日数 (streak)
+  const s = me.streak || { streak: 0, today_active: false, today_correct: 0, daily_min: 5 };
+  $("myStreak").textContent = s.streak;
+  const streakEl = $("myStreakLbl");
+  const streakStat = $("myStreak").parentElement;
+  streakStat.classList.remove("streak-today-pending");
+  if (s.streak === 0 && !s.today_active) {
+    streakEl.textContent = `今日 ${s.daily_min}問で開始`;
+  } else if (s.today_active) {
+    streakEl.textContent = `連続 ${s.streak}日`;
+  } else {
+    // 昨日まで連続 N 日、今日まだ未達
+    streakEl.textContent = `あと${Math.max(0, s.daily_min - s.today_correct)}問で継続`;
+    streakStat.classList.add("streak-today-pending");
+  }
 
   // 比較対象 peer (最初のメンバー)。複数いれば後で選べるように拡張可。
   const peer = (peers || [])[0] || null;
@@ -425,10 +457,14 @@ function renderPeers(peers) {
         <div class="cat-count">${g.pct}%</div>
       </div>`;
     }
+    const ps = p.streak;
+    const streakBadge = ps && ps.streak > 0
+      ? ` ・ 🔥<strong>${ps.streak}</strong>日`
+      : "";
     div.innerHTML = `
       <div class="peer-header">
         <div class="peer-name">${escapeHtml(p.display_name)}</div>
-        <div class="peer-level">LV. <strong>${p.level}</strong> ・ 平均 ${avg}%</div>
+        <div class="peer-level">LV. <strong>${p.level}</strong> ・ 平均 ${avg}%${streakBadge}</div>
       </div>
       <div class="cats">${bars}</div>`;
     list.appendChild(div);

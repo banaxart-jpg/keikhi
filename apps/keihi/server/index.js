@@ -1826,6 +1826,63 @@ app.post("/api/kotonoha/sessions/end", async (req, res) => {
 // マスター済み問題数 / target_count = 進捗%。マスター = 3回正解。
 // (4択で適当に当たった可能性もあるので 1 回だけじゃカウントしない)
 const MASTERY_CORRECT_COUNT = 3;
+
+// 連続日数 (Duolingo 型): 1日5問正解=アクティブ。
+// 1日抜けても、次の日に 15問正解で前日も連続扱い (1回まで)。
+const STREAK_DAILY_MIN = 5;
+const STREAK_DOUBLE_MIN = 15;
+async function computeKotonohaStreak(p, email) {
+  const { rows } = await p.query(
+    `SELECT (answered_at AT TIME ZONE 'Asia/Tokyo')::date AS day,
+            count(*) FILTER (WHERE is_correct)::int AS correct_count
+       FROM kotonoha_progress
+      WHERE user_email = $1
+        AND answered_at > now() - interval '90 days'
+      GROUP BY day
+      ORDER BY day DESC`,
+    [email]
+  );
+  const fmt = (d) =>
+    `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-${String(d.getUTCDate()).padStart(2, "0")}`;
+  const byDay = new Map();
+  for (const r of rows) {
+    const ds = r.day instanceof Date ? fmt(r.day) : String(r.day).slice(0, 10);
+    byDay.set(ds, Number(r.correct_count));
+  }
+  const nowJst = new Date(Date.now() + 9 * 3600 * 1000);
+  const today = fmt(nowJst);
+  const todayCount = byDay.get(today) || 0;
+  const prevDay = (s) => {
+    const [y, m, d] = s.split("-").map(Number);
+    const dt = new Date(Date.UTC(y, m - 1, d));
+    dt.setUTCDate(dt.getUTCDate() - 1);
+    return fmt(dt);
+  };
+  let walk = todayCount >= STREAK_DAILY_MIN ? today : prevDay(today);
+  let streak = 0;
+  let credit = 0;
+  for (let i = 0; i < 90; i++) {
+    const c = byDay.get(walk) || 0;
+    if (c >= STREAK_DAILY_MIN) {
+      streak++;
+      credit = c >= STREAK_DOUBLE_MIN ? 1 : 0;
+    } else if (credit > 0) {
+      credit -= 1;
+      streak++;
+    } else {
+      break;
+    }
+    walk = prevDay(walk);
+  }
+  return {
+    streak,
+    today_correct: todayCount,
+    today_active: todayCount >= STREAK_DAILY_MIN,
+    daily_min: STREAK_DAILY_MIN,
+    double_min: STREAK_DOUBLE_MIN,
+  };
+}
+
 async function buildKotonohaProgress(p, email) {
   const { rows: byGenre } = await p.query(
     `WITH per_q AS (
@@ -1872,7 +1929,10 @@ app.get("/api/kotonoha/me", async (req, res) => {
   if (!p) return res.status(503).json({ error: "DB not configured" });
   try {
     const user = await ensureKotonohaUser(p, req.user.email);
-    const groups = await buildKotonohaProgress(p, req.user.email);
+    const [groups, streak] = await Promise.all([
+      buildKotonohaProgress(p, req.user.email),
+      computeKotonohaStreak(p, req.user.email),
+    ]);
     const { rows: recentWords } = await p.query(
       `SELECT DISTINCT ON (q.id) q.answer, q.genre, q.group_id, q.category, pr.answered_at
          FROM kotonoha_progress pr
@@ -1883,6 +1943,7 @@ app.get("/api/kotonoha/me", async (req, res) => {
     );
     res.json({
       user,
+      streak,
       groups,
       recentWords: recentWords.sort((a, b) => new Date(b.answered_at) - new Date(a.answered_at)).slice(0, 10),
     });
@@ -1906,21 +1967,25 @@ app.get("/api/kotonoha/peers", async (req, res) => {
     );
     const result = [];
     for (const u of users) {
-      const groups = await buildKotonohaProgress(p, u.user_email);
-      const { rows: recentWords } = await p.query(
-        `SELECT DISTINCT ON (q.id) q.answer, q.genre, q.group_id, pr.answered_at
-           FROM kotonoha_progress pr
-           JOIN kotonoha_questions q ON q.id = pr.question_id
-          WHERE pr.user_email = $1 AND pr.is_correct = true
-          ORDER BY q.id, pr.answered_at DESC`,
-        [u.user_email]
-      );
+      const [groups, streak, recentWords] = await Promise.all([
+        buildKotonohaProgress(p, u.user_email),
+        computeKotonohaStreak(p, u.user_email),
+        p.query(
+          `SELECT DISTINCT ON (q.id) q.answer, q.genre, q.group_id, pr.answered_at
+             FROM kotonoha_progress pr
+             JOIN kotonoha_questions q ON q.id = pr.question_id
+            WHERE pr.user_email = $1 AND pr.is_correct = true
+            ORDER BY q.id, pr.answered_at DESC`,
+          [u.user_email]
+        ).then((r) => r.rows),
+      ]);
       result.push({
         display_name: u.display_name,
         level: u.level,
         total_correct: u.total_correct,
         total_answers: u.total_answers,
         last_session_at: u.last_session_at,
+        streak,
         groups,
         recentWords: recentWords.sort((a, b) => new Date(b.answered_at) - new Date(a.answered_at)).slice(0, 5),
       });
