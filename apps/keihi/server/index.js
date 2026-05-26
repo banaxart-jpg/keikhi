@@ -1324,6 +1324,407 @@ app.post("/api/internal/kaigi/tick", async (req, res) => {
 
 
 // ─────────────────────────────
+// kotonoha: 「Claude Code に指示するための語彙」を一問一答で学ぶアプリ
+// ─────────────────────────────
+
+// ユーザー初期化 / 取得
+async function ensureKotonohaUser(p, email) {
+  const display = String(email).split("@")[0] || "user";
+  const { rows } = await p.query(
+    `INSERT INTO kotonoha_users (user_email, display_name)
+     VALUES ($1, $2)
+     ON CONFLICT (user_email) DO UPDATE SET updated_at=now()
+     RETURNING *`,
+    [email, display]
+  );
+  return rows[0];
+}
+
+// AI で新しい問題を生成 (バックグラウンド呼出し or 明示呼出し)
+// レベル ±0〜1 の範囲で、既出答えと重複しない問題を作って DB に保存。
+async function generateKotonohaQuestion(p, { level, category, excludeAnswers = [] }) {
+  if (!genAI) return null;
+  const cats = ["ui", "db", "api", "ai", "infra", "concept", "project", "prompt"];
+  const cat = category || cats[Math.floor(Math.random() * cats.length)];
+  const type = Math.random() < 0.6 ? "choice" : "free";
+  const catGuide = {
+    ui: "画面UI部品 (モーダル/トースト/FAB/アコーディオン等)",
+    db: "データベース (RDB/NoSQL/インデックス/JOIN等)",
+    api: "Web API (HTTPメソッド/ステータスコード/認証等)",
+    ai: "AI・LLM (トークン/プロンプト/RAG/マルチモーダル等)",
+    infra: "GCPインフラ (Cloud Run/Hosting/Secret Manager等)",
+    concept: "プログラミング概念 (async/await/キャッシュ/localStorage等)",
+    project: "このkeihiプロジェクト固有 (Firebase Auth/Cloud Build/CLAUDE.md等)",
+    prompt: "AIへの指示の書き方 (プロンプト/CoT/役割指定等)",
+  }[cat];
+  const prompt = `「Claude Codeに指示するための語彙」を学ぶアプリの問題を1問だけJSONで作って。
+
+カテゴリ: ${cat} (${catGuide})
+難易度: ${level} / 10 (1=超基本、3=入門卒業、5=中級、7=上級、10=エキスパート)
+形式: ${type === "choice" ? "4択" : "自由記述（答えは1単語）"}
+
+ルール:
+- 達成感が出る難易度感に。難しすぎないこと
+- 解説は2-3文、具体例つき
+- claude_example は実際の指示文を「」で囲む
+- 既出の答えと重複しないこと: ${excludeAnswers.slice(0, 40).join(", ")}
+
+JSON以外何も出力しないこと:
+${type === "choice"
+  ? '{"question":"...","options":["A","B","C","D"],"answer":"A","explanation":"...","claude_example":"「...」"}'
+  : '{"question":"...","answer":"答え","keywords":["別表記1","別表記2"],"explanation":"...","claude_example":"「...」"}'}`;
+
+  try {
+    const { result } = await callGeminiWithFallback(prompt, {
+      primaryModel: "gemini-2.5-flash",
+      maxOutputTokens: 1500,
+    });
+    const text = (result.response.text() || "").trim();
+    const m = text.match(/\{[\s\S]*\}/);
+    if (!m) return null;
+    const j = JSON.parse(m[0]);
+    if (!j.question || !j.answer || !j.explanation) return null;
+    const { rows } = await p.query(
+      `INSERT INTO kotonoha_questions
+         (category, difficulty, type, question, options, answer, keywords, explanation, claude_example, source)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'generated') RETURNING *`,
+      [
+        cat,
+        level,
+        type,
+        j.question,
+        type === "choice" ? JSON.stringify(j.options || []) : null,
+        j.answer,
+        JSON.stringify(j.keywords || []),
+        j.explanation,
+        j.claude_example || "",
+      ]
+    );
+    return rows[0];
+  } catch (e) {
+    console.warn("[kotonoha] generate failed:", e.message);
+    return null;
+  }
+}
+
+// セッション開始: 10 問選定して返す（answer は隠す）
+// 方針: ユーザーのレベルに「近い」問題を優先 → 達成感重視。
+// プールが薄ければバックグラウンドで AI 生成 (待たない)。
+app.post("/api/kotonoha/sessions/start", async (req, res) => {
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  try {
+    const user = await ensureKotonohaUser(p, req.user.email);
+    const level = user.level;
+
+    // 1) リトライ候補: 過去30日でミスして、それ以降正解してない問題 (最大3問)
+    const { rows: retryRows } = await p.query(
+      `SELECT q.* FROM kotonoha_questions q
+        WHERE q.id IN (
+          SELECT question_id FROM kotonoha_progress
+           WHERE user_email = $1
+           GROUP BY question_id
+          HAVING bool_and(NOT is_correct) AND max(answered_at) > now() - interval '30 days'
+        )
+        ORDER BY random() LIMIT 3`,
+      [req.user.email]
+    );
+
+    // 2) 新規: レベルに「近い」問題を優先 (距離 0 → 1 → 2 の順で並べてランダム)。
+    //    結果として「ちょうどいい」 + 「ちょっと挑戦」が混ざる。
+    const needNew = 10 - retryRows.length;
+    const { rows: newRows } = await p.query(
+      `SELECT *, ABS(difficulty - $1) AS dd
+         FROM kotonoha_questions
+        WHERE id NOT IN (SELECT question_id FROM kotonoha_progress WHERE user_email = $2)
+          AND difficulty BETWEEN $3 AND $4
+        ORDER BY dd ASC, random()
+        LIMIT $5`,
+      [level, req.user.email, Math.max(1, level - 1), Math.min(10, level + 2), needNew]
+    );
+
+    let questions = [...retryRows, ...newRows];
+
+    // 不足したら全範囲から補充 (シード切れ等)
+    if (questions.length < 10) {
+      const need = 10 - questions.length;
+      const usedIds = questions.map((q) => q.id);
+      const { rows: fillRows } = await p.query(
+        `SELECT *, ABS(difficulty - $3) AS dd
+           FROM kotonoha_questions
+          WHERE id <> ALL($1::bigint[])
+          ORDER BY dd ASC, random() LIMIT $2`,
+        [usedIds.length ? usedIds : [0], need, level]
+      );
+      questions = questions.concat(fillRows);
+    }
+
+    // 3) バックグラウンド AI 生成: このレベル帯の未解答プールが薄ければ補充。
+    //    レスポンスは待たない (fire-and-forget)。
+    (async () => {
+      try {
+        const { rows: poolRows } = await p.query(
+          `SELECT count(*)::int AS n FROM kotonoha_questions
+            WHERE difficulty BETWEEN $1 AND $2
+              AND id NOT IN (SELECT question_id FROM kotonoha_progress WHERE user_email = $3)`,
+          [Math.max(1, level - 1), Math.min(10, level + 1), req.user.email]
+        );
+        const remain = poolRows[0]?.n || 0;
+        if (remain >= 12) return; // 十分残ってる
+        // 既出答え一覧 (重複防止)
+        const { rows: ansRows } = await p.query(
+          `SELECT answer FROM kotonoha_questions ORDER BY id DESC LIMIT 200`
+        );
+        const excludeAnswers = ansRows.map((r) => r.answer);
+        // 2問だけ生成（重課金防止）
+        for (let i = 0; i < 2; i++) {
+          await generateKotonohaQuestion(p, { level, excludeAnswers });
+        }
+      } catch (e) {
+        console.warn("[kotonoha] bg generate skipped:", e.message);
+      }
+    })();
+
+    // クライアントに送る時は answer / keywords / explanation を隠す
+    const safe = questions.map((q) => ({
+      id: q.id,
+      category: q.category,
+      difficulty: q.difficulty,
+      type: q.type,
+      question: q.question,
+      options: q.options,
+      image_url: q.image_url,
+    }));
+    res.json({ level, questions: safe });
+  } catch (err) {
+    console.error("kotonoha start", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 解答: 判定して結果と解説を返す
+app.post("/api/kotonoha/answer", async (req, res) => {
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  const { question_id, user_answer } = req.body || {};
+  if (!question_id) return res.status(400).json({ error: "question_id required" });
+  try {
+    const { rows: qRows } = await p.query(`SELECT * FROM kotonoha_questions WHERE id=$1`, [question_id]);
+    if (!qRows.length) return res.status(404).json({ error: "question not found" });
+    const q = qRows[0];
+    const ua = String(user_answer || "").trim();
+
+    let isCorrect = false;
+    let aiReason = null;
+
+    if (q.type === "choice") {
+      isCorrect = ua === q.answer;
+    } else {
+      // free: まず厳密一致 / キーワード照合 / 最終的に AI 判定
+      const norm = (s) => String(s || "").trim().toLowerCase().replace(/\s+/g, "");
+      if (norm(ua) === norm(q.answer)) {
+        isCorrect = true;
+      } else if (Array.isArray(q.keywords) && q.keywords.some((k) => norm(ua).includes(norm(k)) || norm(k).includes(norm(ua)))) {
+        isCorrect = true;
+      } else if (genAI && ua) {
+        // AI 判定 (Gemini Flash)
+        try {
+          const judgePrompt = `次のユーザー回答が、正解と意味的に同じか判定してください。
+ユーザーが日本語かカタカナか英語かに関わらず、概念として一致してれば正解。
+全く違うものを答えたら不正解。
+
+問題: ${q.question}
+正解: ${q.answer}
+正解として認める同義語: ${JSON.stringify(q.keywords || [])}
+ユーザー回答: ${ua}
+
+JSON でだけ返す (前置きや説明禁止):
+{"correct": true|false, "reason": "1文の理由"}`;
+          const { result } = await callGeminiWithFallback(judgePrompt, {
+            primaryModel: "gemini-2.5-flash",
+            maxOutputTokens: 500,
+          });
+          const text = (result.response.text() || "").trim();
+          const m = text.match(/\{[\s\S]*\}/);
+          if (m) {
+            const j = JSON.parse(m[0]);
+            isCorrect = !!j.correct;
+            aiReason = j.reason || null;
+          }
+        } catch (e) {
+          console.warn("[kotonoha] AI 判定失敗、不正解扱い:", e.message);
+        }
+      }
+    }
+
+    // 過去の attempts 数
+    const { rows: attemptRows } = await p.query(
+      `SELECT count(*)::int AS n FROM kotonoha_progress WHERE user_email=$1 AND question_id=$2`,
+      [req.user.email, question_id]
+    );
+    const attempts = (attemptRows[0]?.n || 0) + 1;
+
+    await p.query(
+      `INSERT INTO kotonoha_progress (user_email, question_id, is_correct, user_answer, attempts)
+       VALUES ($1, $2, $3, $4, $5)`,
+      [req.user.email, question_id, isCorrect, ua, attempts]
+    );
+
+    await p.query(
+      `UPDATE kotonoha_users
+          SET total_correct = total_correct + $1, total_answers = total_answers + 1, updated_at=now()
+        WHERE user_email = $2`,
+      [isCorrect ? 1 : 0, req.user.email]
+    );
+
+    res.json({
+      is_correct: isCorrect,
+      answer: q.answer,
+      explanation: q.explanation,
+      claude_example: q.claude_example,
+      ai_reason: aiReason,
+    });
+  } catch (err) {
+    console.error("kotonoha answer", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// セッション終了: 直近10件の正解率でレベル調整
+app.post("/api/kotonoha/sessions/end", async (req, res) => {
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  try {
+    const { rows: recent } = await p.query(
+      `SELECT is_correct FROM kotonoha_progress
+        WHERE user_email = $1 ORDER BY answered_at DESC LIMIT 10`,
+      [req.user.email]
+    );
+    if (!recent.length) return res.json({ ok: true, levelChanged: false });
+    const correctCount = recent.filter((r) => r.is_correct).length;
+    const rate = correctCount / recent.length;
+    const { rows: uRows } = await p.query(`SELECT level FROM kotonoha_users WHERE user_email=$1`, [req.user.email]);
+    const oldLevel = uRows[0]?.level || 1;
+    let newLevel = oldLevel;
+    // 達成感重視: 70%超でレベルアップ、40%未満で1段下げ。
+    // 「ちょうど飽きない」ゾーンを広く取る。
+    if (rate >= 0.7 && oldLevel < 10) newLevel = oldLevel + 1;
+    else if (rate < 0.4 && oldLevel > 1) newLevel = oldLevel - 1;
+    if (newLevel !== oldLevel) {
+      await p.query(`UPDATE kotonoha_users SET level=$1, last_session_at=now(), updated_at=now() WHERE user_email=$2`, [newLevel, req.user.email]);
+    } else {
+      await p.query(`UPDATE kotonoha_users SET last_session_at=now() WHERE user_email=$1`, [req.user.email]);
+    }
+    res.json({ ok: true, oldLevel, newLevel, levelChanged: newLevel !== oldLevel, rate });
+  } catch (err) {
+    console.error("kotonoha end", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 自分のステータス: カテゴリ別・最近覚えた言葉
+app.get("/api/kotonoha/me", async (req, res) => {
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  try {
+    const user = await ensureKotonohaUser(p, req.user.email);
+    const { rows: byCat } = await p.query(
+      `SELECT q.category,
+              count(DISTINCT q.id) FILTER (WHERE pr.is_correct) AS correct_qs,
+              count(DISTINCT q.id) AS attempted_qs,
+              (SELECT count(*) FROM kotonoha_questions WHERE category = q.category) AS total_qs
+         FROM kotonoha_progress pr
+         JOIN kotonoha_questions q ON q.id = pr.question_id
+        WHERE pr.user_email = $1
+        GROUP BY q.category`,
+      [req.user.email]
+    );
+    const { rows: recentWords } = await p.query(
+      `SELECT DISTINCT ON (q.id) q.answer, q.category, pr.answered_at
+         FROM kotonoha_progress pr
+         JOIN kotonoha_questions q ON q.id = pr.question_id
+        WHERE pr.user_email = $1 AND pr.is_correct = true
+        ORDER BY q.id, pr.answered_at DESC`,
+      [req.user.email]
+    );
+    res.json({
+      user,
+      categories: byCat,
+      recentWords: recentWords.sort((a, b) => new Date(b.answered_at) - new Date(a.answered_at)).slice(0, 10),
+    });
+  } catch (err) {
+    console.error("kotonoha me", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 他メンバーのステータス (並列バー用)
+app.get("/api/kotonoha/peers", async (req, res) => {
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  try {
+    const { rows: users } = await p.query(
+      `SELECT user_email, display_name, level, total_correct, total_answers, last_session_at
+         FROM kotonoha_users
+        WHERE visible_to_peers = true AND user_email <> $1
+        ORDER BY last_session_at DESC NULLS LAST`,
+      [req.user.email]
+    );
+    const result = [];
+    for (const u of users) {
+      const { rows: byCat } = await p.query(
+        `SELECT q.category,
+                count(DISTINCT q.id) FILTER (WHERE pr.is_correct) AS correct_qs,
+                count(DISTINCT q.id) AS attempted_qs,
+                (SELECT count(*) FROM kotonoha_questions WHERE category = q.category) AS total_qs
+           FROM kotonoha_progress pr
+           JOIN kotonoha_questions q ON q.id = pr.question_id
+          WHERE pr.user_email = $1
+          GROUP BY q.category`,
+        [u.user_email]
+      );
+      const { rows: recentWords } = await p.query(
+        `SELECT DISTINCT ON (q.id) q.answer, q.category, pr.answered_at
+           FROM kotonoha_progress pr
+           JOIN kotonoha_questions q ON q.id = pr.question_id
+          WHERE pr.user_email = $1 AND pr.is_correct = true
+          ORDER BY q.id, pr.answered_at DESC`,
+        [u.user_email]
+      );
+      result.push({
+        display_name: u.display_name,
+        level: u.level,
+        total_correct: u.total_correct,
+        total_answers: u.total_answers,
+        last_session_at: u.last_session_at,
+        categories: byCat,
+        recentWords: recentWords.sort((a, b) => new Date(b.answered_at) - new Date(a.answered_at)).slice(0, 5),
+      });
+    }
+    res.json(result);
+  } catch (err) {
+    console.error("kotonoha peers", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 自分の可視性切替
+app.put("/api/kotonoha/me/visibility", async (req, res) => {
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  const visible = !!req.body?.visible;
+  try {
+    await p.query(
+      `UPDATE kotonoha_users SET visible_to_peers = $1, updated_at=now() WHERE user_email = $2`,
+      [visible, req.user.email]
+    );
+    res.json({ ok: true, visible });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─────────────────────────────
 // Records
 // ─────────────────────────────
 app.get("/api/records", async (req, res) => {

@@ -1,0 +1,567 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>kotonoha</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@24,400,0,0">
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+:root {
+  --bg: #e4e6ee; --sl: rgba(255,255,255,1); --sd: rgba(168,172,192,0.75);
+  --text: #42455e; --text2: rgba(66,69,94,0.52); --text3: rgba(66,69,94,0.28);
+  --accent: #6d28d9; /* 紫: 学習・知識 */
+  --accent-soft: color-mix(in srgb, var(--accent) 18%, var(--bg) 82%);
+  --correct: #2a8c3a; --incorrect: #b04040;
+  --cat-ui: #ec4899; --cat-db: #0891b2; --cat-api: #f59e0b;
+  --cat-ai: #8b5cf6; --cat-infra: #10b981; --cat-concept: #6366f1;
+  --cat-project: #f43f5e; --cat-prompt: #14b8a6;
+}
+body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; padding-bottom: 120px; }
+.icon { font-family: 'Material Symbols Outlined'; font-weight: normal; font-size: 1.1em; display: inline-block; line-height: 1; vertical-align: -0.18em; font-variation-settings: 'FILL' 0, 'wght' 500, 'GRAD' 0, 'opsz' 20; }
+
+.bar { display: flex; justify-content: space-between; align-items: center; padding: 40px 20px 0; }
+.hint { font-size: 11px; letter-spacing: 0.22em; color: var(--text3); font-weight: 700; text-transform: uppercase; }
+.pill { padding: 8px 16px; border-radius: 24px; font-size: 12px; font-weight: 700; border: none; color: var(--text2); background: var(--bg); box-shadow: 4px 4px 10px var(--sd), -4px -4px 10px var(--sl); cursor: pointer; font-family: inherit; }
+.pill:active { box-shadow: inset 3px 3px 8px var(--sd), inset -3px -3px 8px var(--sl); transform: scale(0.97); }
+
+.wrap { padding: 24px 18px 40px; max-width: 600px; margin: 0 auto; }
+.title { font-size: 26px; font-weight: 800; }
+.subtitle { font-size: 12px; color: var(--text2); font-weight: 600; margin-top: 2px; margin-bottom: 22px; }
+
+.card { background: var(--bg); border-radius: 22px; padding: 18px; margin-bottom: 16px; box-shadow: 8px 8px 18px var(--sd), -6px -6px 16px var(--sl); }
+.label { font-size: 11px; font-weight: 700; letter-spacing: 0.16em; color: var(--text3); text-transform: uppercase; margin-bottom: 12px; }
+
+/* ホーム画面 */
+.level-hero { text-align: center; padding: 6px 0; }
+.level-num { font-size: 56px; font-weight: 900; color: var(--accent); line-height: 1; letter-spacing: -0.03em; }
+.level-lbl { font-size: 11px; color: var(--text2); font-weight: 700; letter-spacing: 0.2em; text-transform: uppercase; margin-top: 4px; }
+
+.cats { display: flex; flex-direction: column; gap: 8px; }
+.cat-row { display: grid; grid-template-columns: 80px 1fr 50px; align-items: center; gap: 10px; font-size: 12px; }
+.cat-name { font-weight: 700; color: var(--text); font-size: 11px; }
+.cat-bar { height: 8px; background: rgba(154,160,184,0.2); border-radius: 4px; overflow: hidden; box-shadow: inset 2px 2px 4px var(--sd); }
+.cat-bar-fill { height: 100%; border-radius: 4px; transition: width 0.4s; }
+.cat-count { text-align: right; color: var(--text2); font-weight: 700; font-variant-numeric: tabular-nums; }
+
+.start-btn { width: 100%; padding: 16px; border-radius: 16px; border: none; font-family: inherit; font-size: 15px; font-weight: 800; cursor: pointer; color: white; background: linear-gradient(135deg, #8b5cf6, #6d28d9); box-shadow: 6px 6px 14px var(--sd); }
+.start-btn:active { transform: scale(0.98); box-shadow: inset 3px 3px 8px rgba(0,0,0,0.15); }
+.start-btn:disabled { opacity: 0.5; }
+
+.recent-words { display: flex; flex-wrap: wrap; gap: 6px; }
+.word-chip { background: var(--accent-soft); color: var(--accent); padding: 4px 10px; border-radius: 12px; font-size: 11px; font-weight: 700; }
+
+.peer-card { background: var(--bg); border-radius: 18px; padding: 14px; margin-bottom: 10px; box-shadow: 4px 4px 10px var(--sd), -3px -3px 8px var(--sl); }
+.peer-header { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 10px; }
+.peer-name { font-size: 14px; font-weight: 700; }
+.peer-level { font-size: 11px; color: var(--text2); font-weight: 600; }
+.peer-level strong { color: var(--accent); font-size: 14px; }
+
+/* セッション画面 */
+.session-progress { display: flex; align-items: center; gap: 10px; margin-bottom: 18px; }
+.session-progress .text { font-size: 11px; color: var(--text2); font-weight: 700; min-width: 50px; }
+.session-progress .bar-wrap { flex: 1; height: 6px; background: rgba(154,160,184,0.2); border-radius: 3px; overflow: hidden; }
+.session-progress .bar-fill { height: 100%; background: linear-gradient(90deg, #8b5cf6, #6d28d9); border-radius: 3px; transition: width 0.4s; }
+
+.q-category { display: inline-block; font-size: 10px; font-weight: 800; padding: 3px 8px; border-radius: 8px; color: white; letter-spacing: 0.06em; margin-bottom: 12px; }
+.q-text { font-size: 16px; font-weight: 700; line-height: 1.6; margin-bottom: 16px; white-space: pre-wrap; }
+.q-image { width: 100%; max-height: 280px; object-fit: contain; border-radius: 12px; margin-bottom: 14px; background: rgba(154,160,184,0.1); }
+
+.choice-list { display: flex; flex-direction: column; gap: 10px; }
+.choice-btn { width: 100%; padding: 14px 16px; border-radius: 14px; border: none; font-family: inherit; font-size: 14px; font-weight: 600; text-align: left; cursor: pointer; color: var(--text); background: var(--bg); box-shadow: inset 3px 3px 8px var(--sd), inset -3px -3px 8px var(--sl); line-height: 1.5; }
+.choice-btn:active:not(:disabled) { transform: scale(0.98); }
+.choice-btn.correct { background: rgba(42,140,58,0.15); color: var(--correct); font-weight: 800; box-shadow: inset 2px 2px 6px rgba(42,140,58,0.2); }
+.choice-btn.incorrect { background: rgba(176,64,64,0.12); color: var(--incorrect); box-shadow: inset 2px 2px 6px rgba(176,64,64,0.2); }
+.choice-btn:disabled { cursor: default; }
+
+.free-input { width: 100%; padding: 14px; border-radius: 14px; border: none; background: var(--bg); box-shadow: inset 3px 3px 8px var(--sd), inset -3px -3px 8px var(--sl); font-family: inherit; font-size: 15px; color: var(--text); }
+.free-input:focus { outline: none; box-shadow: inset 3px 3px 8px var(--sd), inset -3px -3px 8px var(--sl), 0 0 0 2px rgba(109,40,217,0.3); }
+.free-submit { width: 100%; margin-top: 10px; padding: 12px; border-radius: 12px; border: none; font-family: inherit; font-size: 14px; font-weight: 700; cursor: pointer; color: white; background: linear-gradient(135deg, #8b5cf6, #6d28d9); }
+.free-submit:disabled { opacity: 0.5; background: #aaa; }
+
+.result-card { padding: 14px; border-radius: 14px; margin-top: 14px; line-height: 1.7; }
+.result-card.correct { background: rgba(42,140,58,0.1); border-left: 4px solid var(--correct); }
+.result-card.incorrect { background: rgba(176,64,64,0.08); border-left: 4px solid var(--incorrect); }
+.result-status { font-size: 13px; font-weight: 800; margin-bottom: 6px; }
+.result-status.correct { color: var(--correct); }
+.result-status.incorrect { color: var(--incorrect); }
+.result-answer { font-size: 13px; margin-bottom: 8px; }
+.result-answer strong { color: var(--accent); }
+.result-explanation { font-size: 13px; color: var(--text); line-height: 1.7; }
+.result-claude { margin-top: 10px; padding: 10px 12px; background: rgba(109,40,217,0.06); border-radius: 10px; font-size: 12px; line-height: 1.6; color: var(--text2); }
+.result-claude .lbl { font-size: 10px; font-weight: 800; color: var(--accent); margin-bottom: 4px; letter-spacing: 0.1em; text-transform: uppercase; }
+
+.next-btn { width: 100%; margin-top: 14px; padding: 14px; border-radius: 14px; border: none; font-family: inherit; font-size: 14px; font-weight: 800; cursor: pointer; color: white; background: linear-gradient(135deg, #6b7eff, #4961ff); }
+.next-btn:active { transform: scale(0.98); }
+
+/* 結果画面 */
+.summary-hero { text-align: center; padding: 20px 0; }
+.summary-score { font-size: 56px; font-weight: 900; color: var(--accent); line-height: 1; }
+.summary-score-label { font-size: 12px; color: var(--text2); font-weight: 700; margin-top: 6px; }
+.summary-level-change { font-size: 14px; margin-top: 14px; font-weight: 700; }
+.summary-level-change.up { color: var(--correct); }
+.summary-level-change.down { color: var(--incorrect); }
+.summary-level-change.same { color: var(--text2); }
+
+.empty { text-align: center; color: var(--text3); font-size: 12px; padding: 24px 0; font-weight: 600; }
+.err { color: var(--incorrect); font-size: 11px; margin-top: 10px; font-weight: 600; padding: 10px 12px; border-radius: 12px; background: rgba(176, 64, 64, 0.08); white-space: pre-wrap; word-break: break-all; line-height: 1.5; font-family: ui-monospace, Menlo, monospace; }
+.err:empty { display: none; padding: 0; }
+
+.view { display: none; }
+.view.active { display: block; }
+</style>
+</head>
+<body>
+
+<div class="bar">
+  <span class="hint">Kotonoha</span>
+  <button class="pill" onclick="location.href='/'">← 戻る</button>
+</div>
+
+<div class="wrap">
+  <div class="title">kotonoha</div>
+  <div class="subtitle">Claude Code に指示するための言葉と概念を身につける</div>
+
+  <!-- ホーム画面 -->
+  <div class="view active" id="homeView">
+    <div class="card">
+      <div class="label">あなたのレベル</div>
+      <div class="level-hero">
+        <div class="level-num" id="myLevel">-</div>
+        <div class="level-lbl" id="myLevelStats"></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="label">カテゴリ別の達成度</div>
+      <div class="cats" id="myCats"><div class="empty">読み込み中…</div></div>
+    </div>
+
+    <div class="card">
+      <div class="label">最近覚えた言葉</div>
+      <div class="recent-words" id="myWords"><div class="empty">まだなし</div></div>
+    </div>
+
+    <button class="start-btn" id="startBtn" onclick="startSession()">
+      <span class="icon" style="vertical-align:-0.18em;">play_circle</span>
+      10問にチャレンジ
+    </button>
+
+    <div class="card" style="margin-top: 16px;">
+      <div class="label">みんなの進捗</div>
+      <div id="peerList"><div class="empty">読み込み中…</div></div>
+    </div>
+
+    <div class="err" id="homeErr"></div>
+  </div>
+
+  <!-- セッション画面 -->
+  <div class="view" id="sessionView">
+    <div class="session-progress">
+      <div class="text" id="sessionProgressText">1 / 10</div>
+      <div class="bar-wrap"><div class="bar-fill" id="sessionProgressFill" style="width:10%;"></div></div>
+    </div>
+
+    <div class="card">
+      <span class="q-category" id="qCategory"></span>
+      <div class="q-text" id="qText"></div>
+      <img id="qImage" class="q-image" style="display:none;" alt="">
+
+      <!-- 選択肢 -->
+      <div class="choice-list" id="choiceList" style="display:none;"></div>
+
+      <!-- 自由記述 -->
+      <div id="freeArea" style="display:none;">
+        <input type="text" class="free-input" id="freeInput" placeholder="あなたの答え" autocomplete="off">
+        <button class="free-submit" id="freeSubmit" onclick="submitFree()">送信</button>
+      </div>
+
+      <!-- 結果 -->
+      <div id="resultArea" style="display:none;"></div>
+    </div>
+
+    <div class="err" id="sessionErr"></div>
+  </div>
+
+  <!-- 結果画面 -->
+  <div class="view" id="summaryView">
+    <div class="card">
+      <div class="summary-hero">
+        <div class="summary-score" id="summaryScore">-</div>
+        <div class="summary-score-label">10 問中の正解数</div>
+        <div class="summary-level-change" id="summaryLevelChange"></div>
+      </div>
+    </div>
+
+    <button class="start-btn" onclick="startSession()">
+      <span class="icon">refresh</span>
+      もう 1 セット
+    </button>
+    <button class="start-btn" style="margin-top:10px; background: var(--bg); color: var(--text); box-shadow: 6px 6px 14px var(--sd), -4px -4px 10px var(--sl);" onclick="showHome()">
+      ホームに戻る
+    </button>
+  </div>
+</div>
+
+<script src="/config.js"></script>
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js";
+import { getAuth, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
+
+const CAT_LABELS = {
+  ui: "UI部品", db: "DB", api: "API", ai: "AI/LLM",
+  infra: "インフラ", concept: "概念", project: "このプロジェクト",
+  prompt: "プロンプト",
+};
+const CAT_COLORS = {
+  ui: "var(--cat-ui)", db: "var(--cat-db)", api: "var(--cat-api)",
+  ai: "var(--cat-ai)", infra: "var(--cat-infra)", concept: "var(--cat-concept)",
+  project: "var(--cat-project)", prompt: "var(--cat-prompt)",
+};
+const ALL_CATS = ["ui", "db", "api", "ai", "infra", "concept", "project", "prompt"];
+
+const state = {
+  view: "home",
+  questions: [],
+  currentIdx: 0,
+  correctCount: 0,
+  busy: false,
+};
+
+const $ = (id) => document.getElementById(id);
+const escapeHtml = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({
+  "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+}[c]));
+
+// ───── 認証 + API ─────
+let authToken = null;
+let fbUser = null;
+async function api(method, path, body) {
+  if (!authToken && fbUser) authToken = await fbUser.getIdToken();
+  if (!authToken) throw new Error("ログインが切れました");
+  const res = await fetch(window.API_BASE + path, {
+    method,
+    headers: {
+      authorization: "Bearer " + authToken,
+      ...(body ? { "content-type": "application/json" } : {}),
+    },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  if (res.status === 204) return null;
+  const j = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(j.error || `HTTP ${res.status}`);
+  return j;
+}
+
+// ───── ホーム画面 ─────
+async function loadHome() {
+  $("homeErr").textContent = "";
+  try {
+    const [me, peers] = await Promise.all([
+      api("GET", "/api/kotonoha/me"),
+      api("GET", "/api/kotonoha/peers"),
+    ]);
+    renderMe(me);
+    renderPeers(peers);
+  } catch (e) {
+    $("homeErr").textContent = e.message;
+  }
+}
+
+function renderMe(me) {
+  $("myLevel").textContent = me.user.level;
+  $("myLevelStats").textContent =
+    `LEVEL  ・  正解 ${me.user.total_correct} / ${me.user.total_answers}`;
+
+  // カテゴリ別バー
+  const cats = $("myCats");
+  cats.innerHTML = "";
+  for (const cat of ALL_CATS) {
+    const row = me.categories.find((c) => c.category === cat) || { correct_qs: 0, total_qs: 0 };
+    const pct = row.total_qs > 0 ? Math.round((row.correct_qs / row.total_qs) * 100) : 0;
+    const div = document.createElement("div");
+    div.className = "cat-row";
+    div.innerHTML = `
+      <div class="cat-name">${CAT_LABELS[cat]}</div>
+      <div class="cat-bar"><div class="cat-bar-fill" style="width:${pct}%; background:${CAT_COLORS[cat]};"></div></div>
+      <div class="cat-count">${row.correct_qs}/${row.total_qs || "?"}</div>`;
+    cats.appendChild(div);
+  }
+
+  // 最近覚えた言葉
+  const words = $("myWords");
+  if (!me.recentWords.length) {
+    words.innerHTML = `<div class="empty">まだなし</div>`;
+  } else {
+    words.innerHTML = "";
+    for (const w of me.recentWords) {
+      const chip = document.createElement("span");
+      chip.className = "word-chip";
+      chip.textContent = w.answer;
+      chip.style.color = CAT_COLORS[w.category] || "var(--accent)";
+      chip.style.background = `color-mix(in srgb, ${CAT_COLORS[w.category] || "var(--accent)"} 14%, var(--bg) 86%)`;
+      words.appendChild(chip);
+    }
+  }
+}
+
+function renderPeers(peers) {
+  const list = $("peerList");
+  if (!peers.length) {
+    list.innerHTML = `<div class="empty">他のメンバーがまだいません</div>`;
+    return;
+  }
+  list.innerHTML = "";
+  for (const p of peers) {
+    const div = document.createElement("div");
+    div.className = "peer-card";
+    let catBars = "";
+    for (const cat of ALL_CATS) {
+      const row = p.categories.find((c) => c.category === cat) || { correct_qs: 0, total_qs: 0 };
+      const pct = row.total_qs > 0 ? Math.round((row.correct_qs / row.total_qs) * 100) : 0;
+      catBars += `<div class="cat-row">
+        <div class="cat-name">${CAT_LABELS[cat]}</div>
+        <div class="cat-bar"><div class="cat-bar-fill" style="width:${pct}%; background:${CAT_COLORS[cat]};"></div></div>
+        <div class="cat-count">${row.correct_qs}/${row.total_qs || "?"}</div>
+      </div>`;
+    }
+    div.innerHTML = `
+      <div class="peer-header">
+        <div class="peer-name">${escapeHtml(p.display_name)}</div>
+        <div class="peer-level">LV. <strong>${p.level}</strong> ・ ${p.total_correct}/${p.total_answers}</div>
+      </div>
+      <div class="cats">${catBars}</div>`;
+    list.appendChild(div);
+  }
+}
+
+// ───── セッション ─────
+async function startSession() {
+  if (state.busy) return;
+  state.busy = true;
+  $("startBtn").disabled = true;
+  $("homeErr").textContent = "";
+  try {
+    const { questions } = await api("POST", "/api/kotonoha/sessions/start");
+    if (!questions.length) throw new Error("問題がありません。シード DB の投入が必要かも。");
+    state.questions = questions;
+    state.currentIdx = 0;
+    state.correctCount = 0;
+    showSession();
+    renderCurrentQuestion();
+  } catch (e) {
+    $("homeErr").textContent = e.message;
+  } finally {
+    state.busy = false;
+    $("startBtn").disabled = false;
+  }
+}
+window.startSession = startSession;
+
+function renderCurrentQuestion() {
+  const q = state.questions[state.currentIdx];
+  if (!q) {
+    endSession();
+    return;
+  }
+  const total = state.questions.length;
+  const pct = ((state.currentIdx) / total) * 100;
+  $("sessionProgressText").textContent = `${state.currentIdx + 1} / ${total}`;
+  $("sessionProgressFill").style.width = `${pct + 100 / total}%`;
+
+  $("qCategory").textContent = CAT_LABELS[q.category] || q.category;
+  $("qCategory").style.background = CAT_COLORS[q.category] || "var(--accent)";
+  $("qText").textContent = q.question;
+  if (q.image_url) {
+    $("qImage").src = q.image_url;
+    $("qImage").style.display = "";
+  } else {
+    $("qImage").style.display = "none";
+  }
+  $("resultArea").style.display = "none";
+  $("resultArea").innerHTML = "";
+
+  if (q.type === "choice") {
+    $("choiceList").style.display = "";
+    $("freeArea").style.display = "none";
+    const cl = $("choiceList");
+    cl.innerHTML = "";
+    for (const opt of (q.options || [])) {
+      const b = document.createElement("button");
+      b.className = "choice-btn";
+      b.textContent = opt;
+      b.onclick = () => submitChoice(opt, b);
+      cl.appendChild(b);
+    }
+  } else {
+    $("choiceList").style.display = "none";
+    $("freeArea").style.display = "";
+    $("freeInput").value = "";
+    $("freeInput").disabled = false;
+    $("freeSubmit").disabled = false;
+    setTimeout(() => $("freeInput").focus(), 50);
+  }
+}
+
+async function submitChoice(opt, btn) {
+  if (state.busy) return;
+  state.busy = true;
+  // ボタンを全部無効化
+  document.querySelectorAll(".choice-btn").forEach((b) => b.disabled = true);
+  try {
+    const q = state.questions[state.currentIdx];
+    const r = await api("POST", "/api/kotonoha/answer", { question_id: q.id, user_answer: opt });
+    // 正解 / 不正解のスタイル
+    document.querySelectorAll(".choice-btn").forEach((b) => {
+      if (b.textContent === r.answer) b.classList.add("correct");
+      else if (b === btn && !r.is_correct) b.classList.add("incorrect");
+    });
+    if (r.is_correct) state.correctCount++;
+    renderResult(r);
+  } catch (e) {
+    $("sessionErr").textContent = e.message;
+    document.querySelectorAll(".choice-btn").forEach((b) => b.disabled = false);
+  } finally {
+    state.busy = false;
+  }
+}
+
+async function submitFree() {
+  if (state.busy) return;
+  const ua = $("freeInput").value.trim();
+  if (!ua) return;
+  state.busy = true;
+  $("freeInput").disabled = true;
+  $("freeSubmit").disabled = true;
+  $("freeSubmit").textContent = "判定中…";
+  try {
+    const q = state.questions[state.currentIdx];
+    const r = await api("POST", "/api/kotonoha/answer", { question_id: q.id, user_answer: ua });
+    if (r.is_correct) state.correctCount++;
+    renderResult(r);
+  } catch (e) {
+    $("sessionErr").textContent = e.message;
+    $("freeInput").disabled = false;
+    $("freeSubmit").disabled = false;
+    $("freeSubmit").textContent = "送信";
+  } finally {
+    state.busy = false;
+  }
+}
+window.submitFree = submitFree;
+
+function renderResult(r) {
+  $("freeSubmit").textContent = "送信";
+  const ra = $("resultArea");
+  ra.style.display = "";
+  const cls = r.is_correct ? "correct" : "incorrect";
+  const statusText = r.is_correct ? "✓ 正解" : "× 不正解";
+  ra.innerHTML = `
+    <div class="result-card ${cls}">
+      <div class="result-status ${cls}">${statusText}</div>
+      ${!r.is_correct ? `<div class="result-answer">正解: <strong>${escapeHtml(r.answer)}</strong></div>` : ""}
+      <div class="result-explanation">${escapeHtml(r.explanation)}</div>
+      ${r.claude_example ? `
+      <div class="result-claude">
+        <div class="lbl">Claude Code への指示の例</div>
+        ${escapeHtml(r.claude_example)}
+      </div>` : ""}
+      ${r.ai_reason ? `<div style="font-size:10px;color:var(--text3);margin-top:8px;">AI 判定: ${escapeHtml(r.ai_reason)}</div>` : ""}
+    </div>
+    <button class="next-btn" onclick="nextQuestion()">
+      ${state.currentIdx < state.questions.length - 1 ? "次の問題へ →" : "結果を見る →"}
+    </button>`;
+  // 結果カードまでスクロール
+  setTimeout(() => ra.scrollIntoView({ behavior: "smooth", block: "center" }), 50);
+}
+
+function nextQuestion() {
+  state.currentIdx++;
+  if (state.currentIdx >= state.questions.length) {
+    endSession();
+  } else {
+    renderCurrentQuestion();
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+}
+window.nextQuestion = nextQuestion;
+
+async function endSession() {
+  try {
+    const r = await api("POST", "/api/kotonoha/sessions/end");
+    showSummary(r);
+  } catch (e) {
+    $("sessionErr").textContent = e.message;
+  }
+}
+
+function showSummary(r) {
+  state.view = "summary";
+  $("homeView").classList.remove("active");
+  $("sessionView").classList.remove("active");
+  $("summaryView").classList.add("active");
+
+  $("summaryScore").textContent = `${state.correctCount}`;
+  const lc = $("summaryLevelChange");
+  if (r.levelChanged && r.newLevel > r.oldLevel) {
+    lc.textContent = `🎓 レベルアップ ${r.oldLevel} → ${r.newLevel}`;
+    lc.className = "summary-level-change up";
+  } else if (r.levelChanged && r.newLevel < r.oldLevel) {
+    lc.textContent = `レベル ${r.oldLevel} → ${r.newLevel} (基礎を復習しよう)`;
+    lc.className = "summary-level-change down";
+  } else {
+    lc.textContent = `レベル ${r.newLevel} 継続`;
+    lc.className = "summary-level-change same";
+  }
+}
+
+// ───── view 切替 ─────
+function showHome() {
+  state.view = "home";
+  $("homeView").classList.add("active");
+  $("sessionView").classList.remove("active");
+  $("summaryView").classList.remove("active");
+  loadHome();
+  window.scrollTo({ top: 0 });
+}
+function showSession() {
+  state.view = "session";
+  $("homeView").classList.remove("active");
+  $("sessionView").classList.add("active");
+  $("summaryView").classList.remove("active");
+  window.scrollTo({ top: 0 });
+}
+window.showHome = showHome;
+
+// Enter で自由記述送信
+$("freeInput").addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.isComposing) {
+    e.preventDefault();
+    submitFree();
+  }
+});
+
+// ───── 認証フロー ─────
+(async () => {
+  try {
+    const cfg = await fetch("/__/firebase/init.json").then((r) => r.json());
+    cfg.authDomain = location.hostname;
+    const auth = getAuth(initializeApp(cfg));
+    onAuthStateChanged(auth, async (user) => {
+      if (!user) { location.href = "/?next=" + encodeURIComponent(location.pathname); return; }
+      fbUser = user;
+      authToken = await user.getIdToken();
+      setInterval(async () => { authToken = await user.getIdToken(true); }, 30 * 60 * 1000);
+      loadHome();
+    });
+  } catch (e) {
+    $("homeErr").textContent = "認証初期化エラー: " + e.message;
+  }
+})();
+</script>
+</body>
+</html>

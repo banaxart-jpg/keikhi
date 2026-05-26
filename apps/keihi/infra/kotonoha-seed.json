@@ -1,0 +1,359 @@
+[
+  {
+    "category": "ui",
+    "difficulty": 1,
+    "type": "choice",
+    "question": "画面全体に半透明の背景が出て、中央のカードで他の操作をブロックする UI 部品は？",
+    "options": ["トースト", "モーダル", "アコーディオン", "ツールチップ"],
+    "answer": "モーダル",
+    "explanation": "モーダルは「他の操作を一時的に止めて、これに集中させる」UI。確認ダイアログ、設定画面、ログインフォームによく使われる。半透明の暗い背景 + 中央のカードが典型。",
+    "claude_example": "「保存ボタンを押したら『本当に保存しますか？』の確認モーダルを出して、はい/いいえで進めるようにして」"
+  },
+  {
+    "category": "ui",
+    "difficulty": 1,
+    "type": "choice",
+    "question": "画面の上端や下端から数秒間スッと出てきて、自動で消える短い通知メッセージは？",
+    "options": ["モーダル", "アラート", "トースト", "バナー"],
+    "answer": "トースト",
+    "explanation": "トースト（toast）は「保存しました」「コピーしました」みたいな短いフィードバックを 2〜3 秒だけ表示してフェードアウトする UI。トースターから食パンがポップアップする様子から。",
+    "claude_example": "「コピー成功したら『コピーしました』のトーストを 2 秒間出して」"
+  },
+  {
+    "category": "ui",
+    "difficulty": 2,
+    "type": "free",
+    "question": "画面の右下や左下に常時表示される、丸い形のメインアクションボタンを、3 文字のアルファベット略語で何と言う？",
+    "answer": "FAB",
+    "keywords": ["FAB", "fab", "Floating Action Button", "floating action button"],
+    "explanation": "FAB = Floating Action Button。画面の最も重要な 1 つの操作を、スクロールしても常に押せる位置に固定するボタン。Gmail の「作成」ボタン、Twitter の「ツイート」ボタンが代表例。",
+    "claude_example": "「画面右下にカメラ撮影の FAB を置いて、スクロールしても見えるようにして」"
+  },
+  {
+    "category": "ui",
+    "difficulty": 3,
+    "type": "choice",
+    "question": "縦に積まれた項目をタップすると下に展開して中身が見える、たためる UI 部品は？",
+    "options": ["アコーディオン", "タブ", "ドロワー", "ステッパー"],
+    "answer": "アコーディオン",
+    "explanation": "アコーディオンは FAQ や設定画面で「項目をタップすると詳細が展開、もう一回タップで閉じる」UI。楽器のアコーディオンが伸び縮みする様子から。",
+    "claude_example": "「FAQ をアコーディオンで作って、質問タップしたら答えが下に展開するようにして」"
+  },
+  {
+    "category": "ui",
+    "difficulty": 4,
+    "type": "free",
+    "question": "画面の横（左 or 右）からスライドして出てくる、ナビゲーション用のメニュー領域を何と呼ぶ？カタカナで。",
+    "answer": "ドロワー",
+    "keywords": ["ドロワー", "drawer", "ハンバーガーメニュー", "サイドメニュー"],
+    "explanation": "ドロワー（drawer = 引き出し）はハンバーガーボタンを押すと横からスライドして出てくるメニュー。スマホアプリのナビゲーションでよく使われる。",
+    "claude_example": "「左上のハンバーガーボタンタップで、ドロワーが左からスライドして出るようにして」"
+  },
+
+  {
+    "category": "db",
+    "difficulty": 1,
+    "type": "choice",
+    "question": "Excel のように表（行と列）でデータを管理する DB の種類は？",
+    "options": ["NoSQL", "リレーショナルDB（RDB）", "グラフDB", "オブジェクトストア"],
+    "answer": "リレーショナルDB（RDB）",
+    "explanation": "リレーショナルDB（RDB）は行と列のテーブルでデータを管理する。Postgres・MySQL・SQLite などが代表。「テーブル同士の関係（リレーション）」を JOIN で繋げて検索できるのが強み。",
+    "claude_example": "「経費記録は RDB の records テーブルに保存して、Cloud SQL の Postgres を使って」"
+  },
+  {
+    "category": "db",
+    "difficulty": 2,
+    "type": "choice",
+    "question": "Firestore のように、決まった表形式じゃなく柔軟な構造（ドキュメント単位）でデータを保存する DB は？",
+    "options": ["リレーショナルDB", "NoSQL", "Excel", "CSV"],
+    "answer": "NoSQL",
+    "explanation": "NoSQL は「決まった表形式じゃない DB」の総称。ドキュメント型（Firestore, MongoDB）、KV型（Redis）、グラフ型などある。スキーマ変更が柔軟で、構造が決まってないデータ向き。スマホアプリの即時同期にもよく使われる。",
+    "claude_example": "「ユーザー設定はリアルタイム同期したいから Firestore（NoSQL）に保存して」"
+  },
+  {
+    "category": "db",
+    "difficulty": 3,
+    "type": "choice",
+    "question": "DB で検索を速くするために、特定の列に対して「索引」を作るのは？",
+    "options": ["インデックス", "トランザクション", "ジョイン", "マイグレーション"],
+    "answer": "インデックス",
+    "explanation": "インデックスは本の「索引」と同じで、特定の列の値から行を高速に見つけるための仕組み。WHERE や ORDER BY でよく使う列に貼る。貼りすぎると書き込みが遅くなるトレードオフあり。",
+    "claude_example": "「records テーブルに、日付で並べる検索が多いから date 列にインデックス貼って」"
+  },
+  {
+    "category": "db",
+    "difficulty": 4,
+    "type": "free",
+    "question": "DB に対して「複数の操作を全部成功するか、全部失敗するか」を保証する仕組みを何と呼ぶ？カタカナで。",
+    "answer": "トランザクション",
+    "keywords": ["トランザクション", "transaction", "TX", "tx"],
+    "explanation": "トランザクションは「2つ以上の操作をまとめて成功 or まとめて失敗にする」仕組み。例: 銀行送金で「A から引く」「B に足す」を別々に成功させると、片方失敗時にお金が消える。両方一緒に処理することで整合性保てる。",
+    "claude_example": "「在庫減らす + 注文作る、を 1 つのトランザクションで処理して、失敗したら両方ロールバックして」"
+  },
+  {
+    "category": "db",
+    "difficulty": 5,
+    "type": "free",
+    "question": "テーブル A の行とテーブル B の行を「共通の列の値」で結合して 1 つの結果に並べる SQL の演算は？英語 4 文字で。",
+    "answer": "JOIN",
+    "keywords": ["JOIN", "join", "ジョイン", "結合"],
+    "explanation": "JOIN は「テーブル A の行とテーブル B の行を共通キーで横に繋ぐ」操作。例: 注文テーブルと顧客テーブルを customer_id で JOIN すれば「誰がいつ何を注文したか」一発で取れる。INNER / LEFT / RIGHT / FULL の種類あり。",
+    "claude_example": "「注文一覧に顧客名も表示したいから、orders と customers を customer_id で JOIN して取得して」"
+  },
+
+  {
+    "category": "api",
+    "difficulty": 1,
+    "type": "choice",
+    "question": "フロント（ブラウザ）からサーバーに「データちょうだい / これ保存して」と頼む仕組みは？",
+    "options": ["API リクエスト", "DB クエリ", "ファイル転送", "メール送信"],
+    "answer": "API リクエスト",
+    "explanation": "API リクエストは「ブラウザがサーバーに何かをお願いする」仕組み。「これ取得して (GET)」「これ保存して (POST)」「これ削除して (DELETE)」など。事務所への注文書のやりとりの IT 版。",
+    "claude_example": "「ログインしたら API で /api/records からデータ取って画面に表示して」"
+  },
+  {
+    "category": "api",
+    "difficulty": 2,
+    "type": "choice",
+    "question": "API リクエストが「成功」だった時に返ってくる HTTP ステータスコードは？",
+    "options": ["200", "401", "404", "500"],
+    "answer": "200",
+    "explanation": "HTTP ステータスコードは API の結果を 3 桁の数字で表す。200 = 成功、401 = 未認証（ログイン必要）、403 = 禁止（権限なし）、404 = 見つからない、500 = サーバー側のエラー。",
+    "claude_example": "「401 が返ってきたらログイン画面にリダイレクトして、500 ならエラーメッセージ表示して」"
+  },
+  {
+    "category": "api",
+    "difficulty": 3,
+    "type": "free",
+    "question": "API に「自分が誰か」を証明するため、リクエストのヘッダに付ける入館証のような文字列を何と呼ぶ？英語、カタカナどちらでも。",
+    "answer": "トークン",
+    "keywords": ["トークン", "token", "Token", "ID トークン", "アクセストークン", "Bearer"],
+    "explanation": "トークン（token）は「私はこのユーザーです」と証明するための文字列。Firebase Auth なら ID トークンを取得してから、API リクエストのヘッダに Authorization: Bearer <token> として付ける。サーバー側で検証して「あなたは○○さん」と分かる。",
+    "claude_example": "「fetch する時に Authorization: Bearer <token> ヘッダ付けて、トークンは getIdToken() で取って」"
+  },
+  {
+    "category": "api",
+    "difficulty": 4,
+    "type": "free",
+    "question": "「別のドメインの API を呼ぶときに、サーバーが許可してないとブラウザが弾く仕組み」を 4 文字のアルファベットで何という？",
+    "answer": "CORS",
+    "keywords": ["CORS", "cors", "Cross-Origin Resource Sharing"],
+    "explanation": "CORS = Cross-Origin Resource Sharing。「よその家からの注文書は許可がないと受けない」セキュリティ機能。サーバー側で Access-Control-Allow-Origin ヘッダで許可するドメインを指定する必要がある。よく詰まるので Claude Code に聞くと早い。",
+    "claude_example": "「フロントから API 叩いたら CORS エラー出る、サーバー側に CORS の設定追加して」"
+  },
+
+  {
+    "category": "ai",
+    "difficulty": 1,
+    "type": "choice",
+    "question": "ChatGPT や Gemini のような「文章を理解して答える AI」の総称は？",
+    "options": ["AGI", "LLM", "RNN", "CNN"],
+    "answer": "LLM",
+    "explanation": "LLM = Large Language Model（大規模言語モデル）。大量の文章で学習して「次に来る単語」を予測する仕組み。Gemini, GPT, Claude が代表。「自信満々に間違える」ハルシネーション現象もある。",
+    "claude_example": "「カスタマー対応に LLM を使いたい、Gemini と Claude どっちがいい？」"
+  },
+  {
+    "category": "ai",
+    "difficulty": 2,
+    "type": "free",
+    "question": "AI に渡すテキストの「課金単位」のことを何という？カタカナで。",
+    "answer": "トークン",
+    "keywords": ["トークン", "token", "tokens"],
+    "explanation": "AI のトークンは「単語の見積もり単位」。1 token ≒ 英語 3〜4 文字 or 日本語 1〜2 文字。API 料金は「入力 tokens × 単価 + 出力 tokens × 単価」で決まる。画像も内部で tokens に換算される。",
+    "claude_example": "「この機能で月にどれくらい token 使うか、コスト計算して」"
+  },
+  {
+    "category": "ai",
+    "difficulty": 3,
+    "type": "choice",
+    "question": "AI が事実じゃないことを自信満々に答えてしまう現象は？",
+    "options": ["バイアス", "ハルシネーション", "オーバーフィッティング", "フリッカー"],
+    "answer": "ハルシネーション",
+    "explanation": "ハルシネーション（hallucination = 幻覚）は LLM が「もっともらしい嘘」を生成する現象。「2023 年に〇〇社が△△を発表した」みたいな、本当っぽいけど実在しない情報を出す。重要な事実は必ず一次情報で裏取りすべき。",
+    "claude_example": "「重要な数字を AI に聞いたら、ハルシネーションが心配だから web 検索ツール使って出典付きで答えさせて」"
+  },
+  {
+    "category": "ai",
+    "difficulty": 4,
+    "type": "free",
+    "question": "AI に「自分の DB の中身を参照して答えて」と頼むために、検索結果を毎回 prompt に混ぜる仕組みを 3 文字の英略で何という？",
+    "answer": "RAG",
+    "keywords": ["RAG", "rag", "Retrieval-Augmented Generation", "retrieval augmented generation"],
+    "explanation": "RAG = Retrieval-Augmented Generation。「AI が答える前に、まず関連ドキュメントを検索して、その結果を一緒にプロンプトに入れて答えさせる」仕組み。最新情報・社内情報を AI に使わせたい時に使う。Fine-tuning より柔軟・安い。",
+    "claude_example": "「社内ドキュメント 1000 ページを AI に答えさせたい、RAG で組んで」"
+  },
+  {
+    "category": "ai",
+    "difficulty": 5,
+    "type": "choice",
+    "question": "AI に画像を渡して内容を理解させられる AI の種類を表す言葉は？",
+    "options": ["NLP", "マルチモーダル", "TTS", "STT"],
+    "answer": "マルチモーダル",
+    "explanation": "マルチモーダル AI は「テキスト + 画像 + 音声」など複数の種類のデータを扱える AI。Gemini, GPT-4o, Claude Opus 4 等。図面読取、レシート OCR、動画分析などに使える。",
+    "claude_example": "「レシート画像を AI に読ませて金額抽出したい、マルチモーダル対応のモデルでお願い」"
+  },
+
+  {
+    "category": "infra",
+    "difficulty": 1,
+    "type": "choice",
+    "question": "Google の「サーバーをコンテナで動かしてくれるサービス」は？",
+    "options": ["Cloud Run", "Cloud Storage", "Firebase Auth", "BigQuery"],
+    "answer": "Cloud Run",
+    "explanation": "Cloud Run は Google Cloud の「Docker コンテナをそのまま動かす」サービス。アクセス来たときだけ起動・課金される（=安い）。サーバーレスの代表格。このプロジェクトの keihi-api が動いてるところ。",
+    "claude_example": "「経費の API は Cloud Run にデプロイして、自動スケール・無アクセス時は 0 円にして」"
+  },
+  {
+    "category": "infra",
+    "difficulty": 2,
+    "type": "free",
+    "question": "ブラウザに静的ファイル（HTML/CSS/JS/画像）を配信する Google のサービスを何という？2 単語のサービス名。",
+    "answer": "Firebase Hosting",
+    "keywords": ["Firebase Hosting", "firebase hosting", "Hosting"],
+    "explanation": "Firebase Hosting は HTML/CSS/JS/画像 等の「静的ファイル」を超高速で配信するサービス。CDN（世界中に複製）込み、SSL 自動、無料枠も大きい。Cloud Run と組み合わせて「静的フロントは Hosting、API は Cloud Run」が定番構成。",
+    "claude_example": "「ランディングページ作るから Firebase Hosting にデプロイして」"
+  },
+  {
+    "category": "infra",
+    "difficulty": 3,
+    "type": "choice",
+    "question": "「使った分だけ自動で増減 + 使わない時は 0 にできるサーバー構成」を表す言葉は？",
+    "options": ["オンプレ", "サーバーレス", "VPS", "メインフレーム"],
+    "answer": "サーバーレス",
+    "explanation": "サーバーレスは「サーバーを自分で管理しない」スタイル。リクエスト来たときだけ起動、終わったら 0 に戻る。Cloud Run / AWS Lambda / Cloudflare Workers が代表。スパイクに強い、深夜は無料、保守の手間が少ない。",
+    "claude_example": "「アクセス予測できない社内ツール作るから、サーバーレスで組んで」"
+  },
+  {
+    "category": "infra",
+    "difficulty": 4,
+    "type": "free",
+    "question": "Google の「機密情報（APIキー等）を安全に保管して、コードからは名前で参照できる」サービスを何という？2 単語の英語。",
+    "answer": "Secret Manager",
+    "keywords": ["Secret Manager", "secret manager", "secrets manager"],
+    "explanation": "Secret Manager は APIキーや DB パスワードを暗号化して保管し、IAM で「誰がアクセスできるか」制御する。コードに直接書かない、git に commit しない、ログにも出さない。Cloud Run の --set-secrets で env として注入できる。",
+    "claude_example": "「OpenAI の API キーを Secret Manager に入れて、Cloud Run の OPENAI_API_KEY env として渡して」"
+  },
+
+  {
+    "category": "concept",
+    "difficulty": 1,
+    "type": "choice",
+    "question": "JavaScript で「結果が後から返ってくる処理」を扱うキーワードは？",
+    "options": ["sync", "async / await", "if / else", "for / while"],
+    "answer": "async / await",
+    "explanation": "async / await は「すぐ結果が返らない処理（API 呼び出し、DB 読み込み等）」を待つ書き方。await を付けると「終わるまで待ってから次の行へ」、async は「この関数は async な処理を含む」マーク。",
+    "claude_example": "「API 呼び出しは await で待ってから次の処理に行くようにして、エラーは try/catch で拾って」"
+  },
+  {
+    "category": "concept",
+    "difficulty": 2,
+    "type": "free",
+    "question": "ブラウザに「設定」や「ログイン状態」を保存しておく仕組みを 1 単語で何という？英語、12 文字。",
+    "answer": "localStorage",
+    "keywords": ["localStorage", "localstorage", "local storage", "ローカルストレージ"],
+    "explanation": "localStorage はブラウザ内に文字列を永続保存する仕組み。最大 5MB くらい、別のドメインからは見えない、ブラウザを閉じても残る。設定・ログイン状態・キャッシュに使う。「事務所の台帳（DB）」じゃなく「手元のメモ」に近い。",
+    "claude_example": "「アプリのテーマ設定は localStorage に保存して、次回開いた時に復元して」"
+  },
+  {
+    "category": "concept",
+    "difficulty": 3,
+    "type": "choice",
+    "question": "プログラムが「同時に複数の処理を進める」スタイルを何と呼ぶ？",
+    "options": ["シリアル", "パラレル / 並列", "シーケンシャル", "リニア"],
+    "answer": "パラレル / 並列",
+    "explanation": "パラレル（並列）は「同時に複数の処理を進める」スタイル。Promise.all([api1, api2, api3]) で 3 つの API を一気に投げると、全部終わるまでの時間 = 一番遅い 1 個分。直列だと 3 倍の時間かかる。",
+    "claude_example": "「3 つの API 呼ぶ処理、直列じゃなく並列で投げて全部終わったらまとめて表示して」"
+  },
+  {
+    "category": "concept",
+    "difficulty": 4,
+    "type": "free",
+    "question": "頻繁にアクセスされるデータを「速い場所」に一時保存して、毎回計算・取得し直さない仕組みを何という？カタカナで。",
+    "answer": "キャッシュ",
+    "keywords": ["キャッシュ", "cache", "caching"],
+    "explanation": "キャッシュ（cache）は「よく使うものを近くに置いて速く返す」仕組み。CDN・ブラウザ・サーバー内メモリ・Redis 等、いろんなレイヤーで使う。古くなったキャッシュをどう更新するかが永遠の課題（「キャッシュ無効化」はコンピュータサイエンスの 2 大難問の 1 つと言われる）。",
+    "claude_example": "「ユーザー一覧の取得が遅い、5 分だけキャッシュして 5 分以内なら DB 叩かないようにして」"
+  },
+
+  {
+    "category": "project",
+    "difficulty": 1,
+    "type": "choice",
+    "question": "このプロジェクトで「メンバーが Google アカウントでログインする」のに使ってるサービスは？",
+    "options": ["Firebase Auth", "OAuth", "Cloud IAM", "Active Directory"],
+    "answer": "Firebase Auth",
+    "explanation": "Firebase Auth はメールアドレス・Google・Twitter 等の認証を簡単に組み込めるサービス。ログイン後に ID トークンを取得 → API リクエストに付ける → サーバー側で verifyIdToken で検証、の流れ。「入口の受付係」。",
+    "claude_example": "「ログイン画面作りたい、Firebase Auth の Google プロバイダで」"
+  },
+  {
+    "category": "project",
+    "difficulty": 2,
+    "type": "free",
+    "question": "このプロジェクトで `main` ブランチに push したら自動でデプロイされる仕組み（Google のサービス名）は？2 単語。",
+    "answer": "Cloud Build",
+    "keywords": ["Cloud Build", "cloud build", "cloudbuild"],
+    "explanation": "Cloud Build は git push をトリガにして「Docker ビルド → Cloud Run へデプロイ → Hosting へデプロイ」を自動実行する CI/CD サービス。apps/keihi/cloudbuild.yaml に手順が書いてある。main に push したら勝手に本番反映される。",
+    "claude_example": "「機能追加したら自動デプロイしてほしい、Cloud Build トリガを main の push に紐付けて」"
+  },
+  {
+    "category": "project",
+    "difficulty": 3,
+    "type": "choice",
+    "question": "Claude Code の振る舞いを指定するための、リポジトリ直下のファイルは？",
+    "options": ["README.md", "CLAUDE.md", ".claude", "package.json"],
+    "answer": "CLAUDE.md",
+    "explanation": "CLAUDE.md は Claude Code が自動で読み込む内部メモ。「触っちゃダメなファイル」「push 手順」「会話のトーン」を書いておくと、毎回の指示が省略できる。README.md は人間向け、CLAUDE.md は Claude 向けの役割分担。",
+    "claude_example": "「このリポ触り始める時は CLAUDE.md と README.md を読んでから始めて」"
+  },
+
+  {
+    "category": "prompt",
+    "difficulty": 1,
+    "type": "choice",
+    "question": "Claude Code に何かを依頼する時、最初に伝えるとうまくいきやすいのは？",
+    "options": ["細かい実装手順を全部書く", "誰が・何を・どう使うアプリかを伝える", "全部任せて何も言わない", "短く 1 単語で頼む"],
+    "answer": "誰が・何を・どう使うアプリかを伝える",
+    "explanation": "Claude Code は「目的（誰が・何のために・どう使う）」が分かると、適切な技術選択をしてくれる。逆に細かい実装手順を全部指定すると、もっといいやり方があっても従ってしまう。「経営者がスマホで使う、撮影 1 タップで完了する経費アプリ」みたいに目的中心で伝える。",
+    "claude_example": "「現場で職人が片手で使う、写真 1 枚撮ったら自動で日報になるアプリ作って」"
+  },
+  {
+    "category": "prompt",
+    "difficulty": 2,
+    "type": "choice",
+    "question": "Claude Code がエラーで詰まった時、有効な伝え方は？",
+    "options": ["「動かない」だけ伝える", "エラー全文 + 直前の操作 + 期待した挙動を伝える", "別の AI に聞き直す", "再起動を勧める"],
+    "answer": "エラー全文 + 直前の操作 + 期待した挙動を伝える",
+    "explanation": "AI に限らずデバッグの基本は「再現情報をセットで渡す」。エラーメッセージ全文 / その直前にどの操作をしたか / 本当は何が起きてほしかったか、の 3 点があると原因特定が一気に早くなる。「動かない」だけだと推測ゲームになって時間かかる。",
+    "claude_example": "「保存ボタン押したらエラー：『401 Unauthorized』。ログインはしてる。期待: 保存成功」"
+  },
+  {
+    "category": "prompt",
+    "difficulty": 3,
+    "type": "free",
+    "question": "AI に与える指示文のことを、英語カタカナで何という？",
+    "answer": "プロンプト",
+    "keywords": ["プロンプト", "prompt", "Prompt"],
+    "explanation": "プロンプト（prompt）は AI への指示文。同じタスクでもプロンプトの書き方で出力品質が大きく変わる。「お題」「フォーマット指定」「禁止事項」「具体例」を含めるのが基本。プロンプトの書き方を工夫する技術を「プロンプトエンジニアリング」と呼ぶ。",
+    "claude_example": "「このプロンプトに『出力は JSON で』を追加して、回答が parse しやすいようにして」"
+  },
+  {
+    "category": "prompt",
+    "difficulty": 4,
+    "type": "choice",
+    "question": "Claude Code に「これは触っちゃダメ」と伝えるベストな方法は？",
+    "options": ["毎回の依頼の末尾に書く", "CLAUDE.md に書いておく", "ファイル名を分かりにくくする", "コメントアウトする"],
+    "answer": "CLAUDE.md に書いておく",
+    "explanation": "CLAUDE.md はリポを開いた Claude Code が毎回自動で読むので、ルールはここに書いておけば毎回の依頼に書かなくて済む。「apps/keihi/cloudbuild.yaml は小西管轄、触らない」のように明示すれば、Claude Code は事故を避けつつ作業する。",
+    "claude_example": "（CLAUDE.md に追記）「触っちゃダメ: apps/keihi/cloudbuild.yaml, infra/bootstrap.sh」"
+  },
+  {
+    "category": "prompt",
+    "difficulty": 5,
+    "type": "free",
+    "question": "AI に「途中の思考プロセスを段階的に書きながら答えて」と促す手法を 3 単語の英語で何という？",
+    "answer": "Chain of Thought",
+    "keywords": ["Chain of Thought", "chain of thought", "CoT", "cot", "チェインオブソート"],
+    "explanation": "Chain of Thought (CoT) は「いきなり結論じゃなく、ステップごとに考えて」と AI に指示する手法。数学・論理問題で正答率が大幅上がる。「Think step by step.」と書くだけで CoT が有効になることが多い。新しいモデルは内部で勝手に CoT してる（Gemini 2.5 Pro, Claude Opus, GPT-5 など）。",
+    "claude_example": "「複雑な計算頼む時は『ステップごとに考えて』って入れると精度上がる」"
+  }
+]
