@@ -1586,11 +1586,12 @@ app.post("/api/kotonoha/sessions/start", async (req, res) => {
     const MASTERY = MASTERY_LAST_N;
     const maxDiff = Math.min(10, level + 2);
 
-    // 適格ルール (飽き防止):
-    //   - 未回答 → 即出題 (priority 0)
-    //   - 答えたけど一度も正解してない → 即出題 (priority 1)
-    //   - 正解履歴あり → user の総回答数 − 直近正解位置 ≥ min_gap (50-100問)
-    //     min_gap は (user × 問題ID) の hash で 50-100 にランダム散らす (= ユーザーごと安定値)
+    // 適格ルール (priority 並べ替えのみ、フィルタは難易度キャップのみ):
+    //   priority 0 = 未回答 (最優先)
+    //   priority 1 = 答えたが一度も正解してない (リトライ)
+    //   priority 2 = 正解履歴あり & gap (50-100問) 経過済み (復習タイミング)
+    //   priority 3 = 正解履歴あり & gap 未達 (緊急時のみ・最劣後)
+    //   gap = (user 総回答数 - 直近正解位置)、min_gap は user×問題ID hash で 50-100 散らし
     const baseSelectSql = `
       WITH ranked AS (
         SELECT question_id, is_correct, answered_at,
@@ -1623,17 +1624,13 @@ app.post("/api/kotonoha/sessions/start", async (req, res) => {
                CASE
                  WHEN pq.question_id IS NULL THEN 0
                  WHEN pq.last_correct_pos IS NULL THEN 1
-                 ELSE 2
+                 WHEN ((SELECT total FROM user_total) - pq.last_correct_pos)
+                      >= (50 + (abs(hashtextextended(q.id::text || $1, 0)) % 51))::int THEN 2
+                 ELSE 3
                END AS priority
           FROM kotonoha_questions q
           LEFT JOIN per_q pq ON pq.question_id = q.id
           LEFT JOIN mastered_q mq ON mq.question_id = q.id
-         WHERE (
-           pq.question_id IS NULL
-           OR pq.last_correct_pos IS NULL
-           OR ((SELECT total FROM user_total) - pq.last_correct_pos)
-              >= (50 + (abs(hashtextextended(q.id::text || $1, 0)) % 51))::int
-         )
       )`;
 
     let newRows = [];
@@ -1680,20 +1677,7 @@ app.post("/api/kotonoha/sessions/start", async (req, res) => {
 
     let questions = newRows;
 
-    // 不足したら全範囲から補充 (難易度キャップは守る・4択優先)
-    if (questions.length < SESSION_SIZE) {
-      const need = SESSION_SIZE - questions.length;
-      const usedIds = questions.map((q) => q.id);
-      const { rows: fillRows } = await p.query(
-        `SELECT * FROM kotonoha_questions
-          WHERE id <> ALL($1::bigint[])
-            AND difficulty <= $3
-          ORDER BY (type = 'choice') DESC, (source = 'generated') DESC, difficulty ASC, random()
-          LIMIT $2`,
-        [usedIds.length ? usedIds : [0], need, maxDiff]
-      );
-      questions = questions.concat(fillRows);
-    }
+    // (fill query は廃止: eligible CTE が priority 3 まで含めて全範囲をカバー)
 
     // UI部品 / CSS技法 の問題に demo_html を結合
     const demoGroups = new Set(["ui_parts", "css_layout"]);
@@ -1712,24 +1696,28 @@ app.post("/api/kotonoha/sessions/start", async (req, res) => {
 
     // 3) バックグラウンド AI 生成: ジャンル別未解答プールが薄ければ補充。
     //    レスポンスは待たない (fire-and-forget)。集中セッションならそのジャンルに集中生成。
+    //    早期ユーザー (総回答 < 100) はより積極的に多ジャンル生成 (毎セッション新鮮さを確保)
     (async () => {
       try {
-        // 集中セッションはそのジャンル、通常は弱ジャンル 4 個に投資
-        const targetGenres = focusGenre ? [focusGenre] : await pickWeakGenres(p, req.user.email, 4);
+        const { rows: utr } = await p.query(`SELECT count(*)::int AS n FROM kotonoha_progress WHERE user_email = $1`, [req.user.email]);
+        const userTotal = utr[0]?.n || 0;
+        const genCount = focusGenre ? 1 : (userTotal < 100 ? 10 : 4);
+        const targetGenres = focusGenre ? [focusGenre] : await pickWeakGenres(p, req.user.email, genCount);
         if (!targetGenres.length) return;
         const { rows: ansRows } = await p.query(
           `SELECT answer FROM kotonoha_questions ORDER BY id DESC LIMIT 200`
         );
         const excludeAnswers = ansRows.map((r) => r.answer);
         for (const g of targetGenres) {
-          // そのジャンルの未解答プールが薄い場合のみ生成
+          // 早期ユーザーは pool < 8、それ以降は < 5 で生成
+          const threshold = userTotal < 100 ? 8 : 5;
           const { rows: poolRows } = await p.query(
             `SELECT count(*)::int AS n FROM kotonoha_questions
               WHERE genre = $1
                 AND id NOT IN (SELECT question_id FROM kotonoha_progress WHERE user_email = $2)`,
             [g, req.user.email]
           );
-          if ((poolRows[0]?.n || 0) >= 5) continue;
+          if ((poolRows[0]?.n || 0) >= threshold) continue;
           await generateKotonohaQuestion(p, { level, genre: g, excludeAnswers });
         }
       } catch (e) {
