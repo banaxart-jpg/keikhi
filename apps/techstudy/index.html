@@ -119,8 +119,29 @@ body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); 
 .choice-list { display: flex; flex-direction: column; gap: 10px; }
 .choice-btn { width: 100%; padding: 14px 16px; border-radius: 14px; border: none; font-family: inherit; font-size: 14px; font-weight: 600; text-align: left; cursor: pointer; color: var(--text); background: var(--bg); box-shadow: inset 3px 3px 8px var(--sd), inset -3px -3px 8px var(--sl); line-height: 1.5; }
 .choice-btn:active:not(:disabled) { transform: scale(0.98); }
-.choice-btn.correct { background: rgba(42,140,58,0.15); color: var(--correct); font-weight: 800; box-shadow: inset 2px 2px 6px rgba(42,140,58,0.2); }
-.choice-btn.incorrect { background: rgba(176,64,64,0.12); color: var(--incorrect); box-shadow: inset 2px 2px 6px rgba(176,64,64,0.2); }
+.choice-btn.correct { background: rgba(42,140,58,0.15); color: var(--correct); font-weight: 800; box-shadow: inset 2px 2px 6px rgba(42,140,58,0.2); animation: btn-glow 0.6s ease-out; }
+.choice-btn.incorrect { background: rgba(176,64,64,0.12); color: var(--incorrect); box-shadow: inset 2px 2px 6px rgba(176,64,64,0.2); animation: btn-shake 0.4s ease-out; }
+@keyframes btn-glow { 0% { box-shadow: 0 0 0 0 rgba(42,140,58,0); } 50% { box-shadow: 0 0 0 16px rgba(42,140,58,0); transform: scale(1.04); } 100% { box-shadow: 0 0 0 0 rgba(42,140,58,0); transform: scale(1); } }
+@keyframes btn-shake { 0%, 100% { transform: translateX(0); } 25% { transform: translateX(-8px); } 75% { transform: translateX(8px); } }
+
+/* 派手目フィードバック演出 */
+.fb-overlay { position: fixed; inset: 0; pointer-events: none; z-index: 1000; display: flex; align-items: center; justify-content: center; opacity: 0; }
+.fb-overlay.show { animation: fb-flash 0.7s ease-out; }
+.fb-overlay.show.correct { background: radial-gradient(circle at center, rgba(42,140,58,0.4), rgba(42,140,58,0.05) 40%, transparent 70%); }
+.fb-overlay.show.incorrect { background: radial-gradient(circle at center, rgba(176,64,64,0.35), rgba(176,64,64,0.05) 40%, transparent 70%); }
+.fb-icon { font-size: 200px; font-weight: 900; line-height: 1; text-shadow: 0 8px 30px rgba(0,0,0,0.2); font-family: 'Outfit', sans-serif; }
+.fb-icon.correct { color: #2a8c3a; animation: fb-pop 0.7s cubic-bezier(0.5, 1.6, 0.6, 1); }
+.fb-icon.incorrect { color: #b04040; animation: fb-shake 0.5s ease-out; }
+@keyframes fb-flash { 0% { opacity: 0; } 25% { opacity: 1; } 75% { opacity: 1; } 100% { opacity: 0; } }
+@keyframes fb-pop { 0% { transform: scale(0) rotate(-30deg); opacity: 0; } 60% { transform: scale(1.3) rotate(8deg); opacity: 1; } 100% { transform: scale(1) rotate(0); opacity: 1; } }
+@keyframes fb-shake { 0%, 100% { transform: translateX(0) rotate(0); } 20% { transform: translateX(-20px) rotate(-5deg); } 40% { transform: translateX(20px) rotate(5deg); } 60% { transform: translateX(-15px) rotate(-3deg); } 80% { transform: translateX(15px) rotate(3deg); } }
+
+.confetti { position: fixed; top: 50%; font-size: 32px; pointer-events: none; z-index: 1001; animation: confetti-rise 1.6s ease-out forwards; }
+@keyframes confetti-rise { 0% { transform: translateY(0) translateX(0) rotate(0); opacity: 0; } 15% { opacity: 1; } 100% { transform: translateY(-100vh) translateX(var(--dx, 0px)) rotate(720deg); opacity: 0; } }
+
+.result-card { animation: card-in 0.45s ease-out; }
+@keyframes card-in { 0% { transform: translateY(20px); opacity: 0; } 100% { transform: translateY(0); opacity: 1; } }
+.result-status { font-size: 18px !important; letter-spacing: 0.04em; }
 .choice-btn:disabled { cursor: default; }
 
 .free-input { width: 100%; padding: 14px; border-radius: 14px; border: none; background: var(--bg); box-shadow: inset 3px 3px 8px var(--sd), inset -3px -3px 8px var(--sl); font-family: inherit; font-size: 15px; color: var(--text); }
@@ -161,6 +182,8 @@ body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); 
 </style>
 </head>
 <body>
+
+<div class="fb-overlay" id="fbOverlay"><span class="fb-icon" id="fbIcon"></span></div>
 
 <div class="bar">
   <span class="hint">techstudy</span>
@@ -602,6 +625,36 @@ function handleAnswerResult(qId, r) {
     // 不正解 → キュー末尾に再追加 (正解出るまで終わらない)
     state.queue.push(qId);
   }
+  showFeedback(r.is_correct);
+}
+
+// 派手目フィードバック演出
+function showFeedback(isCorrect) {
+  const ov = $("fbOverlay");
+  const ic = $("fbIcon");
+  const cls = isCorrect ? "correct" : "incorrect";
+  ov.className = "fb-overlay show " + cls;
+  ic.className = "fb-icon " + cls;
+  ic.textContent = isCorrect ? "✓" : "✕";
+  // 振動 (Android 等で効く)
+  try { navigator.vibrate?.(isCorrect ? [25] : [40, 40, 40]); } catch (e) {}
+  // 紙吹雪 (正解時)
+  if (isCorrect) spawnConfetti();
+  setTimeout(() => { ov.className = "fb-overlay"; }, 700);
+}
+
+function spawnConfetti() {
+  const emojis = ["🎉", "✨", "⭐", "🌟", "💫", "🎊"];
+  for (let i = 0; i < 14; i++) {
+    const p = document.createElement("div");
+    p.className = "confetti";
+    p.textContent = emojis[Math.floor(Math.random() * emojis.length)];
+    p.style.left = (5 + Math.random() * 90) + "%";
+    p.style.setProperty("--dx", (Math.random() * 200 - 100) + "px");
+    p.style.animationDelay = (Math.random() * 0.25) + "s";
+    document.body.appendChild(p);
+    setTimeout(() => p.remove(), 1900);
+  }
 }
 
 async function submitChoice(opt, btn) {
@@ -659,7 +712,7 @@ function renderResult(r) {
     ? "🎉 結果を見る →"
     : (r.is_correct ? `次の問題へ → (あと${state.queue.length}問)` : `もう一度挑戦 → (あと${state.queue.length}問)`);
   const cls = r.is_correct ? "correct" : "incorrect";
-  const statusText = r.is_correct ? "✓ 正解" : "× 不正解";
+  const statusText = r.is_correct ? "🎉 正解！" : "💧 おしい";
   ra.innerHTML = `
     <div class="result-card ${cls}">
       <div class="result-status ${cls}">${statusText}</div>
