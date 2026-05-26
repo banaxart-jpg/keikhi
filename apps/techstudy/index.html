@@ -331,6 +331,7 @@ const state = {
   busy: false,
   focusGenre: null,
   groupColorMap: new Map(),
+  groupNameMap: new Map(), // group_id → 表示用のグループ名 (genre 名は答えを spoiler するので隠す)
 };
 
 // ───── UI部品の HTML 実物デモ (genre名 or answer で引く) ─────
@@ -408,6 +409,7 @@ function renderMe(me, peers) {
   let totT = 0, totC = 0;
   for (const g of (me.groups || [])) {
     state.groupColorMap.set(g.id, g.color);
+    state.groupNameMap.set(g.id, g.name);
     for (const gen of g.genres) { totT += gen.target; totC += gen.correct; }
   }
   $("myTotalPct").firstChild.textContent = totT ? Math.round((totC / totT) * 100) : 0;
@@ -636,7 +638,8 @@ function renderCurrentQuestion() {
     : `${done} / ${total}`;
   $("sessionProgressFill").style.width = `${pct}%`;
 
-  $("qCategory").textContent = q.genre || q.category || "";
+  // ジャンル名は答えを spoiler するので、グループ名 (広い分類) を表示
+  $("qCategory").textContent = state.groupNameMap.get(q.group_id) || q.category || "学習";
   $("qCategory").style.background = state.groupColorMap.get(q.group_id) || "var(--accent)";
   $("qText").textContent = q.question;
   // UI部品の HTML 実物デモ
