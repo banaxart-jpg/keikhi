@@ -72,8 +72,7 @@ body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); 
 .radar-legend-title { display: flex; align-items: center; justify-content: center; gap: 14px; margin: 8px 0 10px; font-size: 11px; color: var(--text2); font-weight: 700; }
 .radar-legend-title .swatch { display: inline-block; width: 18px; height: 4px; border-radius: 2px; vertical-align: middle; margin-right: 4px; }
 .radar-legend { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 10px; }
-.legend-item { display: grid; grid-template-columns: 10px 1fr auto; align-items: center; gap: 8px; padding: 7px 10px; border-radius: 8px; cursor: pointer; }
-.legend-item:active { background: rgba(154,160,184,0.12); transform: scale(0.98); }
+.legend-item { display: grid; grid-template-columns: 10px 1fr auto; align-items: center; gap: 8px; padding: 7px 10px; border-radius: 8px; }
 .legend-dot { width: 10px; height: 10px; border-radius: 3px; }
 .legend-name { font-size: 11px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .legend-pct { font-size: 11px; font-weight: 800; font-variant-numeric: tabular-nums; text-align: right; }
@@ -243,7 +242,7 @@ body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); 
     </button>
 
     <div class="card" style="margin-top: 16px;">
-      <div class="label">ジャンル別の達成度 (タップで集中セッション)</div>
+      <div class="label">ジャンル別の達成度</div>
       <div class="radar-wrap">
         <svg id="radarSvg" class="radar-svg" viewBox="0 0 360 360"></svg>
       </div>
@@ -524,30 +523,14 @@ function renderRadarChart(myGroups, peerGroupMap, myName, peerName) {
     const short = GROUP_SHORT[myGroups[i].id] || myGroups[i].name.slice(0, 4);
     html += `<text class="label" x="${lx}" y="${ly}" fill="${myGroups[i].color}" text-anchor="${anchor}">${escapeHtml(short)}</text>`;
   }
-  // タップ判定円 (中心からその軸方向に大きめ)
-  for (let i = 0; i < N; i++) {
-    const [x, y] = point(i, 100);
-    html += `<circle class="axis-hit" cx="${x}" cy="${y}" r="22" data-i="${i}"/>`;
-  }
   svg.innerHTML = html;
-  // タップで集中セッション (グループ内で最も弱い (未マスター) ジャンルへ)
-  svg.querySelectorAll(".axis-hit").forEach((el) => {
-    el.addEventListener("click", () => {
-      const i = Number(el.dataset.i);
-      const g = myGroups[i];
-      if (!g) return;
-      // そのグループの最も未達ジャンルを選ぶ
-      const target = g.genres.slice().sort((a, b) => a.pct - b.pct)[0];
-      if (target) startSession(target.name);
-    });
-  });
 
   // 凡例タイトル (色の意味)
   const lt = $("radarLegendTitle");
   lt.innerHTML = `<span><span class="swatch" style="background:#6d28d9;"></span>${escapeHtml(myName)}</span>`
     + (peerName ? `<span><span class="swatch" style="background:#f59e0b;border:1px dashed #f59e0b;"></span>${escapeHtml(peerName)}</span>` : "");
 
-  // 凡例リスト (タップで集中セッション)
+  // 凡例リスト (情報表示のみ)
   const legend = $("radarLegend");
   legend.innerHTML = "";
   for (const g of myGroups) {
@@ -558,10 +541,6 @@ function renderRadarChart(myGroups, peerGroupMap, myName, peerName) {
       `<div class="legend-dot" style="background:${g.color};"></div>` +
       `<div class="legend-name">${escapeHtml(g.name)}</div>` +
       `<div class="legend-pct">${g.pct}%${peerName ? `<span class="peer">/ ${pg?.pct || 0}%</span>` : ""}</div>`;
-    item.addEventListener("click", () => {
-      const target = g.genres.slice().sort((a, b) => a.pct - b.pct)[0];
-      if (target) startSession(target.name);
-    });
     legend.appendChild(item);
   }
 }
