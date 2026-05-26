@@ -124,3 +124,12 @@ ALTER TABLE kotonoha_questions ADD COLUMN IF NOT EXISTS genre    TEXT;
 ALTER TABLE kotonoha_questions ADD COLUMN IF NOT EXISTS group_id TEXT;
 CREATE INDEX IF NOT EXISTS kotonoha_q_genre_idx ON kotonoha_questions (genre);
 CREATE INDEX IF NOT EXISTS kotonoha_q_group_idx ON kotonoha_questions (group_id);
+
+-- UI部品の HTML 実物デモ (AI 生成、ジャンル単位でキャッシュ)
+CREATE TABLE IF NOT EXISTS kotonoha_ui_demos (
+  genre      TEXT PRIMARY KEY,
+  group_id   TEXT,
+  demo_html  TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);

@@ -1374,6 +1374,46 @@ async function ensureKotonohaUser(p, email) {
 }
 
 // 弱ジャンル選択: バックグラウンド AI 生成のターゲットを決める
+// UI部品の HTML 実物デモを AI に作らせて DB に保存 (genre ごとに1つキャッシュ)
+async function generateUiDemo(p, genre, groupId) {
+  if (!genAI) return null;
+  const prompt = `「${genre}」という UI 部品をユーザーが実際に操作できる、独立した HTML スニペットを作って。
+
+要件:
+- 完全な HTML 文書 (<!doctype html><html>...</html>)
+- インライン CSS / JavaScript のみ (外部依存・CDN・<link>・外部画像 等は禁止)
+- iframe (sandbox: allow-scripts allow-same-origin allow-popups allow-modals) 内で動く前提
+- モバイル前提 (タッチ操作)、画面サイズ 360x280px くらい
+- 派手すぎず最小限の例で「これがその UI 部品です」と伝わる
+- アクセント色は #6d28d9 (紫)。背景は #f5f5f7
+- ユーザーが押す/触れる UI 要素を最低1つ
+- 冒頭に小さく「↓ 押してみて」「↓ タップして」等のヒントを1行 (color:#888, font-size:12px)
+- ★重要: HTML 内で </script> を書く場合は必ず <\\/script> にエスケープする (外側スクリプトを閉じないため)
+
+HTML のみを返す。説明文や Markdown のコードブロック (\`\`\`) は不要。`;
+
+  try {
+    const { result } = await callGeminiWithFallback(prompt, {
+      primaryModel: "gemini-2.5-flash",
+      maxOutputTokens: 4000,
+    });
+    let html = (result.response.text() || "").trim();
+    html = html.replace(/^```html?\s*/i, "").replace(/```\s*$/i, "").trim();
+    if (!html.toLowerCase().includes("<html")) return null;
+    await p.query(
+      `INSERT INTO kotonoha_ui_demos (genre, group_id, demo_html)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (genre) DO UPDATE SET demo_html = EXCLUDED.demo_html, updated_at = now()`,
+      [genre, groupId || null, html]
+    );
+    console.log(`[kotonoha] ui demo generated for "${genre}"`);
+    return html;
+  } catch (e) {
+    console.warn(`[kotonoha] ui demo gen failed for ${genre}:`, e.message);
+    return null;
+  }
+}
+
 async function pickWeakGenres(p, email, n) {
   try {
     const { rows } = await p.query(
@@ -1650,6 +1690,20 @@ app.post("/api/kotonoha/sessions/start", async (req, res) => {
       questions = questions.concat(fillRows);
     }
 
+    // UI部品 (group_id = 'ui_parts') の問題に demo_html を結合
+    const uiGenres = [...new Set(questions.filter((q) => q.group_id === "ui_parts" && q.genre).map((q) => q.genre))];
+    const demoMap = new Map();
+    if (uiGenres.length) {
+      const { rows: dRows } = await p.query(
+        `SELECT genre, demo_html FROM kotonoha_ui_demos WHERE genre = ANY($1::text[])`,
+        [uiGenres]
+      );
+      for (const r of dRows) demoMap.set(r.genre, r.demo_html);
+    }
+    for (const q of questions) {
+      if (demoMap.has(q.genre)) q.demo_html = demoMap.get(q.genre);
+    }
+
     // 3) バックグラウンド AI 生成: ジャンル別未解答プールが薄ければ補充。
     //    レスポンスは待たない (fire-and-forget)。集中セッションならそのジャンルに集中生成。
     (async () => {
@@ -1677,6 +1731,21 @@ app.post("/api/kotonoha/sessions/start", async (req, res) => {
       }
     })();
 
+    // 4) UI demo 未生成なら背景で生成 (この回には間に合わなくても、次セッションで反映)
+    (async () => {
+      try {
+        const uiQs = questions.filter((q) => q.group_id === "ui_parts" && q.genre && !q.demo_html);
+        const seen = new Set();
+        for (const q of uiQs) {
+          if (seen.has(q.genre)) continue;
+          seen.add(q.genre);
+          await generateUiDemo(p, q.genre, q.group_id);
+        }
+      } catch (e) {
+        console.warn("[kotonoha] ui demo bg gen skipped:", e.message);
+      }
+    })();
+
     // クライアントに送る時は answer / keywords / explanation を隠す
     const safe = questions.map((q) => ({
       id: q.id,
@@ -1688,6 +1757,7 @@ app.post("/api/kotonoha/sessions/start", async (req, res) => {
       question: q.question,
       options: q.options,
       image_url: q.image_url,
+      demo_html: q.demo_html || null,
     }));
     res.json({ level, genre: focusGenre, questions: safe });
   } catch (err) {
