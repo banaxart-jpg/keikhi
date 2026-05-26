@@ -2,6 +2,7 @@ import express from "express";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import { Storage } from "@google-cloud/storage";
 import { CloudTasksClient } from "@google-cloud/tasks";
+import { google } from "googleapis";
 import admin from "firebase-admin";
 import pg from "pg";
 import crypto from "node:crypto";
@@ -10,6 +11,7 @@ const {
   GEMINI_API_KEY,
   GEMINI_MODEL = "gemini-2.5-flash",
   RECEIPTS_BUCKET,
+  SHEET_ID,
   DB_USER,
   DB_PASSWORD,
   DB_NAME,
@@ -74,6 +76,65 @@ app.use("/api", async (req, res, next) => {
 
 const genAI = GEMINI_API_KEY ? new GoogleGenerativeAI(GEMINI_API_KEY) : null;
 const storage = RECEIPTS_BUCKET ? new Storage() : null;
+
+// ───── Google Sheets (経費レコードの自動書き込み) ─────
+// SHEET_ID が設定されていればサーバから直接 Sheets API で行を append。
+// ADC (Cloud Run の SA = keihi-run) で認証。SA をシートに編集者として共有する必要あり。
+let sheetsApi = null;
+async function getSheetsApi() {
+  if (sheetsApi) return sheetsApi;
+  const auth = new google.auth.GoogleAuth({
+    scopes: ["https://www.googleapis.com/auth/spreadsheets"],
+  });
+  sheetsApi = google.sheets({ version: "v4", auth: await auth.getClient() });
+  return sheetsApi;
+}
+const SHEET_HEADER = ["ID", "購入日", "購入者", "現場", "店舗", "金額", "費目", "工種", "支払方法", "メモ"];
+const sheetEnsuredCache = new Set(); // 1 度ヘッダー作ったタブはキャッシュ
+async function ensureSheetTab(sheets, ym) {
+  if (sheetEnsuredCache.has(ym)) return;
+  const meta = await sheets.spreadsheets.get({ spreadsheetId: SHEET_ID, fields: "sheets.properties" });
+  const exists = (meta.data.sheets || []).some((s) => s.properties && s.properties.title === ym);
+  if (!exists) {
+    await sheets.spreadsheets.batchUpdate({
+      spreadsheetId: SHEET_ID,
+      requestBody: { requests: [{ addSheet: { properties: { title: ym, index: 0, gridProperties: { frozenRowCount: 1 } } } }] },
+    });
+    await sheets.spreadsheets.values.update({
+      spreadsheetId: SHEET_ID,
+      range: `${ym}!A1`,
+      valueInputOption: "RAW",
+      requestBody: { values: [SHEET_HEADER] },
+    });
+  }
+  sheetEnsuredCache.add(ym);
+}
+async function appendRecordToSheet(r) {
+  if (!SHEET_ID) return;
+  // 現場が未設定 (未 SORT) のレコードはシートに送らない
+  if (!r.site) return;
+  try {
+    const sheets = await getSheetsApi();
+    const ym = String(r.date || "").slice(0, 7) || "unknown";
+    await ensureSheetTab(sheets, ym);
+    await sheets.spreadsheets.values.append({
+      spreadsheetId: SHEET_ID,
+      range: `${ym}!A:J`,
+      valueInputOption: "USER_ENTERED",
+      insertDataOption: "INSERT_ROWS",
+      requestBody: {
+        values: [[
+          r.id || "", r.date || "", r.buyer || "", r.site || "", r.store || "",
+          Number(r.total) || 0, r.category || "", r.workType || "",
+          r.payment || "", r.memo || "",
+        ]],
+      },
+    });
+    console.log(`[sheets] appended id=${r.id} ym=${ym} site=${r.site}`);
+  } catch (e) {
+    console.warn(`[sheets] append FAILED id=${r.id}: ${e.message}`);
+  }
+}
 
 let pool = null;
 function getPool() {
@@ -1297,6 +1358,8 @@ app.post("/api/records", async (req, res) => {
        RETURNING id, created_at`,
       [r.date, r.store, r.total, r.category, r.workType, r.payment, r.buyer, r.site, r.memo || "", r.imageUrl || null]
     );
+    // 現場が設定されてればシートにも追記 (空なら未 SORT で送らない)
+    appendRecordToSheet({ ...r, id: rows[0].id }).catch(() => {});
     res.status(201).json(rows[0]);
   } catch (err) {
     console.error("insert error", err);
@@ -1317,6 +1380,8 @@ app.put("/api/records/:id", async (req, res) => {
       [r.date, r.store, r.total, r.category, r.workType, r.payment, r.buyer, r.site, r.memo || "", req.params.id]
     );
     if (!rowCount) return res.status(404).json({ error: "not found" });
+    // 編集後もシートに append (現場が空なら送らない)。重複は当面手動で削除
+    appendRecordToSheet({ ...r, id: req.params.id }).catch(() => {});
     res.json({ ok: true });
   } catch (err) {
     console.error("update error", err);
