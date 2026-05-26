@@ -1417,7 +1417,9 @@ async function generateKotonohaQuestion(p, { level, genre, excludeAnswers = [] }
   const groupId = targetGenre ? KOTONOHA_GENRE_TO_GROUP.get(targetGenre) || null : null;
   // 旧 category 列にも互換のため group_id を流用
   const cat = groupId || "concept";
-  const type = Math.random() < 0.6 ? "choice" : "free";
+  // 基本は4択 (字面で recognize できれば OK の方針)。
+  // 自由記述は概念がはっきり定まる場合のみ稀に。
+  const type = Math.random() < 0.9 ? "choice" : "free";
 
   // 難易度別ガイド
   const diffGuide = level <= 2
@@ -1522,85 +1524,103 @@ app.post("/api/kotonoha/sessions/start", async (req, res) => {
     const level = user.level;
     const focusGenre = req.body?.genre || null; // 集中セッション (ジャンル指定)
 
-    // 1) リトライ候補: 過去30日でミスして、それ以降正解してない問題 (最大3問)
-    //    集中セッション時はそのジャンルに限定。
-    const retrySql = focusGenre
-      ? `SELECT q.* FROM kotonoha_questions q
-          WHERE q.genre = $2 AND q.id IN (
-            SELECT question_id FROM kotonoha_progress
-             WHERE user_email = $1
-             GROUP BY question_id
-            HAVING bool_and(NOT is_correct) AND max(answered_at) > now() - interval '30 days'
-          ) ORDER BY random() LIMIT 3`
-      : `SELECT q.* FROM kotonoha_questions q
-          WHERE q.id IN (
-            SELECT question_id FROM kotonoha_progress
-             WHERE user_email = $1
-             GROUP BY question_id
-            HAVING bool_and(NOT is_correct) AND max(answered_at) > now() - interval '30 days'
-          ) ORDER BY random() LIMIT 3`;
-    const { rows: retryRows } = await p.query(
-      retrySql,
-      focusGenre ? [req.user.email, focusGenre] : [req.user.email]
-    );
-
-    // 2) 新規: 集中セッション→そのジャンル内優先、通常→「弱いジャンル」優先 + 易しい順 + AI生成優先
-    //    難易度ASC (易しい順) で並べる: 概念紹介→基本→応用 の順序を保つ
-    //    AI生成優先 (DESC): seed には名前暗記型が多いので、新生成のWhy/How/比較型を先に出す
+    // ─── 出題対象の整理 ───
+    // マスター = 同じ問題に MASTERY_CORRECT_COUNT 回 (=3) 以上正解。
+    // 適格 (eligible) =
+    //   - 未回答、または
+    //   - 未マスターで 4時間以上空いてる、または
+    //   - マスター済みでも 30日以上空いてる (spaced repetition で再テスト)
+    // 優先度 = 0(未回答) → 1(未マスターのリトライ) → 2(マスター古い再テスト)
+    // 選択式優先 (字面で recognize できれば OK の方針)
     const SESSION_SIZE = 20;
-    const needNew = SESSION_SIZE - retryRows.length;
+    const MASTERY = MASTERY_CORRECT_COUNT;
+
+    const baseSelectSql = `
+      WITH per_q AS (
+        SELECT question_id,
+               count(*) FILTER (WHERE is_correct) AS correct_count,
+               max(answered_at) AS last_at
+          FROM kotonoha_progress
+         WHERE user_email = $1
+         GROUP BY question_id
+      ),
+      eligible AS (
+        SELECT q.*,
+               COALESCE(pq.correct_count, 0) AS correct_count,
+               pq.last_at,
+               CASE
+                 WHEN pq.question_id IS NULL THEN 0
+                 WHEN COALESCE(pq.correct_count, 0) < $2 THEN 1
+                 ELSE 2
+               END AS priority
+          FROM kotonoha_questions q
+          LEFT JOIN per_q pq ON pq.question_id = q.id
+         WHERE (
+           pq.question_id IS NULL
+           OR (
+             pq.last_at < now() - interval '4 hours'
+             AND (
+               COALESCE(pq.correct_count, 0) < $2
+               OR pq.last_at < now() - interval '30 days'
+             )
+           )
+         )
+      )`;
+
     let newRows = [];
     if (focusGenre) {
-      // 集中セッション: そのジャンル内未解答 (難易度ASC、AI生成優先)
       const { rows } = await p.query(
-        `SELECT *
-           FROM kotonoha_questions
-          WHERE genre = $1
-            AND id NOT IN (SELECT question_id FROM kotonoha_progress WHERE user_email = $2 AND is_correct)
-          ORDER BY (source = 'generated') DESC, difficulty ASC, random()
-          LIMIT $3`,
-        [focusGenre, req.user.email, needNew]
+        `${baseSelectSql}
+         SELECT * FROM eligible
+          WHERE genre = $3
+          ORDER BY priority ASC,
+                   (type = 'choice') DESC,
+                   (source = 'generated') DESC,
+                   difficulty ASC,
+                   random()
+          LIMIT $4`,
+        [req.user.email, MASTERY, focusGenre, SESSION_SIZE]
       );
       newRows = rows;
     } else {
-      // 通常: 「100%に達してないジャンル」優先 + 易しい順 + AI生成優先
       const { rows } = await p.query(
-        `WITH user_progress AS (
+        `${baseSelectSql},
+         genre_progress AS (
            SELECT q.genre,
-                  count(DISTINCT q.id) FILTER (WHERE pr.is_correct) AS correct_uniq
+                  count(DISTINCT q.id) FILTER (
+                    WHERE (SELECT count(*) FROM kotonoha_progress pr
+                           WHERE pr.question_id = q.id AND pr.user_email = $1 AND pr.is_correct) >= $2
+                  ) AS mastered
              FROM kotonoha_questions q
-             LEFT JOIN kotonoha_progress pr
-               ON pr.question_id = q.id AND pr.user_email = $2
             WHERE q.genre IS NOT NULL
             GROUP BY q.genre
          )
-         SELECT q.*,
-                COALESCE(up.correct_uniq, 0) AS uniq_correct
-           FROM kotonoha_questions q
-           LEFT JOIN user_progress up ON up.genre = q.genre
-          WHERE q.id NOT IN (SELECT question_id FROM kotonoha_progress WHERE user_email = $2)
-            AND q.difficulty <= $3
-          ORDER BY uniq_correct ASC,
-                   (q.source = 'generated') DESC,
-                   q.difficulty ASC,
+         SELECT e.*, COALESCE(gp.mastered, 0) AS genre_mastered
+           FROM eligible e
+           LEFT JOIN genre_progress gp ON gp.genre = e.genre
+          WHERE e.difficulty <= $3
+          ORDER BY genre_mastered ASC,
+                   priority ASC,
+                   (e.type = 'choice') DESC,
+                   (e.source = 'generated') DESC,
+                   e.difficulty ASC,
                    random()
           LIMIT $4`,
-        [level, req.user.email, Math.min(10, level + 2), needNew]
+        [req.user.email, MASTERY, Math.min(10, level + 2), SESSION_SIZE]
       );
       newRows = rows;
     }
 
-    let questions = [...retryRows, ...newRows];
+    let questions = newRows;
 
-    // 不足したら全範囲から補充 (シード切れ等)
+    // 不足したら全範囲から補充
     if (questions.length < SESSION_SIZE) {
       const need = SESSION_SIZE - questions.length;
       const usedIds = questions.map((q) => q.id);
       const { rows: fillRows } = await p.query(
-        `SELECT *
-           FROM kotonoha_questions
+        `SELECT * FROM kotonoha_questions
           WHERE id <> ALL($1::bigint[])
-          ORDER BY (source = 'generated') DESC, difficulty ASC, random()
+          ORDER BY (type = 'choice') DESC, (source = 'generated') DESC, difficulty ASC, random()
           LIMIT $2`,
         [usedIds.length ? usedIds : [0], need]
       );
@@ -1776,28 +1796,38 @@ app.post("/api/kotonoha/sessions/end", async (req, res) => {
 });
 
 // 自分のステータス: ジャンル別進捗 + 最近覚えた言葉
-// 各ジャンル: uniq_correct / target_count = 進捗%
+// マスター済み問題数 / target_count = 進捗%。マスター = 3回正解。
+// (4択で適当に当たった可能性もあるので 1 回だけじゃカウントしない)
+const MASTERY_CORRECT_COUNT = 3;
 async function buildKotonohaProgress(p, email) {
   const { rows: byGenre } = await p.query(
-    `SELECT q.genre, q.group_id,
-            count(DISTINCT q.id) FILTER (WHERE pr.is_correct) AS uniq_correct
+    `WITH per_q AS (
+       SELECT question_id,
+              count(*) FILTER (WHERE is_correct) AS correct_count
+         FROM kotonoha_progress
+        WHERE user_email = $1
+        GROUP BY question_id
+     )
+     SELECT q.genre, q.group_id,
+            count(DISTINCT q.id) FILTER (
+              WHERE COALESCE(pq.correct_count, 0) >= $2
+            ) AS mastered
        FROM kotonoha_questions q
-       LEFT JOIN kotonoha_progress pr
-         ON pr.question_id = q.id AND pr.user_email = $1
+       LEFT JOIN per_q pq ON pq.question_id = q.id
       WHERE q.genre IS NOT NULL
       GROUP BY q.genre, q.group_id`,
-    [email]
+    [email, MASTERY_CORRECT_COUNT]
   );
   const dbProg = new Map();
   for (const r of byGenre) {
-    dbProg.set(r.genre, { uniq_correct: Number(r.uniq_correct || 0), group_id: r.group_id });
+    dbProg.set(r.genre, { mastered: Number(r.mastered || 0), group_id: r.group_id });
   }
   const groups = [];
   for (const g of (KOTONOHA_GENRES_DATA?.groups || [])) {
     const genres = g.genres.map((gen) => {
       const target = gen.target_count || 10;
-      const correct = Math.min(dbProg.get(gen.name)?.uniq_correct || 0, target);
-      return { name: gen.name, target, correct, pct: Math.round((correct / target) * 100) };
+      const mastered = Math.min(dbProg.get(gen.name)?.mastered || 0, target);
+      return { name: gen.name, target, correct: mastered, pct: Math.round((mastered / target) * 100) };
     });
     const totalT = genres.reduce((s, x) => s + x.target, 0);
     const totalC = genres.reduce((s, x) => s + x.correct, 0);
