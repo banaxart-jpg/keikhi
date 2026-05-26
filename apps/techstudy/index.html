@@ -587,7 +587,10 @@ function renderPeers(peers) {
 async function startSession(genre) {
   if (state.busy) return;
   state.busy = true;
-  $("startBtn").disabled = true;
+  const btn = $("startBtn");
+  const originalLabel = btn.innerHTML;
+  btn.disabled = true;
+  btn.innerHTML = `<span class="icon" style="vertical-align:-0.18em;">hourglass_top</span> 問題を準備中…`;
   $("homeErr").textContent = "";
   state.focusGenre = genre || null;
   try {
@@ -610,7 +613,8 @@ async function startSession(genre) {
     $("homeErr").textContent = e.message;
   } finally {
     state.busy = false;
-    $("startBtn").disabled = false;
+    btn.disabled = false;
+    btn.innerHTML = originalLabel;
   }
 }
 window.startSession = startSession;

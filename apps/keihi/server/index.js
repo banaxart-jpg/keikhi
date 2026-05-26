@@ -1717,7 +1717,8 @@ app.post("/api/kotonoha/sessions/start", async (req, res) => {
       );
       const freshCount = pcr[0]?.n || 0;
       if (freshCount < SESSION_SIZE) {
-        const need = Math.min(SESSION_SIZE - freshCount + 3, 12);
+        // 最大 6 問だけ同期生成 (UX 優先)。残りは fire-and-forget で後追い。
+        const need = Math.min(SESSION_SIZE - freshCount, 6);
         const { rows: ansRows } = await p.query(
           `SELECT answer FROM kotonoha_questions ORDER BY id DESC LIMIT 200`
         );
