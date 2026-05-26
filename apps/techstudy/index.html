@@ -58,6 +58,26 @@ body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); 
 /* グループ × ジャンル */
 .group-list { display: flex; flex-direction: column; gap: 12px; }
 .group-card { background: var(--bg); border-radius: 18px; padding: 14px 16px; box-shadow: 5px 5px 12px var(--sd), -3px -3px 10px var(--sl); }
+
+/* レーダーチャート */
+.radar-wrap { display: flex; flex-direction: column; align-items: center; padding: 4px 0 4px; }
+.radar-svg { width: 100%; max-width: 360px; display: block; }
+.radar-svg .axis { stroke: rgba(154,160,184,0.22); stroke-width: 1; }
+.radar-svg .grid { fill: none; stroke: rgba(154,160,184,0.18); stroke-width: 1; }
+.radar-svg .grid-100 { stroke: rgba(154,160,184,0.35); }
+.radar-svg .me-poly { fill: rgba(109,40,217,0.32); stroke: #6d28d9; stroke-width: 2; stroke-linejoin: round; }
+.radar-svg .peer-poly { fill: rgba(245,158,11,0.15); stroke: #f59e0b; stroke-width: 2; stroke-linejoin: round; stroke-dasharray: 5 3; }
+.radar-svg .label { font-family: 'Outfit', sans-serif; font-size: 10px; font-weight: 800; pointer-events: none; }
+.radar-svg .axis-hit { fill: transparent; cursor: pointer; }
+.radar-legend-title { display: flex; align-items: center; justify-content: center; gap: 14px; margin: 8px 0 10px; font-size: 11px; color: var(--text2); font-weight: 700; }
+.radar-legend-title .swatch { display: inline-block; width: 18px; height: 4px; border-radius: 2px; vertical-align: middle; margin-right: 4px; }
+.radar-legend { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 10px; }
+.legend-item { display: grid; grid-template-columns: 10px 1fr auto; align-items: center; gap: 8px; padding: 7px 10px; border-radius: 8px; cursor: pointer; }
+.legend-item:active { background: rgba(154,160,184,0.12); transform: scale(0.98); }
+.legend-dot { width: 10px; height: 10px; border-radius: 3px; }
+.legend-name { font-size: 11px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.legend-pct { font-size: 11px; font-weight: 800; font-variant-numeric: tabular-nums; text-align: right; }
+.legend-pct .peer { color: var(--text3); font-weight: 700; font-size: 9px; margin-left: 3px; }
 .group-header { display: flex; justify-content: space-between; align-items: center; cursor: pointer; gap: 10px; margin-bottom: 10px; }
 .group-name { display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0; }
 .group-color { width: 12px; height: 12px; border-radius: 4px; flex-shrink: 0; box-shadow: 2px 2px 4px var(--sd); }
@@ -224,7 +244,11 @@ body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); 
 
     <div class="card" style="margin-top: 16px;">
       <div class="label">ジャンル別の達成度 (タップで集中セッション)</div>
-      <div class="group-list" id="myGroups"><div class="empty">読み込み中…</div></div>
+      <div class="radar-wrap">
+        <svg id="radarSvg" class="radar-svg" viewBox="0 0 360 360"></svg>
+      </div>
+      <div class="radar-legend-title" id="radarLegendTitle"></div>
+      <div class="radar-legend" id="radarLegend"></div>
     </div>
 
     <div class="card">
@@ -405,7 +429,7 @@ function renderMe(me, peers) {
     streakStat.classList.add("streak-today-pending");
   }
 
-  // 比較対象 peer (最初のメンバー)。複数いれば後で選べるように拡張可。
+  // 比較対象 peer (最初のメンバー)
   const peer = (peers || [])[0] || null;
   const peerGroupMap = new Map();
   if (peer) {
@@ -414,61 +438,8 @@ function renderMe(me, peers) {
   const myName = (me.user?.display_name) || "あなた";
   const peerName = peer?.display_name || null;
 
-  // グループ × ジャンル (あなた + peer の二重バー)
-  const root = $("myGroups");
-  root.innerHTML = "";
-  for (const g of (me.groups || [])) {
-    const pg = peerGroupMap.get(g.id);
-    const card = document.createElement("div");
-    card.className = "group-card";
-    card.dataset.gid = g.id;
-    const peerRow = peer
-      ? `<div class="compare-row">
-           <div class="compare-who">${escapeHtml(peerName)}</div>
-           <div class="compare-bar"><div class="compare-bar-fill peer" style="width:${pg?.pct || 0}%; background:${g.color};"></div></div>
-           <div class="compare-pct peer">${pg?.pct || 0}%</div>
-         </div>`
-      : "";
-    card.innerHTML = `
-      <div class="group-header">
-        <div class="group-name">
-          <div class="group-color" style="background: ${g.color};"></div>
-          <span class="group-title">${escapeHtml(g.name)}</span>
-        </div>
-        <span class="icon group-chev">chevron_right</span>
-      </div>
-      <div class="compare-bars">
-        <div class="compare-row">
-          <div class="compare-who me">${escapeHtml(myName)}</div>
-          <div class="compare-bar"><div class="compare-bar-fill me" style="width:${g.pct}%; background:${g.color};"></div></div>
-          <div class="compare-pct">${g.pct}%</div>
-        </div>
-        ${peerRow}
-      </div>
-      <div class="genre-list">
-        ${g.genres.map((gen) => {
-          const pgen = pg?.genres?.find((x) => x.name === gen.name);
-          const peerPct = pgen?.pct || 0;
-          return `
-          <div class="genre-row ${gen.pct >= 100 ? "done" : ""}" data-genre="${escapeHtml(gen.name)}">
-            <div class="genre-name-txt">${escapeHtml(gen.name)}</div>
-            <div class="genre-bar"><div class="genre-bar-fill" style="width:${gen.pct}%; background:${g.color};"></div></div>
-            <div class="genre-pct">${gen.pct}%${peer ? ` <span style="color:var(--text3);">/ ${peerPct}%</span>` : ""}</div>
-            <span class="icon genre-go">chevron_right</span>
-          </div>
-        `;}).join("")}
-      </div>`;
-    card.querySelector(".group-header").addEventListener("click", () => {
-      card.classList.toggle("open");
-    });
-    for (const row of card.querySelectorAll(".genre-row")) {
-      row.addEventListener("click", (e) => {
-        e.stopPropagation();
-        startSession(row.dataset.genre);
-      });
-    }
-    root.appendChild(card);
-  }
+  // レーダーチャート + 凡例
+  renderRadarChart(me.groups || [], peerGroupMap, myName, peerName);
 
   // 最近覚えた言葉
   const words = $("myWords");
@@ -485,6 +456,113 @@ function renderMe(me, peers) {
       chip.style.background = `color-mix(in srgb, ${c} 14%, var(--bg) 86%)`;
       words.appendChild(chip);
     }
+  }
+}
+
+// グループ ID → 短縮ラベル (レーダー軸の表示用)
+const GROUP_SHORT = {
+  banax_os: "BANAX",
+  graphics3d: "3D",
+  engineer_mindset: "心得",
+  wonders: "仕組み",
+  monetize: "収益",
+  history: "歴史",
+  algorithms: "アルゴ",
+  ai_basics: "AI基礎",
+  ai_agents: "Agent",
+  web3: "Web3",
+  ui_parts: "UI部品",
+  ui_design: "UI設計",
+  db: "DB",
+  api: "API",
+  infra: "インフラ",
+  security: "Sec",
+  devflow: "Dev",
+};
+
+function renderRadarChart(myGroups, peerGroupMap, myName, peerName) {
+  const svg = $("radarSvg");
+  const W = 360, H = 360, cx = W / 2, cy = H / 2, R = 110;
+  const N = myGroups.length;
+  if (N === 0) {
+    svg.innerHTML = `<text x="180" y="180" font-size="12" fill="#888" text-anchor="middle">ジャンル未読込</text>`;
+    return;
+  }
+  const point = (i, pct) => {
+    const a = -Math.PI / 2 + (2 * Math.PI * i) / N;
+    const r = (R * Math.min(100, Math.max(0, pct))) / 100;
+    return [cx + r * Math.cos(a), cy + r * Math.sin(a)];
+  };
+  let html = "";
+  // 同心 polygon (25/50/75/100%)
+  for (const grid of [25, 50, 75, 100]) {
+    const pts = myGroups.map((_, i) => point(i, grid).join(",")).join(" ");
+    html += `<polygon class="grid ${grid === 100 ? "grid-100" : ""}" points="${pts}"/>`;
+  }
+  // 軸線
+  for (let i = 0; i < N; i++) {
+    const [x, y] = point(i, 100);
+    html += `<line class="axis" x1="${cx}" y1="${cy}" x2="${x}" y2="${y}"/>`;
+  }
+  // peer polygon (背面に)
+  const peerArr = myGroups.map((g) => peerGroupMap.get(g.id));
+  if (peerName) {
+    const peerPts = peerArr.map((pg, i) => point(i, pg?.pct || 0).join(",")).join(" ");
+    html += `<polygon class="peer-poly" points="${peerPts}"/>`;
+  }
+  // 自分 polygon
+  const myPts = myGroups.map((g, i) => point(i, g.pct).join(",")).join(" ");
+  html += `<polygon class="me-poly" points="${myPts}"/>`;
+  // ラベル (短縮名、軸の外側に)
+  for (let i = 0; i < N; i++) {
+    const a = -Math.PI / 2 + (2 * Math.PI * i) / N;
+    const lr = R + 22;
+    const lx = cx + lr * Math.cos(a);
+    const ly = cy + lr * Math.sin(a) + 4;
+    const cosA = Math.cos(a);
+    const anchor = cosA > 0.35 ? "start" : cosA < -0.35 ? "end" : "middle";
+    const short = GROUP_SHORT[myGroups[i].id] || myGroups[i].name.slice(0, 4);
+    html += `<text class="label" x="${lx}" y="${ly}" fill="${myGroups[i].color}" text-anchor="${anchor}">${escapeHtml(short)}</text>`;
+  }
+  // タップ判定円 (中心からその軸方向に大きめ)
+  for (let i = 0; i < N; i++) {
+    const [x, y] = point(i, 100);
+    html += `<circle class="axis-hit" cx="${x}" cy="${y}" r="22" data-i="${i}"/>`;
+  }
+  svg.innerHTML = html;
+  // タップで集中セッション (グループ内で最も弱い (未マスター) ジャンルへ)
+  svg.querySelectorAll(".axis-hit").forEach((el) => {
+    el.addEventListener("click", () => {
+      const i = Number(el.dataset.i);
+      const g = myGroups[i];
+      if (!g) return;
+      // そのグループの最も未達ジャンルを選ぶ
+      const target = g.genres.slice().sort((a, b) => a.pct - b.pct)[0];
+      if (target) startSession(target.name);
+    });
+  });
+
+  // 凡例タイトル (色の意味)
+  const lt = $("radarLegendTitle");
+  lt.innerHTML = `<span><span class="swatch" style="background:#6d28d9;"></span>${escapeHtml(myName)}</span>`
+    + (peerName ? `<span><span class="swatch" style="background:#f59e0b;border:1px dashed #f59e0b;"></span>${escapeHtml(peerName)}</span>` : "");
+
+  // 凡例リスト (タップで集中セッション)
+  const legend = $("radarLegend");
+  legend.innerHTML = "";
+  for (const g of myGroups) {
+    const pg = peerGroupMap.get(g.id);
+    const item = document.createElement("div");
+    item.className = "legend-item";
+    item.innerHTML =
+      `<div class="legend-dot" style="background:${g.color};"></div>` +
+      `<div class="legend-name">${escapeHtml(g.name)}</div>` +
+      `<div class="legend-pct">${g.pct}%${peerName ? `<span class="peer">/ ${pg?.pct || 0}%</span>` : ""}</div>`;
+    item.addEventListener("click", () => {
+      const target = g.genres.slice().sort((a, b) => a.pct - b.pct)[0];
+      if (target) startSession(target.name);
+    });
+    legend.appendChild(item);
   }
 }
 
