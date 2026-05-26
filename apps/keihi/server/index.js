@@ -1563,7 +1563,7 @@ async function generateKotonohaQuestion(p, { level, genre, excludeAnswers = [] }
 
 ルール:
 - claude_example は実際の指示文を「」で囲む
-- 既出の答えと重複しないこと: ${excludeAnswers.slice(0, 40).join(", ")}
+- 既出の答えと重複しないこと: ${excludeAnswers.slice(0, 20).join(", ")}
 
 【解説 (explanation) は4-6文、以下を必ず含める】
 1. **役割**: この概念は何のための道具/仕組みか (1-2文)
@@ -1584,16 +1584,29 @@ ${type === "choice"
   ? '{"question":"...","options":["この人が誰か判別する仕組み","データを保存する場所","デザインを作るツール","世界中へ高速配信"],"answer":"この人が誰か判別する仕組み","explanation":"...","claude_example":"「...」"}'
   : '{"question":"...","answer":"答え","keywords":["別表記1","別表記2"],"explanation":"...","claude_example":"「...」"}'}`;
 
+  // 1回目失敗したら 1 回だけリトライ
+  let j = null;
+  for (let attempt = 0; attempt < 2 && !j; attempt++) {
+    try {
+      const { result } = await callGeminiWithFallback(prompt, {
+        primaryModel: "gemini-2.5-flash",
+        maxOutputTokens: 1500,
+      });
+      const text = (result.response.text() || "").trim();
+      const m = text.match(/\{[\s\S]*\}/);
+      if (!m) { console.warn(`[kotonoha] gen no-json genre=${targetGenre} attempt=${attempt+1} text_len=${text.length}`); continue; }
+      const parsed = JSON.parse(m[0]);
+      if (!parsed.question || !parsed.answer || !parsed.explanation) {
+        console.warn(`[kotonoha] gen incomplete genre=${targetGenre} attempt=${attempt+1}`);
+        continue;
+      }
+      j = parsed;
+    } catch (e) {
+      console.warn(`[kotonoha] gen exception genre=${targetGenre} attempt=${attempt+1}:`, e.message);
+    }
+  }
+  if (!j) return null;
   try {
-    const { result } = await callGeminiWithFallback(prompt, {
-      primaryModel: "gemini-2.5-flash",
-      maxOutputTokens: 1500,
-    });
-    const text = (result.response.text() || "").trim();
-    const m = text.match(/\{[\s\S]*\}/);
-    if (!m) return null;
-    const j = JSON.parse(m[0]);
-    if (!j.question || !j.answer || !j.explanation) return null;
     const { rows } = await p.query(
       `INSERT INTO kotonoha_questions
          (category, difficulty, type, question, options, answer, keywords, explanation, claude_example, source, genre, group_id)
@@ -1765,8 +1778,8 @@ app.post("/api/kotonoha/sessions/start", async (req, res) => {
            FROM eligible e
            LEFT JOIN mastered_per_genre mpg ON mpg.genre = e.genre
           WHERE e.difficulty <= $3
-          ORDER BY genre_mastered ASC,
-                   priority ASC,
+          ORDER BY priority ASC,
+                   genre_mastered ASC,
                    (e.type = 'choice') DESC,
                    (e.source = 'generated') DESC,
                    e.difficulty ASC,
