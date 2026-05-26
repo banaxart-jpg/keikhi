@@ -17,6 +17,7 @@ const {
   GEMINI_MODEL = "gemini-2.5-flash",
   RECEIPTS_BUCKET,
   SHEET_ID,
+  INVOICE_SHEET_ID,
   DB_USER,
   DB_PASSWORD,
   DB_NAME,
@@ -95,24 +96,28 @@ async function getSheetsApi() {
   return sheetsApi;
 }
 const SHEET_HEADER = ["購入日", "購入者", "現場", "店舗", "金額", "費目", "工種", "支払方法", "メモ", "写真"];
-const sheetEnsuredCache = new Set(); // 1 度ヘッダー作ったタブはキャッシュ
-async function ensureSheetTab(sheets, ym) {
-  if (sheetEnsuredCache.has(ym)) return;
-  const meta = await sheets.spreadsheets.get({ spreadsheetId: SHEET_ID, fields: "sheets.properties" });
+const sheetEnsuredCache = new Set(); // key = "<spreadsheetId>:<tab>" 1 度ヘッダー作ったタブはキャッシュ
+async function ensureSheetTabGeneric(sheets, spreadsheetId, ym, header) {
+  const key = `${spreadsheetId}:${ym}`;
+  if (sheetEnsuredCache.has(key)) return;
+  const meta = await sheets.spreadsheets.get({ spreadsheetId, fields: "sheets.properties" });
   const exists = (meta.data.sheets || []).some((s) => s.properties && s.properties.title === ym);
   if (!exists) {
     await sheets.spreadsheets.batchUpdate({
-      spreadsheetId: SHEET_ID,
+      spreadsheetId,
       requestBody: { requests: [{ addSheet: { properties: { title: ym, index: 0, gridProperties: { frozenRowCount: 1 } } } }] },
     });
     await sheets.spreadsheets.values.update({
-      spreadsheetId: SHEET_ID,
+      spreadsheetId,
       range: `${ym}!A1`,
       valueInputOption: "RAW",
-      requestBody: { values: [SHEET_HEADER] },
+      requestBody: { values: [header] },
     });
   }
-  sheetEnsuredCache.add(ym);
+  sheetEnsuredCache.add(key);
+}
+async function ensureSheetTab(sheets, ym) {
+  return ensureSheetTabGeneric(sheets, SHEET_ID, ym, SHEET_HEADER);
 }
 async function appendRecordToSheet(r) {
   if (!SHEET_ID) return;
@@ -141,6 +146,42 @@ async function appendRecordToSheet(r) {
     console.log(`[sheets] appended id=${r.id} ym=${ym} site=${r.site}`);
   } catch (e) {
     console.warn(`[sheets] append FAILED id=${r.id}: ${e.message}`);
+  }
+}
+
+// ───── 請求書 (seikyu) 用 Sheets append ─────
+// クライアントから直接エンドポイントを叩く方式 (請求書は localStorage 管理で DB なし)。
+const INVOICE_HEADER = ["方向", "発行日", "期限", "状態", "完了日", "発行元/請求先", "金額", "分類", "現場", "銀行", "支店", "種別", "口座番号", "名義", "メモ"];
+async function appendInvoiceToSheet(r) {
+  if (!INVOICE_SHEET_ID) return { skipped: true };
+  try {
+    const sheets = await getSheetsApi();
+    const ym = String(r.issueDate || (r.createdAt || "").slice(0, 10) || "").slice(0, 7) || "unknown";
+    await ensureSheetTabGeneric(sheets, INVOICE_SHEET_ID, ym, INVOICE_HEADER);
+    const acc = r.account || {};
+    const dir = r.direction === "out" ? "受取" : "支払";
+    const statusLbl = r.status === "paid"
+      ? (r.direction === "out" ? "入金済" : "支払済")
+      : (r.direction === "out" ? "未入金" : "未払い");
+    await sheets.spreadsheets.values.append({
+      spreadsheetId: INVOICE_SHEET_ID,
+      range: `${ym}!A:O`,
+      valueInputOption: "USER_ENTERED",
+      insertDataOption: "INSERT_ROWS",
+      requestBody: {
+        values: [[
+          dir, r.issueDate || "", r.dueDate || "", statusLbl, r.paidAt || "",
+          r.issuer || "", Number(r.total) || 0, r.category || "", r.site || "",
+          acc.bank || "", acc.branch || "", acc.type || "", acc.number || "",
+          acc.holder || "", r.memo || "",
+        ]],
+      },
+    });
+    console.log(`[invoice-sheets] appended ym=${ym} issuer=${r.issuer} dir=${dir}`);
+    return { ok: true };
+  } catch (e) {
+    console.warn(`[invoice-sheets] FAILED: ${e.message}`);
+    return { ok: false, error: e.message };
   }
 }
 
@@ -258,6 +299,12 @@ async function callGeminiWithFallback(content, { primaryModel, maxOutputTokens, 
   }
   throw lastErr;
 }
+
+// 請求書アプリ (seikyu) からのスプレッドシート連携 (INVOICE_SHEET_ID に append)
+app.post("/api/invoice-sheet", async (req, res) => {
+  const result = await appendInvoiceToSheet(req.body || {});
+  res.json(result);
+});
 
 app.post("/api/scan", async (req, res) => {
   try {
