@@ -1374,20 +1374,25 @@ async function ensureKotonohaUser(p, email) {
 }
 
 // 弱ジャンル選択: バックグラウンド AI 生成のターゲットを決める
-// UI部品の HTML 実物デモを AI に作らせて DB に保存 (genre ごとに1つキャッシュ)
+// HTML 実物デモを AI に作らせて DB に保存 (genre ごとに1つキャッシュ)。
+// UI部品も、CSSプロパティ (z-index / position fixed / flex 等の挙動) も対応。
 async function generateUiDemo(p, genre, groupId) {
   if (!genAI) return null;
-  const prompt = `「${genre}」という UI 部品をユーザーが実際に操作できる、独立した HTML スニペットを作って。
+  const kindHint = groupId === "css_layout"
+    ? "CSS プロパティ / レイアウト技法の挙動を見せる。可能ならスライダー or ボタンで値を変えて挙動が変わる例にする/before-after の2例を並べる/動きをトグルする等で『何が変わるか』が一目で分かるようにする。"
+    : "UI 部品の最小実物例。ユーザーが押す/触れる要素を最低1つ含める。";
+  const prompt = `「${genre}」について、ユーザーが触って挙動を体感できる、独立した HTML スニペットを作って。
+
+種類のヒント: ${kindHint}
 
 要件:
 - 完全な HTML 文書 (<!doctype html><html>...</html>)
 - インライン CSS / JavaScript のみ (外部依存・CDN・<link>・外部画像 等は禁止)
 - iframe (sandbox: allow-scripts allow-same-origin allow-popups allow-modals) 内で動く前提
 - モバイル前提 (タッチ操作)、画面サイズ 360x280px くらい
-- 派手すぎず最小限の例で「これがその UI 部品です」と伝わる
+- 派手すぎず最小限の例で「これが何か」が伝わる
 - アクセント色は #6d28d9 (紫)。背景は #f5f5f7
-- ユーザーが押す/触れる UI 要素を最低1つ
-- 冒頭に小さく「↓ 押してみて」「↓ タップして」等のヒントを1行 (color:#888, font-size:12px)
+- 冒頭に小さく「↓ 押してみて」「↓ 値を変えてみて」「↓ スクロールしてみて」等のヒント1行 (color:#888, font-size:12px)
 - ★重要: HTML 内で </script> を書く場合は必ず <\\/script> にエスケープする (外側スクリプトを閉じないため)
 
 HTML のみを返す。説明文や Markdown のコードブロック (\`\`\`) は不要。`;
@@ -1690,8 +1695,9 @@ app.post("/api/kotonoha/sessions/start", async (req, res) => {
       questions = questions.concat(fillRows);
     }
 
-    // UI部品 (group_id = 'ui_parts') の問題に demo_html を結合
-    const uiGenres = [...new Set(questions.filter((q) => q.group_id === "ui_parts" && q.genre).map((q) => q.genre))];
+    // UI部品 / CSS技法 の問題に demo_html を結合
+    const demoGroups = new Set(["ui_parts", "css_layout"]);
+    const uiGenres = [...new Set(questions.filter((q) => demoGroups.has(q.group_id) && q.genre).map((q) => q.genre))];
     const demoMap = new Map();
     if (uiGenres.length) {
       const { rows: dRows } = await p.query(
@@ -1731,18 +1737,18 @@ app.post("/api/kotonoha/sessions/start", async (req, res) => {
       }
     })();
 
-    // 4) UI demo 未生成なら背景で生成 (この回には間に合わなくても、次セッションで反映)
+    // 4) UI / CSS demo 未生成なら背景で生成 (この回には間に合わなくても、次セッションで反映)
     (async () => {
       try {
-        const uiQs = questions.filter((q) => q.group_id === "ui_parts" && q.genre && !q.demo_html);
+        const demoQs = questions.filter((q) => demoGroups.has(q.group_id) && q.genre && !q.demo_html);
         const seen = new Set();
-        for (const q of uiQs) {
+        for (const q of demoQs) {
           if (seen.has(q.genre)) continue;
           seen.add(q.genre);
           await generateUiDemo(p, q.genre, q.group_id);
         }
       } catch (e) {
-        console.warn("[kotonoha] ui demo bg gen skipped:", e.message);
+        console.warn("[kotonoha] demo bg gen skipped:", e.message);
       }
     })();
 
