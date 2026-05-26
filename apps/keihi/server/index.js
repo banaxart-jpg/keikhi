@@ -1525,7 +1525,7 @@ app.post("/api/kotonoha/sessions/start", async (req, res) => {
     const focusGenre = req.body?.genre || null; // 集中セッション (ジャンル指定)
 
     // ─── 出題対象の整理 ───
-    // マスター = 同じ問題に MASTERY_CORRECT_COUNT 回 (=3) 以上正解。
+    // マスター = 直近 MASTERY_LAST_N 回 (=3) が連続全部正解 (途中失敗でリセット)。
     // 適格 (eligible) =
     //   - 未回答、または
     //   - 未マスターで 4時間以上空いてる、または
@@ -1533,34 +1533,47 @@ app.post("/api/kotonoha/sessions/start", async (req, res) => {
     // 優先度 = 0(未回答) → 1(未マスターのリトライ) → 2(マスター古い再テスト)
     // 選択式優先 (字面で recognize できれば OK の方針)
     const SESSION_SIZE = 20;
-    const MASTERY = MASTERY_CORRECT_COUNT;
+    const MASTERY = MASTERY_LAST_N;
+    const maxDiff = Math.min(10, level + 2);
 
     const baseSelectSql = `
-      WITH per_q AS (
-        SELECT question_id,
-               count(*) FILTER (WHERE is_correct) AS correct_count,
-               max(answered_at) AS last_at
+      WITH ranked AS (
+        SELECT question_id, is_correct, answered_at,
+               ROW_NUMBER() OVER (PARTITION BY question_id ORDER BY answered_at DESC) AS rn
+          FROM kotonoha_progress
+         WHERE user_email = $1
+      ),
+      mastered_q AS (
+        SELECT question_id
+          FROM ranked
+         WHERE rn <= $2
+         GROUP BY question_id
+        HAVING count(*) >= $2 AND bool_and(is_correct)
+      ),
+      per_q AS (
+        SELECT question_id, max(answered_at) AS last_at
           FROM kotonoha_progress
          WHERE user_email = $1
          GROUP BY question_id
       ),
       eligible AS (
         SELECT q.*,
-               COALESCE(pq.correct_count, 0) AS correct_count,
                pq.last_at,
+               (mq.question_id IS NOT NULL) AS is_mastered,
                CASE
                  WHEN pq.question_id IS NULL THEN 0
-                 WHEN COALESCE(pq.correct_count, 0) < $2 THEN 1
+                 WHEN mq.question_id IS NULL THEN 1
                  ELSE 2
                END AS priority
           FROM kotonoha_questions q
           LEFT JOIN per_q pq ON pq.question_id = q.id
+          LEFT JOIN mastered_q mq ON mq.question_id = q.id
          WHERE (
            pq.question_id IS NULL
            OR (
              pq.last_at < now() - interval '4 hours'
              AND (
-               COALESCE(pq.correct_count, 0) < $2
+               mq.question_id IS NULL
                OR pq.last_at < now() - interval '30 days'
              )
            )
@@ -1585,19 +1598,17 @@ app.post("/api/kotonoha/sessions/start", async (req, res) => {
     } else {
       const { rows } = await p.query(
         `${baseSelectSql},
-         genre_progress AS (
+         mastered_per_genre AS (
            SELECT q.genre,
-                  count(DISTINCT q.id) FILTER (
-                    WHERE (SELECT count(*) FROM kotonoha_progress pr
-                           WHERE pr.question_id = q.id AND pr.user_email = $1 AND pr.is_correct) >= $2
-                  ) AS mastered
+                  count(DISTINCT q.id) FILTER (WHERE mq2.question_id IS NOT NULL) AS mastered
              FROM kotonoha_questions q
+             LEFT JOIN mastered_q mq2 ON mq2.question_id = q.id
             WHERE q.genre IS NOT NULL
             GROUP BY q.genre
          )
-         SELECT e.*, COALESCE(gp.mastered, 0) AS genre_mastered
+         SELECT e.*, COALESCE(mpg.mastered, 0) AS genre_mastered
            FROM eligible e
-           LEFT JOIN genre_progress gp ON gp.genre = e.genre
+           LEFT JOIN mastered_per_genre mpg ON mpg.genre = e.genre
           WHERE e.difficulty <= $3
           ORDER BY genre_mastered ASC,
                    priority ASC,
@@ -1606,23 +1617,24 @@ app.post("/api/kotonoha/sessions/start", async (req, res) => {
                    e.difficulty ASC,
                    random()
           LIMIT $4`,
-        [req.user.email, MASTERY, Math.min(10, level + 2), SESSION_SIZE]
+        [req.user.email, MASTERY, maxDiff, SESSION_SIZE]
       );
       newRows = rows;
     }
 
     let questions = newRows;
 
-    // 不足したら全範囲から補充
+    // 不足したら全範囲から補充 (難易度キャップは守る・4択優先)
     if (questions.length < SESSION_SIZE) {
       const need = SESSION_SIZE - questions.length;
       const usedIds = questions.map((q) => q.id);
       const { rows: fillRows } = await p.query(
         `SELECT * FROM kotonoha_questions
           WHERE id <> ALL($1::bigint[])
+            AND difficulty <= $3
           ORDER BY (type = 'choice') DESC, (source = 'generated') DESC, difficulty ASC, random()
           LIMIT $2`,
-        [usedIds.length ? usedIds : [0], need]
+        [usedIds.length ? usedIds : [0], need, maxDiff]
       );
       questions = questions.concat(fillRows);
     }
@@ -1885,22 +1897,26 @@ async function computeKotonohaStreak(p, email) {
 
 async function buildKotonohaProgress(p, email) {
   const { rows: byGenre } = await p.query(
-    `WITH per_q AS (
-       SELECT question_id,
-              count(*) FILTER (WHERE is_correct) AS correct_count
+    `WITH ranked AS (
+       SELECT question_id, is_correct,
+              ROW_NUMBER() OVER (PARTITION BY question_id ORDER BY answered_at DESC) AS rn
          FROM kotonoha_progress
         WHERE user_email = $1
+     ),
+     mastered_q AS (
+       SELECT question_id
+         FROM ranked
+        WHERE rn <= $2
         GROUP BY question_id
+       HAVING count(*) >= $2 AND bool_and(is_correct)
      )
      SELECT q.genre, q.group_id,
-            count(DISTINCT q.id) FILTER (
-              WHERE COALESCE(pq.correct_count, 0) >= $2
-            ) AS mastered
+            count(DISTINCT q.id) FILTER (WHERE mq.question_id IS NOT NULL) AS mastered
        FROM kotonoha_questions q
-       LEFT JOIN per_q pq ON pq.question_id = q.id
+       LEFT JOIN mastered_q mq ON mq.question_id = q.id
       WHERE q.genre IS NOT NULL
       GROUP BY q.genre, q.group_id`,
-    [email, MASTERY_CORRECT_COUNT]
+    [email, MASTERY_LAST_N]
   );
   const dbProg = new Map();
   for (const r of byGenre) {
