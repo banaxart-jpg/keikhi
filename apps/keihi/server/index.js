@@ -1841,9 +1841,8 @@ app.post("/api/kotonoha/sessions/end", async (req, res) => {
 });
 
 // 自分のステータス: ジャンル別進捗 + 最近覚えた言葉
-// マスター済み問題数 / target_count = 進捗%。マスター = 3回正解。
-// (4択で適当に当たった可能性もあるので 1 回だけじゃカウントしない)
-const MASTERY_CORRECT_COUNT = 3;
+// マスター = 直近 MASTERY_LAST_N 回 (=3) が連続全部正解 (途中失敗でリセット)
+const MASTERY_LAST_N = 3;
 
 // 連続日数 (Duolingo 型): 1日5問正解=アクティブ。
 // 1日抜けても、次の日に 15問正解で前日も連続扱い (1回まで)。
