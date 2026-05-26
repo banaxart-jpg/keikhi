@@ -1757,6 +1757,33 @@ JSON でだけ返す (前置きや説明禁止):
       claude_example: q.claude_example,
       ai_reason: aiReason,
     });
+
+    // ─── 正解ごとにバックグラウンドで AI が次の問題を1つ生成 (fire-and-forget) ───
+    // リアルタイム感: 解くたびにプールが育つ → 次セッションが必ず新鮮
+    if (isCorrect) {
+      (async () => {
+        try {
+          const { rows: uRows } = await p.query(
+            `SELECT level FROM kotonoha_users WHERE user_email=$1`,
+            [req.user.email]
+          );
+          const userLevel = uRows[0]?.level || 1;
+          const targetGenres = await pickWeakGenres(p, req.user.email, 1);
+          if (!targetGenres.length) return;
+          const { rows: ansRows } = await p.query(
+            `SELECT answer FROM kotonoha_questions ORDER BY id DESC LIMIT 200`
+          );
+          const excludeAnswers = ansRows.map((r) => r.answer);
+          await generateKotonohaQuestion(p, {
+            level: userLevel,
+            genre: targetGenres[0],
+            excludeAnswers,
+          });
+        } catch (e) {
+          console.warn("[kotonoha] per-answer gen skipped:", e.message);
+        }
+      })();
+    }
   } catch (err) {
     console.error("kotonoha answer", err);
     res.status(500).json({ error: err.message });

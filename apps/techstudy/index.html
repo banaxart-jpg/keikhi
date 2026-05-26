@@ -232,7 +232,7 @@ body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); 
     <div class="card">
       <div class="summary-hero">
         <div class="summary-score" id="summaryScore">-</div>
-        <div class="summary-score-label">10 問中の正解数</div>
+        <div class="summary-score-label" id="summaryScoreLabel">20 問中の完了</div>
         <div class="summary-level-change" id="summaryLevelChange"></div>
       </div>
     </div>
@@ -254,12 +254,15 @@ import { getAuth, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/
 
 const state = {
   view: "home",
-  questions: [],
-  currentIdx: 0,
-  correctCount: 0,
+  questionMap: new Map(),  // id → question
+  queue: [],               // [questionId, ...] 先頭から出題、不正解で末尾に再追加
+  currentQId: null,
+  completedIds: new Set(), // このセッションで正解した unique 問題 ID
+  totalUnique: 0,          // セッション開始時の問題数 (進捗分母)
+  attemptCount: 0,         // 総回答数 (リトライ含む)
   busy: false,
   focusGenre: null,
-  groupColorMap: new Map(), // group_id → color
+  groupColorMap: new Map(),
 };
 
 const $ = (id) => document.getElementById(id);
@@ -432,7 +435,7 @@ function renderPeers(peers) {
   }
 }
 
-// ───── セッション ─────
+// ───── セッション (キュー方式 + リトライループ) ─────
 async function startSession(genre) {
   if (state.busy) return;
   state.busy = true;
@@ -442,11 +445,19 @@ async function startSession(genre) {
   try {
     const { questions } = await api("POST", "/api/kotonoha/sessions/start", genre ? { genre } : {});
     if (!questions.length) throw new Error("問題がありません。シード DB の投入が必要かも。");
-    state.questions = questions;
-    state.currentIdx = 0;
-    state.correctCount = 0;
+    // キュー初期化
+    state.questionMap = new Map();
+    state.queue = [];
+    for (const q of questions) {
+      state.questionMap.set(q.id, q);
+      state.queue.push(q.id);
+    }
+    state.completedIds = new Set();
+    state.totalUnique = questions.length;
+    state.attemptCount = 0;
+    state.currentQId = null;
     showSession();
-    renderCurrentQuestion();
+    nextQuestion();
   } catch (e) {
     $("homeErr").textContent = e.message;
   } finally {
@@ -457,15 +468,21 @@ async function startSession(genre) {
 window.startSession = startSession;
 
 function renderCurrentQuestion() {
-  const q = state.questions[state.currentIdx];
+  const q = state.questionMap.get(state.currentQId);
   if (!q) {
     endSession();
     return;
   }
-  const total = state.questions.length;
-  const pct = ((state.currentIdx) / total) * 100;
-  $("sessionProgressText").textContent = `${state.currentIdx + 1} / ${total}`;
-  $("sessionProgressFill").style.width = `${pct + 100 / total}%`;
+  // 進捗: 完了 unique 数 / total
+  const done = state.completedIds.size;
+  const total = state.totalUnique;
+  const pct = (done / total) * 100;
+  const remaining = state.queue.length; // 残キュー (現在の問題を除く)
+  const inRetryPhase = state.attemptCount >= total; // 初回20問を超えたらリトライ中
+  $("sessionProgressText").textContent = inRetryPhase
+    ? `🔁 リトライ あと${remaining + 1}問`
+    : `${done} / ${total}`;
+  $("sessionProgressFill").style.width = `${pct}%`;
 
   $("qCategory").textContent = q.genre || q.category || "";
   $("qCategory").style.background = state.groupColorMap.get(q.group_id) || "var(--accent)";
@@ -501,20 +518,28 @@ function renderCurrentQuestion() {
   }
 }
 
+function handleAnswerResult(qId, r) {
+  state.attemptCount++;
+  if (r.is_correct) {
+    state.completedIds.add(qId);
+  } else {
+    // 不正解 → キュー末尾に再追加 (正解出るまで終わらない)
+    state.queue.push(qId);
+  }
+}
+
 async function submitChoice(opt, btn) {
   if (state.busy) return;
   state.busy = true;
-  // ボタンを全部無効化
   document.querySelectorAll(".choice-btn").forEach((b) => b.disabled = true);
   try {
-    const q = state.questions[state.currentIdx];
-    const r = await api("POST", "/api/kotonoha/answer", { question_id: q.id, user_answer: opt });
-    // 正解 / 不正解のスタイル
+    const qId = state.currentQId;
+    const r = await api("POST", "/api/kotonoha/answer", { question_id: qId, user_answer: opt });
     document.querySelectorAll(".choice-btn").forEach((b) => {
       if (b.textContent === r.answer) b.classList.add("correct");
       else if (b === btn && !r.is_correct) b.classList.add("incorrect");
     });
-    if (r.is_correct) state.correctCount++;
+    handleAnswerResult(qId, r);
     renderResult(r);
   } catch (e) {
     $("sessionErr").textContent = e.message;
@@ -533,9 +558,9 @@ async function submitFree() {
   $("freeSubmit").disabled = true;
   $("freeSubmit").textContent = "判定中…";
   try {
-    const q = state.questions[state.currentIdx];
-    const r = await api("POST", "/api/kotonoha/answer", { question_id: q.id, user_answer: ua });
-    if (r.is_correct) state.correctCount++;
+    const qId = state.currentQId;
+    const r = await api("POST", "/api/kotonoha/answer", { question_id: qId, user_answer: ua });
+    handleAnswerResult(qId, r);
     renderResult(r);
   } catch (e) {
     $("sessionErr").textContent = e.message;
@@ -552,6 +577,11 @@ function renderResult(r) {
   $("freeSubmit").textContent = "送信";
   const ra = $("resultArea");
   ra.style.display = "";
+  // 次に何が来るか判定 (キュー空 = 終了)
+  const isLast = state.queue.length === 0;
+  const nextLabel = isLast
+    ? "🎉 結果を見る →"
+    : (r.is_correct ? `次の問題へ → (あと${state.queue.length}問)` : `もう一度挑戦 → (あと${state.queue.length}問)`);
   const cls = r.is_correct ? "correct" : "incorrect";
   const statusText = r.is_correct ? "✓ 正解" : "× 不正解";
   ra.innerHTML = `
@@ -566,21 +596,19 @@ function renderResult(r) {
       </div>` : ""}
       ${r.ai_reason ? `<div style="font-size:10px;color:var(--text3);margin-top:8px;">AI 判定: ${escapeHtml(r.ai_reason)}</div>` : ""}
     </div>
-    <button class="next-btn" onclick="nextQuestion()">
-      ${state.currentIdx < state.questions.length - 1 ? "次の問題へ →" : "結果を見る →"}
-    </button>`;
+    <button class="next-btn" onclick="nextQuestion()">${nextLabel}</button>`;
   // 結果カードまでスクロール
   setTimeout(() => ra.scrollIntoView({ behavior: "smooth", block: "center" }), 50);
 }
 
 function nextQuestion() {
-  state.currentIdx++;
-  if (state.currentIdx >= state.questions.length) {
+  if (state.queue.length === 0) {
     endSession();
-  } else {
-    renderCurrentQuestion();
-    window.scrollTo({ top: 0, behavior: "smooth" });
+    return;
   }
+  state.currentQId = state.queue.shift();
+  renderCurrentQuestion();
+  window.scrollTo({ top: 0, behavior: "smooth" });
 }
 window.nextQuestion = nextQuestion;
 
@@ -599,7 +627,11 @@ function showSummary(r) {
   $("sessionView").classList.remove("active");
   $("summaryView").classList.add("active");
 
-  $("summaryScore").textContent = `${state.correctCount}`;
+  // 全問正解までやる仕組み: 結果は「unique完了数 / 総ユニーク数」
+  // 総回答数 (attemptCount) も表示してリトライ回数が分かるように
+  $("summaryScore").textContent = `${state.completedIds.size}`;
+  const sl = $("summaryScoreLabel");
+  if (sl) sl.textContent = `${state.totalUnique} 問中の完了 (総回答 ${state.attemptCount})`;
   const lc = $("summaryLevelChange");
   if (r.levelChanged && r.newLevel > r.oldLevel) {
     lc.textContent = `🎓 レベルアップ ${r.oldLevel} → ${r.newLevel}`;
