@@ -116,3 +116,11 @@ CREATE TABLE IF NOT EXISTS kotonoha_users (
   created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at     TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- ジャンル細分化 (v2): カテゴリ8軸 → ジャンル ~600軸へ。
+-- 各ジャンルは target_count (基本10) 個 unique 正解で 100%。
+-- 既存問題は genre/group_id が NULL のまま放置 (古いcategoryで動く)。
+ALTER TABLE kotonoha_questions ADD COLUMN IF NOT EXISTS genre    TEXT;
+ALTER TABLE kotonoha_questions ADD COLUMN IF NOT EXISTS group_id TEXT;
+CREATE INDEX IF NOT EXISTS kotonoha_q_genre_idx ON kotonoha_questions (genre);
+CREATE INDEX IF NOT EXISTS kotonoha_q_group_idx ON kotonoha_questions (group_id);

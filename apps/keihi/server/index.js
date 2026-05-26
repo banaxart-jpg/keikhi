@@ -6,6 +6,11 @@ import { google } from "googleapis";
 import admin from "firebase-admin";
 import pg from "pg";
 import crypto from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const {
   GEMINI_API_KEY,
@@ -1327,6 +1332,31 @@ app.post("/api/internal/kaigi/tick", async (req, res) => {
 // kotonoha: 「Claude Code に指示するための語彙」を一問一答で学ぶアプリ
 // ─────────────────────────────
 
+// ジャンルマスタ (~600ジャンル × 13グループ) を起動時に読み込み。
+// genres.json はリポジトリ管理の SoT、コードからは参照のみ。
+let KOTONOHA_GENRES_DATA = null;
+let KOTONOHA_GENRE_TO_GROUP = new Map(); // genre名 → group_id
+let KOTONOHA_GENRE_TARGET = new Map();   // genre名 → target_count
+try {
+  const raw = fs.readFileSync(path.join(__dirname, "kotonoha-genres.json"), "utf8");
+  KOTONOHA_GENRES_DATA = JSON.parse(raw);
+  for (const g of KOTONOHA_GENRES_DATA.groups || []) {
+    for (const gen of g.genres || []) {
+      KOTONOHA_GENRE_TO_GROUP.set(gen.name, g.id);
+      KOTONOHA_GENRE_TARGET.set(gen.name, gen.target_count || 10);
+    }
+  }
+  console.log(`[kotonoha] loaded ${KOTONOHA_GENRE_TO_GROUP.size} genres / ${KOTONOHA_GENRES_DATA.groups?.length || 0} groups`);
+} catch (e) {
+  console.warn("[kotonoha] genres.json load failed:", e.message);
+}
+
+// ジャンルマスタ取得 (フロント用)
+app.get("/api/kotonoha/genres", (req, res) => {
+  if (!KOTONOHA_GENRES_DATA) return res.status(503).json({ error: "genres not loaded" });
+  res.json(KOTONOHA_GENRES_DATA);
+});
+
 // ユーザー初期化 / 取得
 async function ensureKotonohaUser(p, email) {
   const display = String(email).split("@")[0] || "user";
@@ -1340,30 +1370,60 @@ async function ensureKotonohaUser(p, email) {
   return rows[0];
 }
 
+// 弱ジャンル選択: バックグラウンド AI 生成のターゲットを決める
+async function pickWeakGenres(p, email, n) {
+  try {
+    const { rows } = await p.query(
+      `SELECT q.genre,
+              count(DISTINCT q.id) FILTER (WHERE pr.is_correct) AS uniq_correct
+         FROM kotonoha_questions q
+         LEFT JOIN kotonoha_progress pr
+           ON pr.question_id = q.id AND pr.user_email = $1
+        WHERE q.genre IS NOT NULL
+        GROUP BY q.genre
+        ORDER BY uniq_correct ASC, random()
+        LIMIT $2`,
+      [email, n * 3]
+    );
+    const fromDb = rows.map((r) => r.genre).slice(0, n);
+    if (fromDb.length >= n) return fromDb;
+    // DB ジャンルが少ない: マスタからランダムで補う
+    const all = Array.from(KOTONOHA_GENRE_TO_GROUP.keys()).filter((g) => !fromDb.includes(g));
+    for (let i = all.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [all[i], all[j]] = [all[j], all[i]];
+    }
+    return [...fromDb, ...all.slice(0, n - fromDb.length)];
+  } catch (e) {
+    console.warn("[kotonoha] pickWeakGenres failed:", e.message);
+    return [];
+  }
+}
+
 // AI で新しい問題を生成 (バックグラウンド呼出し or 明示呼出し)
-// レベル ±0〜1 の範囲で、既出答えと重複しない問題を作って DB に保存。
-async function generateKotonohaQuestion(p, { level, category, excludeAnswers = [] }) {
+// ジャンル指定すれば該当ジャンル、なしならジャンル空間からランダム選出。
+async function generateKotonohaQuestion(p, { level, genre, excludeAnswers = [] }) {
   if (!genAI) return null;
-  const cats = ["ui", "db", "api", "ai", "infra", "concept", "project", "prompt"];
-  const cat = category || cats[Math.floor(Math.random() * cats.length)];
+
+  // ジャンル決定: 未指定なら全ジャンルからランダム
+  let targetGenre = genre;
+  if (!targetGenre && KOTONOHA_GENRE_TO_GROUP.size > 0) {
+    const all = Array.from(KOTONOHA_GENRE_TO_GROUP.keys());
+    targetGenre = all[Math.floor(Math.random() * all.length)];
+  }
+  const groupId = targetGenre ? KOTONOHA_GENRE_TO_GROUP.get(targetGenre) || null : null;
+  // 旧 category 列にも互換のため group_id を流用
+  const cat = groupId || "concept";
   const type = Math.random() < 0.6 ? "choice" : "free";
-  const catGuide = {
-    ui: "画面UI部品 (モーダル/トースト/FAB/アコーディオン等)",
-    db: "データベース (RDB/NoSQL/インデックス/JOIN等)",
-    api: "Web API (HTTPメソッド/ステータスコード/認証等)",
-    ai: "AI・LLM (トークン/プロンプト/RAG/マルチモーダル等)",
-    infra: "GCPインフラ (Cloud Run/Hosting/Secret Manager等)",
-    concept: "プログラミング概念 (async/await/キャッシュ/localStorage等)",
-    project: "このkeihiプロジェクト固有 (Firebase Auth/Cloud Build/CLAUDE.md等)",
-    prompt: "AIへの指示の書き方 (プロンプト/CoT/役割指定等)",
-  }[cat];
+
   const prompt = `「Claude Codeに指示するための語彙」を学ぶアプリの問題を1問だけJSONで作って。
 
-カテゴリ: ${cat} (${catGuide})
+ジャンル: ${targetGenre || "(自由)"}
 難易度: ${level} / 10 (1=超基本、3=入門卒業、5=中級、7=上級、10=エキスパート)
 形式: ${type === "choice" ? "4択" : "自由記述（答えは1単語）"}
 
 ルール:
+- ジャンルにバッチリ関係ある問題にする (ジャンル名そのものを問うのも可、関連概念でも可)
 - 「プログラミング/技術って面白い」と思える問題にする。雑学・歴史・身近な例・意外な背景を絡める
 - 解説に『へぇー！』ポイントを1つ必ず入れる (例: 「PageRank は学術論文の引用数を Web に応用」「JPEG が圧縮で捨ててるのは人間の目に見えない高周波情報」「ハミング符号はベル研究所の研究員が紙テープ読込エラーにイラついて発明」「QRコードはトヨタの下請けが伝票管理用に作った国産技術」みたいなトリビア)
 - 達成感が出る難易度感に。難しすぎないこと
@@ -1388,8 +1448,8 @@ ${type === "choice"
     if (!j.question || !j.answer || !j.explanation) return null;
     const { rows } = await p.query(
       `INSERT INTO kotonoha_questions
-         (category, difficulty, type, question, options, answer, keywords, explanation, claude_example, source)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'generated') RETURNING *`,
+         (category, difficulty, type, question, options, answer, keywords, explanation, claude_example, source, genre, group_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'generated', $10, $11) RETURNING *`,
       [
         cat,
         level,
@@ -1400,6 +1460,8 @@ ${type === "choice"
         JSON.stringify(j.keywords || []),
         j.explanation,
         j.claude_example || "",
+        targetGenre,
+        groupId,
       ]
     );
     return rows[0];
@@ -1418,32 +1480,71 @@ app.post("/api/kotonoha/sessions/start", async (req, res) => {
   try {
     const user = await ensureKotonohaUser(p, req.user.email);
     const level = user.level;
+    const focusGenre = req.body?.genre || null; // 集中セッション (ジャンル指定)
 
     // 1) リトライ候補: 過去30日でミスして、それ以降正解してない問題 (最大3問)
+    //    集中セッション時はそのジャンルに限定。
+    const retrySql = focusGenre
+      ? `SELECT q.* FROM kotonoha_questions q
+          WHERE q.genre = $2 AND q.id IN (
+            SELECT question_id FROM kotonoha_progress
+             WHERE user_email = $1
+             GROUP BY question_id
+            HAVING bool_and(NOT is_correct) AND max(answered_at) > now() - interval '30 days'
+          ) ORDER BY random() LIMIT 3`
+      : `SELECT q.* FROM kotonoha_questions q
+          WHERE q.id IN (
+            SELECT question_id FROM kotonoha_progress
+             WHERE user_email = $1
+             GROUP BY question_id
+            HAVING bool_and(NOT is_correct) AND max(answered_at) > now() - interval '30 days'
+          ) ORDER BY random() LIMIT 3`;
     const { rows: retryRows } = await p.query(
-      `SELECT q.* FROM kotonoha_questions q
-        WHERE q.id IN (
-          SELECT question_id FROM kotonoha_progress
-           WHERE user_email = $1
-           GROUP BY question_id
-          HAVING bool_and(NOT is_correct) AND max(answered_at) > now() - interval '30 days'
-        )
-        ORDER BY random() LIMIT 3`,
-      [req.user.email]
+      retrySql,
+      focusGenre ? [req.user.email, focusGenre] : [req.user.email]
     );
 
-    // 2) 新規: レベルに「近い」問題を優先 (距離 0 → 1 → 2 の順で並べてランダム)。
-    //    結果として「ちょうどいい」 + 「ちょっと挑戦」が混ざる。
+    // 2) 新規: 集中セッション→そのジャンル内優先、通常→「弱いジャンル」優先 + レベル近接。
     const needNew = 10 - retryRows.length;
-    const { rows: newRows } = await p.query(
-      `SELECT *, ABS(difficulty - $1) AS dd
-         FROM kotonoha_questions
-        WHERE id NOT IN (SELECT question_id FROM kotonoha_progress WHERE user_email = $2)
-          AND difficulty BETWEEN $3 AND $4
-        ORDER BY dd ASC, random()
-        LIMIT $5`,
-      [level, req.user.email, Math.max(1, level - 1), Math.min(10, level + 2), needNew]
-    );
+    let newRows = [];
+    if (focusGenre) {
+      // 集中セッション: そのジャンル内未解答 (難易度近接)
+      const { rows } = await p.query(
+        `SELECT *, ABS(difficulty - $1) AS dd
+           FROM kotonoha_questions
+          WHERE genre = $2
+            AND id NOT IN (SELECT question_id FROM kotonoha_progress WHERE user_email = $3 AND is_correct)
+          ORDER BY dd ASC, random()
+          LIMIT $4`,
+        [level, focusGenre, req.user.email, needNew]
+      );
+      newRows = rows;
+    } else {
+      // 通常: 「100%に達してないジャンル」優先 + レベル近接。
+      // 各ジャンルで unique 正解数を見て、target_count 未満のジャンル優先で取る。
+      const { rows } = await p.query(
+        `WITH user_progress AS (
+           SELECT q.genre,
+                  count(DISTINCT q.id) FILTER (WHERE pr.is_correct) AS correct_uniq
+             FROM kotonoha_questions q
+             LEFT JOIN kotonoha_progress pr
+               ON pr.question_id = q.id AND pr.user_email = $2
+            WHERE q.genre IS NOT NULL
+            GROUP BY q.genre
+         )
+         SELECT q.*,
+                ABS(q.difficulty - $1) AS dd,
+                COALESCE(up.correct_uniq, 0) AS uniq_correct
+           FROM kotonoha_questions q
+           LEFT JOIN user_progress up ON up.genre = q.genre
+          WHERE q.id NOT IN (SELECT question_id FROM kotonoha_progress WHERE user_email = $2)
+            AND q.difficulty BETWEEN $3 AND $4
+          ORDER BY uniq_correct ASC, dd ASC, random()
+          LIMIT $5`,
+        [level, req.user.email, Math.max(1, level - 1), Math.min(10, level + 2), needNew]
+      );
+      newRows = rows;
+    }
 
     let questions = [...retryRows, ...newRows];
 
@@ -1461,26 +1562,26 @@ app.post("/api/kotonoha/sessions/start", async (req, res) => {
       questions = questions.concat(fillRows);
     }
 
-    // 3) バックグラウンド AI 生成: このレベル帯の未解答プールが薄ければ補充。
-    //    レスポンスは待たない (fire-and-forget)。
+    // 3) バックグラウンド AI 生成: ジャンル別未解答プールが薄ければ補充。
+    //    レスポンスは待たない (fire-and-forget)。集中セッションならそのジャンルに集中生成。
     (async () => {
       try {
-        const { rows: poolRows } = await p.query(
-          `SELECT count(*)::int AS n FROM kotonoha_questions
-            WHERE difficulty BETWEEN $1 AND $2
-              AND id NOT IN (SELECT question_id FROM kotonoha_progress WHERE user_email = $3)`,
-          [Math.max(1, level - 1), Math.min(10, level + 1), req.user.email]
-        );
-        const remain = poolRows[0]?.n || 0;
-        if (remain >= 12) return; // 十分残ってる
-        // 既出答え一覧 (重複防止)
+        const targetGenres = focusGenre ? [focusGenre] : await pickWeakGenres(p, req.user.email, 2);
+        if (!targetGenres.length) return;
         const { rows: ansRows } = await p.query(
           `SELECT answer FROM kotonoha_questions ORDER BY id DESC LIMIT 200`
         );
         const excludeAnswers = ansRows.map((r) => r.answer);
-        // 2問だけ生成（重課金防止）
-        for (let i = 0; i < 2; i++) {
-          await generateKotonohaQuestion(p, { level, excludeAnswers });
+        for (const g of targetGenres) {
+          // そのジャンルの未解答プールが薄い場合のみ生成
+          const { rows: poolRows } = await p.query(
+            `SELECT count(*)::int AS n FROM kotonoha_questions
+              WHERE genre = $1
+                AND id NOT IN (SELECT question_id FROM kotonoha_progress WHERE user_email = $2)`,
+            [g, req.user.email]
+          );
+          if ((poolRows[0]?.n || 0) >= 5) continue;
+          await generateKotonohaQuestion(p, { level, genre: g, excludeAnswers });
         }
       } catch (e) {
         console.warn("[kotonoha] bg generate skipped:", e.message);
@@ -1491,13 +1592,15 @@ app.post("/api/kotonoha/sessions/start", async (req, res) => {
     const safe = questions.map((q) => ({
       id: q.id,
       category: q.category,
+      genre: q.genre,
+      group_id: q.group_id,
       difficulty: q.difficulty,
       type: q.type,
       question: q.question,
       options: q.options,
       image_url: q.image_url,
     }));
-    res.json({ level, questions: safe });
+    res.json({ level, genre: focusGenre, questions: safe });
   } catch (err) {
     console.error("kotonoha start", err);
     res.status(500).json({ error: err.message });
@@ -1582,6 +1685,8 @@ JSON でだけ返す (前置きや説明禁止):
     res.json({
       is_correct: isCorrect,
       answer: q.answer,
+      genre: q.genre,
+      group_id: q.group_id,
       explanation: q.explanation,
       claude_example: q.claude_example,
       ai_reason: aiReason,
@@ -1624,25 +1729,49 @@ app.post("/api/kotonoha/sessions/end", async (req, res) => {
   }
 });
 
-// 自分のステータス: カテゴリ別・最近覚えた言葉
+// 自分のステータス: ジャンル別進捗 + 最近覚えた言葉
+// 各ジャンル: uniq_correct / target_count = 進捗%
+async function buildKotonohaProgress(p, email) {
+  const { rows: byGenre } = await p.query(
+    `SELECT q.genre, q.group_id,
+            count(DISTINCT q.id) FILTER (WHERE pr.is_correct) AS uniq_correct
+       FROM kotonoha_questions q
+       LEFT JOIN kotonoha_progress pr
+         ON pr.question_id = q.id AND pr.user_email = $1
+      WHERE q.genre IS NOT NULL
+      GROUP BY q.genre, q.group_id`,
+    [email]
+  );
+  const dbProg = new Map();
+  for (const r of byGenre) {
+    dbProg.set(r.genre, { uniq_correct: Number(r.uniq_correct || 0), group_id: r.group_id });
+  }
+  const groups = [];
+  for (const g of (KOTONOHA_GENRES_DATA?.groups || [])) {
+    const genres = g.genres.map((gen) => {
+      const target = gen.target_count || 10;
+      const correct = Math.min(dbProg.get(gen.name)?.uniq_correct || 0, target);
+      return { name: gen.name, target, correct, pct: Math.round((correct / target) * 100) };
+    });
+    const totalT = genres.reduce((s, x) => s + x.target, 0);
+    const totalC = genres.reduce((s, x) => s + x.correct, 0);
+    groups.push({
+      id: g.id, name: g.name, color: g.color,
+      genres,
+      pct: totalT ? Math.round((totalC / totalT) * 100) : 0,
+    });
+  }
+  return groups;
+}
+
 app.get("/api/kotonoha/me", async (req, res) => {
   const p = getPool();
   if (!p) return res.status(503).json({ error: "DB not configured" });
   try {
     const user = await ensureKotonohaUser(p, req.user.email);
-    const { rows: byCat } = await p.query(
-      `SELECT q.category,
-              count(DISTINCT q.id) FILTER (WHERE pr.is_correct) AS correct_qs,
-              count(DISTINCT q.id) AS attempted_qs,
-              (SELECT count(*) FROM kotonoha_questions WHERE category = q.category) AS total_qs
-         FROM kotonoha_progress pr
-         JOIN kotonoha_questions q ON q.id = pr.question_id
-        WHERE pr.user_email = $1
-        GROUP BY q.category`,
-      [req.user.email]
-    );
+    const groups = await buildKotonohaProgress(p, req.user.email);
     const { rows: recentWords } = await p.query(
-      `SELECT DISTINCT ON (q.id) q.answer, q.category, pr.answered_at
+      `SELECT DISTINCT ON (q.id) q.answer, q.genre, q.group_id, q.category, pr.answered_at
          FROM kotonoha_progress pr
          JOIN kotonoha_questions q ON q.id = pr.question_id
         WHERE pr.user_email = $1 AND pr.is_correct = true
@@ -1651,7 +1780,7 @@ app.get("/api/kotonoha/me", async (req, res) => {
     );
     res.json({
       user,
-      categories: byCat,
+      groups,
       recentWords: recentWords.sort((a, b) => new Date(b.answered_at) - new Date(a.answered_at)).slice(0, 10),
     });
   } catch (err) {
@@ -1674,19 +1803,9 @@ app.get("/api/kotonoha/peers", async (req, res) => {
     );
     const result = [];
     for (const u of users) {
-      const { rows: byCat } = await p.query(
-        `SELECT q.category,
-                count(DISTINCT q.id) FILTER (WHERE pr.is_correct) AS correct_qs,
-                count(DISTINCT q.id) AS attempted_qs,
-                (SELECT count(*) FROM kotonoha_questions WHERE category = q.category) AS total_qs
-           FROM kotonoha_progress pr
-           JOIN kotonoha_questions q ON q.id = pr.question_id
-          WHERE pr.user_email = $1
-          GROUP BY q.category`,
-        [u.user_email]
-      );
+      const groups = await buildKotonohaProgress(p, u.user_email);
       const { rows: recentWords } = await p.query(
-        `SELECT DISTINCT ON (q.id) q.answer, q.category, pr.answered_at
+        `SELECT DISTINCT ON (q.id) q.answer, q.genre, q.group_id, pr.answered_at
            FROM kotonoha_progress pr
            JOIN kotonoha_questions q ON q.id = pr.question_id
           WHERE pr.user_email = $1 AND pr.is_correct = true
@@ -1699,7 +1818,7 @@ app.get("/api/kotonoha/peers", async (req, res) => {
         total_correct: u.total_correct,
         total_answers: u.total_answers,
         last_session_at: u.last_session_at,
-        categories: byCat,
+        groups,
         recentWords: recentWords.sort((a, b) => new Date(b.answered_at) - new Date(a.answered_at)).slice(0, 5),
       });
     }

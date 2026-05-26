@@ -48,6 +48,34 @@ body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); 
 .cat-bar-fill { height: 100%; border-radius: 4px; transition: width 0.4s; }
 .cat-count { text-align: right; color: var(--text2); font-weight: 700; font-variant-numeric: tabular-nums; }
 
+/* グループ × ジャンル */
+.group-list { display: flex; flex-direction: column; gap: 10px; }
+.group-card { background: var(--bg); border-radius: 16px; padding: 12px 14px; box-shadow: 4px 4px 10px var(--sd), -3px -3px 8px var(--sl); }
+.group-header { display: flex; justify-content: space-between; align-items: center; cursor: pointer; gap: 10px; }
+.group-name { display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0; }
+.group-color { width: 10px; height: 10px; border-radius: 3px; flex-shrink: 0; }
+.group-title { font-size: 13px; font-weight: 700; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.group-pct { font-size: 12px; color: var(--text2); font-variant-numeric: tabular-nums; }
+.group-pct strong { font-size: 16px; color: var(--text); font-weight: 800; }
+.group-chev { font-size: 18px; color: var(--text3); transition: transform 0.2s; }
+.group-card.open .group-chev { transform: rotate(90deg); }
+.group-bar { height: 5px; background: rgba(154,160,184,0.2); border-radius: 3px; overflow: hidden; box-shadow: inset 1px 1px 3px var(--sd); margin-top: 8px; }
+.group-bar-fill { height: 100%; border-radius: 3px; transition: width 0.4s; }
+.genre-list { margin-top: 12px; display: none; flex-direction: column; gap: 6px; padding-top: 4px; }
+.group-card.open .genre-list { display: flex; }
+.genre-row { display: grid; grid-template-columns: 1fr 80px 36px 24px; align-items: center; gap: 8px; padding: 6px 4px; border-radius: 8px; cursor: pointer; }
+.genre-row:hover { background: rgba(154,160,184,0.08); }
+.genre-row:active { transform: scale(0.98); }
+.genre-row.done { opacity: 0.55; }
+.genre-name-txt { font-size: 12px; font-weight: 600; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.genre-bar { height: 5px; background: rgba(154,160,184,0.2); border-radius: 3px; overflow: hidden; }
+.genre-bar-fill { height: 100%; border-radius: 3px; transition: width 0.4s; }
+.genre-pct { font-size: 11px; color: var(--text2); text-align: right; font-variant-numeric: tabular-nums; font-weight: 700; }
+.genre-go { color: var(--text3); font-size: 14px; text-align: right; }
+.total-progress { display: flex; align-items: baseline; gap: 8px; margin-top: 6px; }
+.total-progress .num { font-size: 28px; font-weight: 900; color: var(--accent); line-height: 1; }
+.total-progress .lbl { font-size: 11px; color: var(--text2); font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; }
+
 .start-btn { width: 100%; padding: 16px; border-radius: 16px; border: none; font-family: inherit; font-size: 15px; font-weight: 800; cursor: pointer; color: white; background: linear-gradient(135deg, #8b5cf6, #6d28d9); box-shadow: 6px 6px 14px var(--sd); }
 .start-btn:active { transform: scale(0.98); box-shadow: inset 3px 3px 8px rgba(0,0,0,0.15); }
 .start-btn:disabled { opacity: 0.5; }
@@ -129,16 +157,25 @@ body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); 
   <!-- ホーム画面 -->
   <div class="view active" id="homeView">
     <div class="card">
-      <div class="label">あなたのレベル</div>
+      <div class="label">あなた</div>
       <div class="level-hero">
         <div class="level-num" id="myLevel">-</div>
         <div class="level-lbl" id="myLevelStats"></div>
+        <div class="total-progress" style="justify-content:center;">
+          <div class="num" id="myTotalPct">0</div>
+          <div class="lbl">% 全ジャンル平均</div>
+        </div>
       </div>
     </div>
 
-    <div class="card">
-      <div class="label">カテゴリ別の達成度</div>
-      <div class="cats" id="myCats"><div class="empty">読み込み中…</div></div>
+    <button class="start-btn" id="startBtn" onclick="startSession()">
+      <span class="icon" style="vertical-align:-0.18em;">play_circle</span>
+      10問にチャレンジ (弱いジャンル優先)
+    </button>
+
+    <div class="card" style="margin-top: 16px;">
+      <div class="label">ジャンル別の達成度 (タップで集中セッション)</div>
+      <div class="group-list" id="myGroups"><div class="empty">読み込み中…</div></div>
     </div>
 
     <div class="card">
@@ -146,12 +183,7 @@ body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); 
       <div class="recent-words" id="myWords"><div class="empty">まだなし</div></div>
     </div>
 
-    <button class="start-btn" id="startBtn" onclick="startSession()">
-      <span class="icon" style="vertical-align:-0.18em;">play_circle</span>
-      10問にチャレンジ
-    </button>
-
-    <div class="card" style="margin-top: 16px;">
+    <div class="card">
       <div class="label">みんなの進捗</div>
       <div id="peerList"><div class="empty">読み込み中…</div></div>
     </div>
@@ -212,24 +244,14 @@ body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); 
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js";
 import { getAuth, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
 
-const CAT_LABELS = {
-  ui: "UI部品", db: "DB", api: "API", ai: "AI/LLM",
-  infra: "インフラ", concept: "概念", project: "このプロジェクト",
-  prompt: "プロンプト",
-};
-const CAT_COLORS = {
-  ui: "var(--cat-ui)", db: "var(--cat-db)", api: "var(--cat-api)",
-  ai: "var(--cat-ai)", infra: "var(--cat-infra)", concept: "var(--cat-concept)",
-  project: "var(--cat-project)", prompt: "var(--cat-prompt)",
-};
-const ALL_CATS = ["ui", "db", "api", "ai", "infra", "concept", "project", "prompt"];
-
 const state = {
   view: "home",
   questions: [],
   currentIdx: 0,
   correctCount: 0,
   busy: false,
+  focusGenre: null,
+  groupColorMap: new Map(), // group_id → color
 };
 
 const $ = (id) => document.getElementById(id);
@@ -277,24 +299,58 @@ function renderMe(me) {
   $("myLevelStats").textContent =
     `LEVEL  ・  正解 ${me.user.total_correct} / ${me.user.total_answers}`;
 
-  // カテゴリ別バー
-  const cats = $("myCats");
-  cats.innerHTML = "";
-  for (const cat of ALL_CATS) {
-    const row = me.categories.find((c) => c.category === cat) || { correct_qs: 0, total_qs: 0 };
-    const pct = row.total_qs > 0 ? Math.round((row.correct_qs / row.total_qs) * 100) : 0;
-    const div = document.createElement("div");
-    div.className = "cat-row";
-    div.innerHTML = `
-      <div class="cat-name">${CAT_LABELS[cat]}</div>
-      <div class="cat-bar"><div class="cat-bar-fill" style="width:${pct}%; background:${CAT_COLORS[cat]};"></div></div>
-      <div class="cat-count">${row.correct_qs}/${row.total_qs || "?"}</div>`;
-    cats.appendChild(div);
+  // 全ジャンル平均%
+  let totT = 0, totC = 0;
+  for (const g of (me.groups || [])) {
+    state.groupColorMap.set(g.id, g.color);
+    for (const gen of g.genres) { totT += gen.target; totC += gen.correct; }
+  }
+  $("myTotalPct").textContent = totT ? Math.round((totC / totT) * 100) : 0;
+
+  // グループ × ジャンル
+  const root = $("myGroups");
+  root.innerHTML = "";
+  for (const g of (me.groups || [])) {
+    const card = document.createElement("div");
+    card.className = "group-card";
+    card.dataset.gid = g.id;
+    card.innerHTML = `
+      <div class="group-header">
+        <div class="group-name">
+          <div class="group-color" style="background: ${g.color};"></div>
+          <span class="group-title">${escapeHtml(g.name)}</span>
+        </div>
+        <div class="group-pct"><strong>${g.pct}</strong>%</div>
+        <span class="icon group-chev">chevron_right</span>
+      </div>
+      <div class="group-bar"><div class="group-bar-fill" style="width:${g.pct}%; background:${g.color};"></div></div>
+      <div class="genre-list">
+        ${g.genres.map((gen) => `
+          <div class="genre-row ${gen.pct >= 100 ? "done" : ""}" data-genre="${escapeHtml(gen.name)}">
+            <div class="genre-name-txt">${escapeHtml(gen.name)}</div>
+            <div class="genre-bar"><div class="genre-bar-fill" style="width:${gen.pct}%; background:${g.color};"></div></div>
+            <div class="genre-pct">${gen.pct}%</div>
+            <span class="icon genre-go">chevron_right</span>
+          </div>
+        `).join("")}
+      </div>`;
+    // ヘッダタップで開閉
+    card.querySelector(".group-header").addEventListener("click", () => {
+      card.classList.toggle("open");
+    });
+    // ジャンルタップで集中セッション
+    for (const row of card.querySelectorAll(".genre-row")) {
+      row.addEventListener("click", (e) => {
+        e.stopPropagation();
+        startSession(row.dataset.genre);
+      });
+    }
+    root.appendChild(card);
   }
 
   // 最近覚えた言葉
   const words = $("myWords");
-  if (!me.recentWords.length) {
+  if (!me.recentWords?.length) {
     words.innerHTML = `<div class="empty">まだなし</div>`;
   } else {
     words.innerHTML = "";
@@ -302,8 +358,9 @@ function renderMe(me) {
       const chip = document.createElement("span");
       chip.className = "word-chip";
       chip.textContent = w.answer;
-      chip.style.color = CAT_COLORS[w.category] || "var(--accent)";
-      chip.style.background = `color-mix(in srgb, ${CAT_COLORS[w.category] || "var(--accent)"} 14%, var(--bg) 86%)`;
+      const c = state.groupColorMap.get(w.group_id) || "var(--accent)";
+      chip.style.color = c;
+      chip.style.background = `color-mix(in srgb, ${c} 14%, var(--bg) 86%)`;
       words.appendChild(chip);
     }
   }
@@ -311,7 +368,7 @@ function renderMe(me) {
 
 function renderPeers(peers) {
   const list = $("peerList");
-  if (!peers.length) {
+  if (!peers?.length) {
     list.innerHTML = `<div class="empty">他のメンバーがまだいません</div>`;
     return;
   }
@@ -319,34 +376,39 @@ function renderPeers(peers) {
   for (const p of peers) {
     const div = document.createElement("div");
     div.className = "peer-card";
-    let catBars = "";
-    for (const cat of ALL_CATS) {
-      const row = p.categories.find((c) => c.category === cat) || { correct_qs: 0, total_qs: 0 };
-      const pct = row.total_qs > 0 ? Math.round((row.correct_qs / row.total_qs) * 100) : 0;
-      catBars += `<div class="cat-row">
-        <div class="cat-name">${CAT_LABELS[cat]}</div>
-        <div class="cat-bar"><div class="cat-bar-fill" style="width:${pct}%; background:${CAT_COLORS[cat]};"></div></div>
-        <div class="cat-count">${row.correct_qs}/${row.total_qs || "?"}</div>
+    // 平均%
+    let tt = 0, tc = 0;
+    for (const g of (p.groups || [])) for (const gen of g.genres) { tt += gen.target; tc += gen.correct; }
+    const avg = tt ? Math.round((tc/tt)*100) : 0;
+    // 上位5グループだけ表示
+    const topGroups = (p.groups || []).slice().sort((a, b) => b.pct - a.pct).slice(0, 5);
+    let bars = "";
+    for (const g of topGroups) {
+      bars += `<div class="cat-row">
+        <div class="cat-name" style="font-size:10px;">${escapeHtml(g.name)}</div>
+        <div class="cat-bar"><div class="cat-bar-fill" style="width:${g.pct}%; background:${g.color};"></div></div>
+        <div class="cat-count">${g.pct}%</div>
       </div>`;
     }
     div.innerHTML = `
       <div class="peer-header">
         <div class="peer-name">${escapeHtml(p.display_name)}</div>
-        <div class="peer-level">LV. <strong>${p.level}</strong> ・ ${p.total_correct}/${p.total_answers}</div>
+        <div class="peer-level">LV. <strong>${p.level}</strong> ・ 平均 ${avg}%</div>
       </div>
-      <div class="cats">${catBars}</div>`;
+      <div class="cats">${bars}</div>`;
     list.appendChild(div);
   }
 }
 
 // ───── セッション ─────
-async function startSession() {
+async function startSession(genre) {
   if (state.busy) return;
   state.busy = true;
   $("startBtn").disabled = true;
   $("homeErr").textContent = "";
+  state.focusGenre = genre || null;
   try {
-    const { questions } = await api("POST", "/api/kotonoha/sessions/start");
+    const { questions } = await api("POST", "/api/kotonoha/sessions/start", genre ? { genre } : {});
     if (!questions.length) throw new Error("問題がありません。シード DB の投入が必要かも。");
     state.questions = questions;
     state.currentIdx = 0;
@@ -373,8 +435,8 @@ function renderCurrentQuestion() {
   $("sessionProgressText").textContent = `${state.currentIdx + 1} / ${total}`;
   $("sessionProgressFill").style.width = `${pct + 100 / total}%`;
 
-  $("qCategory").textContent = CAT_LABELS[q.category] || q.category;
-  $("qCategory").style.background = CAT_COLORS[q.category] || "var(--accent)";
+  $("qCategory").textContent = q.genre || q.category || "";
+  $("qCategory").style.background = state.groupColorMap.get(q.group_id) || "var(--accent)";
   $("qText").textContent = q.question;
   if (q.image_url) {
     $("qImage").src = q.image_url;

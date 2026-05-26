@@ -26,7 +26,7 @@ BEGIN;
 DELETE FROM kotonoha_questions WHERE source = 'seed';
 
 INSERT INTO kotonoha_questions
-  (category, difficulty, type, question, options, answer, keywords, explanation, claude_example, source)
+  (category, difficulty, type, question, options, answer, keywords, explanation, claude_example, source, genre, group_id)
 SELECT
   category, difficulty, type, question,
   CASE WHEN type = 'choice' THEN options ELSE NULL END,
@@ -34,7 +34,9 @@ SELECT
   COALESCE(keywords, '[]'::jsonb),
   explanation,
   COALESCE(claude_example, ''),
-  'seed'
+  'seed',
+  NULLIF(genre, ''),
+  NULLIF(group_id, '')
 FROM jsonb_to_recordset(:'json'::jsonb)
   AS x(
     category       text,
@@ -45,14 +47,16 @@ FROM jsonb_to_recordset(:'json'::jsonb)
     answer         text,
     keywords       jsonb,
     explanation    text,
-    claude_example text
+    claude_example text,
+    genre          text,
+    group_id       text
   );
 
 COMMIT;
 
-SELECT category, count(*) AS n
+SELECT COALESCE(group_id, '(none)') AS group_id, count(*) AS n
   FROM kotonoha_questions
  WHERE source = 'seed'
- GROUP BY category
- ORDER BY category;
+ GROUP BY group_id
+ ORDER BY group_id;
 EOSQL
