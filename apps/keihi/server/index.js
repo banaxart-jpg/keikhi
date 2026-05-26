@@ -1989,6 +1989,10 @@ async function computeKotonohaStreak(p, email) {
 }
 
 async function buildKotonohaProgress(p, email) {
+  // 進捗の見え方: 「ユニーク正解数 / target_count」をベースにする
+  //   - 1回でも正解した unique 問題は 0.6 として加算 (一定の達成感)
+  //   - 直近3連続正解した (mastered) 問題は 1.0 として加算 (フル習得)
+  //   - 早期段階でもバーが伸びる + マスターしたら満タンに近づく設計
   const { rows: byGenre } = await p.query(
     `WITH ranked AS (
        SELECT question_id, is_correct,
@@ -2002,10 +2006,16 @@ async function buildKotonohaProgress(p, email) {
         WHERE rn <= $2
         GROUP BY question_id
        HAVING count(*) >= $2 AND bool_and(is_correct)
+     ),
+     correct_q AS (
+       SELECT DISTINCT question_id FROM kotonoha_progress
+        WHERE user_email = $1 AND is_correct = true
      )
      SELECT q.genre, q.group_id,
+            count(DISTINCT q.id) FILTER (WHERE cq.question_id IS NOT NULL) AS correct_uniq,
             count(DISTINCT q.id) FILTER (WHERE mq.question_id IS NOT NULL) AS mastered
        FROM kotonoha_questions q
+       LEFT JOIN correct_q cq ON cq.question_id = q.id
        LEFT JOIN mastered_q mq ON mq.question_id = q.id
       WHERE q.genre IS NOT NULL
       GROUP BY q.genre, q.group_id`,
@@ -2013,21 +2023,40 @@ async function buildKotonohaProgress(p, email) {
   );
   const dbProg = new Map();
   for (const r of byGenre) {
-    dbProg.set(r.genre, { mastered: Number(r.mastered || 0), group_id: r.group_id });
+    dbProg.set(r.genre, {
+      correct_uniq: Number(r.correct_uniq || 0),
+      mastered: Number(r.mastered || 0),
+      group_id: r.group_id,
+    });
   }
   const groups = [];
   for (const g of (KOTONOHA_GENRES_DATA?.groups || [])) {
     const genres = g.genres.map((gen) => {
       const target = gen.target_count || 10;
-      const mastered = Math.min(dbProg.get(gen.name)?.mastered || 0, target);
-      return { name: gen.name, target, correct: mastered, pct: Math.round((mastered / target) * 100) };
+      const rec = dbProg.get(gen.name) || { correct_uniq: 0, mastered: 0 };
+      // 進捗 = (正解問題 × 0.6 + マスター問題 × 0.4) / target
+      // correct_uniq には mastered も含まれる前提なので、内訳は:
+      //   未マスター正解 × 0.6 + マスター × 1.0 (=0.6+0.4)
+      const partial = Math.max(0, rec.correct_uniq - rec.mastered);
+      const score = partial * 0.6 + rec.mastered * 1.0;
+      const pct = Math.min(100, Math.round((score / target) * 100));
+      return {
+        name: gen.name,
+        target,
+        correct: rec.correct_uniq,
+        mastered: rec.mastered,
+        pct,
+      };
     });
     const totalT = genres.reduce((s, x) => s + x.target, 0);
-    const totalC = genres.reduce((s, x) => s + x.correct, 0);
+    const totalScore = genres.reduce((s, x) => {
+      const partial = Math.max(0, x.correct - x.mastered);
+      return s + partial * 0.6 + x.mastered * 1.0;
+    }, 0);
     groups.push({
       id: g.id, name: g.name, color: g.color,
       genres,
-      pct: totalT ? Math.round((totalC / totalT) * 100) : 0,
+      pct: totalT ? Math.min(100, Math.round((totalScore / totalT) * 100)) : 0,
     });
   }
   return groups;
