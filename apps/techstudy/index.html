@@ -656,8 +656,9 @@ function renderCurrentQuestion() {
   $("qCategory").textContent = q.genre || q.category || "";
   $("qCategory").style.background = state.groupColorMap.get(q.group_id) || "var(--accent)";
   $("qText").textContent = q.question;
-  // UI部品の HTML 実物デモ (サーバー demo_html 優先 → hardcoded フォールバック)
-  const demoHtml = q.demo_html || UI_DEMOS[q.genre] || UI_DEMOS[q.answer];
+  // UI部品の HTML 実物デモ
+  // ハードコード優先 (動作確認済の 11 種)、それ以外は AI 生成 (DB) を使う
+  const demoHtml = UI_DEMOS[q.genre] || UI_DEMOS[q.answer] || q.demo_html;
   if (demoHtml) {
     $("qDemo").srcdoc = demoHtml;
     $("qDemoWrap").style.display = "";

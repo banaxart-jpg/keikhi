@@ -1393,7 +1393,16 @@ async function generateUiDemo(p, genre, groupId) {
 - 派手すぎず最小限の例で「これが何か」が伝わる
 - アクセント色は #6d28d9 (紫)。背景は #f5f5f7
 - 冒頭に小さく「↓ 押してみて」「↓ 値を変えてみて」「↓ スクロールしてみて」等のヒント1行 (color:#888, font-size:12px)
-- ★重要: HTML 内で </script> を書く場合は必ず <\\/script> にエスケープする (外側スクリプトを閉じないため)
+
+★絶対守るルール (動作確認の罠):
+- body と html に高さ指定する (例: html, body { height: 100%; margin: 0; })
+- 浮く要素 (トースト/モーダル/FAB/ドロワー等) は \`position: fixed\` ではなく \`position: absolute\` を使う。body は \`position: relative\` にする
+- transform を body / html に付けてはいけない (position fixed が壊れる)
+- overflow: hidden を body に付ける (はみ出し防止)
+- z-index, transition 等は要素自身に付ける
+- 出現/消滅は opacity + transform で。display:none → display:flex の切り替えは avoid
+- すべての onclick/JS が確実に発火するか脳内シミュレーションする (button id でアクセス、event listener も OK)
+- HTML 内で </script> を書く場合は必ず <\\/script> にエスケープする (外側スクリプトを閉じないため)
 
 HTML のみを返す。説明文や Markdown のコードブロック (\`\`\`) は不要。`;
 
