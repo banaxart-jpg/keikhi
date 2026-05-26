@@ -1473,9 +1473,14 @@ async function generateKotonohaQuestion(p, { level, genre, excludeAnswers = [] }
 
 → 解説を読んだら「この用語の本質と使いどころが分かった」と思える濃度。ただの定義の繰り返しは NG。
 
+【choice 形式の超重要ルール】
+- options は「A.」「B.」のような letter prefix を絶対に付けない
+- options は普通の自然な日本語の選択肢文だけ
+- answer は options の中の文字列と完全一致する1つを書く (letter "A" などは絶対にダメ)
+
 JSON以外何も出力しないこと:
 ${type === "choice"
-  ? '{"question":"...","options":["A","B","C","D"],"answer":"A","explanation":"...","claude_example":"「...」"}'
+  ? '{"question":"...","options":["この人が誰か判別する仕組み","データを保存する場所","デザインを作るツール","世界中へ高速配信"],"answer":"この人が誰か判別する仕組み","explanation":"...","claude_example":"「...」"}'
   : '{"question":"...","answer":"答え","keywords":["別表記1","別表記2"],"explanation":"...","claude_example":"「...」"}'}`;
 
   try {
@@ -1708,6 +1713,25 @@ app.post("/api/kotonoha/answer", async (req, res) => {
 
     if (q.type === "choice") {
       isCorrect = ua === q.answer;
+      // Fallback 1: AI が options に "A. xxx" 形式で answer に "A" だけ入れたパターン
+      if (!isCorrect && /^[A-D]$/i.test(String(q.answer || "").trim())) {
+        const letter = String(q.answer).trim().toUpperCase();
+        if (ua.startsWith(letter + ".") || ua.startsWith(letter + ")") || ua.startsWith(letter + ":") || ua.startsWith(letter + " ")) {
+          isCorrect = true;
+        }
+        // 逆: options 配列の index で照合 (A=0, B=1, ...)
+        if (!isCorrect && Array.isArray(q.options)) {
+          const idx = letter.charCodeAt(0) - "A".charCodeAt(0);
+          if (q.options[idx] === ua) isCorrect = true;
+        }
+      }
+      // Fallback 2: prefix "A. " などを除去して一致を見る (両方向)
+      if (!isCorrect) {
+        const stripPrefix = (s) => String(s || "").replace(/^[A-D][.\):：\s]+/i, "").trim();
+        if (stripPrefix(ua) === stripPrefix(q.answer) && stripPrefix(ua) !== "") {
+          isCorrect = true;
+        }
+      }
     } else {
       // free: まず厳密一致 / キーワード照合 / 最終的に AI 判定
       const norm = (s) => String(s || "").trim().toLowerCase().replace(/\s+/g, "");
