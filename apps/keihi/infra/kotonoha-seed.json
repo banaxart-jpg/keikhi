@@ -336,5 +336,22 @@
     "answer": "CLAUDE.md に書いておく",
     "explanation": "CLAUDE.md はリポを開いた Claude Code が毎回自動で読むので、ルールはここに書いておけば毎回の依頼に書かなくて済む。「apps/keihi/cloudbuild.yaml は小西管轄、触らない」のように明示すれば、Claude Code は事故を避けつつ作業する。",
     "claude_example": "（CLAUDE.md に追記）「触っちゃダメ: apps/keihi/cloudbuild.yaml, infra/bootstrap.sh」"
+  },
+  {
+    "category": "concept",
+    "difficulty": 2,
+    "type": "choice",
+    "question": "バグが取れなくて何時間も詰まってる時、デバッグを速くするコツとして一番効くのは？",
+    "options": [
+      "とりあえず機能を足してみる",
+      "できるだけシンプルな再現コードに削ぎ落としてから調べる",
+      "別の言語で書き直す",
+      "コメントを大量に書く"
+    ],
+    "answer": "できるだけシンプルな再現コードに削ぎ落としてから調べる",
+    "explanation": "デバッグの基本は『複雑さを切り捨てて原因の切り分けを速くする』こと。100行のコードでバグるなら、関係なさそうな部分を消して10行に縮められないか試す。残ったコードで再現したらそこが原因。複雑なまま見つめても変数の組み合わせが多すぎて手詰まりになる。これは KISS 原則 (Keep It Simple, Stupid) の応用で、1960年代に米海軍ロッキード社の航空機設計者 Kelly Johnson が提唱したエンジニアリングの普遍原則。複雑にすると壊れた時に直せない、を航空機設計の現場から定式化した。",
+    "claude_example": "「これバグが取れない、まず再現する最小コードに絞り込んで」",
+    "genre": "KISS原則",
+    "group_id": "engineer_mindset"
   }
 ]
