@@ -1800,6 +1800,8 @@ app.post("/api/kotonoha/sessions/start", async (req, res) => {
            LEFT JOIN mastered_per_genre mpg ON mpg.genre = e.genre
           WHERE e.difficulty <= $3
           ORDER BY priority ASC,
+                   -- seed (古い暗記型) は最後尾。AI gen 優先で消費。
+                   (source = 'seed') ASC,
                    -- priority 0 (未回答) は古い順で消費 (= 寝かせた問題を先に)
                    -- priority 1+ (回答済み) は完全ランダムでセッション毎の変化を最大化
                    CASE WHEN priority = 0 THEN EXTRACT(EPOCH FROM e.created_at) END ASC,
@@ -2194,6 +2196,20 @@ async function computeKotonohaStreak(p, email) {
     double_min: STREAK_DOUBLE_MIN,
   };
 }
+
+// seed 全削除 (= source='seed' を消す)。AI 生成プールが育ったら呼ぶ用
+app.post("/api/kotonoha/wipe-seed", async (req, res) => {
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  try {
+    const before = await p.query(`SELECT count(*)::int AS n FROM kotonoha_questions WHERE source = 'seed'`);
+    await p.query(`DELETE FROM kotonoha_questions WHERE source = 'seed'`);
+    const after = await p.query(`SELECT count(*)::int AS n FROM kotonoha_questions`);
+    res.json({ ok: true, deleted: before.rows[0]?.n || 0, remaining: after.rows[0]?.n || 0 });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
 
 // テスト生成: Gemini 直接呼び出し + 完全な問題生成、両方の結果を返す
 app.post("/api/kotonoha/test-gen", async (req, res) => {

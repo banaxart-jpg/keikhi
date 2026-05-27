@@ -241,7 +241,10 @@ body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); 
       20問にチャレンジ (弱いジャンル優先)
     </button>
     <div id="diagStrip" style="font-family: ui-monospace, Menlo, monospace; font-size: 11px; color: #6d28d9; background: rgba(109,40,217,0.08); border-radius: 8px; padding: 8px 12px; margin-top: 10px; line-height: 1.5; word-break: break-all; font-weight: 600;">DIAG: loading…</div>
-    <button onclick="testGen()" style="margin-top:6px; padding:6px 12px; border:none; border-radius:6px; background:#6d28d9; color:white; font-size:11px; font-weight:700; cursor:pointer;">🧪 テスト生成 (1問)</button>
+    <div style="display:flex; gap:6px; margin-top:6px; flex-wrap:wrap;">
+      <button onclick="testGen()" style="padding:6px 12px; border:none; border-radius:6px; background:#6d28d9; color:white; font-size:11px; font-weight:700; cursor:pointer;">🧪 テスト生成</button>
+      <button onclick="wipeSeed()" style="padding:6px 12px; border:none; border-radius:6px; background:#dc2626; color:white; font-size:11px; font-weight:700; cursor:pointer;">🗑️ seed削除</button>
+    </div>
     <div id="testGenResult" style="font-family: ui-monospace, Menlo, monospace; font-size: 10px; color: var(--text2); padding: 6px 0; line-height: 1.5; word-break: break-all;"></div>
 
     <div class="card" style="margin-top: 16px;">
@@ -670,6 +673,27 @@ async function testGen() {
   }
 }
 window.testGen = testGen;
+
+async function wipeSeed() {
+  if (!confirm("seed 問題を全削除します。よろしいですか?")) return;
+  const el = $("testGenResult");
+  el.textContent = "🌀 削除中…";
+  try {
+    const r = await api("POST", "/api/kotonoha/wipe-seed");
+    if (r.ok) {
+      el.textContent = `🗑️ 削除完了: ${r.deleted}問 (残り ${r.remaining}問)`;
+      el.style.color = "#2a8c3a";
+      setTimeout(() => loadHome(), 500);
+    } else {
+      el.textContent = `❌ 失敗: ${r.error}`;
+      el.style.color = "#b04040";
+    }
+  } catch (e) {
+    el.textContent = `❌ API エラー: ${e.message}`;
+    el.style.color = "#b04040";
+  }
+}
+window.wipeSeed = wipeSeed;
 
 function renderCurrentQuestion() {
   const q = state.questionMap.get(state.currentQId);
