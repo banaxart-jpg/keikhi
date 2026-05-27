@@ -393,6 +393,7 @@ body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); 
     <div id="ownerAdminRow" style="display:none; text-align:center; padding: 4px 0 6px; gap:18px; flex-wrap:wrap; justify-content:center;">
       <button class="danger-link" onclick="wipeAllQuestions()">🗑 問題プール全消し</button>
       <button class="danger-link" onclick="genAllUiDemos()" style="color:var(--accent);" id="genUiBtn">🎨 UIデモ一括生成</button>
+      <button class="danger-link" onclick="openGallery()" style="color:var(--accent);">🖼 UIデモ確認</button>
     </div>
     <div id="genUiProgress" style="text-align:center; font-size:11px; color:var(--text2); font-weight:700; padding:4px 0; display:none;"></div>
     <div style="text-align:center; padding: 4px 0 18px;">
@@ -449,6 +450,16 @@ body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); 
     <button class="start-btn" style="margin-top:10px; background: var(--bg); color: var(--text); box-shadow: 6px 6px 14px var(--sd), -4px -4px 10px var(--sl);" onclick="showHome()">
       ホームに戻る
     </button>
+  </div>
+
+  <!-- UIデモギャラリー (owner専用) -->
+  <div class="view" id="galleryView">
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 14px;">
+      <div class="label" style="margin:0;">UIデモ ギャラリー</div>
+      <button class="pill" onclick="showHome()">← ホーム</button>
+    </div>
+    <div class="label" id="galleryStatus" style="margin-bottom: 10px;"></div>
+    <div id="galleryGrid" style="display:flex; flex-direction:column; gap:14px;"></div>
   </div>
 </div>
 
@@ -1110,37 +1121,124 @@ window.dismissCelebrate = function () {
   showHome();
 };
 
+// バックエンド (Cloud Tasks) で自動進行。
+// 起動キック → ステータスポーリングで進捗表示。タブ閉じても進む。
+let uiDemoPollTimer = null;
 window.genAllUiDemos = async function () {
-  if (!confirm("ui_parts ジャンルの未生成 UI デモを一括生成します。\n\n・1バッチ3件ずつ、完了までループ\n・1件 5-10秒なので残り100件なら ~20分かかる\n・タブを閉じても次回再開可能 (既存はスキップ)")) return;
-  const btn = $("genUiBtn");
   const prog = $("genUiProgress");
-  const origLbl = btn.innerHTML;
-  btn.disabled = true;
   prog.style.display = "";
-  let totalGen = 0, totalFail = 0, batches = 0;
   try {
-    while (true) {
-      batches++;
-      prog.textContent = `🎨 バッチ ${batches} 実行中…`;
-      const r = await api("POST", "/api/kotonoha/gen-ui-demos", { limit: 3 });
-      totalGen += r.generated || 0;
-      totalFail += (r.failed || []).length;
-      const remaining = r.pendingAfter || 0;
-      prog.textContent = `バッチ ${batches}: +${r.generated} 生成 / 残り ${remaining} (累計 +${totalGen}、失敗 ${totalFail})`;
-      if (remaining === 0) break;
-      if (r.generated === 0 && (r.failed?.length || 0) >= (r.results?.length || 1)) {
-        // 何も生成できてない (Gemini 落ち等) → 抜ける
-        prog.textContent += " — 全失敗のため停止";
-        break;
+    const r = await api("POST", "/api/kotonoha/gen-ui-demos");
+    if (r.msg === "nothing pending") {
+      prog.textContent = `✓ 全部生成済み (DB ${r.inDb} + ハードコード ${r.hardcoded})`;
+      return;
+    }
+    prog.textContent = `🎨 バックエンドで生成開始 (残り ${r.pending}) — タブ閉じても続く`;
+  } catch (e) {
+    prog.textContent = `起動失敗: ${e.message}`;
+    return;
+  }
+  // 進捗ポーリング (10秒おき)
+  clearInterval(uiDemoPollTimer);
+  uiDemoPollTimer = setInterval(async () => {
+    try {
+      const s = await api("GET", "/api/kotonoha/ui-demo-status");
+      if (s.pending === 0) {
+        prog.textContent = `✓ 完了 (DB ${s.inDb} + ハードコード ${s.hardcoded} = 全 ${s.total} ジャンル)`;
+        clearInterval(uiDemoPollTimer);
+      } else {
+        prog.textContent = `🎨 生成中… DB ${s.inDb} / 残り ${s.pending}`;
       }
-      // 少し空けて次へ (rate limit 回避)
-      await new Promise((res) => setTimeout(res, 500));
+    } catch {}
+  }, 10000);
+};
+
+// ────────── UIデモギャラリー (owner) ──────────
+window.openGallery = async function () {
+  state.view = "gallery";
+  $("homeView").classList.remove("active");
+  $("sessionView").classList.remove("active");
+  $("summaryView").classList.remove("active");
+  $("galleryView").classList.add("active");
+  $("galleryStatus").textContent = "読み込み中…";
+  $("galleryGrid").innerHTML = "";
+  window.scrollTo({ top: 0 });
+  try {
+    const [dbDemos, status] = await Promise.all([
+      api("GET", "/api/kotonoha/ui-demos-list"),
+      api("GET", "/api/kotonoha/ui-demo-status").catch(() => null),
+    ]);
+    $("galleryStatus").textContent = status
+      ? `DB ${dbDemos.length} 件 + ハードコード ${status.hardcoded} 件 / 残り ${status.pending}`
+      : `DB ${dbDemos.length} 件`;
+    const grid = $("galleryGrid");
+    grid.innerHTML = "";
+    // ハードコード分も含めて全部表示 (DB を優先、無ければハードコード)
+    const dbMap = new Map(dbDemos.map((d) => [d.genre, d]));
+    const hardcodedNames = Object.keys(UI_DEMOS);
+    const allGenres = [
+      ...dbDemos.map((d) => ({ genre: d.genre, source: "db", html: d.demo_html, updatedAt: d.updated_at })),
+      ...hardcodedNames.filter((n) => !dbMap.has(n)).map((n) => ({ genre: n, source: "hardcoded", html: UI_DEMOS[n] })),
+    ];
+    allGenres.sort((a, b) => a.genre.localeCompare(b.genre, "ja"));
+    const allNames = allGenres.map((g) => g.genre);
+    for (const item of allGenres) {
+      // 実際の出題と同じ形に: 「この機能の名前は?」+ iframe + 4選択肢 (1正解 + 3他ジャンルから)
+      const otherNames = allNames.filter((n) => n !== item.genre);
+      const distractors = [];
+      const pool = otherNames.slice();
+      while (distractors.length < 3 && pool.length) {
+        const idx = Math.floor(Math.random() * pool.length);
+        distractors.push(pool.splice(idx, 1)[0]);
+      }
+      const options = [item.genre, ...distractors];
+      for (let i = options.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [options[i], options[j]] = [options[j], options[i]];
+      }
+      const card = document.createElement("div");
+      card.className = "card";
+      card.innerHTML = `
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+          <span class="q-category" style="background: var(--cat-ui); margin-bottom:0;">UI 部品 · ${escapeHtml(item.genre)}</span>
+          <div style="display:flex; gap:8px; align-items:center;">
+            <span style="font-size:9px; color:var(--text3); font-weight:700; letter-spacing:0.08em; text-transform:uppercase;">${item.source}</span>
+            ${item.source === "db" ? `<button class="danger-link" data-genre="${escapeHtml(item.genre)}" onclick="regenDemo(this)" style="color:var(--accent);">🔁 再生成</button>` : ""}
+          </div>
+        </div>
+        <div class="q-text">この機能の名前はなんでしょう？</div>
+        <div class="q-demo-hint">↓ 実際に触ってみて</div>
+        <iframe class="q-demo" sandbox="allow-scripts allow-same-origin allow-popups allow-modals" srcdoc="${escapeHtml(item.html)}"></iframe>
+        <div class="choice-list">
+          ${options.map((o) => {
+            const isAns = o === item.genre;
+            return `<button class="choice-btn" style="${isAns ? 'box-shadow: inset 2px 2px 6px rgba(42,140,58,0.2); color: var(--correct); font-weight:800;' : ''}">${escapeHtml(o)}${isAns ? " ✓" : ""}</button>`;
+          }).join("")}
+        </div>
+      `;
+      grid.appendChild(card);
+    }
+    if (!allGenres.length) {
+      grid.innerHTML = `<div class="empty">まだデモがありません。「🎨 UIデモ一括生成」を押して生成開始</div>`;
     }
   } catch (e) {
-    prog.textContent = `エラー: ${e.message} (累計 +${totalGen}、失敗 ${totalFail})`;
+    $("galleryStatus").textContent = `エラー: ${e.message}`;
+  }
+};
+
+window.regenDemo = async function (btn) {
+  const genre = btn.dataset.genre;
+  const orig = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = "生成中…";
+  try {
+    const r = await api("POST", "/api/kotonoha/ui-demos/regenerate", { genre });
+    btn.textContent = r.ok ? "✓ 再生成完了" : "失敗";
+    setTimeout(() => openGallery(), 800);
+  } catch (e) {
+    btn.textContent = `失敗: ${e.message}`;
   } finally {
     btn.disabled = false;
-    btn.innerHTML = origLbl;
   }
 };
 
@@ -1161,6 +1259,7 @@ function showHome() {
   $("homeView").classList.add("active");
   $("sessionView").classList.remove("active");
   $("summaryView").classList.remove("active");
+  $("galleryView").classList.remove("active");
   loadHome();
   window.scrollTo({ top: 0 });
 }
@@ -1169,6 +1268,7 @@ function showSession() {
   $("homeView").classList.remove("active");
   $("sessionView").classList.add("active");
   $("summaryView").classList.remove("active");
+  $("galleryView").classList.remove("active");
   window.scrollTo({ top: 0 });
 }
 window.showHome = showHome;

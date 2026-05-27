@@ -2381,54 +2381,134 @@ app.post("/api/kotonoha/wipe-all", async (req, res) => {
 });
 
 // ui_parts デモを一括生成 (owner 限定)。
-// 1リクエストでバッチ生成 (Cloud Run 5分タイムアウトに収まる範囲)。
-// 既存 DB demo / フロントハードコード分はスキップ。フロントから「未済が0になるまで」ループで叩く。
+// Cloud Tasks 自己再キューでバックエンド完結。ブラウザを閉じても進行する。
 const HARDCODED_UI_DEMO_GENRES = new Set([
   "モーダル","トースト","FAB","アコーディオン","ドロワー","タブ",
   "ツールチップ","スイッチ","プログレスバー","スケルトン","ハンバーガーメニュー"
 ]);
-app.post("/api/kotonoha/gen-ui-demos", async (req, res) => {
-  const email = String(req.user?.email || "").toLowerCase();
-  if (!KOTONOHA_OWNER_EMAILS.has(email)) return res.status(403).json({ error: "owner only" });
-  const p = getPool();
-  if (!p) return res.status(503).json({ error: "DB not configured" });
-  const limit = Math.min(5, Math.max(1, Number(req.body?.limit) || 3));
 
+async function uiDemoStatus(p) {
   const uiPartsGroup = (KOTONOHA_GENRES_DATA?.groups || []).find((g) => g.id === "ui_parts");
-  if (!uiPartsGroup) return res.status(500).json({ error: "ui_parts group not in master" });
+  if (!uiPartsGroup) return null;
   const allGenres = uiPartsGroup.genres.map((g) => g.name);
-
   const { rows: existing } = await p.query(
     `SELECT genre FROM kotonoha_ui_demos WHERE genre = ANY($1::text[])`,
     [allGenres]
   );
   const existingSet = new Set(existing.map((r) => r.genre));
-
-  // 未済 = master − hardcoded − DB既存
   const pending = allGenres.filter((g) => !HARDCODED_UI_DEMO_GENRES.has(g) && !existingSet.has(g));
-  const targets = pending.slice(0, limit);
+  return {
+    total: allGenres.length,
+    hardcoded: HARDCODED_UI_DEMO_GENRES.size,
+    inDb: existingSet.size,
+    pending: pending.length,
+    pendingGenres: pending,
+  };
+}
 
-  const results = [];
+async function enqueueKotonohaDemoGen(delaySec = 0) {
+  if (!KAIGI_TASKS_QUEUE || !SERVICE_URL || !INTERNAL_TICK_SECRET || !FIREBASE_PROJECT_ID) {
+    console.warn("[kotonoha] demo-gen enqueue skipped (env 未設定)");
+    return null;
+  }
+  const client = getTasksClient();
+  const parent = client.queuePath(FIREBASE_PROJECT_ID, KAIGI_TASKS_LOCATION, KAIGI_TASKS_QUEUE);
+  const task = {
+    httpRequest: {
+      httpMethod: "POST",
+      url: `${SERVICE_URL}/api/internal/kotonoha/gen-ui-demos`,
+      headers: { "content-type": "application/json", "x-tick-secret": INTERNAL_TICK_SECRET },
+      body: Buffer.from(JSON.stringify({})).toString("base64"),
+    },
+  };
+  if (delaySec > 0) task.scheduleTime = { seconds: Math.floor(Date.now() / 1000) + delaySec };
+  const [resp] = await client.createTask({ parent, task });
+  return resp.name;
+}
+
+// 内部: Cloud Tasks → 4件生成 → 残ってればもう1タスク enqueue (自己再帰)
+app.post("/api/internal/kotonoha/gen-ui-demos", async (_req, res) => {
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  const BATCH = 4; // 1 task で 4件 (~25-40秒)
+  const status = await uiDemoStatus(p);
+  if (!status) return res.json({ ok: true, msg: "ui_parts not found" });
+  const targets = status.pendingGenres.slice(0, BATCH);
+  if (!targets.length) {
+    console.log("[kotonoha] demo-gen: all done");
+    return res.json({ ok: true, done: true });
+  }
+  let okCount = 0, failCount = 0;
   for (const genre of targets) {
-    const t0 = Date.now();
     try {
       const html = await generateUiDemo(p, genre, "ui_parts");
-      results.push({ genre, ok: !!html, ms: Date.now() - t0 });
+      if (html) okCount++; else failCount++;
     } catch (e) {
-      results.push({ genre, ok: false, error: e.message, ms: Date.now() - t0 });
+      console.warn(`[kotonoha] demo-gen ${genre}:`, e.message);
+      failCount++;
     }
   }
+  console.log(`[kotonoha] demo-gen batch: +${okCount} (-${failCount}), pending=${status.pending - okCount}`);
+  // まだ残ってればもう一回 enqueue (10秒空けて quota 圧迫回避)
+  if (status.pending - okCount > 0) {
+    await enqueueKotonohaDemoGen(10).catch((e) => console.warn("[kotonoha] re-enqueue:", e.message));
+  }
+  res.json({ ok: true, generated: okCount, failed: failCount, remaining: status.pending - okCount });
+});
 
-  res.json({
-    totalUiParts: allGenres.length,
-    hardcoded: HARDCODED_UI_DEMO_GENRES.size,
-    inDbBefore: existingSet.size,
-    pendingBefore: pending.length,
-    pendingAfter: pending.length - results.filter((r) => r.ok).length,
-    generated: results.filter((r) => r.ok).length,
-    failed: results.filter((r) => !r.ok),
-    results,
-  });
+// owner 操作: タスクキック (即返却。実生成は Cloud Tasks で進行)
+app.post("/api/kotonoha/gen-ui-demos", async (req, res) => {
+  const email = String(req.user?.email || "").toLowerCase();
+  if (!KOTONOHA_OWNER_EMAILS.has(email)) return res.status(403).json({ error: "owner only" });
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  const status = await uiDemoStatus(p);
+  if (!status || status.pending === 0) return res.json({ ok: true, ...(status || {}), msg: "nothing pending" });
+  try {
+    const taskName = await enqueueKotonohaDemoGen(0);
+    res.json({ ok: true, queued: true, taskName, ...status, pendingGenres: undefined });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// 進捗確認 (owner)
+app.get("/api/kotonoha/ui-demo-status", async (req, res) => {
+  const email = String(req.user?.email || "").toLowerCase();
+  if (!KOTONOHA_OWNER_EMAILS.has(email)) return res.status(403).json({ error: "owner only" });
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  const status = await uiDemoStatus(p);
+  res.json({ ...(status || {}), pendingGenres: undefined });
+});
+
+// ギャラリー: ハードコード分は frontend が知ってるので、DB 分のみ返す
+app.get("/api/kotonoha/ui-demos-list", async (req, res) => {
+  const email = String(req.user?.email || "").toLowerCase();
+  if (!KOTONOHA_OWNER_EMAILS.has(email)) return res.status(403).json({ error: "owner only" });
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  const { rows } = await p.query(
+    `SELECT genre, demo_html, updated_at FROM kotonoha_ui_demos ORDER BY genre`
+  );
+  res.json(rows);
+});
+
+// 個別デモ再生成 (壊れてるやつ作り直し用)
+app.post("/api/kotonoha/ui-demos/regenerate", async (req, res) => {
+  const email = String(req.user?.email || "").toLowerCase();
+  if (!KOTONOHA_OWNER_EMAILS.has(email)) return res.status(403).json({ error: "owner only" });
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  const genre = String(req.body?.genre || "").trim();
+  if (!genre) return res.status(400).json({ error: "genre required" });
+  const groupId = KOTONOHA_GENRE_TO_GROUP.get(genre) || "ui_parts";
+  try {
+    const html = await generateUiDemo(p, genre, groupId);
+    res.json({ ok: !!html, genre });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
 });
 
 // テスト生成: Gemini 直接呼び出し + 完全な問題生成、両方の結果を返す
