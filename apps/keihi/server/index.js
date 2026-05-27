@@ -2392,7 +2392,7 @@ app.post("/api/kotonoha/gen-ui-demos", async (req, res) => {
   if (!KOTONOHA_OWNER_EMAILS.has(email)) return res.status(403).json({ error: "owner only" });
   const p = getPool();
   if (!p) return res.status(503).json({ error: "DB not configured" });
-  const limit = Math.min(20, Math.max(1, Number(req.body?.limit) || 8));
+  const limit = Math.min(5, Math.max(1, Number(req.body?.limit) || 3));
 
   const uiPartsGroup = (KOTONOHA_GENRES_DATA?.groups || []).find((g) => g.id === "ui_parts");
   if (!uiPartsGroup) return res.status(500).json({ error: "ui_parts group not in master" });

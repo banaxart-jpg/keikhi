@@ -1111,7 +1111,7 @@ window.dismissCelebrate = function () {
 };
 
 window.genAllUiDemos = async function () {
-  if (!confirm("ui_parts ジャンルの未生成 UI デモを一括生成します。\n\n・1バッチ8件ずつ、完了までループ\n・1件 5-10秒なので残り100件なら ~15分かかる\n・タブを閉じても次回再開可能 (既存はスキップ)")) return;
+  if (!confirm("ui_parts ジャンルの未生成 UI デモを一括生成します。\n\n・1バッチ3件ずつ、完了までループ\n・1件 5-10秒なので残り100件なら ~20分かかる\n・タブを閉じても次回再開可能 (既存はスキップ)")) return;
   const btn = $("genUiBtn");
   const prog = $("genUiProgress");
   const origLbl = btn.innerHTML;
@@ -1122,7 +1122,7 @@ window.genAllUiDemos = async function () {
     while (true) {
       batches++;
       prog.textContent = `🎨 バッチ ${batches} 実行中…`;
-      const r = await api("POST", "/api/kotonoha/gen-ui-demos", { limit: 8 });
+      const r = await api("POST", "/api/kotonoha/gen-ui-demos", { limit: 3 });
       totalGen += r.generated || 0;
       totalFail += (r.failed || []).length;
       const remaining = r.pendingAfter || 0;
