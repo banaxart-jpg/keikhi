@@ -1753,6 +1753,15 @@ async function ensureMinPool(p, email, target = 30) {
         SELECT question_id, MAX(pos) FILTER (WHERE is_correct) AS last_correct_pos
           FROM ranked GROUP BY question_id
       ),
+      per_q AS (
+        SELECT question_id, COUNT(*)::int AS attempts,
+               COUNT(*) FILTER (WHERE is_correct)::int AS correct_count
+          FROM kotonoha_progress WHERE user_email = $1 GROUP BY question_id
+      ),
+      mastered_q AS (
+        SELECT question_id FROM per_q
+         WHERE attempts >= 3 AND correct_count::float / attempts >= 0.85
+      ),
       gc AS (
         SELECT q.genre, COUNT(DISTINCT q.id) AS n
           FROM kotonoha_questions q
@@ -1767,7 +1776,10 @@ async function ensureMinPool(p, email, target = 30) {
        WHERE (
          up.question_id IS NULL
          OR up.last_correct_pos IS NULL
-         OR ((SELECT total FROM ut) - up.last_correct_pos) >= 50 + (abs(hashtextextended(q.id::text || $1, 0)) % 50)::int
+         OR (
+           ((SELECT total FROM ut) - up.last_correct_pos) >= 50 + (abs(hashtextextended(q.id::text || $1, 0)) % 50)::int
+           AND q.id NOT IN (SELECT question_id FROM mastered_q)
+         )
        )
        AND q.difficulty <= COALESCE(gc.n, 0) + 1
        AND NOT EXISTS (
@@ -1906,6 +1918,19 @@ app.post("/api/kotonoha/sessions/start", async (req, res) => {
         SELECT question_id, MAX(pos) FILTER (WHERE is_correct) AS last_correct_pos
           FROM ranked GROUP BY question_id
       ),
+      per_q AS (
+        SELECT question_id,
+               COUNT(*)::int AS attempts,
+               COUNT(*) FILTER (WHERE is_correct)::int AS correct_count
+          FROM kotonoha_progress
+         WHERE user_email = $1
+         GROUP BY question_id
+      ),
+      mastered_q AS (
+        -- 「覚えた」= 3回以上挑戦 & 正解率 85%以上。復習プールから除外。
+        SELECT question_id FROM per_q
+         WHERE attempts >= 3 AND correct_count::float / attempts >= 0.85
+      ),
       gc AS (
         SELECT q.genre, COUNT(DISTINCT q.id) AS n
           FROM kotonoha_questions q
@@ -1939,7 +1964,9 @@ app.post("/api/kotonoha/sessions/start", async (req, res) => {
     );
     let { rows: newRows } = await runNewQuery();
 
-    // 2) REVIEW: 正解履歴あり & gap 経過
+    // 2) REVIEW: 正解履歴あり & gap 経過 & まだ master 未達
+    // 「覚えた」(= 3回以上 正解率85%) は復習対象から除外。よく使う語彙なら
+    // 他問題の前提知識として自然に再登場するので、専用復習は不要。
     const { rows: reviewRows } = await p.query(`
       ${baseFilter}
       SELECT q.*
@@ -1948,6 +1975,7 @@ app.post("/api/kotonoha/sessions/start", async (req, res) => {
         LEFT JOIN gc ON gc.genre = q.genre
        WHERE up.last_correct_pos IS NOT NULL
          AND ((SELECT total FROM ut) - up.last_correct_pos) >= 50 + (abs(hashtextextended(q.id::text || $1, 0)) % 50)::int
+         AND q.id NOT IN (SELECT question_id FROM mastered_q)
          ${commonAnd}
        ORDER BY random()
        LIMIT $2`,
@@ -2569,28 +2597,32 @@ app.get("/api/kotonoha/me", async (req, res) => {
        FROM kotonoha_questions`
     );
     const pool = poolRows[0] || { total: 0, generated: 0, seed: 0, gen_last_hour: 0 };
-    // 覚えた言葉: ジャンル名で集約 + 各ラベルの直近 explanation を同梱
-    // 「単語だけ」になるよう char_length 2-24 でフィルタ
+    // 覚えた言葉: ラベル単位で「3回以上挑戦 & 正解率 85%以上」が成立したものだけ。
+    // よく出るラベルほど自然に attempts が増えて mastered になる仕組み。
     const { rows: learned } = await p.query(
-      `SELECT label, group_id, explanation, answered_at FROM (
-         SELECT
-           COALESCE(NULLIF(q.genre, ''), q.answer) AS label,
-           q.group_id,
-           q.explanation,
-           pr.answered_at,
-           ROW_NUMBER() OVER (
-             PARTITION BY COALESCE(NULLIF(q.genre, ''), q.answer)
-             ORDER BY pr.answered_at DESC
-           ) AS rn
-         FROM kotonoha_progress pr
-         JOIN kotonoha_questions q ON q.id = pr.question_id
-         WHERE pr.user_email = $1
-           AND pr.is_correct = true
-           AND char_length(COALESCE(NULLIF(q.genre, ''), q.answer)) BETWEEN 2 AND 24
-       ) sub
-       WHERE rn = 1
-       ORDER BY answered_at DESC
-       LIMIT 200`,
+      `WITH per_label AS (
+         SELECT COALESCE(NULLIF(q.genre, ''), q.answer) AS label,
+                COUNT(*)::int AS attempts,
+                COUNT(*) FILTER (WHERE pr.is_correct)::int AS correct_count,
+                MAX(pr.answered_at) AS last_seen
+           FROM kotonoha_progress pr
+           JOIN kotonoha_questions q ON q.id = pr.question_id
+          WHERE pr.user_email = $1
+            AND char_length(COALESCE(NULLIF(q.genre, ''), q.answer)) BETWEEN 2 AND 24
+          GROUP BY COALESCE(NULLIF(q.genre, ''), q.answer)
+       )
+       SELECT pl.label, pl.last_seen AS answered_at, q2.group_id, q2.explanation
+         FROM per_label pl
+         CROSS JOIN LATERAL (
+           SELECT q.group_id, q.explanation
+             FROM kotonoha_questions q
+            WHERE COALESCE(NULLIF(q.genre, ''), q.answer) = pl.label
+            ORDER BY q.id DESC
+            LIMIT 1
+         ) q2
+        WHERE pl.attempts >= 3 AND pl.correct_count::float / pl.attempts >= 0.85
+        ORDER BY pl.last_seen DESC
+        LIMIT 200`,
       [req.user.email]
     );
     res.json({
