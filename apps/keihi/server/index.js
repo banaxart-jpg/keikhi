@@ -1613,6 +1613,17 @@ async function generateQuestion(p, { genre, depth, excludeAnswers = [], knownGen
     ? `(例: ${triviaExamples.slice(0, 3).map((s) => `「${s}」`).join(" / ")})`
     : "";
 
+  // prerequisites に使える master 名一覧 (同グループ全部 + 他グループ各6個ずつ)。
+  // ここに無い名前を AI が書いても出題側で破棄されるので、有効候補を明示する。
+  const sameGroupGenres = (KOTONOHA_GENRES_DATA?.groups || [])
+    .find((gr) => gr.id === groupId)?.genres?.map((g) => g.name) || [];
+  const otherGroupSamples = (KOTONOHA_GENRES_DATA?.groups || [])
+    .filter((gr) => gr.id !== groupId)
+    .flatMap((gr) => (gr.genres || []).slice(0, 6).map((g) => g.name));
+  const prereqPool = [...new Set([...sameGroupGenres, ...otherGroupSamples])].filter((n) => n !== genre);
+  const prereqLine = `prerequisites に書ける有効な名前リスト (この中の文字列を完全一致で書く。書いた名前で「ユーザーがその概念を知ってる」かサーバーが判定する。リスト外を書いても無視される):
+${prereqPool.slice(0, 200).join(" / ")}`;
+
   const prompt = `「${subject}」の学習問題を1問作って。JSON のみ返す。
 
 ジャンル: ${genre}
@@ -1649,6 +1660,13 @@ ${vocabLine}
 - 解説 (explanation) は3-5文、役割 + 判断軸 + へぇートリビア ${triviaLine}
 - 既出と被らない: ${excludeAnswers.slice(0, 15).join(", ")}
 
+★prerequisites について (i+1 ゲートに直結):
+- この問題を理解するのに必須の他ジャンル知識を 0-3 個列挙
+- 「総称 (例: DB, ベクトル)」ではなく **マスターのジャンル名と完全一致** すること
+- 例: depth=3 の「ベクトルDB (Pinecone等)」なら prerequisites=["RDB 基礎","エンベディング","セマンティック検索"] のように、リストにある名前を使う
+- depth=1 (絶対基礎) は空配列でよい
+${prereqLine}
+
 JSON:
 {"question":"…","options":["…","…","…","…"],"answer":"…","explanation":"…","claude_example":"「…」","prerequisites":["他ジャンル名1","他ジャンル名2"]}`;
 
@@ -1674,8 +1692,15 @@ JSON:
     }
   }
   if (!j) return null;
-  // prerequisites は depth=1 では空配列に強制 (intro は誰でも見れる)
-  let prereqs = Array.isArray(j.prerequisites) ? j.prerequisites.filter((s) => typeof s === "string" && s.length > 0 && s !== genre) : [];
+  // prerequisites: 出題ゲートに使うので **master genre 名と完全一致** したものだけ残す。
+  // - depth=1 は intro 扱いで空に強制 (誰にでも出る = foundational)
+  // - 一致しないラベル (例: "DB" "ベクトル" 等の総称) は無視 (満たせないと永久ブロック)
+  let prereqs = Array.isArray(j.prerequisites)
+    ? j.prerequisites.filter((s) =>
+        typeof s === "string" && s.length > 0 && s !== genre
+        && KOTONOHA_GENRE_TO_GROUP.has(s)
+      )
+    : [];
   if (d === 1) prereqs = [];
   try {
     const { rows } = await p.query(
@@ -1744,7 +1769,11 @@ async function ensureMinPool(p, email, target = 30) {
          OR up.last_correct_pos IS NULL
          OR ((SELECT total FROM ut) - up.last_correct_pos) >= 50 + (abs(hashtextextended(q.id::text || $1, 0)) % 50)::int
        )
-       AND q.difficulty <= COALESCE(gc.n, 0) + 1`,
+       AND q.difficulty <= COALESCE(gc.n, 0) + 1
+       AND NOT EXISTS (
+         SELECT 1 FROM jsonb_array_elements_text(COALESCE(q.prerequisites, '[]'::jsonb)) AS prereq_g
+          WHERE NOT EXISTS (SELECT 1 FROM gc WHERE gc.genre = prereq_g)
+       )`,
       [email]
     );
     dbg.freshBefore = pc[0]?.n || 0;
@@ -1884,9 +1913,15 @@ app.post("/api/kotonoha/sessions/start", async (req, res) => {
          GROUP BY q.genre
       ),
       ut AS (SELECT COUNT(*)::int AS total FROM ranked)`;
+    // i+1: prerequisites に列挙された全ジャンルでユーザーが1個以上正解してないとブロック。
+    // depth=1 の問題は prereq=[] なので常に通る (foundational)。
     const commonAnd = `
          AND q.difficulty <= COALESCE(gc.n, 0) + 1
-         AND ($3::text[] IS NULL OR q.group_id = ANY($3::text[]))`;
+         AND ($3::text[] IS NULL OR q.group_id = ANY($3::text[]))
+         AND NOT EXISTS (
+           SELECT 1 FROM jsonb_array_elements_text(COALESCE(q.prerequisites, '[]'::jsonb)) AS prereq_g
+            WHERE NOT EXISTS (SELECT 1 FROM gc WHERE gc.genre = prereq_g)
+         )`;
 
     // 1) NEW: 未回答 (priority 0) または 一度も正解してない (priority 1)
     const { rows: newRows } = await p.query(`
