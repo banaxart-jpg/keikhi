@@ -272,7 +272,7 @@ body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); 
     </div>
 
     <div class="err" id="homeErr"></div>
-    <div id="homeDebug" style="font-family: ui-monospace, Menlo, monospace; font-size: 10px; color: var(--text3); padding: 10px 12px; line-height: 1.5; word-break: break-all;"></div>
+    <div id="versionFooter" style="text-align:center; font-family: ui-monospace, Menlo, monospace; font-size: 10px; color: var(--text3); padding: 20px 8px 12px; line-height: 1.5; word-break: break-all;"></div>
   </div>
 
   <!-- セッション画面 -->
@@ -401,11 +401,18 @@ async function api(method, path, body) {
 async function loadHome() {
   $("homeErr").textContent = "";
   try {
-    const [me, peers, genresData] = await Promise.all([
+    const [me, peers, genresData, version] = await Promise.all([
       api("GET", "/api/kotonoha/me"),
       api("GET", "/api/kotonoha/peers"),
       api("GET", "/api/kotonoha/genres").catch(() => null),
+      fetch((window.API_BASE || "") + "/api/version").then((r) => r.json()).catch(() => null),
     ]);
+    // バージョン情報表示 (デプロイ確認用)
+    if (version) {
+      const vf = $("versionFooter");
+      const t = version.startedAt ? new Date(version.startedAt).toLocaleString("ja-JP", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "?";
+      if (vf) vf.textContent = `v.${version.version || "dev"} ・ デプロイ: ${t}`;
+    }
     // domain config からタイトル/サブタイトル動的設定
     const dom = genresData?.domain;
     if (dom) {

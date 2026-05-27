@@ -37,6 +37,14 @@ const allowList = ALLOWED_EMAILS.split(",").map((s) => s.trim().toLowerCase()).f
 const app = express();
 app.use(express.json({ limit: "20mb" }));
 
+// バージョン情報 (デプロイ確認用)
+const APP_VERSION = process.env.APP_VERSION || "dev";
+const BUILD_ID = process.env.BUILD_ID || "";
+const SERVER_STARTED_AT = new Date().toISOString();
+app.get("/api/version", (req, res) => {
+  res.json({ version: APP_VERSION, buildId: BUILD_ID, startedAt: SERVER_STARTED_AT });
+});
+
 app.use((req, res, next) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET,POST,PUT,DELETE,OPTIONS");
