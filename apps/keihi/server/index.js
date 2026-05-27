@@ -1401,6 +1401,37 @@ try {
   console.warn("[kotonoha] genres.json load failed:", e.message);
 }
 
+// UI 部品 のジャンル名リスト (4択 distractor 用)
+const UI_PARTS_GENRES = (() => {
+  const g = KOTONOHA_GENRES_DATA?.groups?.find((g) => g.id === "ui_parts");
+  return g ? g.genres.map((x) => x.name) : [];
+})();
+
+// UI 部品問題を「この機能の名前はなんでしょう？」+ ジャンル名4択に統一
+function buildUiPartsQuestion(q) {
+  if (q.group_id !== "ui_parts" || !q.genre) return q;
+  const others = UI_PARTS_GENRES.filter((n) => n !== q.genre);
+  // ランダムに 3 個選ぶ
+  const distractors = [];
+  const pool = others.slice();
+  while (distractors.length < 3 && pool.length) {
+    const idx = Math.floor(Math.random() * pool.length);
+    distractors.push(pool.splice(idx, 1)[0]);
+  }
+  const options = [q.genre, ...distractors];
+  // シャッフル
+  for (let i = options.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [options[i], options[j]] = [options[j], options[i]];
+  }
+  return {
+    ...q,
+    question: "この機能の名前はなんでしょう？",
+    options,
+    type: "choice",
+  };
+}
+
 // ジャンルマスタ取得 (フロント用)
 app.get("/api/kotonoha/genres", (req, res) => {
   if (!KOTONOHA_GENRES_DATA) return res.status(503).json({ error: "genres not loaded" });
@@ -1820,18 +1851,21 @@ app.post("/api/kotonoha/sessions/start", async (req, res) => {
       }
     }
 
-    const safe = questions.map((q) => ({
-      id: q.id,
-      category: q.category,
-      genre: q.genre,
-      group_id: q.group_id,
-      difficulty: q.difficulty,
-      type: q.type,
-      question: q.question,
-      options: q.options,
-      image_url: q.image_url,
-      demo_html: q.demo_html || null,
-    }));
+    const safe = questions.map((q) => {
+      const transformed = buildUiPartsQuestion(q);
+      return {
+        id: transformed.id,
+        category: transformed.category,
+        genre: transformed.genre,
+        group_id: transformed.group_id,
+        difficulty: transformed.difficulty,
+        type: transformed.type,
+        question: transformed.question,
+        options: transformed.options,
+        image_url: transformed.image_url,
+        demo_html: transformed.demo_html || null,
+      };
+    });
     res.json({ questions: safe, debug });
   } catch (err) {
     console.error("kotonoha start", err);
@@ -1855,7 +1889,13 @@ app.post("/api/kotonoha/answer", async (req, res) => {
     let aiReason = null;
 
     if (q.type === "choice") {
-      isCorrect = ua === q.answer;
+      // UI 部品問題は「この機能の名前は?」+ ジャンル名4択に統一されてるので、
+      // 比較対象は q.genre (DB の q.answer ではなく)
+      if (q.group_id === "ui_parts" && q.genre) {
+        isCorrect = ua === q.genre;
+      } else {
+        isCorrect = ua === q.answer;
+      }
       // Fallback 1: AI が options に "A. xxx" 形式で answer に "A" だけ入れたパターン
       if (!isCorrect && /^[A-D]$/i.test(String(q.answer || "").trim())) {
         const letter = String(q.answer).trim().toUpperCase();
@@ -1935,7 +1975,7 @@ JSON でだけ返す (前置きや説明禁止):
 
     res.json({
       is_correct: isCorrect,
-      answer: q.answer,
+      answer: (q.group_id === "ui_parts" && q.genre) ? q.genre : q.answer,
       genre: q.genre,
       group_id: q.group_id,
       explanation: q.explanation,
