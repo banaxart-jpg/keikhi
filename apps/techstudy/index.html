@@ -347,6 +347,12 @@ body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); 
       <div id="wordsExpanded" style="display:none; flex-direction:column; gap:6px; margin-top:10px;"></div>
     </div>
 
+    <!-- オーナー (社長) のみ可視。サーバーが空配列を返したら js 側で非表示 -->
+    <div class="card" id="peerCard" style="display:none;">
+      <div class="label">みんなの進捗 <span style="color:var(--text3); font-weight:600; text-transform:none; letter-spacing:0; font-size:9px;">(owner only)</span></div>
+      <div id="peerList"></div>
+    </div>
+
     <div class="err" id="homeErr"></div>
     <div id="versionFooter" style="text-align:center; font-family: ui-monospace, Menlo, monospace; font-size: 10px; color: var(--text3); padding: 20px 8px 6px; line-height: 1.5; word-break: break-all;"></div>
     <div style="text-align:center; padding: 4px 0 18px;">
@@ -487,9 +493,10 @@ async function api(method, path, body) {
 async function loadHome() {
   $("homeErr").textContent = "";
   try {
-    // peers は廃止 (プライバシー配慮)。自分の進捗のみ表示。
-    const [me, genresData, version] = await Promise.all([
+    // peers はサーバーが owner だけに返す (それ以外は [])
+    const [me, peers, genresData, version] = await Promise.all([
       api("GET", "/api/kotonoha/me"),
+      api("GET", "/api/kotonoha/peers").catch(() => []),
       api("GET", "/api/kotonoha/genres").catch(() => null),
       fetch((window.API_BASE || "") + "/api/version").then((r) => r.json()).catch(() => null),
     ]);
@@ -513,13 +520,14 @@ async function loadHome() {
       }
       if (dom.subtitle) $("appSubtitle").textContent = dom.subtitle;
     }
-    renderMe(me);
+    renderMe(me, peers);
+    renderPeers(peers);
   } catch (e) {
     $("homeErr").textContent = e.message;
   }
 }
 
-function renderMe(me) {
+function renderMe(me, peers) {
   $("myLevel").textContent = me.user.level;
   $("myLevelStats").textContent =
     `通算 正解 ${me.user.total_correct} / ${me.user.total_answers}`;
@@ -549,9 +557,13 @@ function renderMe(me) {
     streakStat.classList.add("streak-today-pending");
   }
 
-  // peer 比較なし: 自分のレーダーチャートのみ
+  // owner だけ peer overlay (最初の1人と比較)
+  const peer = (peers || [])[0] || null;
+  const peerGroupMap = new Map();
+  if (peer) for (const g of (peer.groups || [])) peerGroupMap.set(g.id, g);
   const myName = (me.user?.display_name) || "あなた";
-  renderRadarChart(me.groups || [], new Map(), myName, null);
+  const peerName = peer?.display_name || null;
+  renderRadarChart(me.groups || [], peerGroupMap, myName, peerName);
 
   // 覚えた言葉: chip 6 個 + 「全部見る」で list 展開
   const words = $("myWords");
@@ -697,6 +709,43 @@ function renderRadarChart(myGroups, peerGroupMap, myName, peerName) {
       `<div class="legend-name">${escapeHtml(g.name)}</div>` +
       `<div class="legend-pct">${g.pct}%${peerName ? `<span class="peer">/ ${pg?.pct || 0}%</span>` : ""}</div>`;
     legend.appendChild(item);
+  }
+}
+
+// owner だけ呼ばれる (サーバーが peers を返すのは owner だけ)。空ならカード非表示。
+function renderPeers(peers) {
+  const card = $("peerCard");
+  const list = $("peerList");
+  if (!peers?.length) {
+    if (card) card.style.display = "none";
+    return;
+  }
+  if (card) card.style.display = "";
+  list.innerHTML = "";
+  for (const p of peers) {
+    const div = document.createElement("div");
+    div.className = "peer-card";
+    let tt = 0, tc = 0;
+    for (const g of (p.groups || [])) for (const gen of g.genres) { tt += gen.target; tc += gen.correct; }
+    const avg = tt ? Math.round((tc / tt) * 100) : 0;
+    const topGroups = (p.groups || []).slice().sort((a, b) => b.pct - a.pct).slice(0, 5);
+    let bars = "";
+    for (const g of topGroups) {
+      bars += `<div class="cat-row">
+        <div class="cat-name" style="font-size:10px;">${escapeHtml(g.name)}</div>
+        <div class="cat-bar"><div class="cat-bar-fill" style="width:${g.pct}%; background:${g.color};"></div></div>
+        <div class="cat-count">${g.pct}%</div>
+      </div>`;
+    }
+    const ps = p.streak;
+    const streakBadge = ps && ps.streak > 0 ? ` ・ 🔥<strong>${ps.streak}</strong>日` : "";
+    div.innerHTML = `
+      <div class="peer-header">
+        <div class="peer-name">${escapeHtml(p.display_name)}</div>
+        <div class="peer-level">LV. <strong>${p.level}</strong> ・ 平均 ${avg}%${streakBadge}</div>
+      </div>
+      <div class="cats">${bars}</div>`;
+    list.appendChild(div);
   }
 }
 

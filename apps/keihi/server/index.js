@@ -33,6 +33,12 @@ const {
 
 admin.initializeApp({ projectId: FIREBASE_PROJECT_ID || undefined });
 const allowList = ALLOWED_EMAILS.split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);
+// kotonoha/techstudy で他メンバーの進捗を閲覧できるオーナー (社長) のみのホワイトリスト。
+// 従業員同士の比較は不可。env で上書き可。
+const KOTONOHA_OWNER_EMAILS = new Set(
+  (process.env.KOTONOHA_OWNER_EMAILS || "info@banax.tokyo,konishi0221@gmail.com")
+    .split(",").map((s) => s.trim().toLowerCase()).filter(Boolean)
+);
 
 const app = express();
 app.use(express.json({ limit: "20mb" }));
@@ -2459,10 +2465,52 @@ app.get("/api/kotonoha/me", async (req, res) => {
   }
 });
 
-// 他メンバーのステータス: 従業員同士に進捗が見えないようプライバシー配慮で無効化。
-// 直接 API を叩かれても何も返さない (空配列固定)。
-app.get("/api/kotonoha/peers", async (_req, res) => {
-  res.json([]);
+// 他メンバーのステータス: オーナー (社長) のみ閲覧可。
+// 従業員同士は不可 — owner 以外は空配列固定 (visible_to_peers 設定は無視)。
+app.get("/api/kotonoha/peers", async (req, res) => {
+  const email = String(req.user?.email || "").toLowerCase();
+  if (!KOTONOHA_OWNER_EMAILS.has(email)) return res.json([]);
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  try {
+    // オーナーには visible_to_peers 関係なく全メンバー見せる (人事把握目的)
+    const { rows: users } = await p.query(
+      `SELECT user_email, display_name, level, total_correct, total_answers, last_session_at
+         FROM kotonoha_users
+        WHERE user_email <> $1
+        ORDER BY last_session_at DESC NULLS LAST`,
+      [email]
+    );
+    const result = [];
+    for (const u of users) {
+      const [groups, streak, recentWords] = await Promise.all([
+        buildKotonohaProgress(p, u.user_email),
+        computeKotonohaStreak(p, u.user_email),
+        p.query(
+          `SELECT DISTINCT ON (q.id) q.answer, q.genre, q.group_id, pr.answered_at
+             FROM kotonoha_progress pr
+             JOIN kotonoha_questions q ON q.id = pr.question_id
+            WHERE pr.user_email = $1 AND pr.is_correct = true
+            ORDER BY q.id, pr.answered_at DESC`,
+          [u.user_email]
+        ).then((r) => r.rows),
+      ]);
+      result.push({
+        display_name: u.display_name,
+        level: u.level,
+        total_correct: u.total_correct,
+        total_answers: u.total_answers,
+        last_session_at: u.last_session_at,
+        streak,
+        groups,
+        recentWords: recentWords.sort((a, b) => new Date(b.answered_at) - new Date(a.answered_at)).slice(0, 5),
+      });
+    }
+    res.json(result);
+  } catch (err) {
+    console.error("kotonoha peers", err);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // 自分の可視性切替
