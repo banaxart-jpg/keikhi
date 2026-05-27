@@ -37,13 +37,10 @@ const allowList = ALLOWED_EMAILS.split(",").map((s) => s.trim().toLowerCase()).f
 const app = express();
 app.use(express.json({ limit: "20mb" }));
 
-// バージョン情報 (デプロイ確認用)
+// バージョン情報 (デプロイ確認用) ※ 認証不要、CORS の後ろに置く必要あり
 const APP_VERSION = process.env.APP_VERSION || "dev";
 const BUILD_ID = process.env.BUILD_ID || "";
 const SERVER_STARTED_AT = new Date().toISOString();
-app.get("/api/version", (req, res) => {
-  res.json({ version: APP_VERSION, buildId: BUILD_ID, startedAt: SERVER_STARTED_AT });
-});
 
 app.use((req, res, next) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
@@ -51,6 +48,11 @@ app.use((req, res, next) => {
   res.setHeader("Access-Control-Allow-Headers", "content-type,authorization");
   if (req.method === "OPTIONS") return res.sendStatus(204);
   next();
+});
+
+// バージョン情報 (CORS の後、認証 middleware の前 = 公開エンドポイント)
+app.get("/api/version", (req, res) => {
+  res.json({ version: APP_VERSION, buildId: BUILD_ID, startedAt: SERVER_STARTED_AT });
 });
 
 // Gate /api/* with a Firebase ID token. The browser calls this service
