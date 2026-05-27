@@ -465,16 +465,23 @@ const escapeHtml = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({
 let authToken = null;
 let fbUser = null;
 async function api(method, path, body) {
-  if (!authToken && fbUser) authToken = await fbUser.getIdToken();
-  if (!authToken) throw new Error("ログインが切れました");
-  const res = await fetch(window.API_BASE + path, {
+  if (!fbUser) throw new Error("ログインが切れました");
+  // 毎回 getIdToken: 有効期限 >5min なら cache 返す軽い処理。idle 後の token-expired を防ぐ
+  authToken = await fbUser.getIdToken();
+  const doFetch = async (token) => fetch(window.API_BASE + path, {
     method,
     headers: {
-      authorization: "Bearer " + authToken,
+      authorization: "Bearer " + token,
       ...(body ? { "content-type": "application/json" } : {}),
     },
     body: body ? JSON.stringify(body) : undefined,
   });
+  let res = await doFetch(authToken);
+  // 401 → 強制リフレッシュ後 1回だけリトライ (clock skew / 早期失効対策)
+  if (res.status === 401) {
+    authToken = await fbUser.getIdToken(true);
+    res = await doFetch(authToken);
+  }
   if (res.status === 204) return null;
   const j = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(j.error || `HTTP ${res.status}`);
