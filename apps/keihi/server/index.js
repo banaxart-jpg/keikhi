@@ -1702,7 +1702,9 @@ async function ensureMinPool(p, email, target = 30) {
     dbg.freshAfter = dbg.freshBefore;
     if (dbg.freshBefore >= target) return dbg;
     const need = Math.min(target - dbg.freshBefore, 8);
-    // 弱ジャンル (このユーザーの正解数が少ない) を選ぶ。各 genre の suggestedDepth = correct + 1
+    // 弱ジャンル選定: 「ユーザーの正解少ない」+「他問題から参照される頻度高い」順
+    // 頻度 = そのジャンルの問題数 (出題量) + 他問題の prerequisites に登場する回数 (foundational)
+    // → 「土台として使われる用語」を優先的に学ばせる Zipf 的アプローチ
     const { rows: weakRows } = await p.query(`
       WITH gc AS (
         SELECT q.genre, q.group_id, COUNT(DISTINCT q.id) FILTER (WHERE pr.is_correct)::int AS correct
@@ -1710,8 +1712,24 @@ async function ensureMinPool(p, email, target = 30) {
           LEFT JOIN kotonoha_progress pr ON pr.question_id = q.id AND pr.user_email = $1
          WHERE q.genre IS NOT NULL
          GROUP BY q.genre, q.group_id
+      ),
+      freq_self AS (
+        SELECT genre, COUNT(*)::int AS n FROM kotonoha_questions
+         WHERE genre IS NOT NULL GROUP BY genre
+      ),
+      freq_prereq AS (
+        SELECT prereq AS genre, COUNT(*)::int AS n
+          FROM kotonoha_questions q,
+               jsonb_array_elements_text(COALESCE(q.prerequisites, '[]'::jsonb)) prereq
+         GROUP BY prereq
       )
-      SELECT genre, group_id, correct FROM gc ORDER BY correct ASC, random() LIMIT $2`,
+      SELECT gc.genre, gc.group_id, gc.correct,
+             COALESCE(fs.n, 0) + COALESCE(fp.n, 0) AS total_freq
+        FROM gc
+        LEFT JOIN freq_self fs ON fs.genre = gc.genre
+        LEFT JOIN freq_prereq fp ON fp.genre = gc.genre
+       ORDER BY gc.correct ASC, total_freq DESC, random()
+       LIMIT $2`,
       [email, need * 3]
     );
     // フェーズ判定
