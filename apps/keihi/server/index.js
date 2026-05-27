@@ -2184,6 +2184,16 @@ app.get("/api/kotonoha/me", async (req, res) => {
       buildKotonohaProgress(p, req.user.email),
       computeKotonohaStreak(p, req.user.email),
     ]);
+    // プール統計 (デバッグ用)
+    const { rows: poolRows } = await p.query(
+      `SELECT
+         count(*)::int AS total,
+         count(*) FILTER (WHERE source = 'generated')::int AS generated,
+         count(*) FILTER (WHERE source = 'seed')::int AS seed,
+         count(*) FILTER (WHERE source = 'generated' AND created_at > now() - interval '1 hour')::int AS gen_last_hour
+       FROM kotonoha_questions`
+    );
+    const pool = poolRows[0] || { total: 0, generated: 0, seed: 0, gen_last_hour: 0 };
     // 最近覚えた言葉: ジャンル名で集約 (概念ベース)。長文回答や letter-only な
     // 壊れ answer を chip にしないようにする。
     const { rows: recentWords } = await p.query(
@@ -2206,6 +2216,7 @@ app.get("/api/kotonoha/me", async (req, res) => {
       user,
       streak,
       groups,
+      pool,
       recentWords: recentWords.slice(0, 12),
     });
   } catch (err) {

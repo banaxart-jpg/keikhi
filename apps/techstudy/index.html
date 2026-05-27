@@ -240,6 +240,7 @@ body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); 
       <span class="icon" style="vertical-align:-0.18em;">play_circle</span>
       20問にチャレンジ (弱いジャンル優先)
     </button>
+    <div id="diagStrip" style="font-family: ui-monospace, Menlo, monospace; font-size: 11px; color: #6d28d9; background: rgba(109,40,217,0.08); border-radius: 8px; padding: 8px 12px; margin-top: 10px; line-height: 1.5; word-break: break-all; font-weight: 600;">DIAG: loading…</div>
 
     <div class="card" style="margin-top: 16px;">
       <div class="label">ジャンル別の達成度</div>
@@ -402,6 +403,11 @@ async function loadHome() {
 }
 
 function renderMe(me, peers) {
+  // プール統計を上部に表示
+  if (me.pool) {
+    const d = $("diagStrip");
+    if (d) d.textContent = `DB: ${me.pool.total}問 (seed ${me.pool.seed} / AI生成 ${me.pool.generated}) ・ 直近1h生成: ${me.pool.gen_last_hour}`;
+  }
   $("myLevel").textContent = me.user.level;
   $("myLevelStats").textContent =
     `通算 正解 ${me.user.total_correct} / ${me.user.total_answers}`;
@@ -601,9 +607,8 @@ async function startSession(genre) {
     const { questions, debug } = sessionRes;
     if (debug) {
       console.log("[techstudy] session debug:", debug);
-      // 画面上にも表示 (mobile から見れるように)
-      const d = $("homeDebug");
-      if (d) d.textContent = `DEBUG: fresh ${debug.freshBefore}→${debug.freshAfter} / gen ${debug.syncGenSucceeded}/${debug.syncGenAttempted} / priority ${JSON.stringify(debug.priorityBreakdown)}`;
+      const d = $("diagStrip");
+      if (d) d.textContent = `DIAG: fresh ${debug.freshBefore}→${debug.freshAfter} ・ gen ${debug.syncGenSucceeded}/${debug.syncGenAttempted} ・ priority ${JSON.stringify(debug.priorityBreakdown)}`;
     }
     if (!questions.length) throw new Error("問題がありません。シード DB の投入が必要かも。");
     // キュー初期化
