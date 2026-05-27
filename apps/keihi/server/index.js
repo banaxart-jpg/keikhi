@@ -1611,8 +1611,9 @@ JSON:
     }
   }
   if (!j) return null;
-  // prerequisites は array of string に正規化
-  const prereqs = Array.isArray(j.prerequisites) ? j.prerequisites.filter((s) => typeof s === "string" && s.length > 0) : [];
+  // prerequisites は depth=1 では空配列に強制 (intro は誰でも見れる)
+  let prereqs = Array.isArray(j.prerequisites) ? j.prerequisites.filter((s) => typeof s === "string" && s.length > 0 && s !== genre) : [];
+  if (d === 1) prereqs = [];
   try {
     const { rows } = await p.query(
       `INSERT INTO kotonoha_questions
@@ -1713,26 +1714,25 @@ async function ensureMinPool(p, email, target = 30) {
     );
     const correctCount = tcr[0]?.n || 0;
     const priorityGroups = pickPriorityGroups(correctCount);
-    // priority groups が指定されてればそれだけからジャンル選択 + マスタの該当グループから補充
-    let candidates = weakRows;
-    if (priorityGroups) {
-      candidates = weakRows.filter((r) => priorityGroups.includes(r.group_id));
-      // 足りなければマスタから該当グループのジャンル足す
-      if (candidates.length < need) {
-        const priorityGenres = [];
-        for (const g of (KOTONOHA_GENRES_DATA?.groups || [])) {
-          if (priorityGroups.includes(g.id)) {
-            for (const gen of g.genres) priorityGenres.push({ genre: gen.name, group_id: g.id });
-          }
-        }
-        const seen = new Set(candidates.map((c) => c.genre));
-        const more = priorityGenres.filter((g) => !seen.has(g.genre));
-        for (let i = more.length - 1; i > 0; i--) {
-          const j = Math.floor(Math.random() * (i + 1));
-          [more[i], more[j]] = [more[j], more[i]];
-        }
-        candidates = [...candidates, ...more.slice(0, need - candidates.length).map((g) => ({ genre: g.genre, group_id: g.group_id, correct: 0 }))];
+    // priority groups の filter + master 補充
+    let candidates = priorityGroups
+      ? weakRows.filter((r) => priorityGroups.includes(r.group_id))
+      : weakRows;
+    // priorityGroups の対象グループから (DB に未登録のジャンル含む) フォールバック
+    if (candidates.length < need) {
+      const fallbackGenres = [];
+      for (const g of (KOTONOHA_GENRES_DATA?.groups || [])) {
+        // priorityGroups 指定時はそのグループのみ、null (Phase 3) なら全グループ
+        if (priorityGroups && !priorityGroups.includes(g.id)) continue;
+        for (const gen of g.genres) fallbackGenres.push({ genre: gen.name, group_id: g.id });
       }
+      const seen = new Set(candidates.map((c) => c.genre));
+      const more = fallbackGenres.filter((g) => !seen.has(g.genre));
+      for (let i = more.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [more[i], more[j]] = [more[j], more[i]];
+      }
+      candidates = [...candidates, ...more.slice(0, need - candidates.length).map((g) => ({ genre: g.genre, group_id: g.group_id, correct: 0 }))];
     }
     let targets = candidates.slice(0, need).map((r) => ({ genre: r.genre, depth: Math.min(5, (r.correct || 0) + 1) }));
     // 万一 priority + マスタでも足りないなら全範囲から補う
@@ -1787,8 +1787,11 @@ app.post("/api/kotonoha/sessions/start", async (req, res) => {
     const priorityGroups = pickPriorityGroups(correctCount);
     debug.phase = priorityGroups ? `${priorityGroups.length}グループ` : "全グループ";
 
-    // 出題: depth ゲート + prerequisites ゲート + (未回答 OR 不正解 OR gap 経過) + random
-    const { rows: questions } = await p.query(`
+    // 出題は new (未回答) + review (gap 経過) の 70:30 quota で取る
+    // → 学習履歴がたまっても新規が常に多数派になり「復習で埋まる」事故を防ぐ
+    const NEW_QUOTA = 14;
+    const REVIEW_QUOTA = SESSION_SIZE - NEW_QUOTA; // 6
+    const baseFilter = `
       WITH ranked AS (
         SELECT question_id, is_correct, ROW_NUMBER() OVER (ORDER BY answered_at) AS pos
           FROM kotonoha_progress WHERE user_email = $1
@@ -1804,38 +1807,57 @@ app.post("/api/kotonoha/sessions/start", async (req, res) => {
          WHERE pr.user_email = $1 AND pr.is_correct AND q.genre IS NOT NULL
          GROUP BY q.genre
       ),
-      ut AS (SELECT COUNT(*)::int AS total FROM ranked),
-      -- ユーザーが既に正解実績があるジャンル (prerequisite check 用)
-      known_genres AS (
-        SELECT DISTINCT q.genre FROM kotonoha_progress pr
-          JOIN kotonoha_questions q ON q.id = pr.question_id
-         WHERE pr.user_email = $1 AND pr.is_correct AND q.genre IS NOT NULL
-      )
+      ut AS (SELECT COUNT(*)::int AS total FROM ranked)`;
+    const commonAnd = `
+         AND q.difficulty <= COALESCE(gc.n, 0) + 1
+         AND ($3::text[] IS NULL OR q.group_id = ANY($3::text[]))`;
+
+    // 1) NEW: 未回答 (priority 0) または 一度も正解してない (priority 1)
+    const { rows: newRows } = await p.query(`
+      ${baseFilter}
       SELECT q.*
         FROM kotonoha_questions q
         LEFT JOIN up ON up.question_id = q.id
         LEFT JOIN gc ON gc.genre = q.genre
-       WHERE (
-         up.question_id IS NULL
-         OR up.last_correct_pos IS NULL
-         OR ((SELECT total FROM ut) - up.last_correct_pos) >= 50 + (abs(hashtextextended(q.id::text || $1, 0)) % 50)::int
-       )
-         AND q.difficulty <= COALESCE(gc.n, 0) + 1
-         -- prerequisites ゲート
-         AND (
-           q.prerequisites IS NULL
-           OR jsonb_array_length(q.prerequisites) = 0
-           OR NOT EXISTS (
-             SELECT 1 FROM jsonb_array_elements_text(q.prerequisites) prereq
-              WHERE prereq NOT IN (SELECT genre FROM known_genres)
-           )
-         )
-         -- フェーズゲート: 序盤は IT 入門 + UI 部品 から優先
-         AND ($3::text[] IS NULL OR q.group_id = ANY($3::text[]))
+       WHERE (up.question_id IS NULL OR up.last_correct_pos IS NULL)
+         ${commonAnd}
        ORDER BY random()
        LIMIT $2`,
       [req.user.email, SESSION_SIZE, priorityGroups]
     );
+
+    // 2) REVIEW: 正解履歴あり & gap 経過
+    const { rows: reviewRows } = await p.query(`
+      ${baseFilter}
+      SELECT q.*
+        FROM kotonoha_questions q
+        JOIN up ON up.question_id = q.id
+        LEFT JOIN gc ON gc.genre = q.genre
+       WHERE up.last_correct_pos IS NOT NULL
+         AND ((SELECT total FROM ut) - up.last_correct_pos) >= 50 + (abs(hashtextextended(q.id::text || $1, 0)) % 50)::int
+         ${commonAnd}
+       ORDER BY random()
+       LIMIT $2`,
+      [req.user.email, SESSION_SIZE, priorityGroups]
+    );
+
+    // 3) quota mix: NEW 多数派、REVIEW 補完
+    let pickedNew = newRows.slice(0, NEW_QUOTA);
+    let pickedReview = reviewRows.slice(0, REVIEW_QUOTA);
+    // 片方が不足なら他方で補う
+    if (pickedNew.length < NEW_QUOTA) {
+      pickedReview = reviewRows.slice(0, REVIEW_QUOTA + (NEW_QUOTA - pickedNew.length));
+    }
+    if (pickedReview.length < REVIEW_QUOTA) {
+      pickedNew = newRows.slice(0, NEW_QUOTA + (REVIEW_QUOTA - pickedReview.length));
+    }
+    let questions = [...pickedNew, ...pickedReview];
+    // 出題順序はシャッフル (new と review が連続しないように)
+    for (let i = questions.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [questions[i], questions[j]] = [questions[j], questions[i]];
+    }
+    questions = questions.slice(0, SESSION_SIZE);
 
     // UI demo を結合
     const demoGroups = new Set(["ui_parts", "css_layout"]);
