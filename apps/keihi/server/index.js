@@ -2161,22 +2161,28 @@ app.get("/api/kotonoha/me", async (req, res) => {
        FROM kotonoha_questions`
     );
     const pool = poolRows[0] || { total: 0, generated: 0, seed: 0, gen_last_hour: 0 };
-    // 最近覚えた言葉: ジャンル名で集約 (概念ベース)。長文回答や letter-only な
-    // 壊れ answer を chip にしないようにする。
-    const { rows: recentWords } = await p.query(
-      `SELECT
-         COALESCE(NULLIF(q.genre, ''), q.answer) AS label,
-         q.genre,
-         q.group_id,
-         MAX(pr.answered_at) AS answered_at
+    // 覚えた言葉: ジャンル名で集約 + 各ラベルの直近 explanation を同梱
+    // 「単語だけ」になるよう char_length 2-24 でフィルタ
+    const { rows: learned } = await p.query(
+      `SELECT label, group_id, explanation, answered_at FROM (
+         SELECT
+           COALESCE(NULLIF(q.genre, ''), q.answer) AS label,
+           q.group_id,
+           q.explanation,
+           pr.answered_at,
+           ROW_NUMBER() OVER (
+             PARTITION BY COALESCE(NULLIF(q.genre, ''), q.answer)
+             ORDER BY pr.answered_at DESC
+           ) AS rn
          FROM kotonoha_progress pr
          JOIN kotonoha_questions q ON q.id = pr.question_id
-        WHERE pr.user_email = $1
-          AND pr.is_correct = true
-          AND char_length(COALESCE(NULLIF(q.genre, ''), q.answer)) BETWEEN 2 AND 24
-        GROUP BY label, q.genre, q.group_id
-        ORDER BY MAX(pr.answered_at) DESC
-        LIMIT 12`,
+         WHERE pr.user_email = $1
+           AND pr.is_correct = true
+           AND char_length(COALESCE(NULLIF(q.genre, ''), q.answer)) BETWEEN 2 AND 24
+       ) sub
+       WHERE rn = 1
+       ORDER BY answered_at DESC
+       LIMIT 200`,
       [req.user.email]
     );
     res.json({
@@ -2184,7 +2190,8 @@ app.get("/api/kotonoha/me", async (req, res) => {
       streak,
       groups,
       pool,
-      recentWords: recentWords.slice(0, 12),
+      recentWords: learned.slice(0, 12),
+      learned, // フルリスト (最大200件、explanation 付き)
     });
   } catch (err) {
     console.error("kotonoha me", err);

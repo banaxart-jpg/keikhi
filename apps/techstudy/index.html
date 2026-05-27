@@ -116,6 +116,14 @@ body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); 
 
 .recent-words { display: flex; flex-wrap: wrap; gap: 6px; }
 .word-chip { background: var(--accent-soft); color: var(--accent); padding: 5px 11px; border-radius: 12px; font-size: 11px; font-weight: 700; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.word-row { padding: 10px 14px; background: var(--bg); border-radius: 10px; box-shadow: 3px 3px 8px var(--sd), -2px -2px 6px var(--sl); cursor: pointer; transition: transform 0.1s; }
+.word-row:active { transform: scale(0.98); }
+.word-row .row-label { font-weight: 700; font-size: 13px; color: var(--text); display: flex; align-items: center; gap: 8px; }
+.word-row .row-dot { width: 8px; height: 8px; border-radius: 3px; flex-shrink: 0; }
+.word-row .row-explain { display: none; font-size: 12px; color: var(--text2); margin-top: 8px; line-height: 1.7; padding-left: 16px; border-left: 2px solid var(--accent); }
+.word-row.open .row-explain { display: block; }
+.word-row.open .row-chev { transform: rotate(90deg); }
+.word-row .row-chev { font-family: 'Material Symbols Outlined'; margin-left: auto; transition: transform 0.2s; color: var(--text3); font-size: 16px; }
 
 .peer-card { background: var(--bg); border-radius: 18px; padding: 14px; margin-bottom: 10px; box-shadow: 4px 4px 10px var(--sd), -3px -3px 8px var(--sl); }
 .peer-header { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 10px; }
@@ -257,8 +265,10 @@ body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); 
     </div>
 
     <div class="card">
-      <div class="label">最近覚えた言葉</div>
+      <div class="label">最近覚えた言葉 <span id="wordsCount" style="color:var(--text3);font-weight:600;"></span></div>
       <div class="recent-words" id="myWords"><div class="empty">まだなし</div></div>
+      <button id="wordsToggle" onclick="toggleWordsExpand()" style="display:none; margin-top:10px; padding:7px 14px; border:none; border-radius:8px; background:var(--bg); box-shadow: inset 2px 2px 6px var(--sd), inset -2px -2px 6px var(--sl); color:var(--accent); font-weight:700; font-size:11px; cursor:pointer; width:100%;">全部見る ▼</button>
+      <div id="wordsExpanded" style="display:none; flex-direction:column; gap:6px; margin-top:10px;"></div>
     </div>
 
     <div class="card">
@@ -462,13 +472,21 @@ function renderMe(me, peers) {
   // レーダーチャート + 凡例
   renderRadarChart(me.groups || [], peerGroupMap, myName, peerName);
 
-  // 最近覚えた言葉
+  // 覚えた言葉: chip 6 個 + 「全部見る」で list 展開
   const words = $("myWords");
-  if (!me.recentWords?.length) {
+  const toggle = $("wordsToggle");
+  const expanded = $("wordsExpanded");
+  const countEl = $("wordsCount");
+  const learnedList = me.learned || me.recentWords || [];
+  state.learnedAll = learnedList;
+  if (countEl) countEl.textContent = learnedList.length ? `(${learnedList.length})` : "";
+  if (!learnedList.length) {
     words.innerHTML = `<div class="empty">まだなし</div>`;
+    if (toggle) toggle.style.display = "none";
+    if (expanded) { expanded.style.display = "none"; expanded.innerHTML = ""; }
   } else {
     words.innerHTML = "";
-    for (const w of me.recentWords) {
+    for (const w of learnedList.slice(0, 6)) {
       const chip = document.createElement("span");
       chip.className = "word-chip";
       chip.textContent = w.label || w.answer || "";
@@ -477,8 +495,42 @@ function renderMe(me, peers) {
       chip.style.background = `color-mix(in srgb, ${c} 14%, var(--bg) 86%)`;
       words.appendChild(chip);
     }
+    if (toggle) toggle.style.display = learnedList.length > 6 ? "block" : "none";
   }
 }
+
+function toggleWordsExpand() {
+  const expanded = $("wordsExpanded");
+  const toggle = $("wordsToggle");
+  const words = $("myWords");
+  if (!expanded || !toggle) return;
+  const isOpen = expanded.style.display === "flex";
+  if (isOpen) {
+    expanded.style.display = "none";
+    toggle.textContent = `全部見る (${state.learnedAll?.length || 0}) ▼`;
+    if (words) words.style.display = "flex";
+  } else {
+    if (words) words.style.display = "none";
+    expanded.style.display = "flex";
+    expanded.innerHTML = "";
+    for (const w of (state.learnedAll || [])) {
+      const row = document.createElement("div");
+      row.className = "word-row";
+      const c = state.groupColorMap.get(w.group_id) || "var(--accent)";
+      row.innerHTML =
+        `<div class="row-label">
+           <div class="row-dot" style="background:${c};"></div>
+           <span>${escapeHtml(w.label || "")}</span>
+           <span class="row-chev">chevron_right</span>
+         </div>
+         <div class="row-explain">${escapeHtml(w.explanation || "解説なし")}</div>`;
+      row.addEventListener("click", () => row.classList.toggle("open"));
+      expanded.appendChild(row);
+    }
+    toggle.textContent = "閉じる ▲";
+  }
+}
+window.toggleWordsExpand = toggleWordsExpand;
 
 // グループ ID → 短縮ラベル (レーダー軸の表示用)
 const GROUP_SHORT = {
