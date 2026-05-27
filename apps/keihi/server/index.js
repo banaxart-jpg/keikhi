@@ -2244,42 +2244,42 @@ app.post("/api/kotonoha/sessions/end", async (req, res) => {
 
 // セッション完了画面に出す「派手目の一言」を組み立てる。
 // 優先度: レベルアップ大台 > 連続記録達成 > 連続記録あとちょっと > 通算ミルストーン > 既定。
+// フロントは celebrateMsg を innerHTML で描画するので、ここで
+// `<span class="icon">name</span>` を直接埋めて Material Symbols 表示。
+const ICON_STAR  = `<span class="icon" style="color:#fbbf24;vertical-align:-0.18em;">stars</span>`;
+const ICON_FIRE  = `<span class="icon" style="color:#f59e0b;vertical-align:-0.18em;">local_fire_department</span>`;
+const ICON_SCHOOL= `<span class="icon" style="color:#6d28d9;vertical-align:-0.18em;">school</span>`;
+const ICON_TGT   = `<span class="icon" style="color:#6d28d9;vertical-align:-0.18em;">my_location</span>`;
 function buildEndMessage({ oldLevel, newLevel, streak, totalUniqCorrect }) {
   const leveledUp = newLevel > oldLevel;
   const milestoneLv = [5, 10, 15, 20, 30, 50, 75, 100];
   const streakMilestones = [3, 7, 14, 30, 60, 100, 200, 365];
   const totalMilestones = [10, 25, 50, 100, 200, 500, 1000];
 
-  // 大台レベル
   if (leveledUp && milestoneLv.includes(newLevel)) {
-    return `🌟 レベル ${newLevel} 到達！大台です`;
+    return `${ICON_STAR} レベル ${newLevel} 到達!大台です`;
   }
-  // 連続記録のキリ番達成 (今日アクティブで streak が milestone と一致)
   if (streak?.today_active && streakMilestones.includes(streak.streak)) {
-    return `🔥 連続 ${streak.streak} 日達成！`;
+    return `${ICON_FIRE} 連続 ${streak.streak} 日達成!`;
   }
-  // レベルアップ
   if (leveledUp) {
-    return `🎓 レベル ${oldLevel} → ${newLevel} に上がった`;
+    return `${ICON_SCHOOL} レベル ${oldLevel} → ${newLevel} に上がった`;
   }
-  // 今日まだ未達でも、あとちょっとで継続伸びる
   if (streak && !streak.today_active && streak.streak > 0) {
     const need = Math.max(1, (streak.daily_min || 5) - (streak.today_correct || 0));
     return `今日あと ${need} 問正解で 連続 ${streak.streak + 1} 日`;
   }
-  // 連続記録のキリ番が射程内 (あと N日)
   if (streak?.today_active) {
     const next = streakMilestones.find((m) => m > streak.streak);
     if (next && next - streak.streak <= 5) {
       return `あと ${next - streak.streak} 日で 連続 ${next} 日達成`;
     }
     if (streak.streak >= 1) {
-      return `🔥 連続 ${streak.streak} 日継続中`;
+      return `${ICON_FIRE} 連続 ${streak.streak} 日継続中`;
     }
   }
-  // 通算正解のキリ番達成
   if (totalMilestones.includes(totalUniqCorrect)) {
-    return `🎯 通算 ${totalUniqCorrect} 語マスター`;
+    return `${ICON_TGT} 通算 ${totalUniqCorrect} 語マスター`;
   }
   // 通算ミルストーンまであと少し
   const nextTotal = totalMilestones.find((m) => m > totalUniqCorrect);
