@@ -1722,9 +1722,10 @@ app.post("/api/kotonoha/sessions/start", async (req, res) => {
       const freshCount = pcr[0]?.n || 0;
       debug.freshBefore = freshCount;
       debug.freshAfter = freshCount;
-      // 緊急時のみ生成 (プール枯渇)
-      if (freshCount < SESSION_SIZE) {
-        const need = Math.min(SESSION_SIZE - freshCount + 4, 10);
+      // プール 40 未満なら成長させる (毎回最大 8 問)
+      const POOL_TARGET = 40;
+      if (freshCount < POOL_TARGET) {
+        const need = Math.min(POOL_TARGET - freshCount, 8);
         const { rows: ansRows } = await p.query(
           `SELECT answer FROM kotonoha_questions ORDER BY id DESC LIMIT 200`
         );
@@ -1799,9 +1800,11 @@ app.post("/api/kotonoha/sessions/start", async (req, res) => {
            LEFT JOIN mastered_per_genre mpg ON mpg.genre = e.genre
           WHERE e.difficulty <= $3
           ORDER BY priority ASC,
+                   -- priority 0 (未回答) は古い順で消費 (= 寝かせた問題を先に)
+                   -- priority 1+ (回答済み) は完全ランダムでセッション毎の変化を最大化
+                   CASE WHEN priority = 0 THEN EXTRACT(EPOCH FROM e.created_at) END ASC,
                    genre_mastered ASC,
                    (e.type = 'choice') DESC,
-                   e.created_at ASC,
                    random()
           LIMIT $4`,
         [req.user.email, MASTERY, maxDiff, SESSION_SIZE]
