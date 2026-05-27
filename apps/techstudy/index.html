@@ -347,11 +347,6 @@ body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); 
       <div id="wordsExpanded" style="display:none; flex-direction:column; gap:6px; margin-top:10px;"></div>
     </div>
 
-    <div class="card">
-      <div class="label">みんなの進捗</div>
-      <div id="peerList"><div class="empty">読み込み中…</div></div>
-    </div>
-
     <div class="err" id="homeErr"></div>
     <div id="versionFooter" style="text-align:center; font-family: ui-monospace, Menlo, monospace; font-size: 10px; color: var(--text3); padding: 20px 8px 6px; line-height: 1.5; word-break: break-all;"></div>
     <div style="text-align:center; padding: 4px 0 18px;">
@@ -492,9 +487,9 @@ async function api(method, path, body) {
 async function loadHome() {
   $("homeErr").textContent = "";
   try {
-    const [me, peers, genresData, version] = await Promise.all([
+    // peers は廃止 (プライバシー配慮)。自分の進捗のみ表示。
+    const [me, genresData, version] = await Promise.all([
       api("GET", "/api/kotonoha/me"),
-      api("GET", "/api/kotonoha/peers"),
       api("GET", "/api/kotonoha/genres").catch(() => null),
       fetch((window.API_BASE || "") + "/api/version").then((r) => r.json()).catch(() => null),
     ]);
@@ -518,14 +513,13 @@ async function loadHome() {
       }
       if (dom.subtitle) $("appSubtitle").textContent = dom.subtitle;
     }
-    renderMe(me, peers);
-    renderPeers(peers);
+    renderMe(me);
   } catch (e) {
     $("homeErr").textContent = e.message;
   }
 }
 
-function renderMe(me, peers) {
+function renderMe(me) {
   $("myLevel").textContent = me.user.level;
   $("myLevelStats").textContent =
     `通算 正解 ${me.user.total_correct} / ${me.user.total_answers}`;
@@ -555,17 +549,9 @@ function renderMe(me, peers) {
     streakStat.classList.add("streak-today-pending");
   }
 
-  // 比較対象 peer (最初のメンバー)
-  const peer = (peers || [])[0] || null;
-  const peerGroupMap = new Map();
-  if (peer) {
-    for (const g of (peer.groups || [])) peerGroupMap.set(g.id, g);
-  }
+  // peer 比較なし: 自分のレーダーチャートのみ
   const myName = (me.user?.display_name) || "あなた";
-  const peerName = peer?.display_name || null;
-
-  // レーダーチャート + 凡例
-  renderRadarChart(me.groups || [], peerGroupMap, myName, peerName);
+  renderRadarChart(me.groups || [], new Map(), myName, null);
 
   // 覚えた言葉: chip 6 個 + 「全部見る」で list 展開
   const words = $("myWords");
@@ -711,44 +697,6 @@ function renderRadarChart(myGroups, peerGroupMap, myName, peerName) {
       `<div class="legend-name">${escapeHtml(g.name)}</div>` +
       `<div class="legend-pct">${g.pct}%${peerName ? `<span class="peer">/ ${pg?.pct || 0}%</span>` : ""}</div>`;
     legend.appendChild(item);
-  }
-}
-
-function renderPeers(peers) {
-  const list = $("peerList");
-  if (!peers?.length) {
-    list.innerHTML = `<div class="empty">他のメンバーがまだいません</div>`;
-    return;
-  }
-  list.innerHTML = "";
-  for (const p of peers) {
-    const div = document.createElement("div");
-    div.className = "peer-card";
-    // 平均%
-    let tt = 0, tc = 0;
-    for (const g of (p.groups || [])) for (const gen of g.genres) { tt += gen.target; tc += gen.correct; }
-    const avg = tt ? Math.round((tc/tt)*100) : 0;
-    // 上位5グループだけ表示
-    const topGroups = (p.groups || []).slice().sort((a, b) => b.pct - a.pct).slice(0, 5);
-    let bars = "";
-    for (const g of topGroups) {
-      bars += `<div class="cat-row">
-        <div class="cat-name" style="font-size:10px;">${escapeHtml(g.name)}</div>
-        <div class="cat-bar"><div class="cat-bar-fill" style="width:${g.pct}%; background:${g.color};"></div></div>
-        <div class="cat-count">${g.pct}%</div>
-      </div>`;
-    }
-    const ps = p.streak;
-    const streakBadge = ps && ps.streak > 0
-      ? ` ・ 🔥<strong>${ps.streak}</strong>日`
-      : "";
-    div.innerHTML = `
-      <div class="peer-header">
-        <div class="peer-name">${escapeHtml(p.display_name)}</div>
-        <div class="peer-level">LV. <strong>${p.level}</strong> ・ 平均 ${avg}%${streakBadge}</div>
-      </div>
-      <div class="cats">${bars}</div>`;
-    list.appendChild(div);
   }
 }
 
