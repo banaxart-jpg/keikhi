@@ -1562,10 +1562,14 @@ ${type === "choice"
   for (let attempt = 0; attempt < 2 && !j; attempt++) {
     try {
       const { result } = await callGeminiWithFallback(prompt, {
-        primaryModel: "gemini-2.5-flash",
-        maxOutputTokens: 1500,
+        primaryModel: "gemini-2.5-flash-lite",
+        maxOutputTokens: 4000,
       });
       const text = (result.response.text() || "").trim();
+      if (!text) {
+        console.warn(`[kotonoha] gen empty text genre=${targetGenre} attempt=${attempt + 1}`);
+        continue;
+      }
       const m = text.match(/\{[\s\S]*\}/);
       if (!m) { console.warn(`[kotonoha] gen no-json genre=${targetGenre} attempt=${attempt+1} text_len=${text.length}`); continue; }
       const parsed = JSON.parse(m[0]);
@@ -2170,12 +2174,12 @@ app.post("/api/kotonoha/test-gen", async (req, res) => {
   // ① Gemini 直接呼び出し (最小プロンプト)
   const start1 = Date.now();
   try {
-    const m = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+    const m = genAI.getGenerativeModel({ model: "gemini-2.5-flash-lite", generationConfig: { maxOutputTokens: 4000 } });
     const r = await m.generateContent("Reply with exactly: ok");
     out.gemini = {
       ok: true,
       elapsed: Date.now() - start1,
-      model: "gemini-2.5-flash",
+      model: "gemini-2.5-flash-lite",
       text: (r.response.text() || "").slice(0, 200),
     };
   } catch (e) {
