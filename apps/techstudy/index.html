@@ -261,6 +261,7 @@ body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); 
     </div>
 
     <div class="err" id="homeErr"></div>
+    <div id="homeDebug" style="font-family: ui-monospace, Menlo, monospace; font-size: 10px; color: var(--text3); padding: 10px 12px; line-height: 1.5; word-break: break-all;"></div>
   </div>
 
   <!-- セッション画面 -->
@@ -598,7 +599,12 @@ async function startSession(genre) {
   try {
     const sessionRes = await api("POST", "/api/kotonoha/sessions/start", genre ? { genre } : {});
     const { questions, debug } = sessionRes;
-    if (debug) console.log("[techstudy] session debug:", debug);
+    if (debug) {
+      console.log("[techstudy] session debug:", debug);
+      // 画面上にも表示 (mobile から見れるように)
+      const d = $("homeDebug");
+      if (d) d.textContent = `DEBUG: fresh ${debug.freshBefore}→${debug.freshAfter} / gen ${debug.syncGenSucceeded}/${debug.syncGenAttempted} / priority ${JSON.stringify(debug.priorityBreakdown)}`;
+    }
     if (!questions.length) throw new Error("問題がありません。シード DB の投入が必要かも。");
     // キュー初期化
     state.questionMap = new Map();
