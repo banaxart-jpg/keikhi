@@ -1981,9 +1981,10 @@ app.post("/api/kotonoha/sessions/start", async (req, res) => {
     }
     questions = questions.slice(0, SESSION_SIZE);
 
-    // UI demo を結合: 「この機能の名前は?」型は demo が無いと答えようがないので、
-    // demo 無しのジャンルは出題から外し、後ろで bg 生成キック。
-    const demoGroups = new Set(["ui_parts", "css_layout"]);
+    // UI demo を結合: 「この機能の名前は?」型 (ui_parts) は demo が無いと答えようがない。
+    // css_layout は AI 生成デモが空 iframe になりがち & 質問文だけで答えられるので
+    // demo 対象から外す。
+    const demoGroups = new Set(["ui_parts"]);
     const uiGenres = [...new Set(questions.filter((q) => demoGroups.has(q.group_id) && q.genre).map((q) => q.genre))];
     let missingDemoGenres = [];
     if (uiGenres.length) {
