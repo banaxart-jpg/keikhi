@@ -1401,16 +1401,21 @@ try {
   console.warn("[kotonoha] genres.json load failed:", e.message);
 }
 
-// UI 部品 のジャンル名リスト (4択 distractor 用)
-const UI_PARTS_GENRES = (() => {
-  const g = KOTONOHA_GENRES_DATA?.groups?.find((g) => g.id === "ui_parts");
-  return g ? g.genres.map((x) => x.name) : [];
+// UI テンプレ適用グループ (汎用化のため content config に外出し)
+const UI_TEMPLATE_GROUPS = new Set(KOTONOHA_GENRES_DATA?.ui_template_groups || []);
+const UI_TEMPLATE_GENRES_BY_GROUP = (() => {
+  const m = new Map();
+  for (const gid of UI_TEMPLATE_GROUPS) {
+    const g = KOTONOHA_GENRES_DATA?.groups?.find((x) => x.id === gid);
+    if (g) m.set(gid, g.genres.map((x) => x.name));
+  }
+  return m;
 })();
 
-// UI 部品問題を「この機能の名前はなんでしょう？」+ ジャンル名4択に統一
+// UI テンプレ問題を「この機能の名前はなんでしょう？」+ ジャンル名4択に統一
 function buildUiPartsQuestion(q) {
-  if (q.group_id !== "ui_parts" || !q.genre) return q;
-  const others = UI_PARTS_GENRES.filter((n) => n !== q.genre);
+  if (!q.group_id || !UI_TEMPLATE_GROUPS.has(q.group_id) || !q.genre) return q;
+  const others = (UI_TEMPLATE_GENRES_BY_GROUP.get(q.group_id) || []).filter((n) => n !== q.genre);
   // ランダムに 3 個選ぶ
   const distractors = [];
   const pool = others.slice();
@@ -1561,9 +1566,15 @@ async function generateQuestion(p, { genre, depth, excludeAnswers = [], knownGen
 
   const vocabLine = knownGenres.length
     ? `ユーザーが既に理解してる用語 (これらは問題内で使ってOK): ${knownGenres.slice(0, 80).join(", ")}`
-    : "ユーザーは IT 用語をほぼ知らない。専門用語は使わず、身近な例えだけで問題を作る。";
+    : "ユーザーはこの分野の用語をほぼ知らない。専門用語は使わず、身近な例えだけで問題を作る。";
 
-  const prompt = `「IT・技術」の学習問題を1問作って。JSON のみ返す。
+  const subject = KOTONOHA_GENRES_DATA?.domain?.ai_subject || "学習対象";
+  const triviaExamples = KOTONOHA_GENRES_DATA?.domain?.ai_trivia_examples || [];
+  const triviaLine = triviaExamples.length
+    ? `(例: ${triviaExamples.slice(0, 3).map((s) => `「${s}」`).join(" / ")})`
+    : "";
+
+  const prompt = `「${subject}」の学習問題を1問作って。JSON のみ返す。
 
 ジャンル: ${genre}
 深さ: ${d}/5 (${guide})
@@ -1574,16 +1585,16 @@ ${vocabLine}
 
 → このリスト + 一般日本語 + 「${genre}」自体の概念、これ以外の専門用語は禁止。
   もしどうしても他の専門用語が必要な場合は、問題文に1行で「〇〇 (=△△する仕組み) について…」と必ず説明する。
-  そして「prerequisites」フィールドにその他ジャンル名を列挙する (このユーザーが先に学ぶべきジャンル)。
+  そして「prerequisites」フィールドにその他ジャンル名を列挙する。
 
 ルール:
 - 暗記禁止。「なぜ/いつ/どっち/もしも/歴史」型で。
 - ★options は各「最大25文字以内」の短い句で。長文の説明文は選択肢にしない。
-- ★4択は一目で違いが分かる対比的な書き方 (例: 「待つ / 並行 / 後でリトライ / 諦める」)
+- ★4択は一目で違いが分かる対比的な書き方
 - question 本文は 80文字以内目安。短く、ハッキリ問う。
 - options は letter prefix なし
 - answer は options 内の文字列と完全一致
-- 解説 (explanation) は3-5文、役割 + 判断軸 + へぇートリビア (これは長めでOK)
+- 解説 (explanation) は3-5文、役割 + 判断軸 + へぇートリビア ${triviaLine}
 - 既出と被らない: ${excludeAnswers.slice(0, 15).join(", ")}
 
 JSON:
@@ -1643,18 +1654,12 @@ JSON:
 // Phase 3: 専門領域
 //   - インフラ / セキュリティ / Web3 / 3D / 収益化 / wonders / BANAX OS
 function pickPriorityGroups(correctCount) {
-  if (correctCount < 50) return [
-    "it_intro", "ui_parts", "ui_design", "css_layout",
-    "devflow", "engineer_mindset", "ai_agents",
-    "db", "api", "ai_basics",
-  ];
-  if (correctCount < 150) return [
-    "it_intro", "ui_parts", "ui_design", "css_layout",
-    "devflow", "engineer_mindset", "ai_agents",
-    "db", "api", "ai_basics",
-    "algorithms", "history", "monetize", "wonders",
-  ];
-  return null; // 全グループ解禁 (infra / security / web3 / graphics3d / banax_os)
+  const phases = KOTONOHA_GENRES_DATA?.phases || [];
+  // 昇順想定。max_correct 未満で当てはまる最初の phase を採用。
+  for (const ph of phases) {
+    if (correctCount < (ph.max_correct ?? Infinity)) return ph.groups || null;
+  }
+  return null; // 全グループ解禁
 }
 
 // プール (現ユーザーが解ける問題) を計測。足りなければ sync gen で増やす。
@@ -1913,7 +1918,7 @@ app.post("/api/kotonoha/answer", async (req, res) => {
     if (q.type === "choice") {
       // UI 部品問題は「この機能の名前は?」+ ジャンル名4択に統一されてるので、
       // 比較対象は q.genre (DB の q.answer ではなく)
-      if (q.group_id === "ui_parts" && q.genre) {
+      if (q.group_id && UI_TEMPLATE_GROUPS.has(q.group_id) && q.genre) {
         isCorrect = ua === q.genre;
       } else {
         isCorrect = ua === q.answer;
@@ -1997,7 +2002,7 @@ JSON でだけ返す (前置きや説明禁止):
 
     res.json({
       is_correct: isCorrect,
-      answer: (q.group_id === "ui_parts" && q.genre) ? q.genre : q.answer,
+      answer: (q.group_id && UI_TEMPLATE_GROUPS.has(q.group_id) && q.genre) ? q.genre : q.answer,
       genre: q.genre,
       group_id: q.group_id,
       explanation: q.explanation,

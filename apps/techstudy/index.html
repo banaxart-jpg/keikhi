@@ -213,13 +213,13 @@ body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); 
 <div class="fb-overlay" id="fbOverlay"><span class="fb-icon" id="fbIcon"></span></div>
 
 <div class="bar">
-  <span class="hint">techstudy</span>
+  <span class="hint" id="appHint">techstudy</span>
   <button class="pill" onclick="location.href='/'">← 戻る</button>
 </div>
 
 <div class="wrap">
-  <div class="title">techstudy</div>
-  <div class="subtitle">ITまわりの用語・仕組み・歴史を、知らぬ間に</div>
+  <div class="title" id="appTitle">techstudy</div>
+  <div class="subtitle" id="appSubtitle">ITまわりの用語・仕組み・歴史を、知らぬ間に</div>
 
   <!-- ホーム画面 -->
   <div class="view active" id="homeView">
@@ -401,10 +401,21 @@ async function api(method, path, body) {
 async function loadHome() {
   $("homeErr").textContent = "";
   try {
-    const [me, peers] = await Promise.all([
+    const [me, peers, genresData] = await Promise.all([
       api("GET", "/api/kotonoha/me"),
       api("GET", "/api/kotonoha/peers"),
+      api("GET", "/api/kotonoha/genres").catch(() => null),
     ]);
+    // domain config からタイトル/サブタイトル動的設定
+    const dom = genresData?.domain;
+    if (dom) {
+      if (dom.title) {
+        document.title = dom.title;
+        $("appTitle").textContent = dom.title;
+        $("appHint").textContent = dom.title;
+      }
+      if (dom.subtitle) $("appSubtitle").textContent = dom.subtitle;
+    }
     renderMe(me, peers);
     renderPeers(peers);
   } catch (e) {

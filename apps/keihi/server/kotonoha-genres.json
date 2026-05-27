@@ -1,5 +1,28 @@
 {
-  "_comment": "ことのは: ジャンル定義。各グループ ~30-60ジャンル (合計 ~600)。target_count=そのジャンルを100%にするのに必要な正解unique問題数(基本10)。AI生成が genre 単位で動く。BANAX OS グループは別リポにある社内システム本体の技術スタックを学ぶ用、中身は要追記。",
+  "_comment": "ドメイン非依存エンジン。content.json を差し替えれば大工/看護/美容 等にも転用可。",
+  "domain": {
+    "title": "techstudy",
+    "subtitle": "ITまわりの用語・仕組み・歴史を、知らぬ間に",
+    "ai_subject": "IT・技術",
+    "ai_trivia_examples": [
+      "Wi-Fi の語源は実は何の略でもない (Hi-Fi に語感を寄せただけ)",
+      "ビットコイン作者 中本哲史 (Satoshi Nakamoto) は今も正体不明",
+      "PageRank は学術論文の引用数を Web に応用したもの",
+      "QRコードはトヨタの下請けデンソーが伝票管理用に作った国産技術",
+      "JPEG が圧縮で捨ててるのは人間の目に見えない高周波情報"
+    ]
+  },
+  "phases": [
+    {
+      "max_correct": 50,
+      "groups": ["it_intro", "ui_parts", "ui_design", "css_layout", "devflow", "engineer_mindset", "ai_agents", "db", "api", "ai_basics"]
+    },
+    {
+      "max_correct": 150,
+      "groups": ["it_intro", "ui_parts", "ui_design", "css_layout", "devflow", "engineer_mindset", "ai_agents", "db", "api", "ai_basics", "algorithms", "history", "monetize", "wonders"]
+    }
+  ],
+  "ui_template_groups": ["ui_parts"],
   "groups": [
     {
       "id": "it_intro",
