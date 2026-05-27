@@ -1594,6 +1594,14 @@ JSON:
   }
 }
 
+// フェーズ別に「優先して出題するグループ」を返す。
+// 序盤は IT 入門 + UI 部品 (= 実用的・即役立つ)。マスター進んだら拡張。
+function pickPriorityGroups(correctCount) {
+  if (correctCount < 30) return ["it_intro", "ui_parts"];
+  if (correctCount < 80) return ["it_intro", "ui_parts", "ui_design", "css_layout", "db", "api", "devflow", "engineer_mindset"];
+  return null; // 全グループ解禁
+}
+
 // プール (現ユーザーが解ける問題) を計測。足りなければ sync gen で増やす。
 async function ensureMinPool(p, email, target = 30) {
   const dbg = { freshBefore: 0, freshAfter: 0, genAttempted: 0, genSucceeded: 0 };
@@ -1640,11 +1648,40 @@ async function ensureMinPool(p, email, target = 30) {
          WHERE q.genre IS NOT NULL
          GROUP BY q.genre, q.group_id
       )
-      SELECT genre, correct FROM gc ORDER BY correct ASC, random() LIMIT $2`,
-      [email, need * 2]
+      SELECT genre, group_id, correct FROM gc ORDER BY correct ASC, random() LIMIT $2`,
+      [email, need * 3]
     );
-    let targets = weakRows.map((r) => ({ genre: r.genre, depth: Math.min(5, (r.correct || 0) + 1) }));
-    // DB に無いジャンルがあればマスタから補う
+    // フェーズ判定
+    const { rows: tcr } = await p.query(
+      `SELECT COUNT(DISTINCT question_id)::int AS n FROM kotonoha_progress
+        WHERE user_email = $1 AND is_correct`,
+      [email]
+    );
+    const correctCount = tcr[0]?.n || 0;
+    const priorityGroups = pickPriorityGroups(correctCount);
+    // priority groups が指定されてればそれだけからジャンル選択 + マスタの該当グループから補充
+    let candidates = weakRows;
+    if (priorityGroups) {
+      candidates = weakRows.filter((r) => priorityGroups.includes(r.group_id));
+      // 足りなければマスタから該当グループのジャンル足す
+      if (candidates.length < need) {
+        const priorityGenres = [];
+        for (const g of (KOTONOHA_GENRES_DATA?.groups || [])) {
+          if (priorityGroups.includes(g.id)) {
+            for (const gen of g.genres) priorityGenres.push({ genre: gen.name, group_id: g.id });
+          }
+        }
+        const seen = new Set(candidates.map((c) => c.genre));
+        const more = priorityGenres.filter((g) => !seen.has(g.genre));
+        for (let i = more.length - 1; i > 0; i--) {
+          const j = Math.floor(Math.random() * (i + 1));
+          [more[i], more[j]] = [more[j], more[i]];
+        }
+        candidates = [...candidates, ...more.slice(0, need - candidates.length).map((g) => ({ genre: g.genre, group_id: g.group_id, correct: 0 }))];
+      }
+    }
+    let targets = candidates.slice(0, need).map((r) => ({ genre: r.genre, depth: Math.min(5, (r.correct || 0) + 1) }));
+    // 万一 priority + マスタでも足りないなら全範囲から補う
     if (targets.length < need) {
       const seen = new Set(targets.map((t) => t.genre));
       const all = Array.from(KOTONOHA_GENRE_TO_GROUP.keys()).filter((g) => !seen.has(g));
@@ -1686,6 +1723,16 @@ app.post("/api/kotonoha/sessions/start", async (req, res) => {
     // プール不足なら sync 生成 (max 8問)
     const debug = await ensureMinPool(p, req.user.email, POOL_TARGET);
 
+    // フェーズ判定 (序盤は IT 入門 + UI 部品 限定)
+    const { rows: tcr2 } = await p.query(
+      `SELECT COUNT(DISTINCT question_id)::int AS n FROM kotonoha_progress
+        WHERE user_email = $1 AND is_correct`,
+      [req.user.email]
+    );
+    const correctCount = tcr2[0]?.n || 0;
+    const priorityGroups = pickPriorityGroups(correctCount);
+    debug.phase = priorityGroups ? `${priorityGroups.length}グループ` : "全グループ";
+
     // 出題: depth ゲート + prerequisites ゲート + (未回答 OR 不正解 OR gap 経過) + random
     const { rows: questions } = await p.query(`
       WITH ranked AS (
@@ -1720,7 +1767,7 @@ app.post("/api/kotonoha/sessions/start", async (req, res) => {
          OR ((SELECT total FROM ut) - up.last_correct_pos) >= 50 + (abs(hashtextextended(q.id::text || $1, 0)) % 50)::int
        )
          AND q.difficulty <= COALESCE(gc.n, 0) + 1
-         -- prerequisites ゲート: prereq の全ジャンルにユーザーが正解実績ないと出さない
+         -- prerequisites ゲート
          AND (
            q.prerequisites IS NULL
            OR jsonb_array_length(q.prerequisites) = 0
@@ -1729,9 +1776,11 @@ app.post("/api/kotonoha/sessions/start", async (req, res) => {
               WHERE prereq NOT IN (SELECT genre FROM known_genres)
            )
          )
+         -- フェーズゲート: 序盤は IT 入門 + UI 部品 から優先
+         AND ($3::text[] IS NULL OR q.group_id = ANY($3::text[]))
        ORDER BY random()
        LIMIT $2`,
-      [req.user.email, SESSION_SIZE]
+      [req.user.email, SESSION_SIZE, priorityGroups]
     );
 
     // UI demo を結合
