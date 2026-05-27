@@ -86,7 +86,10 @@ app.use("/api", async (req, res, next) => {
     const m = /^Bearer (.+)$/.exec(req.headers.authorization || "");
     if (!m) return res.status(401).json({ error: "ログインが必要です (no token)" });
     const decoded = await admin.auth().verifyIdToken(m[1]);
-    if (allowList.length && !allowList.includes((decoded.email || "").toLowerCase())) {
+    // techstudy (kotonoha) だけは社外含む任意の Firebase 認証ユーザーに開放。
+    // 他のミニアプリ (keihi/kaigi 等) は引き続き ALLOWED_EMAILS の社内限定。
+    const isKotonoha = req.path.startsWith("/kotonoha/");
+    if (!isKotonoha && allowList.length && !allowList.includes((decoded.email || "").toLowerCase())) {
       return res.status(403).json({ error: `権限がありません (${decoded.email || "?"})` });
     }
     req.user = decoded;
