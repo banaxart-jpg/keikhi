@@ -1475,116 +1475,64 @@ HTML のみを返す。説明文や Markdown のコードブロック (\`\`\`) �
   }
 }
 
-async function pickWeakGenres(p, email, n) {
-  try {
-    const { rows } = await p.query(
-      `SELECT q.genre,
-              count(DISTINCT q.id) FILTER (WHERE pr.is_correct) AS uniq_correct
-         FROM kotonoha_questions q
-         LEFT JOIN kotonoha_progress pr
-           ON pr.question_id = q.id AND pr.user_email = $1
-        WHERE q.genre IS NOT NULL
-        GROUP BY q.genre
-        ORDER BY uniq_correct ASC, random()
-        LIMIT $2`,
-      [email, n * 3]
-    );
-    const fromDb = rows.map((r) => r.genre).slice(0, n);
-    if (fromDb.length >= n) return fromDb;
-    // DB ジャンルが少ない: マスタからランダムで補う
-    const all = Array.from(KOTONOHA_GENRE_TO_GROUP.keys()).filter((g) => !fromDb.includes(g));
-    for (let i = all.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
-      [all[i], all[j]] = [all[j], all[i]];
-    }
-    return [...fromDb, ...all.slice(0, n - fromDb.length)];
-  } catch (e) {
-    console.warn("[kotonoha] pickWeakGenres failed:", e.message);
-    return [];
-  }
-}
+// pickWeakGenres は ensureMinPool に統合済み (削除)
 
 // AI で新しい問題を生成 (バックグラウンド呼出し or 明示呼出し)
 // ジャンル指定すれば該当ジャンル、なしならジャンル空間からランダム選出。
 // userEmail を渡すと「このユーザーがこのジャンルでどこまで理解してるか」を
 // 計算して、深さに応じた問題を生成 (前提知識ゲート)。
-async function generateKotonohaQuestion(p, { level, genre, excludeAnswers = [], userEmail = null }) {
+// ============================================================
+// kotonoha v3 (refactored): シンプルな depth ベース設計
+// ============================================================
+// 設計原則:
+// 1. 全ユーザー共通の難易度進行 (depth 1-5 = ジャンル内の階段)
+// 2. 出題条件: ジャンル内 unique 正解数 + 1 までの depth しか出ない
+//    → VPC 0回正解の人には VPC depth 1 (入門) のみ
+//    → VPC 1回正解で depth 1-2 が解放
+//    → VPC 4回正解で depth 1-5 全部解放
+// 3. 選定: (未回答 OR 不正解継続 OR 正解後50-100問経過) AND depth ゲート OK
+//    → ORDER BY random() で完全シャッフル
+// 4. 生成: pool < 30 のときだけ sessions/start で sync 生成 (max 8)
+// 5. ユーザー個別 level / mastered / priority / maxDiff の概念は廃止
+
+const KOTONOHA_DEPTH_GUIDE = {
+  1: "完全初心者向け。「そもそも何の道具?」「身近な例えで言うと?」レベル。専門用語禁止、必要なら問題文で1行説明。",
+  2: "基本特徴。「いつ使う?」「何が違う?」「身近なシーンでの例」レベル。",
+  3: "用途と判断。「どっち選ぶ?」「なぜ〇〇は△△より速い?」レベル。",
+  4: "応用。「もしも〇〇だったら何が起きる?」「歴史的にどう生まれた?」レベル。",
+  5: "深い洞察。「設計判断の根拠」「トレードオフ」レベル。前提知識ゼロでも問題文だけで答えられること。",
+};
+
+// AI で1問生成 (genre, depth 指定)。失敗時は null。
+async function generateQuestion(p, { genre, depth, excludeAnswers = [] }) {
   if (!genAI) return null;
-
-  // ジャンル決定: 未指定なら全ジャンルからランダム
-  let targetGenre = genre;
-  if (!targetGenre && KOTONOHA_GENRE_TO_GROUP.size > 0) {
+  if (!genre) {
     const all = Array.from(KOTONOHA_GENRE_TO_GROUP.keys());
-    targetGenre = all[Math.floor(Math.random() * all.length)];
+    if (!all.length) return null;
+    genre = all[Math.floor(Math.random() * all.length)];
   }
-  const groupId = targetGenre ? KOTONOHA_GENRE_TO_GROUP.get(targetGenre) || null : null;
-  // 旧 category 列にも互換のため group_id を流用
+  const groupId = KOTONOHA_GENRE_TO_GROUP.get(genre) || null;
   const cat = groupId || "concept";
+  const d = Math.min(5, Math.max(1, depth || 1));
+  const guide = KOTONOHA_DEPTH_GUIDE[d];
 
-  // ★ユーザーのこのジャンルにおける既知の深さを計算
-  //   = 「VPC を 5 回正解してたら VPC は分かってる」と判断
-  //   →  分かってないジャンルでは入門レベルだけ出す (前提知識ゲート)
-  let genreDepth = 0;
-  if (userEmail && targetGenre) {
-    try {
-      const { rows } = await p.query(
-        `SELECT count(DISTINCT q.id) FILTER (WHERE pr.is_correct)::int AS n
-           FROM kotonoha_questions q
-           LEFT JOIN kotonoha_progress pr ON pr.question_id = q.id AND pr.user_email = $1
-          WHERE q.genre = $2`,
-        [userEmail, targetGenre]
-      );
-      genreDepth = rows[0]?.n || 0;
-    } catch (e) { /* fallback to 0 */ }
-  }
-  // 基本は4択 (字面で recognize できれば OK の方針)。
-  // 自由記述は概念がはっきり定まる場合のみ稀に。
-  const type = Math.random() < 0.9 ? "choice" : "free";
+  const prompt = `「IT・技術」の学習問題を1問作って。JSON のみ返す。
 
-  // 難易度ガイドは「ジャンル内の正解数 (genreDepth)」ベース。
-  // user.level (全体経験値) ではなく、このジャンルでの理解度で決める。
-  // → VPC を一度も正解してない人には VPC の超基本だけ出る
-  const diffGuide = genreDepth === 0
-    ? "★このジャンル完全初心者 (このジャンル正解数 0)。「そもそも何の道具?」「身近な例えで言うと?」レベル必須。専門用語禁止。"
-    : genreDepth < 3
-      ? `基本特徴の確認 (このジャンル正解 ${genreDepth} 回)。「どんな時に使う?」「何が違う?」レベル。`
-      : genreDepth < 6
-        ? `用途と判断軸 (このジャンル正解 ${genreDepth} 回)。「いつ使う?」「どっち選ぶ?」「なぜ?」レベル。`
-        : `応用・歴史・トレードオフ (このジャンル正解 ${genreDepth} 回)。「もしも」「設計判断の根拠」。ただし問題文だけで答えられる構造に。`;
+ジャンル: ${genre}
+深さ: ${d}/5 (${guide})
+形式: 4択
 
-  const prompt = `「IT・技術」の学習問題を1問だけ作って。JSON のみ返す (他テキスト・コードブロック禁止)。
+ルール:
+- 暗記禁止。「なぜ/いつ/どっち/もしも/歴史」型で。
+- 前提知識を要求しない。専門用語が必要なら問題文で1行説明 (例「VPC (AWSで閉じた仮想ネットワーク領域) について…」)
+- options は letter prefix なし、自然な選択肢文
+- answer は options 内の文字列と完全一致
+- 解説 (explanation) は3-5文、役割 + 判断軸 + へぇートリビア
+- 既出と被らない: ${excludeAnswers.slice(0, 15).join(", ")}
 
-ジャンル: ${targetGenre || "(自由)"}
-深さ指定: ${diffGuide}
-形式: ${type === "choice" ? "4択" : "自由記述 (答えは1単語)"}
+JSON:
+{"question":"…","options":["…","…","…","…"],"answer":"…","explanation":"…","claude_example":"「…」"}`;
 
-★絶対ルール (難易度問わず厳守):
-- 問題文だけで答えられる構造にする。前提知識を要求しない
-- ジャンル名がマイナーな専門用語の場合は、問題文の冒頭で「〇〇とは△△する仕組みのこと」と1行で説明してから問う
-- 例: VPC なら「VPC (AWS でアカウント内に閉じた仮想ネットワーク領域) について…」と前置きしてから「では VPC 同士を繋ぐとき何が必要?」と問う
-- 解答者は「IT 全般を勉強し始めた人」想定。AWS / GCP / k8s 等の具体プロダクトでも、初見で理解できる導入を入れる
-
-問題の型 (どれか):
-- 概念「何のための道具?」
-- いつ使う「シチュエーション → 適切な選択」
-- なぜ「仕組み・理由」
-- どっち「比較判断」
-- もしも「思考実験」
-- 歴史「誰が・なぜ生まれた」
-※ 「Xを何と呼ぶ?」「英語何文字?」など単純名前暗記は禁止。
-
-解説 (explanation) は3-5文。役割 + 判断軸 + へぇートリビア (例: 「Wi-Fi の語源は何の略でもない」「中本哲史は正体不明」)。
-
-choice 注意: options は letter prefix 無しの自然な選択肢文。answer は options 内の文字列と完全一致 (letter "A" は禁止)。
-
-既出の答え (重複禁止): ${excludeAnswers.slice(0, 15).join(", ")}
-
-JSON のみ:
-${type === "choice"
-  ? '{"question":"…","options":["選択肢1","選択肢2","選択肢3","選択肢4"],"answer":"選択肢1","explanation":"…","claude_example":"「…」"}'
-  : '{"question":"…","answer":"答え","keywords":["別表記"],"explanation":"…","claude_example":"「…」"}'}`;
-
-  // 1回目失敗したら 1 回だけリトライ
   let j = null;
   for (let attempt = 0; attempt < 2 && !j; attempt++) {
     try {
@@ -1593,20 +1541,17 @@ ${type === "choice"
         maxOutputTokens: 4000,
       });
       const text = (result.response.text() || "").trim();
-      if (!text) {
-        console.warn(`[kotonoha] gen empty text genre=${targetGenre} attempt=${attempt + 1}`);
-        continue;
-      }
+      if (!text) { console.warn(`[kotonoha] gen empty genre=${genre} d=${d} a=${attempt+1}`); continue; }
       const m = text.match(/\{[\s\S]*\}/);
-      if (!m) { console.warn(`[kotonoha] gen no-json genre=${targetGenre} attempt=${attempt+1} text_len=${text.length}`); continue; }
+      if (!m) { console.warn(`[kotonoha] gen no-json genre=${genre} d=${d} a=${attempt+1}`); continue; }
       const parsed = JSON.parse(m[0]);
       if (!parsed.question || !parsed.answer || !parsed.explanation) {
-        console.warn(`[kotonoha] gen incomplete genre=${targetGenre} attempt=${attempt+1}`);
+        console.warn(`[kotonoha] gen incomplete genre=${genre} d=${d} a=${attempt+1}`);
         continue;
       }
       j = parsed;
     } catch (e) {
-      console.warn(`[kotonoha] gen exception genre=${targetGenre} attempt=${attempt+1}:`, e.message);
+      console.warn(`[kotonoha] gen exception genre=${genre} d=${d} a=${attempt+1}: ${e.message}`);
     }
   }
   if (!j) return null;
@@ -1614,272 +1559,155 @@ ${type === "choice"
     const { rows } = await p.query(
       `INSERT INTO kotonoha_questions
          (category, difficulty, type, question, options, answer, keywords, explanation, claude_example, source, genre, group_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'generated', $10, $11) RETURNING *`,
-      [
-        cat,
-        level,
-        type,
-        j.question,
-        type === "choice" ? JSON.stringify(j.options || []) : null,
-        j.answer,
-        JSON.stringify(j.keywords || []),
-        j.explanation,
-        j.claude_example || "",
-        targetGenre,
-        groupId,
-      ]
+       VALUES ($1, $2, 'choice', $3, $4, $5, '[]'::jsonb, $6, $7, 'generated', $8, $9) RETURNING *`,
+      [cat, d, j.question, JSON.stringify(j.options || []), j.answer, j.explanation, j.claude_example || "", genre, groupId]
     );
+    console.log(`[kotonoha] gen OK genre=${genre} d=${d} answer="${j.answer}"`);
     return rows[0];
   } catch (e) {
-    console.warn("[kotonoha] generate failed:", e.message);
+    console.warn("[kotonoha] insert failed:", e.message);
     return null;
   }
 }
 
-// セッション開始: 10 問選定して返す（answer は隠す）
-// 方針: ユーザーのレベルに「近い」問題を優先 → 達成感重視。
+// プール (現ユーザーが解ける問題) を計測。足りなければ sync gen で増やす。
+async function ensureMinPool(p, email, target = 30) {
+  const dbg = { freshBefore: 0, freshAfter: 0, genAttempted: 0, genSucceeded: 0 };
+  try {
+    // eligible count
+    const { rows: pc } = await p.query(`
+      WITH ranked AS (
+        SELECT question_id, is_correct, ROW_NUMBER() OVER (ORDER BY answered_at) AS pos
+          FROM kotonoha_progress WHERE user_email = $1
+      ),
+      up AS (
+        SELECT question_id, MAX(pos) FILTER (WHERE is_correct) AS last_correct_pos
+          FROM ranked GROUP BY question_id
+      ),
+      gc AS (
+        SELECT q.genre, COUNT(DISTINCT q.id) AS n
+          FROM kotonoha_questions q
+          JOIN kotonoha_progress pr ON pr.question_id = q.id
+         WHERE pr.user_email = $1 AND pr.is_correct AND q.genre IS NOT NULL
+         GROUP BY q.genre
+      ),
+      ut AS (SELECT COUNT(*)::int AS total FROM ranked)
+      SELECT COUNT(*)::int AS n FROM kotonoha_questions q
+       LEFT JOIN up ON up.question_id = q.id
+       LEFT JOIN gc ON gc.genre = q.genre
+       WHERE (
+         up.question_id IS NULL
+         OR up.last_correct_pos IS NULL
+         OR ((SELECT total FROM ut) - up.last_correct_pos) >= 50 + (abs(hashtextextended(q.id::text || $1, 0)) % 50)::int
+       )
+       AND q.difficulty <= COALESCE(gc.n, 0) + 1`,
+      [email]
+    );
+    dbg.freshBefore = pc[0]?.n || 0;
+    dbg.freshAfter = dbg.freshBefore;
+    if (dbg.freshBefore >= target) return dbg;
+    const need = Math.min(target - dbg.freshBefore, 8);
+    // 弱ジャンル (このユーザーの正解数が少ない) を選ぶ。各 genre の suggestedDepth = correct + 1
+    const { rows: weakRows } = await p.query(`
+      WITH gc AS (
+        SELECT q.genre, q.group_id, COUNT(DISTINCT q.id) FILTER (WHERE pr.is_correct)::int AS correct
+          FROM kotonoha_questions q
+          LEFT JOIN kotonoha_progress pr ON pr.question_id = q.id AND pr.user_email = $1
+         WHERE q.genre IS NOT NULL
+         GROUP BY q.genre, q.group_id
+      )
+      SELECT genre, correct FROM gc ORDER BY correct ASC, random() LIMIT $2`,
+      [email, need * 2]
+    );
+    let targets = weakRows.map((r) => ({ genre: r.genre, depth: Math.min(5, (r.correct || 0) + 1) }));
+    // DB に無いジャンルがあればマスタから補う
+    if (targets.length < need) {
+      const seen = new Set(targets.map((t) => t.genre));
+      const all = Array.from(KOTONOHA_GENRE_TO_GROUP.keys()).filter((g) => !seen.has(g));
+      for (let i = all.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [all[i], all[j]] = [all[j], all[i]];
+      }
+      for (const g of all.slice(0, need - targets.length)) targets.push({ genre: g, depth: 1 });
+    }
+    targets = targets.slice(0, need);
+    const { rows: ansRows } = await p.query(`SELECT answer FROM kotonoha_questions ORDER BY id DESC LIMIT 100`);
+    const excludeAnswers = ansRows.map((r) => r.answer);
+    dbg.genAttempted = targets.length;
+    console.log(`[kotonoha] ensureMinPool: need=${need} targets=`, targets.map((t) => `${t.genre}@d${t.depth}`).join(","));
+    const results = await Promise.all(
+      targets.map((t) => generateQuestion(p, { genre: t.genre, depth: t.depth, excludeAnswers })
+        .catch((e) => { console.warn(`[kotonoha] gen err ${t.genre}:`, e.message); return null; }))
+    );
+    dbg.genSucceeded = results.filter(Boolean).length;
+    dbg.freshAfter = dbg.freshBefore + dbg.genSucceeded;
+  } catch (e) {
+    console.warn("[kotonoha] ensureMinPool failed:", e.message);
+  }
+  return dbg;
+}
+
+// セッション開始: depth ゲート + 50-100問 gap + random で 20問選定。
+// プール薄なら sync 生成して埋める。
 // プールが薄ければバックグラウンドで AI 生成 (待たない)。
 app.post("/api/kotonoha/sessions/start", async (req, res) => {
   const p = getPool();
   if (!p) return res.status(503).json({ error: "DB not configured" });
   try {
-    const user = await ensureKotonohaUser(p, req.user.email);
-    const level = user.level;
-    const focusGenre = req.body?.genre || null; // 集中セッション (ジャンル指定)
-
-    // ─── 出題対象の整理 ───
-    // マスター = 直近 MASTERY_LAST_N 回 (=3) が連続全部正解 (途中失敗でリセット)。
-    // 適格 (eligible) =
-    //   - 未回答、または
-    //   - 未マスターで 4時間以上空いてる、または
-    //   - マスター済みでも 30日以上空いてる (spaced repetition で再テスト)
-    // 優先度 = 0(未回答) → 1(未マスターのリトライ) → 2(マスター古い再テスト)
-    // 選択式優先 (字面で recognize できれば OK の方針)
+    await ensureKotonohaUser(p, req.user.email);
     const SESSION_SIZE = 20;
-    const MASTERY = MASTERY_LAST_N;
-    const maxDiff = Math.min(7, level + 1);
+    const POOL_TARGET = 30;
 
-    // 適格ルール (priority 並べ替えのみ、フィルタは難易度キャップのみ):
-    //   priority 0 = 未回答 (最優先)
-    //   priority 1 = 答えたが一度も正解してない (リトライ)
-    //   priority 2 = 正解履歴あり & gap (50-100問) 経過済み (復習タイミング)
-    //   priority 3 = 正解履歴あり & gap 未達 (緊急時のみ・最劣後)
-    //   gap = (user 総回答数 - 直近正解位置)、min_gap は user×問題ID hash で 50-100 散らし
-    const baseSelectSql = `
+    // プール不足なら sync 生成 (max 8問)
+    const debug = await ensureMinPool(p, req.user.email, POOL_TARGET);
+
+    // 出題: depth ゲート + (未回答 OR 不正解継続 OR 正解後 gap 経過) + random
+    const { rows: questions } = await p.query(`
       WITH ranked AS (
-        SELECT question_id, is_correct, answered_at,
-               ROW_NUMBER() OVER (PARTITION BY question_id ORDER BY answered_at DESC) AS rn_q,
-               ROW_NUMBER() OVER (ORDER BY answered_at) AS global_rn
-          FROM kotonoha_progress
-         WHERE user_email = $1
+        SELECT question_id, is_correct, ROW_NUMBER() OVER (ORDER BY answered_at) AS pos
+          FROM kotonoha_progress WHERE user_email = $1
       ),
-      mastered_q AS (
-        SELECT question_id
-          FROM ranked
-         WHERE rn_q <= $2
-         GROUP BY question_id
-        HAVING count(*) >= $2 AND bool_and(is_correct)
+      up AS (
+        SELECT question_id, MAX(pos) FILTER (WHERE is_correct) AS last_correct_pos
+          FROM ranked GROUP BY question_id
       ),
-      per_q AS (
-        SELECT question_id,
-               MAX(global_rn) FILTER (WHERE is_correct) AS last_correct_pos,
-               MAX(answered_at) AS last_at
-          FROM ranked
-         GROUP BY question_id
-      ),
-      user_total AS (
-        SELECT COUNT(*)::int AS total FROM ranked
-      ),
-      eligible AS (
-        SELECT q.*,
-               pq.last_at,
-               (mq.question_id IS NOT NULL) AS is_mastered,
-               CASE
-                 WHEN pq.question_id IS NULL THEN 0
-                 WHEN pq.last_correct_pos IS NULL THEN 1
-                 WHEN ((SELECT total FROM user_total) - pq.last_correct_pos)
-                      >= (50 + (abs(hashtextextended(q.id::text || $1, 0)) % 51))::int THEN 2
-                 ELSE 3
-               END AS priority
+      gc AS (
+        SELECT q.genre, COUNT(DISTINCT q.id) AS n
           FROM kotonoha_questions q
-          LEFT JOIN per_q pq ON pq.question_id = q.id
-          LEFT JOIN mastered_q mq ON mq.question_id = q.id
-      )`;
+          JOIN kotonoha_progress pr ON pr.question_id = q.id
+         WHERE pr.user_email = $1 AND pr.is_correct AND q.genre IS NOT NULL
+         GROUP BY q.genre
+      ),
+      ut AS (SELECT COUNT(*)::int AS total FROM ranked)
+      SELECT q.*
+        FROM kotonoha_questions q
+        LEFT JOIN up ON up.question_id = q.id
+        LEFT JOIN gc ON gc.genre = q.genre
+       WHERE (
+         up.question_id IS NULL
+         OR up.last_correct_pos IS NULL
+         OR ((SELECT total FROM ut) - up.last_correct_pos) >= 50 + (abs(hashtextextended(q.id::text || $1, 0)) % 50)::int
+       )
+         AND q.difficulty <= COALESCE(gc.n, 0) + 1
+       ORDER BY random()
+       LIMIT $2`,
+      [req.user.email, SESSION_SIZE]
+    );
 
-    // ─── start は基本即返却。プール枯渇時のみ緊急同期生成 ───
-    // 通常時は /sessions/end の wrap-up gen でプール 40 維持されてる前提。
-    const debug = { freshBefore: 0, freshAfter: 0, syncGenAttempted: 0, syncGenSucceeded: 0 };
-    try {
-      const { rows: pcr } = await p.query(
-        `${baseSelectSql}
-         SELECT COUNT(*)::int AS n FROM eligible
-          WHERE difficulty <= $3 AND priority <= 2
-            ${focusGenre ? "AND genre = $4" : ""}`,
-        focusGenre
-          ? [req.user.email, MASTERY, maxDiff, focusGenre]
-          : [req.user.email, MASTERY, maxDiff]
-      );
-      const freshCount = pcr[0]?.n || 0;
-      debug.freshBefore = freshCount;
-      debug.freshAfter = freshCount;
-      // プール 40 未満なら成長させる (毎回最大 8 問)
-      const POOL_TARGET = 40;
-      if (freshCount < POOL_TARGET) {
-        const need = Math.min(POOL_TARGET - freshCount, 8);
-        const { rows: ansRows } = await p.query(
-          `SELECT answer FROM kotonoha_questions ORDER BY id DESC LIMIT 200`
-        );
-        const excludeAnswers = ansRows.map((r) => r.answer);
-        let targets;
-        if (focusGenre) {
-          targets = Array(need).fill(focusGenre);
-        } else {
-          targets = await pickWeakGenres(p, req.user.email, need);
-          if (targets.length < need) {
-            const all = Array.from(KOTONOHA_GENRE_TO_GROUP.keys()).filter((g) => !targets.includes(g));
-            for (let i = all.length - 1; i > 0; i--) {
-              const j = Math.floor(Math.random() * (i + 1));
-              [all[i], all[j]] = [all[j], all[i]];
-            }
-            targets.push(...all.slice(0, need - targets.length));
-          }
-        }
-        console.log(`[kotonoha] emergency gen: fresh=${freshCount} need=${need}`);
-        debug.syncGenAttempted = need;
-        const results = await Promise.all(
-          targets.slice(0, need).map((g) =>
-            generateKotonohaQuestion(p, { level, genre: g, excludeAnswers, userEmail: req.user.email })
-              .catch((e) => { console.warn("[kotonoha] emergency gen failed:", g, e.message); return null; })
-          )
-        );
-        debug.syncGenSucceeded = results.filter(Boolean).length;
-        console.log(`[kotonoha] emergency gen succeeded ${debug.syncGenSucceeded}/${need}`);
-        const { rows: pcr2 } = await p.query(
-          `${baseSelectSql}
-           SELECT COUNT(*)::int AS n FROM eligible
-            WHERE difficulty <= $3 AND priority <= 2
-              ${focusGenre ? "AND genre = $4" : ""}`,
-          focusGenre
-            ? [req.user.email, MASTERY, maxDiff, focusGenre]
-            : [req.user.email, MASTERY, maxDiff]
-        );
-        debug.freshAfter = pcr2[0]?.n || 0;
-      }
-    } catch (e) {
-      console.warn("[kotonoha] sync gen check skipped:", e.message);
-    }
-
-    let newRows = [];
-    if (focusGenre) {
-      const { rows } = await p.query(
-        `${baseSelectSql}
-         SELECT * FROM eligible
-          WHERE genre = $3
-          ORDER BY priority ASC,
-                   (type = 'choice') DESC,
-                   (source = 'generated') DESC,
-                   difficulty ASC,
-                   random()
-          LIMIT $4`,
-        [req.user.email, MASTERY, focusGenre, SESSION_SIZE]
-      );
-      newRows = rows;
-    } else {
-      const { rows } = await p.query(
-        `${baseSelectSql},
-         mastered_per_genre AS (
-           SELECT q.genre,
-                  count(DISTINCT q.id) FILTER (WHERE mq2.question_id IS NOT NULL) AS mastered
-             FROM kotonoha_questions q
-             LEFT JOIN mastered_q mq2 ON mq2.question_id = q.id
-            WHERE q.genre IS NOT NULL
-            GROUP BY q.genre
-         )
-         SELECT e.*, COALESCE(mpg.mastered, 0) AS genre_mastered
-           FROM eligible e
-           LEFT JOIN mastered_per_genre mpg ON mpg.genre = e.genre
-          WHERE e.difficulty <= $3
-          ORDER BY priority ASC,
-                   -- seed (古い暗記型) は最後尾。AI gen 優先で消費。
-                   (source = 'seed') ASC,
-                   -- priority 0 (未回答) は古い順で消費 (= 寝かせた問題を先に)
-                   -- priority 1+ (回答済み) は完全ランダムでセッション毎の変化を最大化
-                   CASE WHEN priority = 0 THEN EXTRACT(EPOCH FROM e.created_at) END ASC,
-                   genre_mastered ASC,
-                   (e.type = 'choice') DESC,
-                   random()
-          LIMIT $4`,
-        [req.user.email, MASTERY, maxDiff, SESSION_SIZE]
-      );
-      newRows = rows;
-    }
-
-    let questions = newRows;
-
-    // (fill query は廃止: eligible CTE が priority 3 まで含めて全範囲をカバー)
-
-    // UI部品 / CSS技法 の問題に demo_html を結合
+    // UI demo を結合
     const demoGroups = new Set(["ui_parts", "css_layout"]);
     const uiGenres = [...new Set(questions.filter((q) => demoGroups.has(q.group_id) && q.genre).map((q) => q.genre))];
-    const demoMap = new Map();
     if (uiGenres.length) {
       const { rows: dRows } = await p.query(
         `SELECT genre, demo_html FROM kotonoha_ui_demos WHERE genre = ANY($1::text[])`,
         [uiGenres]
       );
-      for (const r of dRows) demoMap.set(r.genre, r.demo_html);
-    }
-    for (const q of questions) {
-      if (demoMap.has(q.genre)) q.demo_html = demoMap.get(q.genre);
-    }
-
-    // 3) バックグラウンド AI 生成: ジャンル別未解答プールが薄ければ補充。
-    //    レスポンスは待たない (fire-and-forget)。集中セッションならそのジャンルに集中生成。
-    //    早期ユーザー (総回答 < 100) はより積極的に多ジャンル生成 (毎セッション新鮮さを確保)
-    (async () => {
-      try {
-        const { rows: utr } = await p.query(`SELECT count(*)::int AS n FROM kotonoha_progress WHERE user_email = $1`, [req.user.email]);
-        const userTotal = utr[0]?.n || 0;
-        const genCount = focusGenre ? 1 : (userTotal < 100 ? 10 : 4);
-        const targetGenres = focusGenre ? [focusGenre] : await pickWeakGenres(p, req.user.email, genCount);
-        if (!targetGenres.length) return;
-        const { rows: ansRows } = await p.query(
-          `SELECT answer FROM kotonoha_questions ORDER BY id DESC LIMIT 200`
-        );
-        const excludeAnswers = ansRows.map((r) => r.answer);
-        for (const g of targetGenres) {
-          // 早期ユーザーは pool < 8、それ以降は < 5 で生成
-          const threshold = userTotal < 100 ? 8 : 5;
-          const { rows: poolRows } = await p.query(
-            `SELECT count(*)::int AS n FROM kotonoha_questions
-              WHERE genre = $1
-                AND id NOT IN (SELECT question_id FROM kotonoha_progress WHERE user_email = $2)`,
-            [g, req.user.email]
-          );
-          if ((poolRows[0]?.n || 0) >= threshold) continue;
-          await generateKotonohaQuestion(p, { level, genre: g, excludeAnswers, userEmail: req.user.email });
-        }
-      } catch (e) {
-        console.warn("[kotonoha] bg generate skipped:", e.message);
+      const demoMap = new Map(dRows.map((r) => [r.genre, r.demo_html]));
+      for (const q of questions) {
+        if (demoMap.has(q.genre)) q.demo_html = demoMap.get(q.genre);
       }
-    })();
+    }
 
-    // 4) UI / CSS demo 未生成なら背景で生成 (この回には間に合わなくても、次セッションで反映)
-    (async () => {
-      try {
-        const demoQs = questions.filter((q) => demoGroups.has(q.group_id) && q.genre && !q.demo_html);
-        const seen = new Set();
-        for (const q of demoQs) {
-          if (seen.has(q.genre)) continue;
-          seen.add(q.genre);
-          await generateUiDemo(p, q.genre, q.group_id);
-        }
-      } catch (e) {
-        console.warn("[kotonoha] demo bg gen skipped:", e.message);
-      }
-    })();
-
-    // クライアントに送る時は answer / keywords / explanation を隠す
     const safe = questions.map((q) => ({
       id: q.id,
       category: q.category,
@@ -1892,13 +1720,7 @@ app.post("/api/kotonoha/sessions/start", async (req, res) => {
       image_url: q.image_url,
       demo_html: q.demo_html || null,
     }));
-    // 返却問題の priority 内訳もデバッグに追加
-    const priorityBreakdown = questions.reduce((acc, q) => {
-      const k = q.priority ?? "?";
-      acc[k] = (acc[k] || 0) + 1;
-      return acc;
-    }, {});
-    res.json({ level, genre: focusGenre, questions: safe, debug: { ...debug, priorityBreakdown } });
+    res.json({ questions: safe, debug });
   } catch (err) {
     console.error("kotonoha start", err);
     res.status(500).json({ error: err.message });
@@ -2008,34 +1830,8 @@ JSON でだけ返す (前置きや説明禁止):
       claude_example: q.claude_example,
       ai_reason: aiReason,
     });
-
-    // ─── 正解ごとにバックグラウンドで AI が次の問題を1つ生成 (fire-and-forget) ───
-    // リアルタイム感: 解くたびにプールが育つ → 次セッションが必ず新鮮
-    if (isCorrect) {
-      (async () => {
-        try {
-          const { rows: uRows } = await p.query(
-            `SELECT level FROM kotonoha_users WHERE user_email=$1`,
-            [req.user.email]
-          );
-          const userLevel = uRows[0]?.level || 1;
-          const targetGenres = await pickWeakGenres(p, req.user.email, 1);
-          if (!targetGenres.length) return;
-          const { rows: ansRows } = await p.query(
-            `SELECT answer FROM kotonoha_questions ORDER BY id DESC LIMIT 200`
-          );
-          const excludeAnswers = ansRows.map((r) => r.answer);
-          await generateKotonohaQuestion(p, {
-            level: userLevel,
-            genre: targetGenres[0],
-            excludeAnswers,
-            userEmail: req.user.email,
-          });
-        } catch (e) {
-          console.warn("[kotonoha] per-answer gen skipped:", e.message);
-        }
-      })();
-    }
+    // per-answer fire-and-forget gen は廃止 (Cloud Run の CPU throttle で殺されるため)。
+    // 生成は sessions/start で sync 実行する ensureMinPool に集約。
   } catch (err) {
     console.error("kotonoha answer", err);
     res.status(500).json({ error: err.message });
@@ -2067,70 +1863,7 @@ app.post("/api/kotonoha/sessions/end", async (req, res) => {
     } else {
       await p.query(`UPDATE kotonoha_users SET last_session_at=now() WHERE user_email=$1`, [req.user.email]);
     }
-    // ─── プール warm-up: 次セッション用に最大 12 問を sync 生成 ───
-    // start を即返却にするための準備。end の時点なら数秒待たせても OK
-    // (ユーザーは結果サマリを見るところ)。プール 40 未満ならその差を埋める。
-    const POOL_TARGET = 40;
-    const warmup = { freshBefore: 0, freshAfter: 0, genAttempted: 0, genSucceeded: 0 };
-    try {
-      const userLevel = newLevel;
-      const maxDiff = Math.min(7, userLevel + 1);
-      const { rows: poolRows } = await p.query(
-        `WITH ranked AS (
-           SELECT question_id, is_correct, answered_at,
-                  ROW_NUMBER() OVER (PARTITION BY question_id ORDER BY answered_at DESC) AS rn_q,
-                  ROW_NUMBER() OVER (ORDER BY answered_at) AS global_rn
-             FROM kotonoha_progress
-            WHERE user_email = $1
-         ),
-         per_q AS (
-           SELECT question_id, MAX(global_rn) FILTER (WHERE is_correct) AS last_correct_pos
-             FROM ranked GROUP BY question_id
-         ),
-         user_total AS (SELECT COUNT(*)::int AS total FROM ranked)
-         SELECT COUNT(*)::int AS n FROM kotonoha_questions q
-          LEFT JOIN per_q pq ON pq.question_id = q.id
-         WHERE q.difficulty <= $2
-           AND (
-             pq.question_id IS NULL
-             OR pq.last_correct_pos IS NULL
-             OR ((SELECT total FROM user_total) - pq.last_correct_pos)
-                >= (50 + (abs(hashtextextended(q.id::text || $1, 0)) % 51))::int
-           )`,
-        [req.user.email, maxDiff]
-      );
-      const freshNow = poolRows[0]?.n || 0;
-      warmup.freshBefore = freshNow;
-      warmup.freshAfter = freshNow;
-      if (freshNow < POOL_TARGET) {
-        const need = Math.min(POOL_TARGET - freshNow, 12);
-        const { rows: ansRows } = await p.query(`SELECT answer FROM kotonoha_questions ORDER BY id DESC LIMIT 200`);
-        const excludeAnswers = ansRows.map((r) => r.answer);
-        let targets = await pickWeakGenres(p, req.user.email, need);
-        if (targets.length < need) {
-          const all = Array.from(KOTONOHA_GENRE_TO_GROUP.keys()).filter((g) => !targets.includes(g));
-          for (let i = all.length - 1; i > 0; i--) {
-            const j = Math.floor(Math.random() * (i + 1));
-            [all[i], all[j]] = [all[j], all[i]];
-          }
-          targets.push(...all.slice(0, need - targets.length));
-        }
-        console.log(`[kotonoha] warmup gen: fresh=${freshNow} need=${need}`);
-        warmup.genAttempted = need;
-        const results = await Promise.all(
-          targets.slice(0, need).map((g) =>
-            generateKotonohaQuestion(p, { level: userLevel, genre: g, excludeAnswers, userEmail: req.user.email })
-              .catch((e) => { console.warn("[kotonoha] warmup gen failed:", g, e.message); return null; })
-          )
-        );
-        warmup.genSucceeded = results.filter(Boolean).length;
-        warmup.freshAfter = freshNow + warmup.genSucceeded;
-      }
-    } catch (e) {
-      console.warn("[kotonoha] warmup skipped:", e.message);
-    }
-
-    res.json({ ok: true, oldLevel, newLevel, levelChanged: newLevel !== oldLevel, rate, warmup });
+    res.json({ ok: true, oldLevel, newLevel, levelChanged: newLevel !== oldLevel, rate });
   } catch (err) {
     console.error("kotonoha end", err);
     res.status(500).json({ error: err.message });
@@ -2138,8 +1871,6 @@ app.post("/api/kotonoha/sessions/end", async (req, res) => {
 });
 
 // 自分のステータス: ジャンル別進捗 + 最近覚えた言葉
-// マスター = 直近 MASTERY_LAST_N 回 (=3) が連続全部正解 (途中失敗でリセット)
-const MASTERY_LAST_N = 3;
 
 // 連続日数 (Duolingo 型): 1日5問正解=アクティブ。
 // 1日抜けても、次の日に 15問正解で前日も連続扱い (1回まで)。
@@ -2245,14 +1976,21 @@ app.post("/api/kotonoha/test-gen", async (req, res) => {
   try {
     const all = Array.from(KOTONOHA_GENRE_TO_GROUP.keys());
     const genre = all[Math.floor(Math.random() * all.length)];
-    const { rows: uRows } = await p.query(`SELECT level FROM kotonoha_users WHERE user_email=$1`, [req.user.email]);
-    const userLevel = uRows[0]?.level || 1;
-    const result = await generateKotonohaQuestion(p, { level: userLevel, genre, excludeAnswers: [], userEmail: req.user.email });
+    // ジャンル内正解数を見て depth 決定
+    const { rows: gc } = await p.query(
+      `SELECT COUNT(DISTINCT q.id) FILTER (WHERE pr.is_correct)::int AS n
+         FROM kotonoha_questions q LEFT JOIN kotonoha_progress pr
+         ON pr.question_id = q.id AND pr.user_email = $1
+        WHERE q.genre = $2`,
+      [req.user.email, genre]
+    );
+    const depth = Math.min(5, (gc[0]?.n || 0) + 1);
+    const result = await generateQuestion(p, { genre, depth, excludeAnswers: [] });
     out.fullGen = {
       ok: !!result,
       elapsed: Date.now() - start2,
       genre,
-      level: userLevel,
+      depth,
       answer: result?.answer,
     };
     return res.json({ ...out, ok: !!result });
@@ -2262,72 +2000,27 @@ app.post("/api/kotonoha/test-gen", async (req, res) => {
   }
 });
 
-// テスト生成: 1問だけ生成して結果 (成功/失敗 + 詳細) を返すデバッグ用 (旧)
 async function buildKotonohaProgress(p, email) {
-  // 進捗の見え方: 「ユニーク正解数 / target_count」をベースにする
-  //   - 1回でも正解した unique 問題は 0.6 として加算 (一定の達成感)
-  //   - 直近3連続正解した (mastered) 問題は 1.0 として加算 (フル習得)
-  //   - 早期段階でもバーが伸びる + マスターしたら満タンに近づく設計
+  // 進捗 = unique 正解数 / target_count (シンプル化)
   const { rows: byGenre } = await p.query(
-    `WITH ranked AS (
-       SELECT question_id, is_correct,
-              ROW_NUMBER() OVER (PARTITION BY question_id ORDER BY answered_at DESC) AS rn
-         FROM kotonoha_progress
-        WHERE user_email = $1
-     ),
-     mastered_q AS (
-       SELECT question_id
-         FROM ranked
-        WHERE rn <= $2
-        GROUP BY question_id
-       HAVING count(*) >= $2 AND bool_and(is_correct)
-     ),
-     correct_q AS (
-       SELECT DISTINCT question_id FROM kotonoha_progress
-        WHERE user_email = $1 AND is_correct = true
-     )
-     SELECT q.genre, q.group_id,
-            count(DISTINCT q.id) FILTER (WHERE cq.question_id IS NOT NULL) AS correct_uniq,
-            count(DISTINCT q.id) FILTER (WHERE mq.question_id IS NOT NULL) AS mastered
+    `SELECT q.genre, q.group_id,
+            count(DISTINCT q.id) FILTER (WHERE pr.is_correct)::int AS correct_uniq
        FROM kotonoha_questions q
-       LEFT JOIN correct_q cq ON cq.question_id = q.id
-       LEFT JOIN mastered_q mq ON mq.question_id = q.id
+       LEFT JOIN kotonoha_progress pr ON pr.question_id = q.id AND pr.user_email = $1
       WHERE q.genre IS NOT NULL
       GROUP BY q.genre, q.group_id`,
-    [email, MASTERY_LAST_N]
+    [email]
   );
-  const dbProg = new Map();
-  for (const r of byGenre) {
-    dbProg.set(r.genre, {
-      correct_uniq: Number(r.correct_uniq || 0),
-      mastered: Number(r.mastered || 0),
-      group_id: r.group_id,
-    });
-  }
+  const dbProg = new Map(byGenre.map((r) => [r.genre, r.correct_uniq]));
   const groups = [];
   for (const g of (KOTONOHA_GENRES_DATA?.groups || [])) {
     const genres = g.genres.map((gen) => {
       const target = gen.target_count || 10;
-      const rec = dbProg.get(gen.name) || { correct_uniq: 0, mastered: 0 };
-      // 進捗 = (正解問題 × 0.6 + マスター問題 × 0.4) / target
-      // correct_uniq には mastered も含まれる前提なので、内訳は:
-      //   未マスター正解 × 0.6 + マスター × 1.0 (=0.6+0.4)
-      const partial = Math.max(0, rec.correct_uniq - rec.mastered);
-      const score = partial * 0.6 + rec.mastered * 1.0;
-      const pct = Math.min(100, Math.round((score / target) * 100));
-      return {
-        name: gen.name,
-        target,
-        correct: rec.correct_uniq,
-        mastered: rec.mastered,
-        pct,
-      };
+      const correct = Math.min(dbProg.get(gen.name) || 0, target);
+      return { name: gen.name, target, correct, pct: Math.round((correct / target) * 100) };
     });
     const totalT = genres.reduce((s, x) => s + x.target, 0);
-    const totalScore = genres.reduce((s, x) => {
-      const partial = Math.max(0, x.correct - x.mastered);
-      return s + partial * 0.6 + x.mastered * 1.0;
-    }, 0);
+    const totalScore = genres.reduce((s, x) => s + x.correct, 0);
     groups.push({
       id: g.id, name: g.name, color: g.color,
       genres,

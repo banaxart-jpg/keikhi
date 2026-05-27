@@ -620,7 +620,7 @@ async function startSession(genre) {
     const { questions, debug } = sessionRes;
     if (debug) {
       console.log("[techstudy] session debug:", debug);
-      state.diagSession = `セッション: fresh ${debug.freshBefore}→${debug.freshAfter} ・ gen ${debug.syncGenSucceeded}/${debug.syncGenAttempted} ・ priority ${JSON.stringify(debug.priorityBreakdown)}`;
+      state.diagSession = `pool ${debug.freshBefore}→${debug.freshAfter} ・ gen ${debug.genSucceeded}/${debug.genAttempted}`;
       renderDiag();
     }
     if (!questions.length) throw new Error("問題がありません。シード DB の投入が必要かも。");
@@ -661,7 +661,7 @@ async function testGen() {
       else lines.push(`❌ Gemini直接 (${r.gemini.elapsed}ms) code=${r.gemini.code}: ${r.gemini.error}`);
     }
     if (r.fullGen) {
-      if (r.fullGen.ok) lines.push(`✅ 問題生成 (${r.fullGen.elapsed}ms) ${r.fullGen.genre} Lv${r.fullGen.level} 答:「${r.fullGen.answer}」`);
+      if (r.fullGen.ok) lines.push(`✅ 問題生成 (${r.fullGen.elapsed}ms) ${r.fullGen.genre} d${r.fullGen.depth} 答:「${r.fullGen.answer}」`);
       else lines.push(`❌ 問題生成 (${r.fullGen.elapsed}ms): ${r.fullGen.error || "null"}`);
     }
     el.textContent = lines.join("\n");
@@ -883,10 +883,6 @@ window.nextQuestion = nextQuestion;
 async function endSession() {
   try {
     const r = await api("POST", "/api/kotonoha/sessions/end");
-    if (r?.warmup) {
-      console.log("[techstudy] warmup:", r.warmup);
-      state.diagSession = `warmup: pool ${r.warmup.freshBefore}→${r.warmup.freshAfter} ・ gen ${r.warmup.genSucceeded}/${r.warmup.genAttempted}`;
-    }
     showSummary(r);
   } catch (e) {
     $("sessionErr").textContent = e.message;
