@@ -1906,9 +1906,11 @@ app.post("/api/kotonoha/sessions/start", async (req, res) => {
     }
     questions = questions.slice(0, SESSION_SIZE);
 
-    // UI demo を結合
+    // UI demo を結合: 「この機能の名前は?」型は demo が無いと答えようがないので、
+    // demo 無しのジャンルは出題から外し、後ろで bg 生成キック。
     const demoGroups = new Set(["ui_parts", "css_layout"]);
     const uiGenres = [...new Set(questions.filter((q) => demoGroups.has(q.group_id) && q.genre).map((q) => q.genre))];
+    let missingDemoGenres = [];
     if (uiGenres.length) {
       const { rows: dRows } = await p.query(
         `SELECT genre, demo_html FROM kotonoha_ui_demos WHERE genre = ANY($1::text[])`,
@@ -1917,6 +1919,20 @@ app.post("/api/kotonoha/sessions/start", async (req, res) => {
       const demoMap = new Map(dRows.map((r) => [r.genre, r.demo_html]));
       for (const q of questions) {
         if (demoMap.has(q.genre)) q.demo_html = demoMap.get(q.genre);
+      }
+      // フロント側 (techstudy/index.html) にハードコードされてる UI_DEMOS のキー。
+      // これらは demo_html が null でもフロントが代わりに表示するので落とさない。
+      const hardcoded = new Set([
+        "モーダル","トースト","FAB","アコーディオン","ドロワー","タブ",
+        "ツールチップ","スイッチ","プログレスバー","スケルトン","ハンバーガーメニュー"
+      ]);
+      missingDemoGenres = uiGenres.filter((g) => !demoMap.has(g) && !hardcoded.has(g));
+      if (missingDemoGenres.length) {
+        // 出題前 filter: demo 無し UI 問題は今回は出さない
+        questions = questions.filter((q) => {
+          if (!demoGroups.has(q.group_id) || !q.genre) return true;
+          return demoMap.has(q.genre) || hardcoded.has(q.genre);
+        });
       }
     }
 
@@ -1960,6 +1976,13 @@ app.post("/api/kotonoha/sessions/start", async (req, res) => {
           bgTargets.map((genre) => generateQuestion(p, { genre, depth: 1, excludeAnswers, knownGenres })
             .catch((e) => { console.warn(`[kotonoha] bg gen ${genre}:`, e.message); return null; }))
         );
+        // 出題から外した UI デモも、次回までに用意 (1回6個まで, 並列だと AI quota キツいので逐次)
+        for (const g of missingDemoGenres.slice(0, 6)) {
+          const gid = KOTONOHA_GENRE_TO_GROUP.get(g);
+          await generateUiDemo(p, g, gid).catch((e) =>
+            console.warn(`[kotonoha] ui demo gen ${g}:`, e.message)
+          );
+        }
       } catch (e) {
         console.warn("[kotonoha] post-response bg gen skipped:", e.message);
       }
