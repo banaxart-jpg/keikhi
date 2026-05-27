@@ -830,6 +830,10 @@ window.nextQuestion = nextQuestion;
 async function endSession() {
   try {
     const r = await api("POST", "/api/kotonoha/sessions/end");
+    if (r?.warmup) {
+      console.log("[techstudy] warmup:", r.warmup);
+      state.diagSession = `warmup: pool ${r.warmup.freshBefore}→${r.warmup.freshAfter} ・ gen ${r.warmup.genSucceeded}/${r.warmup.genAttempted}`;
+    }
     showSummary(r);
   } catch (e) {
     $("sessionErr").textContent = e.message;

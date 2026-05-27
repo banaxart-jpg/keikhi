@@ -1675,9 +1675,8 @@ app.post("/api/kotonoha/sessions/start", async (req, res) => {
           LEFT JOIN mastered_q mq ON mq.question_id = q.id
       )`;
 
-    // ─── 同期生成: 毎セッション開始時に必ず数問生成してプールを育てる ───
-    // Cloud Run の fire-and-forget は CPU throttle で殺されるので、sync で確実に。
-    // 並列 (Promise.all) で実行時間を圧縮 (各 2-5sec × 並列 → 合計 ~5-8sec で済む)。
+    // ─── start は基本即返却。プール枯渇時のみ緊急同期生成 ───
+    // 通常時は /sessions/end の wrap-up gen でプール 40 維持されてる前提。
     const debug = { freshBefore: 0, freshAfter: 0, syncGenAttempted: 0, syncGenSucceeded: 0 };
     try {
       const { rows: pcr } = await p.query(
@@ -1691,10 +1690,10 @@ app.post("/api/kotonoha/sessions/start", async (req, res) => {
       );
       const freshCount = pcr[0]?.n || 0;
       debug.freshBefore = freshCount;
-      // プール常時成長: freshCount に関わらず必ず 8 問生成 (UX 5-8sec wait)
-      const need = freshCount < SESSION_SIZE
-        ? Math.min(SESSION_SIZE - freshCount + 4, 10) // 不足してる時は埋める + 余分
-        : 8; // 十分足りててもプール育てる
+      debug.freshAfter = freshCount;
+      // 緊急時のみ生成 (プール枯渇)
+      if (freshCount < SESSION_SIZE) {
+        const need = Math.min(SESSION_SIZE - freshCount + 4, 10);
         const { rows: ansRows } = await p.query(
           `SELECT answer FROM kotonoha_questions ORDER BY id DESC LIMIT 200`
         );
@@ -1713,17 +1712,16 @@ app.post("/api/kotonoha/sessions/start", async (req, res) => {
             targets.push(...all.slice(0, need - targets.length));
           }
         }
-        console.log(`[kotonoha] sync gen: fresh=${freshCount} need=${need} targets=${targets.length}`);
+        console.log(`[kotonoha] emergency gen: fresh=${freshCount} need=${need}`);
         debug.syncGenAttempted = need;
         const results = await Promise.all(
           targets.slice(0, need).map((g) =>
             generateKotonohaQuestion(p, { level, genre: g, excludeAnswers })
-              .catch((e) => { console.warn("[kotonoha] sync gen failed:", g, e.message); return null; })
+              .catch((e) => { console.warn("[kotonoha] emergency gen failed:", g, e.message); return null; })
           )
         );
         debug.syncGenSucceeded = results.filter(Boolean).length;
-        console.log(`[kotonoha] sync gen succeeded ${debug.syncGenSucceeded}/${need}`);
-        // 再度 fresh プールを確認
+        console.log(`[kotonoha] emergency gen succeeded ${debug.syncGenSucceeded}/${need}`);
         const { rows: pcr2 } = await p.query(
           `${baseSelectSql}
            SELECT COUNT(*)::int AS n FROM eligible
@@ -1734,6 +1732,7 @@ app.post("/api/kotonoha/sessions/start", async (req, res) => {
             : [req.user.email, MASTERY, maxDiff]
         );
         debug.freshAfter = pcr2[0]?.n || 0;
+      }
     } catch (e) {
       console.warn("[kotonoha] sync gen check skipped:", e.message);
     }
@@ -1771,8 +1770,7 @@ app.post("/api/kotonoha/sessions/start", async (req, res) => {
           ORDER BY priority ASC,
                    genre_mastered ASC,
                    (e.type = 'choice') DESC,
-                   (e.source = 'generated') DESC,
-                   e.difficulty ASC,
+                   e.created_at ASC,
                    random()
           LIMIT $4`,
         [req.user.email, MASTERY, maxDiff, SESSION_SIZE]
@@ -2032,7 +2030,70 @@ app.post("/api/kotonoha/sessions/end", async (req, res) => {
     } else {
       await p.query(`UPDATE kotonoha_users SET last_session_at=now() WHERE user_email=$1`, [req.user.email]);
     }
-    res.json({ ok: true, oldLevel, newLevel, levelChanged: newLevel !== oldLevel, rate });
+    // ─── プール warm-up: 次セッション用に最大 12 問を sync 生成 ───
+    // start を即返却にするための準備。end の時点なら数秒待たせても OK
+    // (ユーザーは結果サマリを見るところ)。プール 40 未満ならその差を埋める。
+    const POOL_TARGET = 40;
+    const warmup = { freshBefore: 0, freshAfter: 0, genAttempted: 0, genSucceeded: 0 };
+    try {
+      const userLevel = newLevel;
+      const maxDiff = Math.min(10, userLevel + 2);
+      const { rows: poolRows } = await p.query(
+        `WITH ranked AS (
+           SELECT question_id, is_correct, answered_at,
+                  ROW_NUMBER() OVER (PARTITION BY question_id ORDER BY answered_at DESC) AS rn_q,
+                  ROW_NUMBER() OVER (ORDER BY answered_at) AS global_rn
+             FROM kotonoha_progress
+            WHERE user_email = $1
+         ),
+         per_q AS (
+           SELECT question_id, MAX(global_rn) FILTER (WHERE is_correct) AS last_correct_pos
+             FROM ranked GROUP BY question_id
+         ),
+         user_total AS (SELECT COUNT(*)::int AS total FROM ranked)
+         SELECT COUNT(*)::int AS n FROM kotonoha_questions q
+          LEFT JOIN per_q pq ON pq.question_id = q.id
+         WHERE q.difficulty <= $2
+           AND (
+             pq.question_id IS NULL
+             OR pq.last_correct_pos IS NULL
+             OR ((SELECT total FROM user_total) - pq.last_correct_pos)
+                >= (50 + (abs(hashtextextended(q.id::text || $1, 0)) % 51))::int
+           )`,
+        [req.user.email, maxDiff]
+      );
+      const freshNow = poolRows[0]?.n || 0;
+      warmup.freshBefore = freshNow;
+      warmup.freshAfter = freshNow;
+      if (freshNow < POOL_TARGET) {
+        const need = Math.min(POOL_TARGET - freshNow, 12);
+        const { rows: ansRows } = await p.query(`SELECT answer FROM kotonoha_questions ORDER BY id DESC LIMIT 200`);
+        const excludeAnswers = ansRows.map((r) => r.answer);
+        let targets = await pickWeakGenres(p, req.user.email, need);
+        if (targets.length < need) {
+          const all = Array.from(KOTONOHA_GENRE_TO_GROUP.keys()).filter((g) => !targets.includes(g));
+          for (let i = all.length - 1; i > 0; i--) {
+            const j = Math.floor(Math.random() * (i + 1));
+            [all[i], all[j]] = [all[j], all[i]];
+          }
+          targets.push(...all.slice(0, need - targets.length));
+        }
+        console.log(`[kotonoha] warmup gen: fresh=${freshNow} need=${need}`);
+        warmup.genAttempted = need;
+        const results = await Promise.all(
+          targets.slice(0, need).map((g) =>
+            generateKotonohaQuestion(p, { level: userLevel, genre: g, excludeAnswers })
+              .catch((e) => { console.warn("[kotonoha] warmup gen failed:", g, e.message); return null; })
+          )
+        );
+        warmup.genSucceeded = results.filter(Boolean).length;
+        warmup.freshAfter = freshNow + warmup.genSucceeded;
+      }
+    } catch (e) {
+      console.warn("[kotonoha] warmup skipped:", e.message);
+    }
+
+    res.json({ ok: true, oldLevel, newLevel, levelChanged: newLevel !== oldLevel, rate, warmup });
   } catch (err) {
     console.error("kotonoha end", err);
     res.status(500).json({ error: err.message });
