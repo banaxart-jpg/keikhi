@@ -527,7 +527,7 @@ const UI_DEMOS = {
 
   "コンテキストメニュー": `<!doctype html><html><head><meta charset='utf-8'><style>html,body{height:100%;margin:0;font-family:-apple-system,sans-serif;background:#f5f5f7;position:relative;overflow:hidden;}.note{padding:20px;text-align:center;color:#888;font-size:12px;}.item{margin:0 16px;background:white;padding:14px;border-radius:8px;cursor:pointer;user-select:none;-webkit-user-select:none;}.menu{position:absolute;background:white;border-radius:8px;box-shadow:0 4px 16px rgba(0,0,0,0.2);overflow:hidden;display:none;z-index:10;min-width:140px;}.menu.show{display:block;}.menu div{padding:10px 14px;font-size:13px;cursor:pointer;}.menu div:hover{background:#f5f5f7;}.menu div.del{color:#dc2626;border-top:1px solid #eee;}</style></head><body><p class='note'>↓ 長押し / 右クリック</p><div class='item' id='target' oncontextmenu='openMenu(event);return false;' ontouchstart='startTouch(event)' ontouchend='clearTimeout(window.tt)'>メモ #1</div><div class='menu' id='m'><div>📝 編集</div><div>📋 複製</div><div>📤 共有</div><div class='del'>🗑 削除</div></div><script>function openMenu(e){const m=document.getElementById('m');m.style.left=Math.min(e.clientX,window.innerWidth-150)+'px';m.style.top=e.clientY+'px';m.classList.add('show');}function startTouch(e){const t=e.touches[0];window.tt=setTimeout(()=>openMenu({clientX:t.clientX,clientY:t.clientY}),500);}document.addEventListener('click',(e)=>{if(!e.target.closest('#m'))document.getElementById('m').classList.remove('show');});<\/script></body></html>`,
 
-  "オートコンプリート": `<!doctype html><html><head><meta charset='utf-8'><style>body{font-family:-apple-system,sans-serif;padding:20px;margin:0;background:#f5f5f7;}.wrap{position:relative;}input{width:100%;padding:11px 14px;border:1px solid #ddd;border-radius:8px;font-size:14px;outline:none;box-sizing:border-box;}input:focus{border-color:#6d28d9;}.list{position:absolute;top:calc(100% + 4px);left:0;right:0;background:white;border-radius:8px;box-shadow:0 4px 12px rgba(0,0,0,0.1);max-height:160px;overflow:auto;display:none;}.list.show{display:block;}.li{padding:10px 14px;font-size:13px;cursor:pointer;}.li:hover,.li.on{background:#f5f0ff;color:#6d28d9;}.li b{font-weight:800;}</style></head><body><div class='wrap'><input type='text' id='q' placeholder='県名を入力 (ex: と)' oninput='go()' onfocus='go()'><div class='list' id='l'></div></div><script>const data=['東京都','大阪府','京都府','北海道','沖縄県','栃木県','鳥取県','徳島県','富山県','長崎県','奈良県'];function go(){const v=document.getElementById('q').value;const l=document.getElementById('l');if(!v){l.classList.remove('show');return;}const m=data.filter(x=>x.includes(v));if(!m.length){l.classList.remove('show');return;}l.innerHTML=m.map(x=>`<div class='li' onclick=\"document.getElementById('q').value='\${x}';document.getElementById('l').classList.remove('show');\">\${x.replace(v,'<b>'+v+'</b>')}</div>`).join('');l.classList.add('show');}<\/script></body></html>`,
+  "オートコンプリート": `<!doctype html><html><head><meta charset='utf-8'><style>body{font-family:-apple-system,sans-serif;padding:20px;margin:0;background:#f5f5f7;}.wrap{position:relative;}input{width:100%;padding:11px 14px;border:1px solid #ddd;border-radius:8px;font-size:14px;outline:none;box-sizing:border-box;}input:focus{border-color:#6d28d9;}.list{position:absolute;top:calc(100% + 4px);left:0;right:0;background:white;border-radius:8px;box-shadow:0 4px 12px rgba(0,0,0,0.1);max-height:160px;overflow:auto;display:none;}.list.show{display:block;}.li{padding:10px 14px;font-size:13px;cursor:pointer;}.li:hover,.li.on{background:#f5f0ff;color:#6d28d9;}.li b{font-weight:800;}</style></head><body><div class='wrap'><input type='text' id='q' placeholder='県名を入力 (ex: と)' oninput='go()' onfocus='go()'><div class='list' id='l'></div></div><script>const data=['東京都','大阪府','京都府','北海道','沖縄県','栃木県','鳥取県','徳島県','富山県','長崎県','奈良県'];function go(){const v=document.getElementById('q').value;const l=document.getElementById('l');if(!v){l.classList.remove('show');return;}const m=data.filter(x=>x.includes(v));if(!m.length){l.classList.remove('show');return;}l.innerHTML=m.map(function(x){return "<div class='li' onclick=\"document.getElementById('q').value='"+x+"';document.getElementById('l').classList.remove('show');\">"+x.replace(v,'<b>'+v+'</b>')+"</div>";}).join('');l.classList.add('show');}<\/script></body></html>`,
 
   "セレクト / ドロップダウン": `<!doctype html><html><head><meta charset='utf-8'><style>body{font-family:-apple-system,sans-serif;padding:24px;margin:0;background:#f5f5f7;}label{font-size:12px;color:#666;font-weight:700;display:block;margin-bottom:6px;}select{width:100%;padding:12px;border:1px solid #ddd;border-radius:8px;font-size:14px;background:white;font-family:inherit;outline:none;cursor:pointer;}select:focus{border-color:#6d28d9;}.out{margin-top:14px;padding:12px;background:white;border-radius:8px;font-size:13px;color:#666;}</style></head><body><p style='color:#888;font-size:11px;margin:0 0 14px;'>↓ 選択肢を変えてみて</p><label>カテゴリ</label><select id='s' onchange="document.getElementById('o').textContent='選択中: '+this.options[this.selectedIndex].text"><option>食品</option><option>衣類</option><option>家電</option><option>本</option></select><div class='out' id='o'>選択中: 食品</div></body></html>`,
 
@@ -733,40 +733,41 @@ async function api(method, path, body, { timeoutMs = 45000 } = {}) {
 
 // ───── ホーム画面 ─────
 async function loadHome() {
-  $("homeErr").textContent = "";
-  try {
-    // peers はサーバーが owner だけに返す (それ以外は [])
-    const [me, peers, genresData, version] = await Promise.all([
-      api("GET", "/api/kotonoha/me"),
-      api("GET", "/api/kotonoha/peers").catch(() => []),
-      api("GET", "/api/kotonoha/genres").catch(() => null),
-      fetch((window.API_BASE || "") + "/api/version").then((r) => r.json()).catch(() => null),
-    ]);
-    // バージョン情報表示 (デプロイ確認用)
-    const vb = $("versionBadge");
-    if (vb) {
-      if (version) {
-        const t = version.startedAt ? new Date(version.startedAt).toLocaleString("ja-JP", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "?";
-        vb.textContent = `v.${version.version || "dev"} ・ ${t}`;
-      } else {
-        vb.textContent = "v.unknown (旧サーバー)";
-      }
+  const errEl = $("homeErr");
+  errEl.innerHTML = `<span style="color:var(--text2);font-family:'Outfit';font-weight:700;">📡 読み込み中… (初回は最大45秒、cold start のため)</span>`;
+  errEl.style.display = "";
+  // 各 API を独立に投げて catch — 1つこけても他は描画する
+  const meP     = api("GET", "/api/kotonoha/me").catch((e) => ({ _err: e.message || String(e) }));
+  const peersP  = api("GET", "/api/kotonoha/peers").catch(() => []);
+  const genresP = api("GET", "/api/kotonoha/genres").catch(() => null);
+  const verP    = fetch((window.API_BASE || "") + "/api/version").then((r) => r.json()).catch(() => null);
+  const [me, peers, genresData, version] = await Promise.all([meP, peersP, genresP, verP]);
+
+  // バージョン
+  const vb = $("versionBadge");
+  if (vb) {
+    if (version) {
+      const t = version.startedAt ? new Date(version.startedAt).toLocaleString("ja-JP", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "?";
+      vb.textContent = `v.${version.version || "dev"} ・ ${t}`;
+    } else {
+      vb.textContent = "v.unknown";
     }
-    // domain config からタイトル/サブタイトル動的設定
-    const dom = genresData?.domain;
-    if (dom) {
-      if (dom.title) {
-        document.title = dom.title;
-        $("appTitle").textContent = dom.title;
-        $("appHint").textContent = dom.title;
-      }
-      if (dom.subtitle) $("appSubtitle").textContent = dom.subtitle;
-    }
-    renderMe(me, peers);
-    renderPeers(peers);
-  } catch (e) {
-    $("homeErr").textContent = e.message;
   }
+  // domain config
+  const dom = genresData?.domain;
+  if (dom) {
+    if (dom.title) { document.title = dom.title; $("appTitle").textContent = dom.title; $("appHint").textContent = dom.title; }
+    if (dom.subtitle) $("appSubtitle").textContent = dom.subtitle;
+  }
+  // /me がコケてたら明示エラー + 再読込ボタン
+  if (me && me._err) {
+    errEl.innerHTML = `<div style="margin-bottom:8px;">❌ データ取得に失敗: ${escapeHtml(me._err)}</div><button class="pill" onclick="loadHome()" style="background:var(--accent);color:white;">↻ 再読込</button>`;
+    return;
+  }
+  errEl.style.display = "none";
+  errEl.textContent = "";
+  renderMe(me, peers);
+  renderPeers(peers);
 }
 
 function renderMe(me, peers) {
