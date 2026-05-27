@@ -389,8 +389,13 @@ body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); 
 
     <div class="err" id="homeErr"></div>
     <div id="versionFooter" style="text-align:center; font-family: ui-monospace, Menlo, monospace; font-size: 10px; color: var(--text3); padding: 20px 8px 6px; line-height: 1.5; word-break: break-all;"></div>
-    <div style="text-align:center; padding: 4px 0 18px; display:flex; justify-content:center; gap:18px;">
-      <button class="danger-link" onclick="wipeAllQuestions()">🗑 問題プールを全消し</button>
+    <!-- owner 限定の管理操作 -->
+    <div id="ownerAdminRow" style="display:none; text-align:center; padding: 4px 0 6px; gap:18px; flex-wrap:wrap; justify-content:center;">
+      <button class="danger-link" onclick="wipeAllQuestions()">🗑 問題プール全消し</button>
+      <button class="danger-link" onclick="genAllUiDemos()" style="color:var(--accent);" id="genUiBtn">🎨 UIデモ一括生成</button>
+    </div>
+    <div id="genUiProgress" style="text-align:center; font-size:11px; color:var(--text2); font-weight:700; padding:4px 0; display:none;"></div>
+    <div style="text-align:center; padding: 4px 0 18px;">
       <button class="signout-link" id="signoutLink" onclick="doSignOut()">サインアウト</button>
     </div>
   </div>
@@ -570,6 +575,9 @@ function renderMe(me, peers) {
   // 他ミニアプリにもアクセス権ある社内ユーザーだけ「← 戻る」を出す
   const backBtn = $("backBtn");
   if (backBtn) backBtn.style.display = me.hasLauncherAccess ? "" : "none";
+  // owner だけ管理操作 (wipe / gen) を出す
+  const adminRow = $("ownerAdminRow");
+  if (adminRow) adminRow.style.display = me.isOwner ? "flex" : "none";
 
   $("myLevel").textContent = me.user.level;
   $("myLevelStats").textContent =
@@ -1100,6 +1108,40 @@ window.dismissCelebrate = function () {
   const o = $("celebrateOverlay");
   if (o) o.classList.remove("show");
   showHome();
+};
+
+window.genAllUiDemos = async function () {
+  if (!confirm("ui_parts ジャンルの未生成 UI デモを一括生成します。\n\n・1バッチ8件ずつ、完了までループ\n・1件 5-10秒なので残り100件なら ~15分かかる\n・タブを閉じても次回再開可能 (既存はスキップ)")) return;
+  const btn = $("genUiBtn");
+  const prog = $("genUiProgress");
+  const origLbl = btn.innerHTML;
+  btn.disabled = true;
+  prog.style.display = "";
+  let totalGen = 0, totalFail = 0, batches = 0;
+  try {
+    while (true) {
+      batches++;
+      prog.textContent = `🎨 バッチ ${batches} 実行中…`;
+      const r = await api("POST", "/api/kotonoha/gen-ui-demos", { limit: 8 });
+      totalGen += r.generated || 0;
+      totalFail += (r.failed || []).length;
+      const remaining = r.pendingAfter || 0;
+      prog.textContent = `バッチ ${batches}: +${r.generated} 生成 / 残り ${remaining} (累計 +${totalGen}、失敗 ${totalFail})`;
+      if (remaining === 0) break;
+      if (r.generated === 0 && (r.failed?.length || 0) >= (r.results?.length || 1)) {
+        // 何も生成できてない (Gemini 落ち等) → 抜ける
+        prog.textContent += " — 全失敗のため停止";
+        break;
+      }
+      // 少し空けて次へ (rate limit 回避)
+      await new Promise((res) => setTimeout(res, 500));
+    }
+  } catch (e) {
+    prog.textContent = `エラー: ${e.message} (累計 +${totalGen}、失敗 ${totalFail})`;
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = origLbl;
+  }
 };
 
 window.wipeAllQuestions = async function () {

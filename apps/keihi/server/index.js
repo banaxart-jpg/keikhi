@@ -1996,18 +1996,13 @@ app.post("/api/kotonoha/sessions/start", async (req, res) => {
       for (const q of questions) {
         if (demoMap.has(q.genre)) q.demo_html = demoMap.get(q.genre);
       }
-      // フロント側 (techstudy/index.html) にハードコードされてる UI_DEMOS のキー。
-      // これらは demo_html が null でもフロントが代わりに表示するので落とさない。
-      const hardcoded = new Set([
-        "モーダル","トースト","FAB","アコーディオン","ドロワー","タブ",
-        "ツールチップ","スイッチ","プログレスバー","スケルトン","ハンバーガーメニュー"
-      ]);
-      missingDemoGenres = uiGenres.filter((g) => !demoMap.has(g) && !hardcoded.has(g));
+      // HARDCODED_UI_DEMO_GENRES: フロント側 UI_DEMOS のキー (module top で定義)
+      missingDemoGenres = uiGenres.filter((g) => !demoMap.has(g) && !HARDCODED_UI_DEMO_GENRES.has(g));
       if (missingDemoGenres.length) {
         // 出題前 filter: demo 無し UI 問題は今回は出さない
         questions = questions.filter((q) => {
           if (!demoGroups.has(q.group_id) || !q.genre) return true;
-          return demoMap.has(q.genre) || hardcoded.has(q.genre);
+          return demoMap.has(q.genre) || HARDCODED_UI_DEMO_GENRES.has(q.genre);
         });
       }
     }
@@ -2369,9 +2364,10 @@ app.post("/api/kotonoha/wipe-seed", async (req, res) => {
 });
 
 // 全問題プール削除 (= kotonoha_questions 全消し)。手動リセット用。
-// 進捗 (kotonoha_progress) は FK ON DELETE CASCADE で連動して消える点に注意。
-// レベル / streak はユーザーテーブル側なのでそのまま残る。
+// 進捗 (kotonoha_progress) は FK ON DELETE CASCADE で連動して消えるので owner 限定。
 app.post("/api/kotonoha/wipe-all", async (req, res) => {
+  const email = String(req.user?.email || "").toLowerCase();
+  if (!KOTONOHA_OWNER_EMAILS.has(email)) return res.status(403).json({ error: "owner only" });
   const p = getPool();
   if (!p) return res.status(503).json({ error: "DB not configured" });
   try {
@@ -2382,6 +2378,57 @@ app.post("/api/kotonoha/wipe-all", async (req, res) => {
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
   }
+});
+
+// ui_parts デモを一括生成 (owner 限定)。
+// 1リクエストでバッチ生成 (Cloud Run 5分タイムアウトに収まる範囲)。
+// 既存 DB demo / フロントハードコード分はスキップ。フロントから「未済が0になるまで」ループで叩く。
+const HARDCODED_UI_DEMO_GENRES = new Set([
+  "モーダル","トースト","FAB","アコーディオン","ドロワー","タブ",
+  "ツールチップ","スイッチ","プログレスバー","スケルトン","ハンバーガーメニュー"
+]);
+app.post("/api/kotonoha/gen-ui-demos", async (req, res) => {
+  const email = String(req.user?.email || "").toLowerCase();
+  if (!KOTONOHA_OWNER_EMAILS.has(email)) return res.status(403).json({ error: "owner only" });
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  const limit = Math.min(20, Math.max(1, Number(req.body?.limit) || 8));
+
+  const uiPartsGroup = (KOTONOHA_GENRES_DATA?.groups || []).find((g) => g.id === "ui_parts");
+  if (!uiPartsGroup) return res.status(500).json({ error: "ui_parts group not in master" });
+  const allGenres = uiPartsGroup.genres.map((g) => g.name);
+
+  const { rows: existing } = await p.query(
+    `SELECT genre FROM kotonoha_ui_demos WHERE genre = ANY($1::text[])`,
+    [allGenres]
+  );
+  const existingSet = new Set(existing.map((r) => r.genre));
+
+  // 未済 = master − hardcoded − DB既存
+  const pending = allGenres.filter((g) => !HARDCODED_UI_DEMO_GENRES.has(g) && !existingSet.has(g));
+  const targets = pending.slice(0, limit);
+
+  const results = [];
+  for (const genre of targets) {
+    const t0 = Date.now();
+    try {
+      const html = await generateUiDemo(p, genre, "ui_parts");
+      results.push({ genre, ok: !!html, ms: Date.now() - t0 });
+    } catch (e) {
+      results.push({ genre, ok: false, error: e.message, ms: Date.now() - t0 });
+    }
+  }
+
+  res.json({
+    totalUiParts: allGenres.length,
+    hardcoded: HARDCODED_UI_DEMO_GENRES.size,
+    inDbBefore: existingSet.size,
+    pendingBefore: pending.length,
+    pendingAfter: pending.length - results.filter((r) => r.ok).length,
+    generated: results.filter((r) => r.ok).length,
+    failed: results.filter((r) => !r.ok),
+    results,
+  });
 });
 
 // テスト生成: Gemini 直接呼び出し + 完全な問題生成、両方の結果を返す
@@ -2532,6 +2579,8 @@ app.get("/api/kotonoha/me", async (req, res) => {
       // false の場合、フロントは「← 戻る」(ランチャー行き) を隠す。
       hasLauncherAccess: allowList.length === 0
         || allowList.includes(String(req.user.email || "").toLowerCase()),
+      // owner (社長) かどうか。wipe-all / UIデモ一括生成 等の管理操作を出すかの判定。
+      isOwner: KOTONOHA_OWNER_EMAILS.has(String(req.user.email || "").toLowerCase()),
     });
   } catch (err) {
     console.error("kotonoha me", err);
