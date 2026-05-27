@@ -596,7 +596,9 @@ async function startSession(genre) {
   $("homeErr").textContent = "";
   state.focusGenre = genre || null;
   try {
-    const { questions } = await api("POST", "/api/kotonoha/sessions/start", genre ? { genre } : {});
+    const sessionRes = await api("POST", "/api/kotonoha/sessions/start", genre ? { genre } : {});
+    const { questions, debug } = sessionRes;
+    if (debug) console.log("[techstudy] session debug:", debug);
     if (!questions.length) throw new Error("問題がありません。シード DB の投入が必要かも。");
     // キュー初期化
     state.questionMap = new Map();

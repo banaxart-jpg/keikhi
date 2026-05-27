@@ -1531,58 +1531,31 @@ async function generateKotonohaQuestion(p, { level, genre, excludeAnswers = [] }
         ? "中級者向け。「仕組みは?」「もしも〇〇だったら何が起きる?」「歴史的にどう生まれた?」レベル。"
         : "上級者向け。実装トリック、エッジケース、トレードオフを問う。";
 
-  const prompt = `「ITまわりの語彙・仕組み・歴史」を身につける学習アプリの問題を1問だけJSONで作って。
+  const prompt = `「IT・技術」の学習問題を1問だけ作って。JSON のみ返す (他テキスト・コードブロック禁止)。
 
 ジャンル: ${targetGenre || "(自由)"}
-難易度: ${level} / 10
-難易度ガイド: ${diffGuide}
-形式: ${type === "choice" ? "4択" : "自由記述（答えは1単語）"}
+難易度: ${level} / 10 (${diffGuide})
+形式: ${type === "choice" ? "4択" : "自由記述 (答えは1単語)"}
 
-【問題のスタイル - 厳守 (これが一番大事)】
-× 絶対禁止:
-  - 「Xって何という名前?」「3文字英略で?」「カタカナで何という?」のような単純名前暗記
-  - 「何文字?」「何年?」のような単なる事実記憶
-  - 「以下のうち〇〇なのは?」で正解が単にプロダクト名 (例: 「静的ファイル配信のGoogleサービスは? → Firebase Hosting」←ダメ。名前を覚えても何も身につかない)
+問題の型 (どれか):
+- 概念「何のための道具?」
+- いつ使う「シチュエーション → 適切な選択」
+- なぜ「仕組み・理由」
+- どっち「比較判断」
+- もしも「思考実験」
+- 歴史「誰が・なぜ生まれた」
+※ 「Xを何と呼ぶ?」「英語何文字?」など単純名前暗記は禁止。
 
-○ OK問題型 (以下のどれかで作る):
-  1. 【概念】「そもそも何のための道具/仕組み?」(役割を理解させる)
-     例: 「Webブラウザに静的ファイルを配信するサービスは、なぜサーバーで動的に処理しないで配信できるの?」→ 答え: 中身が変わらないファイルだから事前に置いておける
-  2. 【いつ使う】 シチュエーション → 適切な判断
-     例: 「リアルタイムで複数端末に同期したい場合、向いてるDBの種類は?」→ NoSQL / RDB / KVS
-  3. 【なぜ】 仕組み・理由
-     例: 「CDN が世界中で速い理由は?」→ コピーを各地に置いてユーザーの近くから返すから
-  4. 【どっち?】 比較判断
-     例: 「動画のリアルタイム配信、UDP と TCP どっちが向いてる? なぜ?」
-  5. 【もしも】 思考実験
-     例: 「もしHTTPS じゃなく HTTP でパスワード送ったら何が起きる?」
-  6. 【歴史・人物】「誰が・なぜ・どんな背景で生まれた?」
-     例: 「Unix を作った2人の研究者は?」「ビットコインの作者として知られる正体不明の人物は?」
+解説 (explanation) は3-5文。役割 + 判断軸 + へぇートリビア (例: 「Wi-Fi の語源は何の略でもない」「中本哲史は正体不明」)。
 
-→ ユーザーが解いたあと「あ、なるほど、これ判断軸として使える」「次は自分で考えられる」と思える問題にする。
-→ 名前を暗記させるだけの問題は1問もダメ。
+choice 注意: options は letter prefix 無しの自然な選択肢文。answer は options 内の文字列と完全一致 (letter "A" は禁止)。
 
-ルール:
-- claude_example は実際の指示文を「」で囲む
-- 既出の答えと重複しないこと: ${excludeAnswers.slice(0, 20).join(", ")}
+既出の答え (重複禁止): ${excludeAnswers.slice(0, 15).join(", ")}
 
-【解説 (explanation) は4-6文、以下を必ず含める】
-1. **役割**: この概念は何のための道具/仕組みか (1-2文)
-2. **判断軸**: いつ使う? どんな時に選ぶ? どう判断する? (実用)
-3. **由来・人物・歴史**: 誰が・いつ・なぜ生まれたか
-4. **へぇー！トリビア**: 人に話したくなる小ネタ
-   (例: 「PageRank は学術論文の引用数の真似」「Wi-Fi の語源は実は何の略でもない (Hi-Fi に語感を寄せただけ)」「ビットコイン作者中本哲史は今も正体不明」「QRコードはトヨタの下請けデンソーが伝票管理用に作った国産技術」)
-
-→ 解説を読んだら「この用語の本質と使いどころが分かった」と思える濃度。ただの定義の繰り返しは NG。
-
-【choice 形式の超重要ルール】
-- options は「A.」「B.」のような letter prefix を絶対に付けない
-- options は普通の自然な日本語の選択肢文だけ
-- answer は options の中の文字列と完全一致する1つを書く (letter "A" などは絶対にダメ)
-
-JSON以外何も出力しないこと:
+JSON のみ:
 ${type === "choice"
-  ? '{"question":"...","options":["この人が誰か判別する仕組み","データを保存する場所","デザインを作るツール","世界中へ高速配信"],"answer":"この人が誰か判別する仕組み","explanation":"...","claude_example":"「...」"}'
-  : '{"question":"...","answer":"答え","keywords":["別表記1","別表記2"],"explanation":"...","claude_example":"「...」"}'}`;
+  ? '{"question":"…","options":["選択肢1","選択肢2","選択肢3","選択肢4"],"answer":"選択肢1","explanation":"…","claude_example":"「…」"}'
+  : '{"question":"…","answer":"答え","keywords":["別表記"],"explanation":"…","claude_example":"「…」"}'}`;
 
   // 1回目失敗したら 1 回だけリトライ
   let j = null;
@@ -1705,6 +1678,7 @@ app.post("/api/kotonoha/sessions/start", async (req, res) => {
     // ─── 同期生成: フレッシュ問題プールが SESSION_SIZE 未満なら、その場で並列生成 ───
     // Cloud Run の fire-and-forget は CPU throttle で殺されるので、確実性のために sync。
     // 並列 (Promise.all) で実行時間を圧縮 (各 2-5sec × 並列 → 合計 ~5-8sec で済む)。
+    const debug = { freshBefore: 0, freshAfter: 0, syncGenAttempted: 0, syncGenSucceeded: 0 };
     try {
       const { rows: pcr } = await p.query(
         `${baseSelectSql}
@@ -1716,6 +1690,7 @@ app.post("/api/kotonoha/sessions/start", async (req, res) => {
           : [req.user.email, MASTERY, maxDiff]
       );
       const freshCount = pcr[0]?.n || 0;
+      debug.freshBefore = freshCount;
       if (freshCount < SESSION_SIZE) {
         // 最大 6 問だけ同期生成 (UX 優先)。残りは fire-and-forget で後追い。
         const need = Math.min(SESSION_SIZE - freshCount, 6);
@@ -1738,12 +1713,28 @@ app.post("/api/kotonoha/sessions/start", async (req, res) => {
           }
         }
         console.log(`[kotonoha] sync gen: fresh=${freshCount} need=${need} targets=${targets.length}`);
-        await Promise.all(
+        debug.syncGenAttempted = need;
+        const results = await Promise.all(
           targets.slice(0, need).map((g) =>
             generateKotonohaQuestion(p, { level, genre: g, excludeAnswers })
-              .catch((e) => console.warn("[kotonoha] sync gen failed:", g, e.message))
+              .catch((e) => { console.warn("[kotonoha] sync gen failed:", g, e.message); return null; })
           )
         );
+        debug.syncGenSucceeded = results.filter(Boolean).length;
+        console.log(`[kotonoha] sync gen succeeded ${debug.syncGenSucceeded}/${need}`);
+        // 再度 fresh プールを確認
+        const { rows: pcr2 } = await p.query(
+          `${baseSelectSql}
+           SELECT COUNT(*)::int AS n FROM eligible
+            WHERE difficulty <= $3 AND priority <= 2
+              ${focusGenre ? "AND genre = $4" : ""}`,
+          focusGenre
+            ? [req.user.email, MASTERY, maxDiff, focusGenre]
+            : [req.user.email, MASTERY, maxDiff]
+        );
+        debug.freshAfter = pcr2[0]?.n || 0;
+      } else {
+        debug.freshAfter = freshCount;
       }
     } catch (e) {
       console.warn("[kotonoha] sync gen check skipped:", e.message);
@@ -1869,7 +1860,13 @@ app.post("/api/kotonoha/sessions/start", async (req, res) => {
       image_url: q.image_url,
       demo_html: q.demo_html || null,
     }));
-    res.json({ level, genre: focusGenre, questions: safe });
+    // 返却問題の priority 内訳もデバッグに追加
+    const priorityBreakdown = questions.reduce((acc, q) => {
+      const k = q.priority ?? "?";
+      acc[k] = (acc[k] || 0) + 1;
+      return acc;
+    }, {});
+    res.json({ level, genre: focusGenre, questions: safe, debug: { ...debug, priorityBreakdown } });
   } catch (err) {
     console.error("kotonoha start", err);
     res.status(500).json({ error: err.message });
