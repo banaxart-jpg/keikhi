@@ -14,12 +14,19 @@
   },
   "phases": [
     {
-      "max_correct": 50,
-      "groups": ["it_intro", "ui_parts", "ui_design", "css_layout", "devflow", "engineer_mindset", "ai_agents", "db", "api", "ai_basics"]
+      "_label": "Phase 1: 絶対基礎 (PC・ネット・ファイルの世界)",
+      "max_correct": 30,
+      "groups": ["it_intro"]
     },
     {
-      "max_correct": 150,
-      "groups": ["it_intro", "ui_parts", "ui_design", "css_layout", "devflow", "engineer_mindset", "ai_agents", "db", "api", "ai_basics", "algorithms", "history", "monetize", "wonders"]
+      "_label": "Phase 2: 見える・触れる (UI と CSS、エンジニアの考え方)",
+      "max_correct": 80,
+      "groups": ["it_intro", "ui_parts", "css_layout", "ui_design", "engineer_mindset"]
+    },
+    {
+      "_label": "Phase 3: 開発の主役 (Git/DB/API/AI 基礎)",
+      "max_correct": 200,
+      "groups": ["it_intro", "ui_parts", "css_layout", "ui_design", "engineer_mindset", "devflow", "db", "api", "ai_basics", "algorithms"]
     }
   ],
   "ui_template_groups": ["ui_parts"],
