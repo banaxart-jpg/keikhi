@@ -2112,12 +2112,90 @@ app.post("/api/kotonoha/sessions/end", async (req, res) => {
     } else {
       await p.query(`UPDATE kotonoha_users SET last_session_at=now() WHERE user_email=$1`, [req.user.email]);
     }
-    res.json({ ok: true, oldLevel, newLevel, levelChanged: newLevel !== oldLevel, rate });
+    // コンテキスト一言: streak / 通算 / フェーズ境界 のうち一番ホットなものを選ぶ
+    const streak = await computeKotonohaStreak(p, req.user.email).catch(() => null);
+    const { rows: tcr } = await p.query(
+      `SELECT COUNT(DISTINCT question_id)::int AS n FROM kotonoha_progress
+        WHERE user_email = $1 AND is_correct`,
+      [req.user.email]
+    );
+    const totalUniqCorrect = tcr[0]?.n || 0;
+    const message = buildEndMessage({ oldLevel, newLevel, streak, totalUniqCorrect });
+    res.json({
+      ok: true,
+      oldLevel,
+      newLevel,
+      levelChanged: newLevel !== oldLevel,
+      rate,
+      streak,
+      totalUniqCorrect,
+      message,
+    });
+
+    // 【post-response background gen】次セッション用にプール補充
+    // res.json 後なので throttle で死ぬ可能性あるが、ユーザーが summary を眺めてる
+    // 数秒の間に最低限走る (Cloud Run min-instances=0 でも CPU active)。
+    setImmediate(async () => {
+      try {
+        await ensureMinPool(p, req.user.email, 8);
+      } catch (e) {
+        console.warn("[kotonoha] end bg gen skipped:", e.message);
+      }
+    });
   } catch (err) {
     console.error("kotonoha end", err);
     res.status(500).json({ error: err.message });
   }
 });
+
+// セッション完了画面に出す「派手目の一言」を組み立てる。
+// 優先度: レベルアップ大台 > 連続記録達成 > 連続記録あとちょっと > 通算ミルストーン > 既定。
+function buildEndMessage({ oldLevel, newLevel, streak, totalUniqCorrect }) {
+  const leveledUp = newLevel > oldLevel;
+  const milestoneLv = [5, 10, 15, 20, 30, 50, 75, 100];
+  const streakMilestones = [3, 7, 14, 30, 60, 100, 200, 365];
+  const totalMilestones = [10, 25, 50, 100, 200, 500, 1000];
+
+  // 大台レベル
+  if (leveledUp && milestoneLv.includes(newLevel)) {
+    return `🌟 レベル ${newLevel} 到達！大台です`;
+  }
+  // 連続記録のキリ番達成 (今日アクティブで streak が milestone と一致)
+  if (streak?.today_active && streakMilestones.includes(streak.streak)) {
+    return `🔥 連続 ${streak.streak} 日達成！`;
+  }
+  // レベルアップ
+  if (leveledUp) {
+    return `🎓 レベル ${oldLevel} → ${newLevel} に上がった`;
+  }
+  // 今日まだ未達でも、あとちょっとで継続伸びる
+  if (streak && !streak.today_active && streak.streak > 0) {
+    const need = Math.max(1, (streak.daily_min || 5) - (streak.today_correct || 0));
+    return `今日あと ${need} 問正解で 連続 ${streak.streak + 1} 日`;
+  }
+  // 連続記録のキリ番が射程内 (あと N日)
+  if (streak?.today_active) {
+    const next = streakMilestones.find((m) => m > streak.streak);
+    if (next && next - streak.streak <= 5) {
+      return `あと ${next - streak.streak} 日で 連続 ${next} 日達成`;
+    }
+    if (streak.streak >= 1) {
+      return `🔥 連続 ${streak.streak} 日継続中`;
+    }
+  }
+  // 通算正解のキリ番達成
+  if (totalMilestones.includes(totalUniqCorrect)) {
+    return `🎯 通算 ${totalUniqCorrect} 語マスター`;
+  }
+  // 通算ミルストーンまであと少し
+  const nextTotal = totalMilestones.find((m) => m > totalUniqCorrect);
+  if (nextTotal && nextTotal - totalUniqCorrect <= 5) {
+    return `あと ${nextTotal - totalUniqCorrect} 問で通算 ${nextTotal} 語`;
+  }
+  // 既定
+  if (newLevel < oldLevel) return `基礎を一巡しよう`;
+  return `お疲れさま！`;
+}
 
 // 自分のステータス: ジャンル別進捗 + 最近覚えた言葉
 
@@ -2186,6 +2264,22 @@ app.post("/api/kotonoha/wipe-seed", async (req, res) => {
     await p.query(`DELETE FROM kotonoha_questions WHERE source = 'seed'`);
     const after = await p.query(`SELECT count(*)::int AS n FROM kotonoha_questions`);
     res.json({ ok: true, deleted: before.rows[0]?.n || 0, remaining: after.rows[0]?.n || 0 });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// 全問題プール削除 (= kotonoha_questions 全消し)。手動リセット用。
+// 進捗 (kotonoha_progress) は FK ON DELETE CASCADE で連動して消える点に注意。
+// レベル / streak はユーザーテーブル側なのでそのまま残る。
+app.post("/api/kotonoha/wipe-all", async (req, res) => {
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  try {
+    const before = await p.query(`SELECT count(*)::int AS n FROM kotonoha_questions`);
+    await p.query(`DELETE FROM kotonoha_questions`);
+    console.log(`[kotonoha] wipe-all by ${req.user.email}: deleted ${before.rows[0]?.n}`);
+    res.json({ ok: true, deleted: before.rows[0]?.n || 0 });
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
   }

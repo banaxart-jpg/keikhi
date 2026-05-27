@@ -200,6 +200,72 @@ body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); 
 .summary-level-change.down { color: var(--incorrect); }
 .summary-level-change.same { color: var(--text2); }
 
+/* 派手目レベルアップ全画面オーバーレイ */
+.celebrate-overlay {
+  position: fixed; inset: 0; z-index: 2000; display: flex; flex-direction: column;
+  align-items: center; justify-content: center; padding: 32px;
+  background: radial-gradient(ellipse at center, rgba(109,40,217,0.18) 0%, rgba(228,230,238,0.95) 60%, rgba(228,230,238,1) 100%);
+  opacity: 0; pointer-events: none; transition: opacity 0.4s;
+}
+.celebrate-overlay.show { opacity: 1; pointer-events: auto; }
+.celebrate-burst {
+  font-size: 13px; font-weight: 800; color: var(--accent); letter-spacing: 0.4em;
+  text-transform: uppercase; margin-bottom: 14px; opacity: 0;
+}
+.celebrate-overlay.show .celebrate-burst { animation: cel-burst 0.6s ease-out 0.2s forwards; }
+@keyframes cel-burst {
+  0% { opacity: 0; transform: scale(0.6); }
+  60% { opacity: 1; transform: scale(1.15); }
+  100% { opacity: 1; transform: scale(1); }
+}
+.celebrate-arrow {
+  display: flex; align-items: center; justify-content: center; gap: 18px;
+  font-size: 88px; font-weight: 900; color: var(--accent); line-height: 1;
+  letter-spacing: -0.04em; margin-bottom: 8px;
+  text-shadow: 0 8px 30px rgba(109,40,217,0.4);
+}
+.celebrate-arrow .old { color: var(--text2); font-size: 56px; opacity: 0.5; }
+.celebrate-arrow .glow {
+  display: inline-block; opacity: 0; transform: scale(0.3) rotate(-20deg);
+}
+.celebrate-overlay.show .celebrate-arrow .glow { animation: cel-pop 0.9s cubic-bezier(0.4, 1.8, 0.5, 1) 0.4s forwards; }
+@keyframes cel-pop {
+  0% { opacity: 0; transform: scale(0.3) rotate(-20deg); }
+  50% { opacity: 1; transform: scale(1.35) rotate(8deg); }
+  80% { transform: scale(0.95) rotate(-3deg); }
+  100% { opacity: 1; transform: scale(1) rotate(0); }
+}
+.celebrate-lvllbl { font-size: 11px; color: var(--text2); font-weight: 700; letter-spacing: 0.3em; text-transform: uppercase; margin-bottom: 26px; }
+.celebrate-msg {
+  font-size: 18px; font-weight: 800; color: var(--text); text-align: center;
+  max-width: 320px; line-height: 1.55; padding: 14px 22px; border-radius: 16px;
+  background: var(--bg); box-shadow: 6px 6px 16px var(--sd), -4px -4px 12px var(--sl);
+  opacity: 0; transform: translateY(20px);
+}
+.celebrate-overlay.show .celebrate-msg { animation: cel-msg 0.6s ease-out 0.9s forwards; }
+@keyframes cel-msg { 0% { opacity: 0; transform: translateY(20px); } 100% { opacity: 1; transform: translateY(0); } }
+.celebrate-sub { font-size: 12px; color: var(--text2); font-weight: 700; margin-top: 18px; opacity: 0; }
+.celebrate-overlay.show .celebrate-sub { animation: cel-msg 0.5s ease-out 1.3s forwards; }
+.celebrate-skip {
+  margin-top: 30px; padding: 8px 18px; border-radius: 20px; border: none;
+  font-family: inherit; font-size: 11px; font-weight: 700; cursor: pointer;
+  color: var(--text2); background: var(--bg);
+  box-shadow: 3px 3px 8px var(--sd), -2px -2px 6px var(--sl);
+  opacity: 0;
+}
+.celebrate-overlay.show .celebrate-skip { animation: cel-msg 0.5s ease-out 1.7s forwards; }
+.celebrate-skip:active { box-shadow: inset 2px 2px 6px var(--sd); }
+.celebrate-spark { position: fixed; pointer-events: none; font-size: 28px; z-index: 1999; opacity: 0; }
+@keyframes spark-fly {
+  0% { opacity: 0; transform: translate(0,0) scale(0.5) rotate(0); }
+  20% { opacity: 1; }
+  100% { opacity: 0; transform: translate(var(--dx,0), var(--dy,-120vh)) scale(1.2) rotate(720deg); }
+}
+
+/* ホーム上の微妙な操作リンク (リセット等) */
+.danger-link { color: var(--text3); font-size: 10px; font-weight: 700; letter-spacing: 0.08em; background: none; border: none; cursor: pointer; padding: 6px 10px; font-family: inherit; }
+.danger-link:hover { color: var(--incorrect); }
+
 .empty { text-align: center; color: var(--text3); font-size: 12px; padding: 24px 0; font-weight: 600; }
 .err { color: var(--incorrect); font-size: 11px; margin-top: 10px; font-weight: 600; padding: 10px 12px; border-radius: 12px; background: rgba(176, 64, 64, 0.08); white-space: pre-wrap; word-break: break-all; line-height: 1.5; font-family: ui-monospace, Menlo, monospace; }
 .err:empty { display: none; padding: 0; }
@@ -211,6 +277,20 @@ body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); 
 <body>
 
 <div class="fb-overlay" id="fbOverlay"><span class="fb-icon" id="fbIcon"></span></div>
+
+<!-- レベルアップ派手目オーバーレイ -->
+<div class="celebrate-overlay" id="celebrateOverlay">
+  <div class="celebrate-burst" id="celebrateBurst">Level Up</div>
+  <div class="celebrate-arrow">
+    <span class="old" id="celebrateOld">-</span>
+    <span style="font-size: 36px; color: var(--text3);">→</span>
+    <span class="glow" id="celebrateNew">-</span>
+  </div>
+  <div class="celebrate-lvllbl">LEVEL</div>
+  <div class="celebrate-msg" id="celebrateMsg">-</div>
+  <div class="celebrate-sub" id="celebrateSub"></div>
+  <button class="celebrate-skip" onclick="window.dismissCelebrate()">タップで閉じる</button>
+</div>
 
 <div class="bar">
   <span class="hint" id="appHint">techstudy</span>
@@ -273,7 +353,10 @@ body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); 
     </div>
 
     <div class="err" id="homeErr"></div>
-    <div id="versionFooter" style="text-align:center; font-family: ui-monospace, Menlo, monospace; font-size: 10px; color: var(--text3); padding: 20px 8px 12px; line-height: 1.5; word-break: break-all;"></div>
+    <div id="versionFooter" style="text-align:center; font-family: ui-monospace, Menlo, monospace; font-size: 10px; color: var(--text3); padding: 20px 8px 6px; line-height: 1.5; word-break: break-all;"></div>
+    <div style="text-align:center; padding: 4px 0 18px;">
+      <button class="danger-link" onclick="wipeAllQuestions()">🗑 問題プールを全消し</button>
+    </div>
   </div>
 
   <!-- セッション画面 -->
@@ -893,14 +976,13 @@ async function endSession() {
   }
 }
 
+// 結果画面 (隠しビュー: 派手目演出経由でホームに戻る)
 function showSummary(r) {
   state.view = "summary";
   $("homeView").classList.remove("active");
   $("sessionView").classList.remove("active");
   $("summaryView").classList.add("active");
 
-  // 全問正解までやる仕組み: 結果は「unique完了数 / 総ユニーク数」
-  // 総回答数 (attemptCount) も表示してリトライ回数が分かるように
   $("summaryScore").textContent = `${state.completedIds.size}`;
   const sl = $("summaryScoreLabel");
   if (sl) sl.textContent = `${state.totalUnique} 問中の完了 (総回答 ${state.attemptCount})`;
@@ -915,7 +997,74 @@ function showSummary(r) {
     lc.textContent = `レベル ${r.newLevel} 継続`;
     lc.className = "summary-level-change same";
   }
+
+  // 派手目演出 → 自動でホームに戻る
+  triggerCelebrate(r);
 }
+
+// レベルアップ / 継続/ 続続記録 演出
+let celebrateTimer = null;
+function triggerCelebrate(r) {
+  const o = $("celebrateOverlay");
+  if (!o) return;
+  const oldLv = r.oldLevel ?? r.newLevel ?? 1;
+  const newLv = r.newLevel ?? oldLv;
+  const burst = $("celebrateBurst");
+  if (newLv > oldLv) burst.textContent = "Level Up";
+  else if (newLv < oldLv) burst.textContent = "Level Down";
+  else burst.textContent = "Session Done";
+  $("celebrateOld").textContent = oldLv;
+  $("celebrateNew").textContent = newLv;
+  $("celebrateMsg").textContent = r.message || "お疲れさま！";
+
+  const sub = $("celebrateSub");
+  const parts = [];
+  parts.push(`正解 ${state.completedIds.size} / ${state.totalUnique}`);
+  if (r.streak?.streak) parts.push(`🔥 連続 ${r.streak.streak} 日`);
+  if (r.totalUniqCorrect != null) parts.push(`通算 ${r.totalUniqCorrect} 語`);
+  sub.textContent = parts.join(" ・ ");
+
+  o.classList.add("show");
+  spawnSparks(newLv > oldLv ? 18 : 6);
+
+  // 自動でホーム遷移
+  clearTimeout(celebrateTimer);
+  celebrateTimer = setTimeout(() => window.dismissCelebrate(), newLv > oldLv ? 6200 : 4200);
+}
+
+function spawnSparks(n) {
+  const emojis = ["✨", "🎉", "⭐️", "💫", "🌟"];
+  for (let i = 0; i < n; i++) {
+    const s = document.createElement("span");
+    s.className = "celebrate-spark";
+    s.textContent = emojis[i % emojis.length];
+    const startX = window.innerWidth * (0.2 + Math.random() * 0.6);
+    s.style.left = `${startX}px`;
+    s.style.top = `${window.innerHeight * 0.55}px`;
+    s.style.setProperty("--dx", `${(Math.random() - 0.5) * 200}px`);
+    s.style.animation = `spark-fly ${1.4 + Math.random() * 0.8}s ease-out ${0.4 + Math.random() * 0.6}s forwards`;
+    document.body.appendChild(s);
+    setTimeout(() => s.remove(), 3000);
+  }
+}
+
+window.dismissCelebrate = function () {
+  clearTimeout(celebrateTimer);
+  const o = $("celebrateOverlay");
+  if (o) o.classList.remove("show");
+  showHome();
+};
+
+window.wipeAllQuestions = async function () {
+  if (!confirm("問題プールを全消ししますか？\n\n・kotonoha_questions が全削除\n・FK cascade で回答履歴も削除 → 連続日数は0にリセット\n・レベル / 通算カウンタはユーザーテーブル側なので残る")) return;
+  try {
+    const r = await api("POST", "/api/kotonoha/wipe-all");
+    alert(`削除しました (${r.deleted}問)。次の20問チャレンジで新しく生成されます。`);
+    loadHome();
+  } catch (e) {
+    alert("失敗: " + e.message);
+  }
+};
 
 // ───── view 切替 ─────
 function showHome() {
