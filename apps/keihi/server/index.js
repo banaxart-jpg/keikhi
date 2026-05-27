@@ -2160,25 +2160,54 @@ async function computeKotonohaStreak(p, email) {
   };
 }
 
-// テスト生成: 1問だけ生成して結果 (成功/失敗 + 詳細) を返すデバッグ用
+// テスト生成: Gemini 直接呼び出し + 完全な問題生成、両方の結果を返す
 app.post("/api/kotonoha/test-gen", async (req, res) => {
   const p = getPool();
   if (!p) return res.status(503).json({ error: "DB not configured" });
-  const start = Date.now();
+  const out = { hasKey: !!GEMINI_API_KEY, hasGenAI: !!genAI };
+  if (!genAI) return res.json({ ...out, ok: false, error: "genAI not initialized (GEMINI_API_KEY missing or invalid)" });
+
+  // ① Gemini 直接呼び出し (最小プロンプト)
+  const start1 = Date.now();
   try {
-    if (!genAI) return res.json({ ok: false, error: "genAI not initialized (GEMINI_API_KEY?)" });
+    const m = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+    const r = await m.generateContent("Reply with exactly: ok");
+    out.gemini = {
+      ok: true,
+      elapsed: Date.now() - start1,
+      model: "gemini-2.5-flash",
+      text: (r.response.text() || "").slice(0, 200),
+    };
+  } catch (e) {
+    out.gemini = {
+      ok: false,
+      elapsed: Date.now() - start1,
+      error: e.message,
+      code: e.status || e.code,
+      stack: (e.stack || "").split("\n").slice(0, 3).join(" | "),
+    };
+    return res.json({ ...out, ok: false });
+  }
+
+  // ② 実際の問題生成
+  const start2 = Date.now();
+  try {
     const all = Array.from(KOTONOHA_GENRE_TO_GROUP.keys());
     const genre = all[Math.floor(Math.random() * all.length)];
     const { rows: uRows } = await p.query(`SELECT level FROM kotonoha_users WHERE user_email=$1`, [req.user.email]);
     const userLevel = uRows[0]?.level || 1;
-    const { rows: ansRows } = await p.query(`SELECT answer FROM kotonoha_questions ORDER BY id DESC LIMIT 50`);
-    const excludeAnswers = ansRows.map((r) => r.answer);
-    const result = await generateKotonohaQuestion(p, { level: userLevel, genre, excludeAnswers });
-    const elapsed = Date.now() - start;
-    if (!result) return res.json({ ok: false, elapsed, genre, level: userLevel, error: "generateKotonohaQuestion returned null (Gemini failed or invalid JSON, see Cloud Run logs)" });
-    return res.json({ ok: true, elapsed, genre, level: userLevel, question: result.question, answer: result.answer });
+    const result = await generateKotonohaQuestion(p, { level: userLevel, genre, excludeAnswers: [] });
+    out.fullGen = {
+      ok: !!result,
+      elapsed: Date.now() - start2,
+      genre,
+      level: userLevel,
+      answer: result?.answer,
+    };
+    return res.json({ ...out, ok: !!result });
   } catch (e) {
-    return res.json({ ok: false, elapsed: Date.now() - start, error: e.message, stack: e.stack?.split("\n").slice(0, 5).join("\n") });
+    out.fullGen = { ok: false, elapsed: Date.now() - start2, error: e.message };
+    return res.json({ ...out, ok: false });
   }
 });
 

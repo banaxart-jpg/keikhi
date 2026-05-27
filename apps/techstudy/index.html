@@ -651,13 +651,19 @@ async function testGen() {
   el.style.color = "var(--text2)";
   try {
     const r = await api("POST", "/api/kotonoha/test-gen");
-    if (r.ok) {
-      el.textContent = `✅ 成功 (${r.elapsed}ms) ジャンル:${r.genre} Lv:${r.level} 答:「${r.answer}」`;
-      el.style.color = "#2a8c3a";
-    } else {
-      el.textContent = `❌ 失敗 (${r.elapsed}ms): ${r.error}`;
-      el.style.color = "#b04040";
+    const lines = [];
+    lines.push(`hasKey:${r.hasKey} hasGenAI:${r.hasGenAI}`);
+    if (r.gemini) {
+      if (r.gemini.ok) lines.push(`✅ Gemini直接 (${r.gemini.elapsed}ms): "${r.gemini.text}"`);
+      else lines.push(`❌ Gemini直接 (${r.gemini.elapsed}ms) code=${r.gemini.code}: ${r.gemini.error}`);
     }
+    if (r.fullGen) {
+      if (r.fullGen.ok) lines.push(`✅ 問題生成 (${r.fullGen.elapsed}ms) ${r.fullGen.genre} Lv${r.fullGen.level} 答:「${r.fullGen.answer}」`);
+      else lines.push(`❌ 問題生成 (${r.fullGen.elapsed}ms): ${r.fullGen.error || "null"}`);
+    }
+    el.textContent = lines.join("\n");
+    el.style.color = r.ok ? "#2a8c3a" : "#b04040";
+    el.style.whiteSpace = "pre-wrap";
   } catch (e) {
     el.textContent = `❌ API エラー: ${e.message}`;
     el.style.color = "#b04040";
