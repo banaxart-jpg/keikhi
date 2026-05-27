@@ -266,6 +266,20 @@ body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); 
 .danger-link { color: var(--text3); font-size: 10px; font-weight: 700; letter-spacing: 0.08em; background: none; border: none; cursor: pointer; padding: 6px 10px; font-family: inherit; }
 .danger-link:hover { color: var(--incorrect); }
 
+/* サインイン画面 (未ログイン時のみ表示) */
+.signin-overlay { position: fixed; inset: 0; z-index: 1500; display: none; flex-direction: column; align-items: center; justify-content: center; padding: 32px; background: var(--bg); }
+.signin-overlay.show { display: flex; }
+.signin-title { font-size: 28px; font-weight: 800; color: var(--text); margin-bottom: 4px; letter-spacing: -0.01em; }
+.signin-sub { font-size: 12px; color: var(--text2); font-weight: 600; text-align: center; margin-bottom: 36px; max-width: 280px; line-height: 1.55; }
+.signin-btn { display: inline-flex; align-items: center; gap: 10px; padding: 14px 26px; border-radius: 14px; border: none; font-family: inherit; font-size: 14px; font-weight: 700; cursor: pointer; color: var(--text); background: var(--bg); box-shadow: 6px 6px 14px var(--sd), -4px -4px 10px var(--sl); }
+.signin-btn:active { transform: scale(0.98); box-shadow: inset 3px 3px 8px var(--sd), inset -2px -2px 6px var(--sl); }
+.signin-btn svg { width: 18px; height: 18px; }
+.signin-status { font-size: 11px; color: var(--text3); margin-top: 18px; font-weight: 600; }
+.signin-err { font-size: 11px; color: var(--incorrect); margin-top: 12px; max-width: 320px; text-align: center; word-break: break-all; font-family: ui-monospace, Menlo, monospace; }
+.signin-foot { margin-top: 28px; font-size: 10px; color: var(--text3); font-weight: 600; }
+.signout-link { color: var(--text3); font-size: 10px; font-weight: 700; background: none; border: none; cursor: pointer; padding: 4px 8px; font-family: inherit; }
+.signout-link:hover { color: var(--text); }
+
 .empty { text-align: center; color: var(--text3); font-size: 12px; padding: 24px 0; font-weight: 600; }
 .err { color: var(--incorrect); font-size: 11px; margin-top: 10px; font-weight: 600; padding: 10px 12px; border-radius: 12px; background: rgba(176, 64, 64, 0.08); white-space: pre-wrap; word-break: break-all; line-height: 1.5; font-family: ui-monospace, Menlo, monospace; }
 .err:empty { display: none; padding: 0; }
@@ -275,6 +289,19 @@ body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); 
 </style>
 </head>
 <body>
+
+<!-- サインイン画面 (未ログイン時のみ。Firebase auth state で出し分け) -->
+<div class="signin-overlay" id="signinOverlay">
+  <div class="signin-title">techstudy</div>
+  <div class="signin-sub">IT 用語をクイズで覚えるミニアプリ。<br>Google アカウントでサインイン</div>
+  <button class="signin-btn" id="signinBtn">
+    <svg viewBox="0 0 18 18" xmlns="http://www.w3.org/2000/svg"><path fill="#4285F4" d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844a4.14 4.14 0 0 1-1.796 2.716v2.259h2.908c1.702-1.567 2.684-3.875 2.684-6.615z"/><path fill="#34A853" d="M9 18c2.43 0 4.467-.806 5.956-2.184l-2.908-2.259c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332A8.997 8.997 0 0 0 9 18z"/><path fill="#FBBC05" d="M3.964 10.706A5.41 5.41 0 0 1 3.682 9c0-.593.102-1.17.282-1.706V4.962H.957A8.996 8.996 0 0 0 0 9c0 1.452.348 2.827.957 4.038l3.007-2.332z"/><path fill="#EA4335" d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0A8.997 8.997 0 0 0 .957 4.962L3.964 7.294C4.672 5.167 6.656 3.58 9 3.58z"/></svg>
+    Google でサインイン
+  </button>
+  <div class="signin-status" id="signinStatus"></div>
+  <div class="signin-err" id="signinErr"></div>
+  <div class="signin-foot">techstudy は Google アカウントがあれば誰でも使えます</div>
+</div>
 
 <div class="fb-overlay" id="fbOverlay"><span class="fb-icon" id="fbIcon"></span></div>
 
@@ -355,8 +382,9 @@ body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); 
 
     <div class="err" id="homeErr"></div>
     <div id="versionFooter" style="text-align:center; font-family: ui-monospace, Menlo, monospace; font-size: 10px; color: var(--text3); padding: 20px 8px 6px; line-height: 1.5; word-break: break-all;"></div>
-    <div style="text-align:center; padding: 4px 0 18px;">
+    <div style="text-align:center; padding: 4px 0 18px; display:flex; justify-content:center; gap:18px;">
       <button class="danger-link" onclick="wipeAllQuestions()">🗑 問題プールを全消し</button>
+      <button class="signout-link" id="signoutLink" onclick="doSignOut()">サインアウト</button>
     </div>
   </div>
 
@@ -415,7 +443,11 @@ body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); 
 <script src="/config.js"></script>
 <script type="module">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js";
-import { getAuth, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
+import {
+  getAuth, onAuthStateChanged, signOut,
+  GoogleAuthProvider, signInWithPopup, signInWithRedirect, getRedirectResult,
+  setPersistence, browserLocalPersistence,
+} from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
 
 const state = {
   view: "home",
@@ -1096,21 +1128,62 @@ $("freeInput").addEventListener("keydown", (e) => {
   }
 });
 
-// ───── 認証フロー ─────
+// ───── 認証フロー (techstudy 内で完結。未ログインなら overlay で Google sign-in) ─────
+let fbAuth = null;
+const isMobile = /iphone|ipad|ipod|android/i.test(navigator.userAgent);
+const sErr = (m) => { const el = $("signinErr"); if (el) el.textContent = m || ""; };
+const sStatus = (m) => { const el = $("signinStatus"); if (el) el.textContent = m || ""; };
+
+window.doSignOut = async () => {
+  if (fbAuth) await signOut(fbAuth);
+  location.reload();
+};
+
 (async () => {
   try {
     const cfg = await fetch("/__/firebase/init.json").then((r) => r.json());
-    cfg.authDomain = location.hostname;
-    const auth = getAuth(initializeApp(cfg));
-    onAuthStateChanged(auth, async (user) => {
-      if (!user) { location.href = "/?next=" + encodeURIComponent(location.pathname); return; }
+    cfg.authDomain = location.hostname; // iOS Safari ITP 対策で Hosting と同一オリジン
+    fbAuth = getAuth(initializeApp(cfg));
+    await setPersistence(fbAuth, browserLocalPersistence);
+    const provider = new GoogleAuthProvider();
+    provider.setCustomParameters({ prompt: "select_account" });
+
+    // signInWithRedirect の戻り (モバイル)
+    try { await getRedirectResult(fbAuth); } catch (e) { sErr((e.code || "") + " " + e.message); }
+
+    // Google ボタン
+    $("signinBtn").addEventListener("click", async () => {
+      sErr(""); sStatus("サインイン中…");
+      if (isMobile) {
+        try { await signInWithRedirect(fbAuth, provider); }
+        catch (e) { sErr((e.code || "") + " " + e.message); sStatus(""); }
+        return;
+      }
+      try {
+        await signInWithPopup(fbAuth, provider);
+        // onAuthStateChanged 側で UI 切り替え
+      } catch (e) {
+        // popup 不可な環境は redirect にフォールバック
+        if (["auth/popup-blocked","auth/popup-closed-by-user","auth/cancelled-popup-request","auth/operation-not-supported-in-this-environment"].includes(e.code)) {
+          try { await signInWithRedirect(fbAuth, provider); } catch (e2) { sErr((e2.code||"")+" "+e2.message); sStatus(""); }
+        } else { sErr((e.code||"")+" "+e.message); sStatus(""); }
+      }
+    });
+
+    onAuthStateChanged(fbAuth, async (user) => {
+      if (!user) {
+        $("signinOverlay").classList.add("show");
+        return;
+      }
+      $("signinOverlay").classList.remove("show");
       fbUser = user;
       authToken = await user.getIdToken();
       setInterval(async () => { authToken = await user.getIdToken(true); }, 30 * 60 * 1000);
       loadHome();
     });
   } catch (e) {
-    $("homeErr").textContent = "認証初期化エラー: " + e.message;
+    sErr("初期化エラー: " + e.message);
+    $("signinOverlay").classList.add("show");
   }
 })();
 </script>
