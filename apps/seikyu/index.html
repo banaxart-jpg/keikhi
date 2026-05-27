@@ -168,7 +168,7 @@ select.nm-field { background: var(--bg2) url("data:image/svg+xml,%3Csvg xmlns='h
   </div>
   <div class="dir-row">
     <button class="dir-btn" data-dir="in" type="button">支払</button>
-    <button class="dir-btn" data-dir="out" type="button">受取</button>
+    <button class="dir-btn" data-dir="out" type="button">売上</button>
   </div>
   <div class="src-row" id="srcRow" style="display:none;">
     <button class="src-btn" id="srcCamBtn" type="button">カメラ</button>
@@ -207,7 +207,7 @@ select.nm-field { background: var(--bg2) url("data:image/svg+xml,%3Csvg xmlns='h
     </div>
     <div class="card">
       <div class="card-title" id="formCardTitle">請求書情報</div>
-      <div class="field"><label id="lblIssuer">発行元</label><input type="text" id="fIssuer" class="nm-field" placeholder="例：東京電力"></div>
+      <div class="field"><label id="lblIssuer">発行元</label><input type="text" id="fIssuer" class="nm-field" placeholder="取引先名（自社じゃない方）"></div>
       <div class="field"><label>金額（円）</label><input type="number" id="fTotal" class="nm-field" placeholder="0"></div>
       <div class="field"><label id="lblDueDate">支払期限</label><input type="date" id="fDueDate" class="nm-field"></div>
       <div class="field"><label>発行日</label><input type="date" id="fIssueDate" class="nm-field"></div>
@@ -267,7 +267,7 @@ select.nm-field { background: var(--bg2) url("data:image/svg+xml,%3Csvg xmlns='h
       </div>
     </div>
     <div class="tab-group">
-      <div class="tab-group-title">受取</div>
+      <div class="tab-group-title">売上</div>
       <div class="tabs">
         <button class="tab" data-dir="out" data-status="unpaid" type="button">未入金 <span id="cntOutUnpaid">0</span></button>
         <button class="tab paid-tab" data-dir="out" data-status="paid" type="button">入金済 <span id="cntOutPaid">0</span></button>
@@ -366,7 +366,7 @@ let editingDirection = "in";
 // direction ごとの文言
 const LABELS = {
   in:  { name: "支払", tab1: "未払い", tab2: "支払済", state1: "支払期限", state2: "支払日",   emoji: "", noun: "支払請求書" },
-  out: { name: "受取", tab1: "未入金", tab2: "入金済", state1: "入金予定日", state2: "入金日", emoji: "", noun: "受取請求書" },
+  out: { name: "売上", tab1: "未入金", tab2: "入金済", state1: "入金予定日", state2: "入金日", emoji: "", noun: "売上請求書" },
 };
 
 const $ = (id) => document.getElementById(id);
@@ -517,10 +517,10 @@ function applyDirectionLabels(direction) {
   const L = LABELS[direction] || LABELS.in;
   // 確認シートのラベル切替
   $("formCardTitle").textContent = `${L.emoji ? L.emoji + " " : ""}${L.noun}`;
-  $("lblIssuer").textContent = direction === "out" ? "請求先（宛先）" : "発行元";
+  $("lblIssuer").textContent = direction === "out" ? "振込先（取引先）" : "発行元";
   $("lblDueDate").textContent = L.state1;
   $("fIssuer").placeholder = direction === "out" ? "例：〇〇工務店 様" : "例：東京電力";
-  $("previewIssuer").dataset.placeholder = direction === "out" ? "請求先" : "発行元";
+  $("previewIssuer").dataset.placeholder = direction === "out" ? "振込先" : "発行元";
 }
 
 function showConfirm(parsed, errMsg) {
@@ -906,6 +906,8 @@ function makeBillCard(b) {
     else { b.status = "paid"; b.paidAt = new Date().toISOString().slice(0, 10); }
     saveBills();
     renderList();
+    // 状態変更もシートに反映 (完了行として再 append)
+    postToSheet(b).catch(() => {});
   });
   const del = document.createElement("button");
   del.type = "button";
@@ -1002,10 +1004,10 @@ $("sheetTestBtn").addEventListener("click", async () => {
 // ───────── CSV ─────────
 function csvCell(v) { const s = String(v ?? ""); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; }
 function downloadCSV() {
-  const header = ["向き", "発行日", "発行元/請求先", "金額", "期限", "分類", "現場", "状態", "完了日", "銀行", "支店", "種別", "口座番号", "名義", "メモ"].map(csvCell).join(",");
+  const header = ["向き", "発行日", "発行元/振込先", "金額", "期限", "分類", "現場", "状態", "完了日", "銀行", "支店", "種別", "口座番号", "名義", "メモ"].map(csvCell).join(",");
   const rows = bills.map((b) => {
     const d = dirOf(b);
-    const dirLbl = d === "out" ? "受取" : "支払";
+    const dirLbl = d === "out" ? "売上" : "支払";
     const statusLbl = b.status === "paid"
       ? (d === "out" ? "入金済" : "支払済")
       : (d === "out" ? "未入金" : "未払い");

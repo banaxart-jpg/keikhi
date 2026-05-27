@@ -190,37 +190,99 @@ async function appendRecordToSheet(r) {
 
 // ───── 請求書 (seikyu) 用 Sheets append ─────
 // クライアントから直接エンドポイントを叩く方式 (請求書は localStorage 管理で DB なし)。
-const INVOICE_HEADER = ["方向", "発行日", "期限", "状態", "完了日", "発行元/請求先", "金額", "分類", "現場", "銀行", "支店", "種別", "口座番号", "名義", "メモ"];
+// 月別×方向 (YYYY-MM-売上 / YYYY-MM-支払) のタブに append、年別サマリータブを自動更新
+const INVOICE_HEADER = ["発行日", "期限", "状態", "完了日", "振込先", "金額", "分類", "現場", "銀行", "支店", "種別", "口座番号", "名義", "メモ"];
+const SUMMARY_HEADER = ["月", "売上合計", "入金済", "未入金", "支払合計", "支払済", "未払"];
+
 async function appendInvoiceToSheet(r) {
   if (!INVOICE_SHEET_ID) return { skipped: true };
   try {
     const sheets = await getSheetsApi();
     const ym = String(r.issueDate || (r.createdAt || "").slice(0, 10) || "").slice(0, 7) || "unknown";
-    await ensureSheetTabGeneric(sheets, INVOICE_SHEET_ID, ym, INVOICE_HEADER, [1, 2, 4]);
+    const dirLbl = r.direction === "out" ? "売上" : "支払";
+    const tabName = `${ym}-${dirLbl}`;
+    // 月別×方向タブ。日付列 = 発行日(0), 期限(1), 完了日(3)
+    await ensureSheetTabGeneric(sheets, INVOICE_SHEET_ID, tabName, INVOICE_HEADER, [0, 1, 3]);
     const acc = r.account || {};
-    const dir = r.direction === "out" ? "受取" : "支払";
     const statusLbl = r.status === "paid"
       ? (r.direction === "out" ? "入金済" : "支払済")
       : (r.direction === "out" ? "未入金" : "未払い");
     await sheets.spreadsheets.values.append({
       spreadsheetId: INVOICE_SHEET_ID,
-      range: `${ym}!A:O`,
+      range: `${tabName}!A:N`,
       valueInputOption: "USER_ENTERED",
       insertDataOption: "INSERT_ROWS",
       requestBody: {
         values: [[
-          dir, r.issueDate || "", r.dueDate || "", statusLbl, r.paidAt || "",
+          r.issueDate || "", r.dueDate || "", statusLbl, r.paidAt || "",
           r.issuer || "", Number(r.total) || 0, r.category || "", r.site || "",
           acc.bank || "", acc.branch || "", acc.type || "", acc.number || "",
           acc.holder || "", r.memo || "",
         ]],
       },
     });
-    console.log(`[invoice-sheets] appended ym=${ym} issuer=${r.issuer} dir=${dir}`);
+    // 年別サマリーを更新 (失敗しても本体は成功扱い)
+    const year = ym.slice(0, 4);
+    if (/^\d{4}$/.test(year)) {
+      await updateInvoiceSummary(sheets, year, ym).catch((e) => console.warn(`[invoice-sheets] summary update FAILED: ${e.message}`));
+    }
+    console.log(`[invoice-sheets] appended tab=${tabName} issuer=${r.issuer}`);
     return { ok: true };
   } catch (e) {
     console.warn(`[invoice-sheets] FAILED: ${e.message}`);
     return { ok: false, error: e.message };
+  }
+}
+
+// 年別サマリータブ (YYYY-サマリー) の対象月の行を更新
+async function updateInvoiceSummary(sheets, year, ym) {
+  const summaryTab = `${year}-サマリー`;
+  await ensureSheetTabGeneric(sheets, INVOICE_SHEET_ID, summaryTab, SUMMARY_HEADER, []);
+  // 売上タブと支払タブを読み込んで集計
+  const sales = { total: 0, paid: 0, unpaid: 0 };
+  const exp = { total: 0, paid: 0, unpaid: 0 };
+  for (const [tab, target, paidLbl] of [
+    [`${ym}-売上`, sales, "入金済"],
+    [`${ym}-支払`, exp, "支払済"],
+  ]) {
+    try {
+      const res = await sheets.spreadsheets.values.get({
+        spreadsheetId: INVOICE_SHEET_ID,
+        range: `${tab}!A2:F`,
+        valueRenderOption: "UNFORMATTED_VALUE",
+      });
+      for (const row of res.data.values || []) {
+        const status = row[2] || "";
+        const amount = Number(row[5]) || 0;
+        target.total += amount;
+        if (status === paidLbl) target.paid += amount;
+        else target.unpaid += amount;
+      }
+    } catch { /* タブが無い場合は無視 */ }
+  }
+  // サマリータブの ym 行を find or insert
+  const sumRes = await sheets.spreadsheets.values.get({
+    spreadsheetId: INVOICE_SHEET_ID,
+    range: `${summaryTab}!A:A`,
+  });
+  const monthCol = (sumRes.data.values || []).map((r) => r[0]);
+  const rowIdx = monthCol.findIndex((m) => m === ym);
+  const rowValues = [ym, sales.total, sales.paid, sales.unpaid, exp.total, exp.paid, exp.unpaid];
+  if (rowIdx > 0) {
+    await sheets.spreadsheets.values.update({
+      spreadsheetId: INVOICE_SHEET_ID,
+      range: `${summaryTab}!A${rowIdx + 1}`,
+      valueInputOption: "USER_ENTERED",
+      requestBody: { values: [rowValues] },
+    });
+  } else {
+    await sheets.spreadsheets.values.append({
+      spreadsheetId: INVOICE_SHEET_ID,
+      range: `${summaryTab}!A:G`,
+      valueInputOption: "USER_ENTERED",
+      insertDataOption: "INSERT_ROWS",
+      requestBody: { values: [rowValues] },
+    });
   }
 }
 
@@ -381,8 +443,8 @@ app.post("/api/scan", async (req, res) => {
       const accountFmt = `"account":{"bank":"銀行名（〇〇銀行 / ゆうちょ銀行 等。無ければ空文字）","branch":"支店名（〇〇支店 / 〇〇番号 等。無ければ空文字）","type":"普通 or 当座 or 貯蓄 or 振替 or 空文字","number":"口座番号（数字のみ、ハイフン除去）","holder":"口座名義（記載通り。カナでも漢字でも空文字でも）"}`;
       const siteFmt = `"site":"${sites.join(" or ") || "(空文字でOK)"}から最も近いものまたは空文字（建築現場名 / 工事名 / 案件名から判断）"`;
       if (direction === "out") {
-        prompt = `画像/PDF は自社が発行した請求書です。全て検出して JSON のみ返してください。形式:
-{"receipts":[{"issuer":"請求先（宛先の会社名・個人名。「株式会社」等は省略可）","total":請求金額の数値,"dueDate":"YYYY-MM-DD(入金期限。読めなければ空文字)","issueDate":"YYYY-MM-DD(発行日。読めなければ${today})","category":"工事代金 or その他",${siteFmt},${accountFmt},"memo":"工事名 / 件名 / 摘要を短く"}]}`;
+        prompt = `画像/PDF は自社（発行元、社名は無視してよい）が取引先に向けて発行した請求書です。全て検出して JSON のみ返してください。issuer には自社名ではなく「振込先＝請求書を受け取る取引先（顧客）の名前」を入れること。形式:
+{"receipts":[{"issuer":"取引先（請求書の宛先・顧客名。自社名は絶対に入れない。「株式会社」等は省略可）","total":請求金額の数値,"dueDate":"YYYY-MM-DD(入金期限。読めなければ空文字)","issueDate":"YYYY-MM-DD(発行日。読めなければ${today})","category":"工事代金 or その他",${siteFmt},${accountFmt},"memo":"工事名 / 件名 / 摘要を短く"}]}`;
       } else {
         prompt = `画像/PDF は自社が受け取った請求書 / 払込票 / 通知書です。全て検出して JSON のみ返してください。形式:
 {"receipts":[{"issuer":"発行元（東京電力 / 東京ガス / 〇〇税務署 / 取引先名 等。「株式会社」等は省略可）","total":請求金額の数値,"dueDate":"YYYY-MM-DD(支払期限。読めなければ空文字)","issueDate":"YYYY-MM-DD(発行日。読めなければ${today})","category":"光熱費 or 通信費 or 税金 or 家賃 or 保険料 or 外注費 or 工事代金 or その他",${siteFmt},${accountFmt},"memo":"備考があれば短く（請求番号 / 使用期間 等）"}]}`;
