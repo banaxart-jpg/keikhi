@@ -116,27 +116,47 @@ async function getSheetsApi() {
 }
 const SHEET_HEADER = ["購入日", "購入者", "現場", "店舗", "金額", "費目", "工種", "支払方法", "メモ", "写真"];
 const sheetEnsuredCache = new Set(); // key = "<spreadsheetId>:<tab>" 1 度ヘッダー作ったタブはキャッシュ
-async function ensureSheetTabGeneric(sheets, spreadsheetId, ym, header) {
+async function ensureSheetTabGeneric(sheets, spreadsheetId, ym, header, dateCols = []) {
   const key = `${spreadsheetId}:${ym}`;
   if (sheetEnsuredCache.has(key)) return;
   const meta = await sheets.spreadsheets.get({ spreadsheetId, fields: "sheets.properties" });
-  const exists = (meta.data.sheets || []).some((s) => s.properties && s.properties.title === ym);
-  if (!exists) {
-    await sheets.spreadsheets.batchUpdate({
+  const found = (meta.data.sheets || []).find((s) => s.properties && s.properties.title === ym);
+  let sheetId;
+  if (!found) {
+    const res = await sheets.spreadsheets.batchUpdate({
       spreadsheetId,
       requestBody: { requests: [{ addSheet: { properties: { title: ym, index: 0, gridProperties: { frozenRowCount: 1 } } } }] },
     });
+    sheetId = res.data.replies[0].addSheet.properties.sheetId;
     await sheets.spreadsheets.values.update({
       spreadsheetId,
       range: `${ym}!A1`,
       valueInputOption: "RAW",
       requestBody: { values: [header] },
     });
+  } else {
+    sheetId = found.properties.sheetId;
+  }
+  // 指定された列に「日付書式 (yyyy-mm-dd)」を適用 (ヘッダー行は除く)
+  if (sheetId != null && dateCols.length) {
+    await sheets.spreadsheets.batchUpdate({
+      spreadsheetId,
+      requestBody: {
+        requests: dateCols.map((col) => ({
+          repeatCell: {
+            range: { sheetId, startRowIndex: 1, startColumnIndex: col, endColumnIndex: col + 1 },
+            cell: { userEnteredFormat: { numberFormat: { type: "DATE", pattern: "yyyy-mm-dd" } } },
+            fields: "userEnteredFormat.numberFormat",
+          },
+        })),
+      },
+    });
   }
   sheetEnsuredCache.add(key);
 }
 async function ensureSheetTab(sheets, ym) {
-  return ensureSheetTabGeneric(sheets, SHEET_ID, ym, SHEET_HEADER);
+  // 経費: A 列 (購入日) のみ日付
+  return ensureSheetTabGeneric(sheets, SHEET_ID, ym, SHEET_HEADER, [0]);
 }
 async function appendRecordToSheet(r) {
   if (!SHEET_ID) return;
@@ -176,7 +196,7 @@ async function appendInvoiceToSheet(r) {
   try {
     const sheets = await getSheetsApi();
     const ym = String(r.issueDate || (r.createdAt || "").slice(0, 10) || "").slice(0, 7) || "unknown";
-    await ensureSheetTabGeneric(sheets, INVOICE_SHEET_ID, ym, INVOICE_HEADER);
+    await ensureSheetTabGeneric(sheets, INVOICE_SHEET_ID, ym, INVOICE_HEADER, [1, 2, 4]);
     const acc = r.account || {};
     const dir = r.direction === "out" ? "受取" : "支払";
     const statusLbl = r.status === "paid"
