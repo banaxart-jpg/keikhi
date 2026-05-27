@@ -1547,9 +1547,12 @@ ${vocabLine}
 
 ルール:
 - 暗記禁止。「なぜ/いつ/どっち/もしも/歴史」型で。
-- options は letter prefix なし、自然な選択肢文
+- ★options は各「最大25文字以内」の短い句で。長文の説明文は選択肢にしない。
+- ★4択は一目で違いが分かる対比的な書き方 (例: 「待つ / 並行 / 後でリトライ / 諦める」)
+- question 本文は 80文字以内目安。短く、ハッキリ問う。
+- options は letter prefix なし
 - answer は options 内の文字列と完全一致
-- 解説 (explanation) は3-5文、役割 + 判断軸 + へぇートリビア
+- 解説 (explanation) は3-5文、役割 + 判断軸 + へぇートリビア (これは長めでOK)
 - 既出と被らない: ${excludeAnswers.slice(0, 15).join(", ")}
 
 JSON:
