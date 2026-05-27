@@ -1506,7 +1506,9 @@ async function pickWeakGenres(p, email, n) {
 
 // AI で新しい問題を生成 (バックグラウンド呼出し or 明示呼出し)
 // ジャンル指定すれば該当ジャンル、なしならジャンル空間からランダム選出。
-async function generateKotonohaQuestion(p, { level, genre, excludeAnswers = [] }) {
+// userEmail を渡すと「このユーザーがこのジャンルでどこまで理解してるか」を
+// 計算して、深さに応じた問題を生成 (前提知識ゲート)。
+async function generateKotonohaQuestion(p, { level, genre, excludeAnswers = [], userEmail = null }) {
   if (!genAI) return null;
 
   // ジャンル決定: 未指定なら全ジャンルからランダム
@@ -1518,23 +1520,42 @@ async function generateKotonohaQuestion(p, { level, genre, excludeAnswers = [] }
   const groupId = targetGenre ? KOTONOHA_GENRE_TO_GROUP.get(targetGenre) || null : null;
   // 旧 category 列にも互換のため group_id を流用
   const cat = groupId || "concept";
+
+  // ★ユーザーのこのジャンルにおける既知の深さを計算
+  //   = 「VPC を 5 回正解してたら VPC は分かってる」と判断
+  //   →  分かってないジャンルでは入門レベルだけ出す (前提知識ゲート)
+  let genreDepth = 0;
+  if (userEmail && targetGenre) {
+    try {
+      const { rows } = await p.query(
+        `SELECT count(DISTINCT q.id) FILTER (WHERE pr.is_correct)::int AS n
+           FROM kotonoha_questions q
+           LEFT JOIN kotonoha_progress pr ON pr.question_id = q.id AND pr.user_email = $1
+          WHERE q.genre = $2`,
+        [userEmail, targetGenre]
+      );
+      genreDepth = rows[0]?.n || 0;
+    } catch (e) { /* fallback to 0 */ }
+  }
   // 基本は4択 (字面で recognize できれば OK の方針)。
   // 自由記述は概念がはっきり定まる場合のみ稀に。
   const type = Math.random() < 0.9 ? "choice" : "free";
 
-  // 難易度別ガイド (前提知識を要求しない方針。専門用語が必要なら問題文で説明)
-  const diffGuide = level <= 2
-    ? "完全初心者。「そもそも何の道具?」「身近な例えで言うと?」レベル。"
-    : level <= 4
-      ? "「いつ使う?」「どっち選ぶ?」「なぜ〇〇は△△より速い?」レベル。"
-      : level <= 7
-        ? "「仕組みは?」「もしも〇〇だったら?」「歴史的にどう生まれた?」レベル。"
-        : "「設計判断の根拠」「トレードオフ」レベル。ただし前提知識ゼロでも問題文だけで答えられること。専門用語は問題文内に1行で説明する。";
+  // 難易度ガイドは「ジャンル内の正解数 (genreDepth)」ベース。
+  // user.level (全体経験値) ではなく、このジャンルでの理解度で決める。
+  // → VPC を一度も正解してない人には VPC の超基本だけ出る
+  const diffGuide = genreDepth === 0
+    ? "★このジャンル完全初心者 (このジャンル正解数 0)。「そもそも何の道具?」「身近な例えで言うと?」レベル必須。専門用語禁止。"
+    : genreDepth < 3
+      ? `基本特徴の確認 (このジャンル正解 ${genreDepth} 回)。「どんな時に使う?」「何が違う?」レベル。`
+      : genreDepth < 6
+        ? `用途と判断軸 (このジャンル正解 ${genreDepth} 回)。「いつ使う?」「どっち選ぶ?」「なぜ?」レベル。`
+        : `応用・歴史・トレードオフ (このジャンル正解 ${genreDepth} 回)。「もしも」「設計判断の根拠」。ただし問題文だけで答えられる構造に。`;
 
   const prompt = `「IT・技術」の学習問題を1問だけ作って。JSON のみ返す (他テキスト・コードブロック禁止)。
 
 ジャンル: ${targetGenre || "(自由)"}
-難易度: ${level} / 10 (${diffGuide})
+深さ指定: ${diffGuide}
 形式: ${type === "choice" ? "4択" : "自由記述 (答えは1単語)"}
 
 ★絶対ルール (難易度問わず厳守):
@@ -1726,7 +1747,7 @@ app.post("/api/kotonoha/sessions/start", async (req, res) => {
         debug.syncGenAttempted = need;
         const results = await Promise.all(
           targets.slice(0, need).map((g) =>
-            generateKotonohaQuestion(p, { level, genre: g, excludeAnswers })
+            generateKotonohaQuestion(p, { level, genre: g, excludeAnswers, userEmail: req.user.email })
               .catch((e) => { console.warn("[kotonoha] emergency gen failed:", g, e.message); return null; })
           )
         );
@@ -1831,7 +1852,7 @@ app.post("/api/kotonoha/sessions/start", async (req, res) => {
             [g, req.user.email]
           );
           if ((poolRows[0]?.n || 0) >= threshold) continue;
-          await generateKotonohaQuestion(p, { level, genre: g, excludeAnswers });
+          await generateKotonohaQuestion(p, { level, genre: g, excludeAnswers, userEmail: req.user.email });
         }
       } catch (e) {
         console.warn("[kotonoha] bg generate skipped:", e.message);
@@ -2003,6 +2024,7 @@ JSON でだけ返す (前置きや説明禁止):
             level: userLevel,
             genre: targetGenres[0],
             excludeAnswers,
+            userEmail: req.user.email,
           });
         } catch (e) {
           console.warn("[kotonoha] per-answer gen skipped:", e.message);
@@ -2092,7 +2114,7 @@ app.post("/api/kotonoha/sessions/end", async (req, res) => {
         warmup.genAttempted = need;
         const results = await Promise.all(
           targets.slice(0, need).map((g) =>
-            generateKotonohaQuestion(p, { level: userLevel, genre: g, excludeAnswers })
+            generateKotonohaQuestion(p, { level: userLevel, genre: g, excludeAnswers, userEmail: req.user.email })
               .catch((e) => { console.warn("[kotonoha] warmup gen failed:", g, e.message); return null; })
           )
         );
@@ -2206,7 +2228,7 @@ app.post("/api/kotonoha/test-gen", async (req, res) => {
     const genre = all[Math.floor(Math.random() * all.length)];
     const { rows: uRows } = await p.query(`SELECT level FROM kotonoha_users WHERE user_email=$1`, [req.user.email]);
     const userLevel = uRows[0]?.level || 1;
-    const result = await generateKotonohaQuestion(p, { level: userLevel, genre, excludeAnswers: [] });
+    const result = await generateKotonohaQuestion(p, { level: userLevel, genre, excludeAnswers: [], userEmail: req.user.email });
     out.fullGen = {
       ok: !!result,
       elapsed: Date.now() - start2,
