@@ -1611,16 +1611,18 @@ JSON:
 // Phase 3: 専門領域
 //   - インフラ / セキュリティ / Web3 / 3D / 収益化 / wonders / BANAX OS
 function pickPriorityGroups(correctCount) {
-  if (correctCount < 40) return [
+  if (correctCount < 50) return [
     "it_intro", "ui_parts", "ui_design", "css_layout",
     "devflow", "engineer_mindset", "ai_agents",
+    "db", "api", "ai_basics",
   ];
-  if (correctCount < 120) return [
+  if (correctCount < 150) return [
     "it_intro", "ui_parts", "ui_design", "css_layout",
     "devflow", "engineer_mindset", "ai_agents",
-    "db", "api", "ai_basics", "algorithms", "history",
+    "db", "api", "ai_basics",
+    "algorithms", "history", "monetize", "wonders",
   ];
-  return null; // 全グループ解禁
+  return null; // 全グループ解禁 (infra / security / web3 / graphics3d / banax_os)
 }
 
 // プール (現ユーザーが解ける問題) を計測。足りなければ sync gen で増やす。
