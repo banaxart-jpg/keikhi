@@ -328,7 +328,10 @@ body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); 
 
 <div class="bar">
   <span class="hint" id="appHint">techstudy</span>
-  <button class="pill" id="backBtn" style="display:none;" onclick="location.href='/'">← 戻る</button>
+  <div style="display:flex; gap:8px;">
+    <button class="pill" id="backBtn" style="display:none;" onclick="location.href='/'">← 戻る</button>
+    <button class="pill" id="signoutPill" onclick="doSignOut()">サインアウト</button>
+  </div>
 </div>
 
 <div class="wrap">
@@ -393,9 +396,6 @@ body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); 
     <div id="ownerAdminRow" style="display:none; text-align:center; padding: 4px 0 6px; gap:18px; flex-wrap:wrap; justify-content:center;">
       <button class="danger-link" onclick="wipeAllQuestions()">🗑 問題プール全消し</button>
       <button class="danger-link" onclick="openGallery()" style="color:var(--accent);">🖼 UIデモ確認</button>
-    </div>
-    <div style="text-align:center; padding: 4px 0 18px;">
-      <button class="signout-link" id="signoutLink" onclick="doSignOut()">サインアウト</button>
     </div>
   </div>
 
@@ -693,20 +693,34 @@ const escapeHtml = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({
 // ───── 認証 + API ─────
 let authToken = null;
 let fbUser = null;
-async function api(method, path, body) {
+async function api(method, path, body, { timeoutMs = 45000 } = {}) {
   if (!fbUser) throw new Error("ログインが切れました");
-  // 毎回 getIdToken: 有効期限 >5min なら cache 返す軽い処理。idle 後の token-expired を防ぐ
   authToken = await fbUser.getIdToken();
-  const doFetch = async (token) => fetch(window.API_BASE + path, {
-    method,
-    headers: {
-      authorization: "Bearer " + token,
-      ...(body ? { "content-type": "application/json" } : {}),
-    },
-    body: body ? JSON.stringify(body) : undefined,
-  });
-  let res = await doFetch(authToken);
-  // 401 → 強制リフレッシュ後 1回だけリトライ (clock skew / 早期失効対策)
+  const doFetch = async (token) => {
+    // 45秒 AbortController タイムアウト — Cloud Run cold start + 重い処理でも収まる目安
+    const ac = new AbortController();
+    const tid = setTimeout(() => ac.abort(), timeoutMs);
+    try {
+      return await fetch(window.API_BASE + path, {
+        method,
+        headers: {
+          authorization: "Bearer " + token,
+          ...(body ? { "content-type": "application/json" } : {}),
+        },
+        body: body ? JSON.stringify(body) : undefined,
+        signal: ac.signal,
+      });
+    } finally {
+      clearTimeout(tid);
+    }
+  };
+  let res;
+  try {
+    res = await doFetch(authToken);
+  } catch (e) {
+    if (e.name === "AbortError") throw new Error(`タイムアウト (${timeoutMs / 1000}秒)`);
+    throw e;
+  }
   if (res.status === 401) {
     authToken = await fbUser.getIdToken(true);
     res = await doFetch(authToken);
