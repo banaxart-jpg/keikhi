@@ -1720,36 +1720,6 @@ async function ensureMinPool(p, email, target = 30) {
     dbg.freshAfter = dbg.freshBefore;
     if (dbg.freshBefore >= target) return dbg;
     const need = Math.min(target - dbg.freshBefore, 8);
-    // 弱ジャンル選定: 「ユーザーの正解少ない」+「他問題から参照される頻度高い」順
-    // 頻度 = そのジャンルの問題数 (出題量) + 他問題の prerequisites に登場する回数 (foundational)
-    // → 「土台として使われる用語」を優先的に学ばせる Zipf 的アプローチ
-    const { rows: weakRows } = await p.query(`
-      WITH gc AS (
-        SELECT q.genre, q.group_id, COUNT(DISTINCT q.id) FILTER (WHERE pr.is_correct)::int AS correct
-          FROM kotonoha_questions q
-          LEFT JOIN kotonoha_progress pr ON pr.question_id = q.id AND pr.user_email = $1
-         WHERE q.genre IS NOT NULL
-         GROUP BY q.genre, q.group_id
-      ),
-      freq_self AS (
-        SELECT genre, COUNT(*)::int AS n FROM kotonoha_questions
-         WHERE genre IS NOT NULL GROUP BY genre
-      ),
-      freq_prereq AS (
-        SELECT prereq AS genre, COUNT(*)::int AS n
-          FROM kotonoha_questions q,
-               jsonb_array_elements_text(COALESCE(q.prerequisites, '[]'::jsonb)) prereq
-         GROUP BY prereq
-      )
-      SELECT gc.genre, gc.group_id, gc.correct,
-             COALESCE(fs.n, 0) + COALESCE(fp.n, 0) AS total_freq
-        FROM gc
-        LEFT JOIN freq_self fs ON fs.genre = gc.genre
-        LEFT JOIN freq_prereq fp ON fp.genre = gc.genre
-       ORDER BY gc.correct ASC, total_freq DESC, random()
-       LIMIT $2`,
-      [email, need * 3]
-    );
     // フェーズ判定
     const { rows: tcr } = await p.query(
       `SELECT COUNT(DISTINCT question_id)::int AS n FROM kotonoha_progress
@@ -1758,38 +1728,69 @@ async function ensureMinPool(p, email, target = 30) {
     );
     const correctCount = tcr[0]?.n || 0;
     const priorityGroups = pickPriorityGroups(correctCount);
-    // priority groups の filter + master 補充
-    let candidates = priorityGroups
-      ? weakRows.filter((r) => priorityGroups.includes(r.group_id))
-      : weakRows;
-    // priorityGroups の対象グループから (DB に未登録のジャンル含む) フォールバック
-    if (candidates.length < need) {
-      const fallbackGenres = [];
-      for (const g of (KOTONOHA_GENRES_DATA?.groups || [])) {
-        // priorityGroups 指定時はそのグループのみ、null (Phase 3) なら全グループ
-        if (priorityGroups && !priorityGroups.includes(g.id)) continue;
-        for (const gen of g.genres) fallbackGenres.push({ genre: gen.name, group_id: g.id });
+
+    // ★ジャンル選定ロジック (新)
+    // 1. master (genres.json) からスコープ内の全ジャンルを取る
+    // 2. 各ジャンルの「ユーザー正解数」と「他問題からの参照頻度」を引く
+    // 3. 正解少ない順 → 参照頻度高い順 → random でソート
+    // → DB に問題が無い「未着手ジャンル」も等しく candidates に入る
+    const { rows: correctRows } = await p.query(`
+      SELECT q.genre, COUNT(DISTINCT q.id) FILTER (WHERE pr.is_correct)::int AS correct
+        FROM kotonoha_questions q
+        LEFT JOIN kotonoha_progress pr ON pr.question_id = q.id AND pr.user_email = $1
+       WHERE q.genre IS NOT NULL GROUP BY q.genre`,
+      [email]
+    );
+    const { rows: freqRows } = await p.query(`
+      WITH self AS (
+        SELECT genre, COUNT(*)::int AS n FROM kotonoha_questions
+         WHERE genre IS NOT NULL GROUP BY genre
+      ),
+      prereq AS (
+        SELECT prereq AS genre, COUNT(*)::int AS n
+          FROM kotonoha_questions q,
+               jsonb_array_elements_text(COALESCE(q.prerequisites, '[]'::jsonb)) prereq
+         GROUP BY prereq
+      )
+      SELECT COALESCE(s.genre, p.genre) AS genre,
+             COALESCE(s.n, 0) + COALESCE(p.n, 0) AS total_freq
+        FROM self s FULL OUTER JOIN prereq p ON s.genre = p.genre`);
+    const correctByGenre = new Map(correctRows.map((r) => [r.genre, r.correct]));
+    const freqByGenre = new Map(freqRows.map((r) => [r.genre, Number(r.total_freq)]));
+
+    // 全 master ジャンル (priorityGroups でフィルタ) を candidates に
+    const allCandidates = [];
+    for (const g of (KOTONOHA_GENRES_DATA?.groups || [])) {
+      if (priorityGroups && !priorityGroups.includes(g.id)) continue;
+      for (const gen of g.genres) {
+        allCandidates.push({
+          genre: gen.name,
+          group_id: g.id,
+          correct: correctByGenre.get(gen.name) || 0,
+          freq: freqByGenre.get(gen.name) || 0,
+        });
       }
-      const seen = new Set(candidates.map((c) => c.genre));
-      const more = fallbackGenres.filter((g) => !seen.has(g.genre));
-      for (let i = more.length - 1; i > 0; i--) {
-        const j = Math.floor(Math.random() * (i + 1));
-        [more[i], more[j]] = [more[j], more[i]];
-      }
-      candidates = [...candidates, ...more.slice(0, need - candidates.length).map((g) => ({ genre: g.genre, group_id: g.group_id, correct: 0 }))];
     }
-    let targets = candidates.slice(0, need).map((r) => ({ genre: r.genre, depth: Math.min(5, (r.correct || 0) + 1) }));
-    // 万一 priority + マスタでも足りないなら全範囲から補う
-    if (targets.length < need) {
-      const seen = new Set(targets.map((t) => t.genre));
-      const all = Array.from(KOTONOHA_GENRE_TO_GROUP.keys()).filter((g) => !seen.has(g));
-      for (let i = all.length - 1; i > 0; i--) {
-        const j = Math.floor(Math.random() * (i + 1));
-        [all[i], all[j]] = [all[j], all[i]];
-      }
-      for (const g of all.slice(0, need - targets.length)) targets.push({ genre: g, depth: 1 });
+    // ソート: 正解少ない順 → 頻度高い順 → ランダム
+    allCandidates.sort((a, b) => {
+      if (a.correct !== b.correct) return a.correct - b.correct;
+      if (a.freq !== b.freq) return b.freq - a.freq;
+      return Math.random() - 0.5;
+    });
+    // 上位 need*3 から random で need 個ピックして偏りを減らす
+    const pool = allCandidates.slice(0, Math.max(need * 4, 30));
+    for (let i = pool.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [pool[i], pool[j]] = [pool[j], pool[i]];
     }
-    targets = targets.slice(0, need);
+    // 「正解 0 のジャンル (= 未着手)」を最低半分は確保
+    const untouched = pool.filter((c) => c.correct === 0);
+    const touched = pool.filter((c) => c.correct > 0);
+    const untouchedQuota = Math.ceil(need * 0.6);
+    let targets = [
+      ...untouched.slice(0, untouchedQuota),
+      ...touched.slice(0, need - Math.min(untouched.length, untouchedQuota)),
+    ].slice(0, need).map((r) => ({ genre: r.genre, depth: Math.min(5, r.correct + 1) }));
     const { rows: ansRows } = await p.query(`SELECT answer FROM kotonoha_questions ORDER BY id DESC LIMIT 100`);
     const excludeAnswers = ansRows.map((r) => r.answer);
     const knownGenres = await getKnownGenres(p, email);
@@ -2074,7 +2075,7 @@ app.post("/api/kotonoha/sessions/end", async (req, res) => {
     let newLevel = oldLevel;
     // 達成感重視: 70%超でレベルアップ、40%未満で1段下げ。
     // 「ちょうど飽きない」ゾーンを広く取る。
-    if (rate >= 0.7 && oldLevel < 10) newLevel = oldLevel + 1;
+    if (rate >= 0.7) newLevel = oldLevel + 1;  // 上限なし、永久成長
     else if (rate < 0.4 && oldLevel > 1) newLevel = oldLevel - 1;
     if (newLevel !== oldLevel) {
       await p.query(`UPDATE kotonoha_users SET level=$1, last_session_at=now(), updated_at=now() WHERE user_email=$2`, [newLevel, req.user.email]);
