@@ -2481,6 +2481,10 @@ app.get("/api/kotonoha/me", async (req, res) => {
       pool,
       recentWords: learned.slice(0, 12),
       learned, // フルリスト (最大200件、explanation 付き)
+      // 他のミニアプリ (keihi 等) にもアクセスできるユーザーかどうか。
+      // false の場合、フロントは「← 戻る」(ランチャー行き) を隠す。
+      hasLauncherAccess: allowList.length === 0
+        || allowList.includes(String(req.user.email || "").toLowerCase()),
     });
   } catch (err) {
     console.error("kotonoha me", err);

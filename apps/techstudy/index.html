@@ -321,7 +321,7 @@ body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); 
 
 <div class="bar">
   <span class="hint" id="appHint">techstudy</span>
-  <button class="pill" onclick="location.href='/'">← 戻る</button>
+  <button class="pill" id="backBtn" style="display:none;" onclick="location.href='/'">← 戻る</button>
 </div>
 
 <div class="wrap">
@@ -560,6 +560,10 @@ async function loadHome() {
 }
 
 function renderMe(me, peers) {
+  // 他ミニアプリにもアクセス権ある社内ユーザーだけ「← 戻る」を出す
+  const backBtn = $("backBtn");
+  if (backBtn) backBtn.style.display = me.hasLauncherAccess ? "" : "none";
+
   $("myLevel").textContent = me.user.level;
   $("myLevelStats").textContent =
     `通算 正解 ${me.user.total_correct} / ${me.user.total_answers}`;
