@@ -1877,7 +1877,8 @@ app.post("/api/kotonoha/sessions/start", async (req, res) => {
   try {
     await ensureKotonohaUser(p, req.user.email);
     const SESSION_SIZE = 20;
-    const POOL_TARGET = 5; // 即スタート優先: 最小限だけ確保 (home の /me prewarm でほぼ満たされてる前提)
+    const POOL_TARGET = 8; // 即スタート優先: 最小限だけ確保 (home の /me prewarm でほぼ満たされてる前提)。
+                            // wipe-all 直後でも 1セッション組めるよう少し余裕を持つ。
 
     // プール不足なら sync 生成 (max 8問)
     const debug = await ensureMinPool(p, req.user.email, POOL_TARGET);
@@ -1924,7 +1925,7 @@ app.post("/api/kotonoha/sessions/start", async (req, res) => {
          )`;
 
     // 1) NEW: 未回答 (priority 0) または 一度も正解してない (priority 1)
-    const { rows: newRows } = await p.query(`
+    const runNewQuery = () => p.query(`
       ${baseFilter}
       SELECT q.*
         FROM kotonoha_questions q
@@ -1936,6 +1937,7 @@ app.post("/api/kotonoha/sessions/start", async (req, res) => {
        LIMIT $2`,
       [req.user.email, SESSION_SIZE, priorityGroups]
     );
+    let { rows: newRows } = await runNewQuery();
 
     // 2) REVIEW: 正解履歴あり & gap 経過
     const { rows: reviewRows } = await p.query(`
@@ -1951,6 +1953,15 @@ app.post("/api/kotonoha/sessions/start", async (req, res) => {
        LIMIT $2`,
       [req.user.email, SESSION_SIZE, priorityGroups]
     );
+
+    // ★ fallback: pool が壊滅的に薄ければ (NEW+REVIEW合計 0) もう一度ガッツリ gen して再 SELECT
+    // wipe-all 直後や Gemini が初回失敗した時の救済路。同期で 10件まで再生成。
+    if (newRows.length === 0 && reviewRows.length === 0) {
+      console.warn(`[kotonoha] empty pool after initial select — retry ensureMinPool(10)`);
+      const retry = await ensureMinPool(p, req.user.email, 10);
+      debug.retry = retry;
+      ({ rows: newRows } = await runNewQuery());
+    }
 
     // 3) quota mix: NEW 多数派、REVIEW 補完
     let pickedNew = newRows.slice(0, NEW_QUOTA);
