@@ -1819,7 +1819,7 @@ app.post("/api/kotonoha/sessions/start", async (req, res) => {
   try {
     await ensureKotonohaUser(p, req.user.email);
     const SESSION_SIZE = 20;
-    const POOL_TARGET = 30;
+    const POOL_TARGET = 5; // 即スタート優先: 最小限だけ確保 (home の /me prewarm でほぼ満たされてる前提)
 
     // プール不足なら sync 生成 (max 8問)
     const debug = await ensureMinPool(p, req.user.email, POOL_TARGET);
@@ -1936,6 +1936,34 @@ app.post("/api/kotonoha/sessions/start", async (req, res) => {
       };
     });
     res.json({ questions: safe, debug });
+
+    // 【post-response background gen】レスポンス送信後、5問を並列で追加生成。
+    // ユーザーがセッション中の間に DB に貯まる → 次回 start がさらに即座に。
+    // Cloud Run CPU throttle で死ぬ可能性あるが、min-instances=0 でもセッション
+    // 終了までの間 (= /answer リクエストが来る間) は CPU 動くのでだいたい走る。
+    setImmediate(async () => {
+      try {
+        const { rows: ansRows } = await p.query(
+          `SELECT answer FROM kotonoha_questions ORDER BY id DESC LIMIT 50`
+        );
+        const excludeAnswers = ansRows.map((r) => r.answer);
+        const knownGenres = await getKnownGenres(p, req.user.email);
+        // sessions/start で使ったジャンルと同じターゲット set を仮想生成
+        const all = Array.from(KOTONOHA_GENRE_TO_GROUP.keys());
+        const shuffled = all.slice();
+        for (let i = shuffled.length - 1; i > 0; i--) {
+          const j = Math.floor(Math.random() * (i + 1));
+          [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+        }
+        const bgTargets = shuffled.slice(0, 5);
+        await Promise.all(
+          bgTargets.map((genre) => generateQuestion(p, { genre, depth: 1, excludeAnswers, knownGenres })
+            .catch((e) => { console.warn(`[kotonoha] bg gen ${genre}:`, e.message); return null; }))
+        );
+      } catch (e) {
+        console.warn("[kotonoha] post-response bg gen skipped:", e.message);
+      }
+    });
   } catch (err) {
     console.error("kotonoha start", err);
     res.status(500).json({ error: err.message });
@@ -2256,10 +2284,16 @@ app.get("/api/kotonoha/me", async (req, res) => {
   if (!p) return res.status(503).json({ error: "DB not configured" });
   try {
     const user = await ensureKotonohaUser(p, req.user.email);
+    // 【ホーム prewarm】最初の数問を背景で生成しておく (~5秒)
+    // ユーザーがホームを見てる間に終わるので、20問チャレンジ時に待ちが消える
+    const prewarmPromise = ensureMinPool(p, req.user.email, 3)
+      .catch((e) => { console.warn("[kotonoha] prewarm failed:", e.message); return null; });
     const [groups, streak] = await Promise.all([
       buildKotonohaProgress(p, req.user.email),
       computeKotonohaStreak(p, req.user.email),
     ]);
+    // prewarm を max 4秒 だけ待つ (ホーム読込が長すぎないように)
+    await Promise.race([prewarmPromise, new Promise((r) => setTimeout(r, 4000))]);
     // プール統計 (デバッグ用)
     const { rows: poolRows } = await p.query(
       `SELECT
