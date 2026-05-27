@@ -1522,20 +1522,26 @@ async function generateKotonohaQuestion(p, { level, genre, excludeAnswers = [] }
   // 自由記述は概念がはっきり定まる場合のみ稀に。
   const type = Math.random() < 0.9 ? "choice" : "free";
 
-  // 難易度別ガイド
+  // 難易度別ガイド (前提知識を要求しない方針。専門用語が必要なら問題文で説明)
   const diffGuide = level <= 2
-    ? "完全初心者がこのジャンルに初めて触る想定。「そもそも〇〇って何のための道具?」「どんな時に必要?」レベル。専門用語禁止、例え話で説明。"
+    ? "完全初心者。「そもそも何の道具?」「身近な例えで言うと?」レベル。"
     : level <= 4
-      ? "基本理解はある人向け。「いつ使うべき?」「どっち選ぶ?」「なぜ〇〇は△△より速い?」レベル。"
+      ? "「いつ使う?」「どっち選ぶ?」「なぜ〇〇は△△より速い?」レベル。"
       : level <= 7
-        ? "中級者向け。「仕組みは?」「もしも〇〇だったら何が起きる?」「歴史的にどう生まれた?」レベル。"
-        : "上級者向け。実装トリック、エッジケース、トレードオフを問う。";
+        ? "「仕組みは?」「もしも〇〇だったら?」「歴史的にどう生まれた?」レベル。"
+        : "「設計判断の根拠」「トレードオフ」レベル。ただし前提知識ゼロでも問題文だけで答えられること。専門用語は問題文内に1行で説明する。";
 
   const prompt = `「IT・技術」の学習問題を1問だけ作って。JSON のみ返す (他テキスト・コードブロック禁止)。
 
 ジャンル: ${targetGenre || "(自由)"}
 難易度: ${level} / 10 (${diffGuide})
 形式: ${type === "choice" ? "4択" : "自由記述 (答えは1単語)"}
+
+★絶対ルール (難易度問わず厳守):
+- 問題文だけで答えられる構造にする。前提知識を要求しない
+- ジャンル名がマイナーな専門用語の場合は、問題文の冒頭で「〇〇とは△△する仕組みのこと」と1行で説明してから問う
+- 例: VPC なら「VPC (AWS でアカウント内に閉じた仮想ネットワーク領域) について…」と前置きしてから「では VPC 同士を繋ぐとき何が必要?」と問う
+- 解答者は「IT 全般を勉強し始めた人」想定。AWS / GCP / k8s 等の具体プロダクトでも、初見で理解できる導入を入れる
 
 問題の型 (どれか):
 - 概念「何のための道具?」
@@ -1630,7 +1636,7 @@ app.post("/api/kotonoha/sessions/start", async (req, res) => {
     // 選択式優先 (字面で recognize できれば OK の方針)
     const SESSION_SIZE = 20;
     const MASTERY = MASTERY_LAST_N;
-    const maxDiff = Math.min(10, level + 2);
+    const maxDiff = Math.min(7, level + 1);
 
     // 適格ルール (priority 並べ替えのみ、フィルタは難易度キャップのみ):
     //   priority 0 = 未回答 (最優先)
@@ -2041,7 +2047,7 @@ app.post("/api/kotonoha/sessions/end", async (req, res) => {
     const warmup = { freshBefore: 0, freshAfter: 0, genAttempted: 0, genSucceeded: 0 };
     try {
       const userLevel = newLevel;
-      const maxDiff = Math.min(10, userLevel + 2);
+      const maxDiff = Math.min(7, userLevel + 1);
       const { rows: poolRows } = await p.query(
         `WITH ranked AS (
            SELECT question_id, is_correct, answered_at,
