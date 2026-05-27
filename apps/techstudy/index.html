@@ -334,7 +334,18 @@ const state = {
   focusGenre: null,
   groupColorMap: new Map(),
   groupNameMap: new Map(), // group_id → 表示用のグループ名 (genre 名は答えを spoiler するので隠す)
+  diagPool: null,
+  diagSession: null,
 };
+
+function renderDiag() {
+  const d = document.getElementById("diagStrip");
+  if (!d) return;
+  const lines = [];
+  if (state.diagPool) lines.push(state.diagPool);
+  if (state.diagSession) lines.push(state.diagSession);
+  d.textContent = lines.join("  /  ") || "DIAG: loading…";
+}
 
 // ───── UI部品の HTML 実物デモ (genre名 or answer で引く) ─────
 // iframe srcdoc で隔離レンダリング。実際に押せる・触れる。
@@ -403,11 +414,8 @@ async function loadHome() {
 }
 
 function renderMe(me, peers) {
-  // プール統計を上部に表示
-  if (me.pool) {
-    const d = $("diagStrip");
-    if (d) d.textContent = `DB: ${me.pool.total}問 (seed ${me.pool.seed} / AI生成 ${me.pool.generated}) ・ 直近1h生成: ${me.pool.gen_last_hour}`;
-  }
+  if (me.pool) state.diagPool = `DB: ${me.pool.total}問 (seed ${me.pool.seed} / AI生成 ${me.pool.generated}) ・ 直近1h生成: ${me.pool.gen_last_hour}`;
+  renderDiag();
   $("myLevel").textContent = me.user.level;
   $("myLevelStats").textContent =
     `通算 正解 ${me.user.total_correct} / ${me.user.total_answers}`;
@@ -607,8 +615,8 @@ async function startSession(genre) {
     const { questions, debug } = sessionRes;
     if (debug) {
       console.log("[techstudy] session debug:", debug);
-      const d = $("diagStrip");
-      if (d) d.textContent = `DIAG: fresh ${debug.freshBefore}→${debug.freshAfter} ・ gen ${debug.syncGenSucceeded}/${debug.syncGenAttempted} ・ priority ${JSON.stringify(debug.priorityBreakdown)}`;
+      state.diagSession = `セッション: fresh ${debug.freshBefore}→${debug.freshAfter} ・ gen ${debug.syncGenSucceeded}/${debug.syncGenAttempted} ・ priority ${JSON.stringify(debug.priorityBreakdown)}`;
+      renderDiag();
     }
     if (!questions.length) throw new Error("問題がありません。シード DB の投入が必要かも。");
     // キュー初期化

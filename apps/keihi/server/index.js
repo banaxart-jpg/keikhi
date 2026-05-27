@@ -1675,8 +1675,8 @@ app.post("/api/kotonoha/sessions/start", async (req, res) => {
           LEFT JOIN mastered_q mq ON mq.question_id = q.id
       )`;
 
-    // ─── 同期生成: フレッシュ問題プールが SESSION_SIZE 未満なら、その場で並列生成 ───
-    // Cloud Run の fire-and-forget は CPU throttle で殺されるので、確実性のために sync。
+    // ─── 同期生成: 毎セッション開始時に必ず数問生成してプールを育てる ───
+    // Cloud Run の fire-and-forget は CPU throttle で殺されるので、sync で確実に。
     // 並列 (Promise.all) で実行時間を圧縮 (各 2-5sec × 並列 → 合計 ~5-8sec で済む)。
     const debug = { freshBefore: 0, freshAfter: 0, syncGenAttempted: 0, syncGenSucceeded: 0 };
     try {
@@ -1691,9 +1691,10 @@ app.post("/api/kotonoha/sessions/start", async (req, res) => {
       );
       const freshCount = pcr[0]?.n || 0;
       debug.freshBefore = freshCount;
-      if (freshCount < SESSION_SIZE) {
-        // 最大 6 問だけ同期生成 (UX 優先)。残りは fire-and-forget で後追い。
-        const need = Math.min(SESSION_SIZE - freshCount, 6);
+      // プール常時成長: freshCount に関わらず必ず 8 問生成 (UX 5-8sec wait)
+      const need = freshCount < SESSION_SIZE
+        ? Math.min(SESSION_SIZE - freshCount + 4, 10) // 不足してる時は埋める + 余分
+        : 8; // 十分足りててもプール育てる
         const { rows: ansRows } = await p.query(
           `SELECT answer FROM kotonoha_questions ORDER BY id DESC LIMIT 200`
         );
@@ -1733,9 +1734,6 @@ app.post("/api/kotonoha/sessions/start", async (req, res) => {
             : [req.user.email, MASTERY, maxDiff]
         );
         debug.freshAfter = pcr2[0]?.n || 0;
-      } else {
-        debug.freshAfter = freshCount;
-      }
     } catch (e) {
       console.warn("[kotonoha] sync gen check skipped:", e.message);
     }
