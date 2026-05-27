@@ -126,6 +126,12 @@ CREATE INDEX IF NOT EXISTS kotonoha_q_genre_idx ON kotonoha_questions (genre);
 CREATE INDEX IF NOT EXISTS kotonoha_q_group_idx ON kotonoha_questions (group_id);
 
 -- UI部品の HTML 実物デモ (AI 生成、ジャンル単位でキャッシュ)
+-- 各問題が使う「他ジャンルの概念」リスト (= 前提知識)
+-- 例: 「サーバーレスのメリット?」の問題は prerequisites=["サーバー","クラウド","スケーリング"]
+-- 選定時、これら全部にユーザーが正解履歴を持ってない場合は出さない (i+1 ルール)
+ALTER TABLE kotonoha_questions ADD COLUMN IF NOT EXISTS prerequisites JSONB DEFAULT '[]'::jsonb;
+CREATE INDEX IF NOT EXISTS kotonoha_q_prereq_idx ON kotonoha_questions USING GIN (prerequisites);
+
 CREATE TABLE IF NOT EXISTS kotonoha_ui_demos (
   genre      TEXT PRIMARY KEY,
   group_id   TEXT,

@@ -1503,8 +1503,20 @@ const KOTONOHA_DEPTH_GUIDE = {
   5: "深い洞察。「設計判断の根拠」「トレードオフ」レベル。前提知識ゼロでも問題文だけで答えられること。",
 };
 
-// AI で1問生成 (genre, depth 指定)。失敗時は null。
-async function generateQuestion(p, { genre, depth, excludeAnswers = [] }) {
+// ユーザーが既に正解してるジャンル名のリスト (= 既知の概念)
+async function getKnownGenres(p, email) {
+  if (!email) return [];
+  const { rows } = await p.query(
+    `SELECT DISTINCT q.genre FROM kotonoha_progress pr
+       JOIN kotonoha_questions q ON q.id = pr.question_id
+      WHERE pr.user_email = $1 AND pr.is_correct AND q.genre IS NOT NULL`,
+    [email]
+  );
+  return rows.map((r) => r.genre);
+}
+
+// AI で1問生成 (genre, depth, ユーザーの既知ジャンル指定)。失敗時は null。
+async function generateQuestion(p, { genre, depth, excludeAnswers = [], knownGenres = [] }) {
   if (!genAI) return null;
   if (!genre) {
     const all = Array.from(KOTONOHA_GENRE_TO_GROUP.keys());
@@ -1516,22 +1528,32 @@ async function generateQuestion(p, { genre, depth, excludeAnswers = [] }) {
   const d = Math.min(5, Math.max(1, depth || 1));
   const guide = KOTONOHA_DEPTH_GUIDE[d];
 
+  const vocabLine = knownGenres.length
+    ? `ユーザーが既に理解してる用語 (これらは問題内で使ってOK): ${knownGenres.slice(0, 80).join(", ")}`
+    : "ユーザーは IT 用語をほぼ知らない。専門用語は使わず、身近な例えだけで問題を作る。";
+
   const prompt = `「IT・技術」の学習問題を1問作って。JSON のみ返す。
 
 ジャンル: ${genre}
 深さ: ${d}/5 (${guide})
 形式: 4択
 
+★最重要 (前提知識ゲート):
+${vocabLine}
+
+→ このリスト + 一般日本語 + 「${genre}」自体の概念、これ以外の専門用語は禁止。
+  もしどうしても他の専門用語が必要な場合は、問題文に1行で「〇〇 (=△△する仕組み) について…」と必ず説明する。
+  そして「prerequisites」フィールドにその他ジャンル名を列挙する (このユーザーが先に学ぶべきジャンル)。
+
 ルール:
 - 暗記禁止。「なぜ/いつ/どっち/もしも/歴史」型で。
-- 前提知識を要求しない。専門用語が必要なら問題文で1行説明 (例「VPC (AWSで閉じた仮想ネットワーク領域) について…」)
 - options は letter prefix なし、自然な選択肢文
 - answer は options 内の文字列と完全一致
 - 解説 (explanation) は3-5文、役割 + 判断軸 + へぇートリビア
 - 既出と被らない: ${excludeAnswers.slice(0, 15).join(", ")}
 
 JSON:
-{"question":"…","options":["…","…","…","…"],"answer":"…","explanation":"…","claude_example":"「…」"}`;
+{"question":"…","options":["…","…","…","…"],"answer":"…","explanation":"…","claude_example":"「…」","prerequisites":["他ジャンル名1","他ジャンル名2"]}`;
 
   let j = null;
   for (let attempt = 0; attempt < 2 && !j; attempt++) {
@@ -1555,14 +1577,16 @@ JSON:
     }
   }
   if (!j) return null;
+  // prerequisites は array of string に正規化
+  const prereqs = Array.isArray(j.prerequisites) ? j.prerequisites.filter((s) => typeof s === "string" && s.length > 0) : [];
   try {
     const { rows } = await p.query(
       `INSERT INTO kotonoha_questions
-         (category, difficulty, type, question, options, answer, keywords, explanation, claude_example, source, genre, group_id)
-       VALUES ($1, $2, 'choice', $3, $4, $5, '[]'::jsonb, $6, $7, 'generated', $8, $9) RETURNING *`,
-      [cat, d, j.question, JSON.stringify(j.options || []), j.answer, j.explanation, j.claude_example || "", genre, groupId]
+         (category, difficulty, type, question, options, answer, keywords, explanation, claude_example, source, genre, group_id, prerequisites)
+       VALUES ($1, $2, 'choice', $3, $4, $5, '[]'::jsonb, $6, $7, 'generated', $8, $9, $10) RETURNING *`,
+      [cat, d, j.question, JSON.stringify(j.options || []), j.answer, j.explanation, j.claude_example || "", genre, groupId, JSON.stringify(prereqs)]
     );
-    console.log(`[kotonoha] gen OK genre=${genre} d=${d} answer="${j.answer}"`);
+    console.log(`[kotonoha] gen OK genre=${genre} d=${d} answer="${j.answer}" prereq=${prereqs.join(",")}`);
     return rows[0];
   } catch (e) {
     console.warn("[kotonoha] insert failed:", e.message);
@@ -1633,10 +1657,11 @@ async function ensureMinPool(p, email, target = 30) {
     targets = targets.slice(0, need);
     const { rows: ansRows } = await p.query(`SELECT answer FROM kotonoha_questions ORDER BY id DESC LIMIT 100`);
     const excludeAnswers = ansRows.map((r) => r.answer);
+    const knownGenres = await getKnownGenres(p, email);
     dbg.genAttempted = targets.length;
-    console.log(`[kotonoha] ensureMinPool: need=${need} targets=`, targets.map((t) => `${t.genre}@d${t.depth}`).join(","));
+    console.log(`[kotonoha] ensureMinPool: need=${need} knownGenres=${knownGenres.length} targets=`, targets.map((t) => `${t.genre}@d${t.depth}`).join(","));
     const results = await Promise.all(
-      targets.map((t) => generateQuestion(p, { genre: t.genre, depth: t.depth, excludeAnswers })
+      targets.map((t) => generateQuestion(p, { genre: t.genre, depth: t.depth, excludeAnswers, knownGenres })
         .catch((e) => { console.warn(`[kotonoha] gen err ${t.genre}:`, e.message); return null; }))
     );
     dbg.genSucceeded = results.filter(Boolean).length;
@@ -1661,7 +1686,7 @@ app.post("/api/kotonoha/sessions/start", async (req, res) => {
     // プール不足なら sync 生成 (max 8問)
     const debug = await ensureMinPool(p, req.user.email, POOL_TARGET);
 
-    // 出題: depth ゲート + (未回答 OR 不正解継続 OR 正解後 gap 経過) + random
+    // 出題: depth ゲート + prerequisites ゲート + (未回答 OR 不正解 OR gap 経過) + random
     const { rows: questions } = await p.query(`
       WITH ranked AS (
         SELECT question_id, is_correct, ROW_NUMBER() OVER (ORDER BY answered_at) AS pos
@@ -1678,7 +1703,13 @@ app.post("/api/kotonoha/sessions/start", async (req, res) => {
          WHERE pr.user_email = $1 AND pr.is_correct AND q.genre IS NOT NULL
          GROUP BY q.genre
       ),
-      ut AS (SELECT COUNT(*)::int AS total FROM ranked)
+      ut AS (SELECT COUNT(*)::int AS total FROM ranked),
+      -- ユーザーが既に正解実績があるジャンル (prerequisite check 用)
+      known_genres AS (
+        SELECT DISTINCT q.genre FROM kotonoha_progress pr
+          JOIN kotonoha_questions q ON q.id = pr.question_id
+         WHERE pr.user_email = $1 AND pr.is_correct AND q.genre IS NOT NULL
+      )
       SELECT q.*
         FROM kotonoha_questions q
         LEFT JOIN up ON up.question_id = q.id
@@ -1689,6 +1720,15 @@ app.post("/api/kotonoha/sessions/start", async (req, res) => {
          OR ((SELECT total FROM ut) - up.last_correct_pos) >= 50 + (abs(hashtextextended(q.id::text || $1, 0)) % 50)::int
        )
          AND q.difficulty <= COALESCE(gc.n, 0) + 1
+         -- prerequisites ゲート: prereq の全ジャンルにユーザーが正解実績ないと出さない
+         AND (
+           q.prerequisites IS NULL
+           OR jsonb_array_length(q.prerequisites) = 0
+           OR NOT EXISTS (
+             SELECT 1 FROM jsonb_array_elements_text(q.prerequisites) prereq
+              WHERE prereq NOT IN (SELECT genre FROM known_genres)
+           )
+         )
        ORDER BY random()
        LIMIT $2`,
       [req.user.email, SESSION_SIZE]
