@@ -1598,10 +1598,28 @@ JSON:
 }
 
 // フェーズ別に「優先して出題するグループ」を返す。
-// 序盤は IT 入門 + UI 部品 (= 実用的・即役立つ)。マスター進んだら拡張。
+// Phase 1: 実用すぐ役立つ + Claude Code 指示で必要な語彙
+//   - UI 部品名 (モーダル/トースト/FAB) → Claude Code に指示する語彙
+//   - UI デザイン (タップ判定/余白/カード) → 同上
+//   - CSS / レイアウト (position/flex/z-index) → 同上
+//   - 開発フロー (Claude Code / Git / コードレビュー)
+//   - エンジニア心得 (DRY/KISS/YAGNI = 設計方針)
+//   - AI エージェント (Claude Code, プロンプト, MCP)
+//   - IT 入門 (サーバー/OS/URL = 大前提)
+// Phase 2: 基礎概念
+//   - DB / API / AI 基礎 / アルゴリズム / 歴史
+// Phase 3: 専門領域
+//   - インフラ / セキュリティ / Web3 / 3D / 収益化 / wonders / BANAX OS
 function pickPriorityGroups(correctCount) {
-  if (correctCount < 30) return ["it_intro", "ui_parts"];
-  if (correctCount < 80) return ["it_intro", "ui_parts", "ui_design", "css_layout", "db", "api", "devflow", "engineer_mindset"];
+  if (correctCount < 40) return [
+    "it_intro", "ui_parts", "ui_design", "css_layout",
+    "devflow", "engineer_mindset", "ai_agents",
+  ];
+  if (correctCount < 120) return [
+    "it_intro", "ui_parts", "ui_design", "css_layout",
+    "devflow", "engineer_mindset", "ai_agents",
+    "db", "api", "ai_basics", "algorithms", "history",
+  ];
   return null; // 全グループ解禁
 }
 
