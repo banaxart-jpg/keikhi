@@ -201,7 +201,7 @@ async function appendRecordToSheet(r) {
 // クライアントから直接エンドポイントを叩く方式 (請求書は localStorage 管理で DB なし)。
 // 月別×方向 (YYYY-MM-売上 / YYYY-MM-支払) のタブに append、年別サマリータブを自動更新
 // 先頭の「ID」列はサマリー集計時に「同 ID は最新行を採用」するためのキー (画面では非表示)
-const INVOICE_HEADER = ["ID", "発行日", "期限", "状態", "完了日", "振込先", "金額", "分類", "現場", "銀行", "支店", "種別", "口座番号", "名義", "メモ"];
+const INVOICE_HEADER = ["ID", "発行日", "期限", "状態", "完了日", "振込先", "金額", "分類", "現場", "銀行", "支店", "種別", "口座番号", "名義", "メモ", "写真"];
 const SUMMARY_HEADER = ["月", "売上合計", "入金済", "未入金", "支払合計", "支払済", "未払"];
 
 async function appendInvoiceToSheet(r) {
@@ -217,9 +217,16 @@ async function appendInvoiceToSheet(r) {
     const statusLbl = r.status === "paid"
       ? (r.direction === "out" ? "入金済" : "支払済")
       : (r.direction === "out" ? "未入金" : "未払い");
+    // 「写真」セル: seikyu の view パラメータ経由でアプリ内ビューアに飛ばす HYPERLINK
+    const viewUrl = r.imageUrl
+      ? `https://keihi-496002.web.app/seikyu/?view=${encodeURIComponent(r.imageUrl)}`
+      : "";
+    const photoCell = viewUrl
+      ? `=HYPERLINK("${String(viewUrl).replace(/"/g, '""')}","🧾")`
+      : "";
     await sheets.spreadsheets.values.append({
       spreadsheetId: INVOICE_SHEET_ID,
-      range: `${tabName}!A:O`,
+      range: `${tabName}!A:P`,
       valueInputOption: "USER_ENTERED",
       insertDataOption: "INSERT_ROWS",
       requestBody: {
@@ -227,7 +234,7 @@ async function appendInvoiceToSheet(r) {
           r.id || "", r.issueDate || "", r.dueDate || "", statusLbl, r.paidAt || "",
           r.issuer || "", Number(r.total) || 0, r.category || "", r.site || "",
           acc.bank || "", acc.branch || "", acc.type || "", acc.number || "",
-          acc.holder || "", r.memo || "",
+          acc.holder || "", r.memo || "", photoCell,
         ]],
       },
     });
@@ -421,6 +428,27 @@ async function callGeminiWithFallback(content, { primaryModel, maxOutputTokens, 
 app.post("/api/invoice-sheet", async (req, res) => {
   const result = await appendInvoiceToSheet(req.body || {});
   res.json(result);
+});
+
+// 任意の gs://... パスから 5 分有効の signed URL を発行。seikyu のシート連携で
+// 写真リンクをアプリ内表示するために使う。認証経由のみ。
+app.get("/api/image-signed", async (req, res) => {
+  if (!storage) return res.status(503).json({ error: "storage not configured" });
+  const gs = String(req.query.gs || "");
+  if (!gs.startsWith("gs://")) return res.status(400).json({ error: "invalid gs path" });
+  try {
+    const [, , bucket, ...rest] = gs.split("/");
+    const objectPath = rest.join("/");
+    const [url] = await storage.bucket(bucket).file(objectPath).getSignedUrl({
+      version: "v4",
+      action: "read",
+      expires: Date.now() + 5 * 60 * 1000,
+    });
+    res.json({ url });
+  } catch (err) {
+    console.error("image-signed error", err);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 app.post("/api/scan", async (req, res) => {

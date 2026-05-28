@@ -684,13 +684,15 @@ $("submitBtn").addEventListener("click", async () => {
       const idx = bills.findIndex((x) => x.id === editingId);
       if (idx >= 0) bills[idx] = { ...bills[idx], ...rec };
       saveBills();
-      // 編集時もシートに送る（過去データの流し込みにも使える）
-      const sheetRes = await postToSheet(idx >= 0 ? bills[idx] : rec);
-      const okMsg = sheetRes.skipped
-        ? "更新しました"
-        : sheetRes.ok
-          ? "更新しました（シートにも追加）"
-          : "更新しました（シートへの追加は失敗）";
+      // 「未払い/未入金」のままならシートには送らない (完了タイミングで送る方針)
+      // status が paid のレコードを編集した場合のみシートに反映
+      const target = idx >= 0 ? bills[idx] : rec;
+      let okMsg = "更新しました";
+      if (target.status === "paid") {
+        const sheetRes = await postToSheet(target);
+        if (sheetRes.ok) okMsg = "更新しました（シートにも追加）";
+        else if (!sheetRes.skipped) okMsg = "更新しました（シートへの追加は失敗）";
+      }
       toast(okMsg);
       editingId = null;
       tabDir = rec.direction;
@@ -708,13 +710,8 @@ $("submitBtn").addEventListener("click", async () => {
       };
       bills.unshift(newRec);
       saveBills();
-      const sheetRes = await postToSheet(newRec);
-      const okMsg = sheetRes.skipped
-        ? "登録しました"
-        : sheetRes.ok
-          ? "登録しました（シートにも追加）"
-          : "登録（シート追加は失敗）";
-      toast(okMsg);
+      // 新規登録は必ず未払い/未入金なのでシートには送らない (完了したタイミングで送る)
+      toast("登録しました");
       currentDirection = "";
       document.querySelectorAll(".dir-btn").forEach((b) => b.classList.remove("selected"));
       $("srcRow").style.display = "none";
@@ -1030,9 +1027,19 @@ $("imgOverlayClose").addEventListener("click", () => {
 });
 
 // ───────── Boot ─────────
-function boot() {
+async function boot() {
   loadBills();
   refreshSheetState();
+  // ?view=<gs://...> でシートから飛んできたら画像オーバーレイ表示
+  const viewParam = new URLSearchParams(location.search).get("view");
+  if (viewParam && viewParam.startsWith("gs://")) {
+    try {
+      const { url } = await api("GET", `/api/image-signed?gs=${encodeURIComponent(viewParam)}`);
+      $("imgOverlayImg").src = url;
+      $("imgOverlay").style.display = "flex";
+      history.replaceState({}, "", location.pathname);
+    } catch (e) { console.warn("view param failed", e); }
+  }
   showMain();
   // 経費アプリと共有の現場リストは非同期で取得（取れなくても起動はする）
   loadSites();
