@@ -1693,30 +1693,37 @@ ${prereqPool.slice(0, 200).join(" / ")}`;
 形式: 4択
 
 ★絶対ルール (これ守らないと出題不可):
-1. 1問 = 1概念のみ。「${genre}」を主役にする。他のジャンル概念 (例: モーダルとアコーディオンを同時に問う等) を混ぜるのは禁止。
-2. 4択は「${genre}」の同じ性質を比較する形にする (= 1つだけ正しく、3つは明確に違う)。
-3. 「どっち優先?」「どちらの表現を…?」みたいに複数の選択肢が同じくらい妥当な問い方は禁止。一つの明確な正解が必要。
+1. **「${genre}」という用語そのものを question 本文に必ず入れる**。
+   良い例: 「${genre} って何のための道具？」「${genre} はどんな時に使う？」「${genre} の役割は次のうちどれ？」
+   ダメな例 (用語を隠して概念だけ抽象化する): 「データに間違いがないか調べるには？」「何かを並べる時に使うのは？」
+   → 用語を隠すと、4つの選択肢のどれも当てはまりそうで答えられなくなる。
+2. options は **「${genre}」の役割・働き・特徴** を日常語で説明した短い句にする。
+   1つだけ ${genre} を正しく説明し、残り3つは「全然違うことをする道具の説明」にする。
+3. 4択は明確に違う概念の説明にする。「どっち優先？」「どちらの表現を…？」みたいに
+   複数選択肢が同じくらい妥当になる問い方は禁止。一つの明確な正解が必要。
 
 ★★★i+1 ルール (最も重要・絶対遵守):★★★
 1問に含めていい「ユーザーが知らない用語」は **今学んでる「${genre}」の 1 個だけ**。
 2個以上の未知用語があると人間はやる気をなくす。即不採用。
+だが「${genre}」自身は隠さず、堂々と question に書くこと (= 学習対象)。
 
 ${vocabLine}
 
 具体ルール:
-- question 本文 + options(4個) 内では、知らない用語は「${genre}」以外、絶対に1つも入れない
-- 「クライアント / サーバー / プロセス / スレッド / 並行 / キャッシュ / プロビジョニング /
-   スケーリング / メンテナンス」等の専門用語は、ユーザー既知リストに無い場合、
-   options に入れるのも、question 本文で出すのも禁止
-- options は日常語で書く。例:「待つ / 同時にやる / 分ける / まとめる」「速い / 遅い / 違う」
+- 「${genre}」以外の未知用語 (クライアント / サーバー / プロセス / スレッド / 並行 / キャッシュ / プロビジョニング /
+  スケーリング / メンテナンス 等で、ユーザー既知リストに無いもの) は
+  question 本文 / options のどこにも絶対書かない
+- options は日常語の役割説明で書く。
+  良い例 (genre="ハッシュ" の場合): 「データを短い指紋に変える」/「画像を圧縮する」/「データを暗号で隠す」/「データを並べ替える」
+  → どれが ${genre} の説明か明確に1つだけになるよう書く
 - explanation だけは学習の場として関連用語 1-2 個まで使える (使うなら1行で意味を併記)
 - どうしても他の専門用語が必要なら、それを使わず prerequisites に列挙して別問題で学ばせる
 
 ルール:
-- 暗記禁止。「なぜ/いつ/どっち/もしも/歴史」型で。
+- 暗記禁止。「役割は?」「なぜ使う?」「いつ使う?」型で。
 - ★options は各「最大25文字以内」の短い句で。
 - ★4択は一目で違いが分かる対比的な書き方
-- question 本文は 80文字以内目安。短く、ハッキリ問う。
+- question 本文は 80文字以内目安。短く、ハッキリ問う。「${genre}」を必ず含む。
 - options は letter prefix なし
 - answer は options 内の文字列と完全一致
 - 解説 (explanation) は3-5文、役割 + 判断軸 + へぇートリビア ${triviaLine}
@@ -2071,28 +2078,17 @@ app.post("/api/kotonoha/sessions/start", async (req, res) => {
     }
     questions = questions.slice(0, SESSION_SIZE);
 
-    // UI demo を結合: 「この機能の名前は?」型 (ui_parts) は demo が無いと答えようがない。
-    // css_layout は AI 生成デモが空 iframe になりがち & 質問文だけで答えられるので
-    // demo 対象から外す。
+    // UI demo: ハードコード集 (frontend UI_DEMOS) のみ。AI 生成 DB 行は壊れた
+    // 描画が出るので一切 attach しない。hardcoded に無い ui_parts 問題は出題から外す。
     const demoGroups = new Set(["ui_parts"]);
     const uiGenres = [...new Set(questions.filter((q) => demoGroups.has(q.group_id) && q.genre).map((q) => q.genre))];
     let missingDemoGenres = [];
     if (uiGenres.length) {
-      const { rows: dRows } = await p.query(
-        `SELECT genre, demo_html FROM kotonoha_ui_demos WHERE genre = ANY($1::text[])`,
-        [uiGenres]
-      );
-      const demoMap = new Map(dRows.map((r) => [r.genre, r.demo_html]));
-      for (const q of questions) {
-        if (demoMap.has(q.genre)) q.demo_html = demoMap.get(q.genre);
-      }
-      // HARDCODED_UI_DEMO_GENRES: フロント側 UI_DEMOS のキー (module top で定義)
-      missingDemoGenres = uiGenres.filter((g) => !demoMap.has(g) && !HARDCODED_UI_DEMO_GENRES.has(g));
+      missingDemoGenres = uiGenres.filter((g) => !HARDCODED_UI_DEMO_GENRES.has(g));
       if (missingDemoGenres.length) {
-        // 出題前 filter: demo 無し UI 問題は今回は出さない
         questions = questions.filter((q) => {
           if (!demoGroups.has(q.group_id) || !q.genre) return true;
-          return demoMap.has(q.genre) || HARDCODED_UI_DEMO_GENRES.has(q.genre);
+          return HARDCODED_UI_DEMO_GENRES.has(q.genre);
         });
       }
     }
@@ -2137,13 +2133,7 @@ app.post("/api/kotonoha/sessions/start", async (req, res) => {
           bgTargets.map((genre) => generateQuestion(p, { genre, depth: 1, excludeAnswers, knownGenres })
             .catch((e) => { console.warn(`[kotonoha] bg gen ${genre}:`, e.message); return null; }))
         );
-        // 出題から外した UI デモも、次回までに用意 (1回6個まで, 並列だと AI quota キツいので逐次)
-        for (const g of missingDemoGenres.slice(0, 6)) {
-          const gid = KOTONOHA_GENRE_TO_GROUP.get(g);
-          await generateUiDemo(p, g, gid).catch((e) =>
-            console.warn(`[kotonoha] ui demo gen ${g}:`, e.message)
-          );
-        }
+        // UI デモは hardcoded のみ。AI 生成は廃止 (品質安定しないため)。
       } catch (e) {
         console.warn("[kotonoha] post-response bg gen skipped:", e.message);
       }
@@ -2462,9 +2452,13 @@ app.post("/api/kotonoha/wipe-all", async (req, res) => {
   if (!p) return res.status(503).json({ error: "DB not configured" });
   try {
     const before = await p.query(`SELECT count(*)::int AS n FROM kotonoha_questions`);
+    const beforeUi = await p.query(`SELECT count(*)::int AS n FROM kotonoha_ui_demos`);
     await p.query(`DELETE FROM kotonoha_questions`);
-    console.log(`[kotonoha] wipe-all by ${req.user.email}: deleted ${before.rows[0]?.n}`);
-    res.json({ ok: true, deleted: before.rows[0]?.n || 0 });
+    // 旧 AI 生成 UI デモ (kotonoha_ui_demos) も掃除。今はもう参照しないが、残骸を消して
+    // テーブルを空にしておく。
+    await p.query(`DELETE FROM kotonoha_ui_demos`);
+    console.log(`[kotonoha] wipe-all by ${req.user.email}: deleted ${before.rows[0]?.n} questions, ${beforeUi.rows[0]?.n} ui_demos`);
+    res.json({ ok: true, deleted: before.rows[0]?.n || 0, deletedUiDemos: beforeUi.rows[0]?.n || 0 });
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
   }
