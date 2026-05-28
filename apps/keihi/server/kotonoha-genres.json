@@ -76,7 +76,13 @@
         { "name": "Web サイトと Web アプリ", "target_count": 10 },
         { "name": "ネットワーク (基礎)",     "target_count": 10 },
         { "name": "セキュリティ (基礎)",     "target_count": 10 },
-        { "name": "ファイヤーウォール (基礎)", "target_count": 10 }
+        { "name": "ファイヤーウォール (基礎)", "target_count": 10 },
+        { "name": "隠しファイル (ドットファイル)", "target_count": 10 },
+        { "name": "設定ファイル",            "target_count": 10 },
+        { "name": "パス (ファイルパス)",     "target_count": 10 },
+        { "name": "テキストファイルとバイナリファイル", "target_count": 10 },
+        { "name": "文字コード (UTF-8 等)",   "target_count": 10 },
+        { "name": "改行コード (LF/CRLF)",    "target_count": 10 }
       ]
     },
     {
