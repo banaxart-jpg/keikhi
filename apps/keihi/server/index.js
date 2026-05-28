@@ -1573,6 +1573,25 @@ try {
 
 // UI テンプレ適用グループ (汎用化のため content config に外出し)
 const UI_TEMPLATE_GROUPS = new Set(KOTONOHA_GENRES_DATA?.ui_template_groups || []);
+// ui_parts の中でも「これ知らなきゃ話にならない」基本セット。
+// 初期 (= ユーザーの ui_parts unique 正解数 < UI_TIER1_THRESHOLD) は
+// これだけ出題する。マスター済になったら全 ui_parts 解禁。
+const UI_TIER1_THRESHOLD = 18; // tier1 を概ね一周したら次に進む目安
+const UI_TIER1_GENRES = new Set([
+  // 入力系 (フォーム部品)
+  "テキスト入力 (input)","テキストエリア (textarea)","パスワード入力","数値入力",
+  "検索バー","チェックボックス","ラジオボタン","スイッチ / トグル",
+  "セレクト / ドロップダウン","ラベル",
+  // ボタン
+  "ボタン (Primary)","セカンダリボタン","アイコンボタン","送信ボタン",
+  // ナビゲーション / 構造
+  "ヘッダー / トップバー","フッター","タブ","ハンバーガーメニュー","戻るボタン",
+  // フィードバック / 状態
+  "モーダル","ダイアログ","トースト","ツールチップ",
+  "プログレスバー","スピナー / ローダー","スケルトン",
+  // 表示
+  "カード","リスト / テーブル","アイコン","バッジ","アバター",
+]);
 const UI_TEMPLATE_GENRES_BY_GROUP = (() => {
   const m = new Map();
   for (const gid of UI_TEMPLATE_GROUPS) {
@@ -1968,11 +1987,21 @@ async function ensureMinPool(p, email, target = 30) {
     const correctByGenre = new Map(correctRows.map((r) => [r.genre, r.correct]));
     const freqByGenre = new Map(freqRows.map((r) => [r.genre, Number(r.total_freq)]));
 
-    // 全 master ジャンル (priorityGroups でフィルタ) を candidates に
+    // ui_parts tier1 ゲート: 序盤は基本セットだけ gen 対象にする (出題側と整合)
+    const { rows: uiCorrRows } = await p.query(
+      `SELECT COUNT(DISTINCT q.id)::int AS n FROM kotonoha_questions q
+         JOIN kotonoha_progress pr ON pr.question_id = q.id
+        WHERE pr.user_email = $1 AND pr.is_correct AND q.group_id = 'ui_parts'`,
+      [email]
+    );
+    const uiTier1Only = (uiCorrRows[0]?.n || 0) < UI_TIER1_THRESHOLD;
+
+    // 全 master ジャンル (priorityGroups + tier1 でフィルタ) を candidates に
     const allCandidates = [];
     for (const g of (KOTONOHA_GENRES_DATA?.groups || [])) {
       if (priorityGroups && !priorityGroups.includes(g.id)) continue;
       for (const gen of g.genres) {
+        if (uiTier1Only && g.id === "ui_parts" && !UI_TIER1_GENRES.has(gen.name)) continue;
         allCandidates.push({
           genre: gen.name,
           group_id: g.id,
@@ -2079,9 +2108,21 @@ app.post("/api/kotonoha/sessions/start", async (req, res) => {
       ut AS (SELECT COUNT(*)::int AS total FROM ranked)`;
     // i+1: prerequisites に列挙された全ジャンルでユーザーが1個以上正解してないとブロック。
     // depth=1 の問題は prereq=[] なので常に通る (foundational)。
+    // ui_parts は最初に基本セット (UI_TIER1_GENRES) だけ。マスター済になったら
+    // tier2 (リサイズハンドル等の esoteric) も解禁。
+    const { rows: uiCorrRows } = await p.query(
+      `SELECT COUNT(DISTINCT q.id)::int AS n FROM kotonoha_questions q
+         JOIN kotonoha_progress pr ON pr.question_id = q.id
+        WHERE pr.user_email = $1 AND pr.is_correct AND q.group_id = 'ui_parts'`,
+      [req.user.email]
+    );
+    const uiCorrect = uiCorrRows[0]?.n || 0;
+    const uiTier1Only = uiCorrect < UI_TIER1_THRESHOLD;
+    const tier1Arr = uiTier1Only ? [...UI_TIER1_GENRES] : null;
     const commonAnd = `
          AND q.difficulty <= COALESCE(gc.n, 0) + 1
          AND ($3::text[] IS NULL OR q.group_id = ANY($3::text[]))
+         AND ($4::text[] IS NULL OR q.group_id <> 'ui_parts' OR q.genre = ANY($4::text[]))
          AND NOT EXISTS (
            SELECT 1 FROM jsonb_array_elements_text(COALESCE(q.prerequisites, '[]'::jsonb)) AS prereq_g
             WHERE NOT EXISTS (SELECT 1 FROM gc WHERE gc.genre = prereq_g)
@@ -2098,7 +2139,7 @@ app.post("/api/kotonoha/sessions/start", async (req, res) => {
          ${commonAnd}
        ORDER BY random()
        LIMIT $2`,
-      [req.user.email, SESSION_SIZE, priorityGroups]
+      [req.user.email, SESSION_SIZE, priorityGroups, tier1Arr]
     );
     let { rows: newRows } = await runNewQuery();
 
@@ -2117,7 +2158,7 @@ app.post("/api/kotonoha/sessions/start", async (req, res) => {
          ${commonAnd}
        ORDER BY random()
        LIMIT $2`,
-      [req.user.email, SESSION_SIZE, priorityGroups]
+      [req.user.email, SESSION_SIZE, priorityGroups, tier1Arr]
     );
 
     // ★ fallback: pool が壊滅的に薄ければ (NEW+REVIEW合計 0) もう一度ガッツリ gen して再 SELECT
