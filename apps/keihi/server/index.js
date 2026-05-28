@@ -120,9 +120,34 @@ async function ensureSheetTabGeneric(sheets, spreadsheetId, ym, header, dateCols
   const key = `${spreadsheetId}:${ym}`;
   if (sheetEnsuredCache.has(key)) return;
   const meta = await sheets.spreadsheets.get({ spreadsheetId, fields: "sheets.properties" });
-  const found = (meta.data.sheets || []).find((s) => s.properties && s.properties.title === ym);
+  let found = (meta.data.sheets || []).find((s) => s.properties && s.properties.title === ym);
   let sheetId;
-  const isNew = !found;
+  let isNew = !found;
+  // 既存タブのヘッダーが今のフォーマットと違ったら、安全のため -old にリネームして新規作成
+  if (found) {
+    try {
+      const a1 = await sheets.spreadsheets.values.get({ spreadsheetId, range: `${ym}!A1:A1` });
+      const firstCell = a1.data.values?.[0]?.[0];
+      if (firstCell !== header[0]) {
+        // 旧フォーマット → リネームして新規作成
+        const oldTitle = `${ym}-old`;
+        await sheets.spreadsheets.batchUpdate({
+          spreadsheetId,
+          requestBody: { requests: [{
+            updateSheetProperties: {
+              properties: { sheetId: found.properties.sheetId, title: oldTitle },
+              fields: "title",
+            },
+          }] },
+        });
+        console.log(`[sheets] renamed legacy tab ${ym} → ${oldTitle} (header mismatch)`);
+        found = null;
+        isNew = true;
+      }
+    } catch (e) {
+      console.warn(`[sheets] header check failed for ${ym}: ${e.message}`);
+    }
+  }
   if (isNew) {
     const res = await sheets.spreadsheets.batchUpdate({
       spreadsheetId,
