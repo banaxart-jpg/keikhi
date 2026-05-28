@@ -116,13 +116,14 @@ async function getSheetsApi() {
 }
 const SHEET_HEADER = ["購入日", "購入者", "現場", "店舗", "金額", "費目", "工種", "支払方法", "メモ", "写真"];
 const sheetEnsuredCache = new Set(); // key = "<spreadsheetId>:<tab>" 1 度ヘッダー作ったタブはキャッシュ
-async function ensureSheetTabGeneric(sheets, spreadsheetId, ym, header, dateCols = []) {
+async function ensureSheetTabGeneric(sheets, spreadsheetId, ym, header, dateCols = [], hiddenCols = []) {
   const key = `${spreadsheetId}:${ym}`;
   if (sheetEnsuredCache.has(key)) return;
   const meta = await sheets.spreadsheets.get({ spreadsheetId, fields: "sheets.properties" });
   const found = (meta.data.sheets || []).find((s) => s.properties && s.properties.title === ym);
   let sheetId;
-  if (!found) {
+  const isNew = !found;
+  if (isNew) {
     const res = await sheets.spreadsheets.batchUpdate({
       spreadsheetId,
       requestBody: { requests: [{ addSheet: { properties: { title: ym, index: 0, gridProperties: { frozenRowCount: 1 } } } }] },
@@ -137,25 +138,33 @@ async function ensureSheetTabGeneric(sheets, spreadsheetId, ym, header, dateCols
   } else {
     sheetId = found.properties.sheetId;
   }
-  // 指定された列に「日付書式 (yyyy-mm-dd)」を適用 (ヘッダー行は除く)
-  if (sheetId != null && dateCols.length) {
-    await sheets.spreadsheets.batchUpdate({
-      spreadsheetId,
-      requestBody: {
-        requests: dateCols.map((col) => ({
-          repeatCell: {
-            range: { sheetId, startRowIndex: 1, startColumnIndex: col, endColumnIndex: col + 1 },
-            cell: { userEnteredFormat: { numberFormat: { type: "DATE", pattern: "yyyy-mm-dd" } } },
-            fields: "userEnteredFormat.numberFormat",
+  if (sheetId != null && (dateCols.length || (isNew && hiddenCols.length))) {
+    const requests = [];
+    for (const col of dateCols) {
+      requests.push({
+        repeatCell: {
+          range: { sheetId, startRowIndex: 1, startColumnIndex: col, endColumnIndex: col + 1 },
+          cell: { userEnteredFormat: { numberFormat: { type: "DATE", pattern: "yyyy-mm-dd" } } },
+          fields: "userEnteredFormat.numberFormat",
+        },
+      });
+    }
+    if (isNew) {
+      for (const col of hiddenCols) {
+        requests.push({
+          updateDimensionProperties: {
+            range: { sheetId, dimension: "COLUMNS", startIndex: col, endIndex: col + 1 },
+            properties: { hiddenByUser: true },
+            fields: "hiddenByUser",
           },
-        })),
-      },
-    });
+        });
+      }
+    }
+    if (requests.length) await sheets.spreadsheets.batchUpdate({ spreadsheetId, requestBody: { requests } });
   }
   sheetEnsuredCache.add(key);
 }
 async function ensureSheetTab(sheets, ym) {
-  // 経費: A 列 (購入日) のみ日付
   return ensureSheetTabGeneric(sheets, SHEET_ID, ym, SHEET_HEADER, [0]);
 }
 async function appendRecordToSheet(r) {
@@ -191,7 +200,8 @@ async function appendRecordToSheet(r) {
 // ───── 請求書 (seikyu) 用 Sheets append ─────
 // クライアントから直接エンドポイントを叩く方式 (請求書は localStorage 管理で DB なし)。
 // 月別×方向 (YYYY-MM-売上 / YYYY-MM-支払) のタブに append、年別サマリータブを自動更新
-const INVOICE_HEADER = ["発行日", "期限", "状態", "完了日", "振込先", "金額", "分類", "現場", "銀行", "支店", "種別", "口座番号", "名義", "メモ"];
+// 先頭の「ID」列はサマリー集計時に「同 ID は最新行を採用」するためのキー (画面では非表示)
+const INVOICE_HEADER = ["ID", "発行日", "期限", "状態", "完了日", "振込先", "金額", "分類", "現場", "銀行", "支店", "種別", "口座番号", "名義", "メモ"];
 const SUMMARY_HEADER = ["月", "売上合計", "入金済", "未入金", "支払合計", "支払済", "未払"];
 
 async function appendInvoiceToSheet(r) {
@@ -201,20 +211,20 @@ async function appendInvoiceToSheet(r) {
     const ym = String(r.issueDate || (r.createdAt || "").slice(0, 10) || "").slice(0, 7) || "unknown";
     const dirLbl = r.direction === "out" ? "売上" : "支払";
     const tabName = `${ym}-${dirLbl}`;
-    // 月別×方向タブ。日付列 = 発行日(0), 期限(1), 完了日(3)
-    await ensureSheetTabGeneric(sheets, INVOICE_SHEET_ID, tabName, INVOICE_HEADER, [0, 1, 3]);
+    // 月別×方向タブ。日付列 = 発行日(1), 期限(2), 完了日(4)、ID 列(0) を非表示
+    await ensureSheetTabGeneric(sheets, INVOICE_SHEET_ID, tabName, INVOICE_HEADER, [1, 2, 4], [0]);
     const acc = r.account || {};
     const statusLbl = r.status === "paid"
       ? (r.direction === "out" ? "入金済" : "支払済")
       : (r.direction === "out" ? "未入金" : "未払い");
     await sheets.spreadsheets.values.append({
       spreadsheetId: INVOICE_SHEET_ID,
-      range: `${tabName}!A:N`,
+      range: `${tabName}!A:O`,
       valueInputOption: "USER_ENTERED",
       insertDataOption: "INSERT_ROWS",
       requestBody: {
         values: [[
-          r.issueDate || "", r.dueDate || "", statusLbl, r.paidAt || "",
+          r.id || "", r.issueDate || "", r.dueDate || "", statusLbl, r.paidAt || "",
           r.issuer || "", Number(r.total) || 0, r.category || "", r.site || "",
           acc.bank || "", acc.branch || "", acc.type || "", acc.number || "",
           acc.holder || "", r.memo || "",
@@ -235,10 +245,10 @@ async function appendInvoiceToSheet(r) {
 }
 
 // 年別サマリータブ (YYYY-サマリー) の対象月の行を更新
+// 同じ ID の行が複数あれば「最後の行 (最新の状態)」だけ集計に使う
 async function updateInvoiceSummary(sheets, year, ym) {
   const summaryTab = `${year}-サマリー`;
   await ensureSheetTabGeneric(sheets, INVOICE_SHEET_ID, summaryTab, SUMMARY_HEADER, []);
-  // 売上タブと支払タブを読み込んで集計
   const sales = { total: 0, paid: 0, unpaid: 0 };
   const exp = { total: 0, paid: 0, unpaid: 0 };
   for (const [tab, target, paidLbl] of [
@@ -248,19 +258,25 @@ async function updateInvoiceSummary(sheets, year, ym) {
     try {
       const res = await sheets.spreadsheets.values.get({
         spreadsheetId: INVOICE_SHEET_ID,
-        range: `${tab}!A2:F`,
+        range: `${tab}!A2:G`, // ID(0), 発行日(1), 期限(2), 状態(3), 完了日(4), 振込先(5), 金額(6)
         valueRenderOption: "UNFORMATTED_VALUE",
       });
+      // 同 ID は後勝ち。ID 無し (旧データ) はインデックスをキーに個別扱い
+      const latestById = new Map();
+      let noIdSeq = 0;
       for (const row of res.data.values || []) {
-        const status = row[2] || "";
-        const amount = Number(row[5]) || 0;
+        const id = String(row[0] || "");
+        latestById.set(id || `__noid_${noIdSeq++}`, row);
+      }
+      for (const row of latestById.values()) {
+        const status = row[3] || "";
+        const amount = Number(row[6]) || 0;
         target.total += amount;
         if (status === paidLbl) target.paid += amount;
         else target.unpaid += amount;
       }
     } catch { /* タブが無い場合は無視 */ }
   }
-  // サマリータブの ym 行を find or insert
   const sumRes = await sheets.spreadsheets.values.get({
     spreadsheetId: INVOICE_SHEET_ID,
     range: `${summaryTab}!A:A`,
