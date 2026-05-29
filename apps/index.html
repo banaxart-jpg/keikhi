@@ -124,7 +124,7 @@ async function fetchTechstudyBadge(user) {
 }
 
 // 社内 (= 全ミニアプリ可) 限定の email。これ以外は techstudy だけ表示。
-const INTERNAL_EMAILS = new Set(["info@banax.tokyo", "konishi0221@gmail.com"]);
+const INTERNAL_EMAILS = new Set(["info@banax.tokyo", "konishi0221@gmail.com", "banaxart@gmail.com"]);
 let currentUserEmail = null;
 function isInternal() { return INTERNAL_EMAILS.has((currentUserEmail || "").toLowerCase()); }
 
