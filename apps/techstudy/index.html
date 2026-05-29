@@ -995,10 +995,63 @@ function renderPeers(peers) {
         <div class="peer-name">${escapeHtml(p.display_name)}</div>
         <div class="peer-level">LV. <strong>${p.level}</strong> ・ 平均 ${avg}%${streakBadge}</div>
       </div>
-      <div class="cats">${bars}</div>`;
+      <div class="cats">${bars}</div>
+      <div style="text-align:right; margin-top:8px; font-size:10px; color:var(--text3); font-weight:700;">タップで覚えた語を見る →</div>`;
+    div.style.cursor = "pointer";
+    div.onclick = () => window.openPeerLearned(p.user_email, p.display_name);
     list.appendChild(div);
   }
 }
+
+// owner 専用: peer の覚えた語リストをモーダルで表示
+window.openPeerLearned = async function (email, displayName) {
+  if (!email) return;
+  let modal = $("peerLearnedModal");
+  if (!modal) {
+    modal = document.createElement("div");
+    modal.id = "peerLearnedModal";
+    modal.style.cssText = "position:fixed;inset:0;z-index:1400;background:rgba(0,0,0,0.5);display:flex;align-items:center;justify-content:center;padding:20px;";
+    modal.onclick = (e) => { if (e.target === modal) modal.remove(); };
+    document.body.appendChild(modal);
+  }
+  modal.innerHTML = `
+    <div style="background:var(--bg); border-radius:18px; max-width:480px; width:100%; max-height:85vh; display:flex; flex-direction:column; padding:18px; box-shadow:10px 10px 30px var(--sd);">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+        <div>
+          <div style="font-size:11px; color:var(--text3); font-weight:700; letter-spacing:0.12em; text-transform:uppercase;">覚えた語</div>
+          <div style="font-size:16px; font-weight:800; margin-top:2px;">${escapeHtml(displayName || email)}</div>
+          <div style="font-size:10px; color:var(--text3); font-family:ui-monospace,Menlo,monospace;">${escapeHtml(email)}</div>
+        </div>
+        <button onclick="document.getElementById('peerLearnedModal').remove()" style="background:none;border:none;font-size:22px;color:var(--text2);cursor:pointer;line-height:1;padding:6px;">×</button>
+      </div>
+      <div id="peerLearnedBody" style="flex:1; overflow-y:auto; padding-right:4px;">
+        <div class="empty">読み込み中…</div>
+      </div>
+    </div>`;
+  try {
+    const r = await api("GET", `/api/kotonoha/peer-learned?email=${encodeURIComponent(email)}`);
+    const body = document.getElementById("peerLearnedBody");
+    const list = r.learned || [];
+    if (!list.length) {
+      body.innerHTML = `<div class="empty">まだ覚えた語なし (2回正解 & 85%以上が条件)</div>`;
+      return;
+    }
+    body.innerHTML = `<div style="font-size:11px; color:var(--text2); margin-bottom:10px;">${list.length} 語</div>` +
+      list.map((w) => {
+        const c = state.groupColorMap.get(w.group_id) || "var(--accent)";
+        return `<details style="margin-bottom:6px; background:var(--bg); padding:10px 12px; border-radius:10px; box-shadow:3px 3px 8px var(--sd), -2px -2px 6px var(--sl);">
+          <summary style="cursor:pointer; font-weight:700; font-size:13px; display:flex; align-items:center; gap:8px;">
+            <span style="width:8px;height:8px;border-radius:2px;background:${c};flex-shrink:0;"></span>
+            <span style="flex:1;">${escapeHtml(w.label)}</span>
+          </summary>
+          <div style="font-size:12px; color:var(--text2); margin-top:8px; line-height:1.6; padding-left:16px; border-left:2px solid ${c};">${escapeHtml(w.explanation || "")}</div>
+        </details>`;
+      }).join("");
+  } catch (e) {
+    const body = document.getElementById("peerLearnedBody");
+    if (body) body.innerHTML = `<div class="err">エラー: ${escapeHtml(e.message)}</div>`;
+  }
+};
 
 // ───── セッション (キュー方式 + リトライループ) ─────
 async function startSession(genre) {

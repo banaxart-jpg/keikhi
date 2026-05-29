@@ -2881,6 +2881,49 @@ app.get("/api/kotonoha/me", async (req, res) => {
   }
 });
 
+// オーナー専用: 指定 user の覚えた語リスト (label-level mastery)。
+// peer card クリック時に呼ばれる。
+app.get("/api/kotonoha/peer-learned", async (req, res) => {
+  const email = String(req.user?.email || "").toLowerCase();
+  if (!KOTONOHA_OWNER_EMAILS.has(email)) return res.status(403).json({ error: "owner only" });
+  const target = String(req.query?.email || "").toLowerCase();
+  if (!target) return res.status(400).json({ error: "email required" });
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  try {
+    const { rows: learned } = await p.query(
+      `WITH per_label AS (
+         SELECT COALESCE(NULLIF(q.genre, ''), q.answer) AS label,
+                COUNT(*)::int AS attempts,
+                COUNT(*) FILTER (WHERE pr.is_correct)::int AS correct_count,
+                MAX(pr.answered_at) AS last_seen
+           FROM kotonoha_progress pr
+           JOIN kotonoha_questions q ON q.id = pr.question_id
+          WHERE pr.user_email = $1
+            AND char_length(COALESCE(NULLIF(q.genre, ''), q.answer)) BETWEEN 2 AND 24
+          GROUP BY COALESCE(NULLIF(q.genre, ''), q.answer)
+       )
+       SELECT pl.label, pl.last_seen AS answered_at, q2.group_id, q2.explanation
+         FROM per_label pl
+         CROSS JOIN LATERAL (
+           SELECT q.group_id, q.explanation
+             FROM kotonoha_questions q
+            WHERE COALESCE(NULLIF(q.genre, ''), q.answer) = pl.label
+            ORDER BY q.id DESC
+            LIMIT 1
+         ) q2
+        WHERE pl.attempts >= 2 AND pl.correct_count::float / pl.attempts >= 0.85
+        ORDER BY pl.last_seen DESC
+        LIMIT 200`,
+      [target]
+    );
+    res.json({ email: target, learned });
+  } catch (err) {
+    console.error("kotonoha peer-learned", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // 他メンバーのステータス: オーナー (社長) のみ閲覧可。
 // 従業員同士は不可 — owner 以外は空配列固定 (visible_to_peers 設定は無視)。
 app.get("/api/kotonoha/peers", async (req, res) => {
@@ -2912,6 +2955,7 @@ app.get("/api/kotonoha/peers", async (req, res) => {
         ).then((r) => r.rows),
       ]);
       result.push({
+        user_email: u.user_email,
         display_name: u.display_name,
         level: u.level,
         total_correct: u.total_correct,
