@@ -108,6 +108,7 @@ body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); 
 <script type="module">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js";
 import { getAuth, onAuthStateChanged, setPersistence, browserLocalPersistence } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
+import { gateInternal } from "/internal-gate.js";
 
 // ───────── AI 利用するミニアプリの設定 ─────────
 // 新しいAIアプリを追加するときは、ここに1ブロック足すだけ。
@@ -187,6 +188,7 @@ let fbAuth = null;
     cfg.authDomain = location.hostname;
     fbAuth = getAuth(initializeApp(cfg));
     await setPersistence(fbAuth, browserLocalPersistence);
+    gateInternal(fbAuth);
 
     onAuthStateChanged(fbAuth, async (user) => {
       if (!user) {

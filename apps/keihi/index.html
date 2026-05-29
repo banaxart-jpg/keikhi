@@ -301,6 +301,7 @@ import {
   setPersistence, browserLocalPersistence,
   onAuthStateChanged, signOut,
 } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
+import { gateInternal } from "/internal-gate.js";
 
 // ───────── Config / Auth ─────────
 // API は Firebase Hosting の rewrite で同一オリジン (/api/**) → Cloud Run。
@@ -332,6 +333,7 @@ async function idToken() {
     cfg.authDomain = location.hostname; // 認証フローを Hosting と同一オリジンに（iOS Safari ITP でセッション喪失するため）
     fbAuth = getAuth(initializeApp(cfg));
     await setPersistence(fbAuth, browserLocalPersistence);
+    gateInternal(fbAuth); // 社外メールはランチャーに弾く
 
     let entered = false;
     async function enterApp() {

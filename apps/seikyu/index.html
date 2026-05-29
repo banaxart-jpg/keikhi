@@ -302,6 +302,7 @@ import {
   getAuth, setPersistence, browserLocalPersistence,
   onAuthStateChanged, signOut,
 } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
+import { gateInternal } from "/internal-gate.js";
 
 // ───────── Config / Auth ─────────
 const API_BASE = (window.API_BASE || "").replace(/\/$/, "");
@@ -322,6 +323,7 @@ async function idToken() {
     cfg.authDomain = location.hostname;
     fbAuth = getAuth(initializeApp(cfg));
     await setPersistence(fbAuth, browserLocalPersistence);
+    gateInternal(fbAuth);
 
     let entered = false;
     onAuthStateChanged(fbAuth, async (user) => {

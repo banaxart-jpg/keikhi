@@ -295,6 +295,7 @@ import {
   getAuth, setPersistence, browserLocalPersistence,
   onAuthStateChanged, signOut,
 } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
+import { gateInternal } from "/internal-gate.js";
 
 const API_BASE = (window.API_BASE || "").replace(/\/$/, "");
 let fbAuth = null;
@@ -311,6 +312,7 @@ async function idToken() { const u = fbAuth?.currentUser; return u ? await u.get
     cfg.authDomain = location.hostname;
     fbAuth = getAuth(initializeApp(cfg));
     await setPersistence(fbAuth, browserLocalPersistence);
+    gateInternal(fbAuth);
     let entered = false;
     onAuthStateChanged(fbAuth, async (user) => {
       if (user) { if (!entered) { entered = true; sessionStorage.removeItem("authBounce"); document.getElementById("signinOverlay").style.display = "none"; boot(); } return; }

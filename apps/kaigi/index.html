@@ -245,6 +245,7 @@ textarea:focus, input:focus { outline: none; }
 <script type="module">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js";
 import { getAuth, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
+import { gateInternal } from "/internal-gate.js";
 
 const SPEAKERS = [
   { name: "Gemini", provider: "gemini", short: "G", color: "var(--gemini)" },
@@ -1072,6 +1073,7 @@ renderSpeakersPreview();
     const cfg = await fetch("/__/firebase/init.json").then((r) => r.json());
     cfg.authDomain = location.hostname;
     const auth = getAuth(initializeApp(cfg));
+    gateInternal(auth);
     onAuthStateChanged(auth, async (user) => {
       if (!user) { location.href = "/?next=" + encodeURIComponent(location.pathname); return; }
       firebaseUser = user;
