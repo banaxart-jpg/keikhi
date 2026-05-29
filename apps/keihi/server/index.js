@@ -2850,7 +2850,7 @@ app.get("/api/kotonoha/me", async (req, res) => {
             ORDER BY q.id DESC
             LIMIT 1
          ) q2
-        WHERE pl.attempts >= 3 AND pl.correct_count::float / pl.attempts >= 0.85
+        WHERE pl.attempts >= 2 AND pl.correct_count::float / pl.attempts >= 0.85
         ORDER BY pl.last_seen DESC
         LIMIT 200`,
       [req.user.email]
