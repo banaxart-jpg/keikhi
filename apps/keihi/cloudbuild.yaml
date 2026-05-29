@@ -95,6 +95,28 @@ steps:
           -d '{}' || true
         echo "hosting site ensured: ${_HOSTING_SITE}"
 
+  - id: svg-to-png
+    name: node:20
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        set -e
+        # apple-touch-icon は iOS が PNG しか確実に認識しないので、SVG から
+        # 各アプリの PNG (180x180) を生成して同じディレクトリに置く。
+        npm install --prefix /tmp sharp --silent --no-audit --no-fund
+        node -e "
+          const sharp = require('/tmp/node_modules/sharp');
+          const svgs = ['apps/icon.svg','apps/keihi/icon.svg','apps/keihi2/icon.svg','apps/seikyu/icon.svg'];
+          (async () => {
+            for (const svg of svgs) {
+              const png = svg.replace(/\.svg$/, '.png');
+              await sharp(svg, { density: 300 }).resize(180, 180).png().toFile(png);
+              console.log('converted', svg, '->', png);
+            }
+          })();
+        "
+
   - id: deploy-hosting
     name: node:20
     entrypoint: bash
