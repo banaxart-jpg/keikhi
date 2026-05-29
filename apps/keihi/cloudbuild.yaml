@@ -10,9 +10,10 @@ substitutions:
   # Who may invoke the Cloud Run API from the browser (org policy blocks
   # allUsers/allAuthenticatedUsers, so a specific principal is required).
   _INVOKER: user:info@banax.tokyo
-  # Comma-separated emails allowed to use /api/* (Firebase ID token gate).
-  # Empty = any authenticated user of this Firebase project.
-  _ALLOWED_EMAILS: info@banax.tokyo,konishi0221@gmail.com,banaxart@gmail.com
+  # Comma-separated emails allowed to use /api/* (Firebase ID token gate)。
+  # techstudy (/api/kotonoha/*) は別途 isKotonoha バイパスで全認証ユーザーに開放。
+  # それ以外 (経費 / 請求書 / kaigi 等) は社内 2 アカウントだけ。
+  _ALLOWED_EMAILS: info@banax.tokyo,konishi0221@gmail.com
   # Firebase Hosting site id for the keihi frontend (must be globally unique).
   _HOSTING_SITE: keihi-496002
 

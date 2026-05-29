@@ -123,10 +123,16 @@ async function fetchTechstudyBadge(user) {
   } catch (e) { /* silent */ }
 }
 
+// 社内 (= 全ミニアプリ可) 限定の email。これ以外は techstudy だけ表示。
+const INTERNAL_EMAILS = new Set(["info@banax.tokyo", "konishi0221@gmail.com"]);
+let currentUserEmail = null;
+function isInternal() { return INTERNAL_EMAILS.has((currentUserEmail || "").toLowerCase()); }
+
 function renderGrid() {
   const g = document.getElementById("grid");
   g.innerHTML = "";
-  for (const a of APPS) {
+  const visible = APPS.filter((a) => isInternal() || a.id === "techstudy");
+  for (const a of visible) {
     const card = document.createElement("button");
     card.className = "app-card" + (a.soon ? " soon" : "");
     if (a.accent) card.style.setProperty("--accent", a.accent);
@@ -217,6 +223,7 @@ let fbAuth = null;
       done = true;
       diagLog(`onAuthed → ${nextUrl || "grid"}`);
       clearDiag();
+      currentUserEmail = user?.email || null;
       // 元のミニアプリへ自動復帰（ログイン後に経費へ戻る等）
       if (nextUrl && nextUrl.startsWith("/")) { location.replace(nextUrl); return; }
       document.getElementById("signinOverlay").style.display = "none";
