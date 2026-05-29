@@ -1036,13 +1036,26 @@ $("imgOverlayClose").addEventListener("click", () => {
 async function boot() {
   loadBills();
   refreshSheetState();
-  // ?view=<gs://...> でシートから飛んできたら画像オーバーレイ表示
+  // ?view=<gs://...> でシートから飛んできたら画像/PDF オーバーレイ表示
   const viewParam = new URLSearchParams(location.search).get("view");
   if (viewParam && viewParam.startsWith("gs://")) {
     try {
       const { url } = await api("GET", `/api/image-signed?gs=${encodeURIComponent(viewParam)}`);
-      $("imgOverlayImg").src = url;
-      $("imgOverlay").style.display = "flex";
+      const isPdf = viewParam.toLowerCase().endsWith(".pdf");
+      const ol = $("imgOverlay");
+      ol.querySelectorAll(".pdf-frame").forEach((e) => e.remove()); // 前回挿入を掃除
+      if (isPdf) {
+        $("imgOverlayImg").style.display = "none";
+        const iframe = document.createElement("iframe");
+        iframe.className = "pdf-frame";
+        iframe.src = url;
+        iframe.style.cssText = "width:92vw;max-width:720px;height:80vh;border:none;border-radius:14px;background:white;";
+        ol.insertBefore(iframe, ol.firstChild);
+      } else {
+        $("imgOverlayImg").style.display = "";
+        $("imgOverlayImg").src = url;
+      }
+      ol.style.display = "flex";
       history.replaceState({}, "", location.pathname);
     } catch (e) { console.warn("view param failed", e); }
   }
