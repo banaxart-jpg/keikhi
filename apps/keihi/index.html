@@ -666,6 +666,7 @@ async function sendTray() {
           blobUrl: trayItems[i].blobUrl,
           list: resp?.receipts || [],
           imageUrl: resp?.imageUrl || null,
+          driveUrl: resp?.driveUrl || null,
           err: "",
         };
       } catch (e) {
@@ -687,11 +688,11 @@ async function sendTray() {
       queue.push({
         blobUrl: r.blobUrl, parsed: {},
         errMsg: r.err || "領収書を検出できませんでした",
-        imageUrl: r.imageUrl,
+        imageUrl: r.imageUrl, driveUrl: r.driveUrl,
       });
     } else {
       for (const it of r.list) {
-        queue.push({ blobUrl: r.blobUrl, parsed: it, errMsg: "", imageUrl: r.imageUrl });
+        queue.push({ blobUrl: r.blobUrl, parsed: it, errMsg: "", imageUrl: r.imageUrl, driveUrl: r.driveUrl });
       }
     }
   }
@@ -714,7 +715,7 @@ function reviewNext() {
   currentImgUrl = it.blobUrl;
   $("previewImg").src = currentImgUrl;
   $("confirmImg").src = currentImgUrl;
-  scanResult = { ...(it.parsed || {}), imageUrl: it.imageUrl };
+  scanResult = { ...(it.parsed || {}), imageUrl: it.imageUrl, driveUrl: it.driveUrl };
   showConfirm(it.parsed || {}, it.errMsg || "");
 }
 
@@ -791,7 +792,7 @@ function openEdit(r) {
   editingId = r.id;
   // 既存レコードの imageUrl を保持しておかないと、編集→登録で
   // imageUrl=null が上書きされ 🧾 アイコンが消えてしまう。
-  scanResult = r.imageUrl ? { imageUrl: r.imageUrl } : null;
+  scanResult = (r.imageUrl || r.driveUrl) ? { imageUrl: r.imageUrl, driveUrl: r.driveUrl } : null;
   $("sheetTitle").textContent = "記録を編集";
   $("retakeBtn").style.display = "";
   $("retakeBtn").textContent = "キャンセル";
@@ -902,6 +903,7 @@ $("submitBtn").addEventListener("click", async () => {
       site,
       memo: $("fMemo").value,
       imageUrl: scanResult?.imageUrl || null,
+      driveUrl: scanResult?.driveUrl || null,
     };
     if (editingId != null) {
       await api("PUT", `/api/records/${editingId}`, record);

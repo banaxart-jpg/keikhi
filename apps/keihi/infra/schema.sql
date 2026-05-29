@@ -19,6 +19,7 @@ CREATE TABLE IF NOT EXISTS records (
   site       TEXT NOT NULL DEFAULT '',
   memo       TEXT NOT NULL DEFAULT '',
   image_url  TEXT,
+  drive_url  TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 

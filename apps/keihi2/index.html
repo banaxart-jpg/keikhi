@@ -453,6 +453,7 @@ async function processQueue() {
         site: "", // 未仕分け
         memo: "",
         imageUrl: resp?.imageUrl || null,
+        driveUrl: resp?.driveUrl || null,
       };
       const saved = await api("POST", "/api/records", record);
       next.recordId = saved.id;
@@ -929,7 +930,7 @@ async function assignSite(r, siteName, payment) {
       date: updated.date, store: updated.store, total: updated.total,
       category: updated.category, workType: updated.workType,
       payment: pay, buyer: updated.buyer, site: siteName,
-      memo: updated.memo || "", imageUrl: updated.imageUrl || null,
+      memo: updated.memo || "", imageUrl: updated.imageUrl || null, driveUrl: updated.driveUrl || null,
     });
     const idx = records.findIndex((x) => x.id === r.id);
     if (idx >= 0) records[idx] = updated;
@@ -1130,6 +1131,7 @@ $("editSaveBtn").addEventListener("click", async () => {
     await api("PUT", `/api/records/${r.id}`, {
       ...r, ...patch,
       imageUrl: r.imageUrl || null,
+      driveUrl: r.driveUrl || null,
     });
     Object.assign(r, patch);
     // 現場が新たに付いたらスプレッドシートにも送る

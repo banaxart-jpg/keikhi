@@ -8,6 +8,7 @@ import pg from "pg";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -18,6 +19,7 @@ const {
   RECEIPTS_BUCKET,
   SHEET_ID,
   INVOICE_SHEET_ID,
+  DRIVE_FOLDER_ID,
   DB_USER,
   DB_PASSWORD,
   DB_NAME,
@@ -105,14 +107,54 @@ const storage = RECEIPTS_BUCKET ? new Storage() : null;
 // ───── Google Sheets (経費レコードの自動書き込み) ─────
 // SHEET_ID が設定されていればサーバから直接 Sheets API で行を append。
 // ADC (Cloud Run の SA = keihi-run) で認証。SA をシートに編集者として共有する必要あり。
+// 共通の Google 認証クライアント (Sheets と Drive 両方のスコープ)
+let googleAuthClient = null;
+async function getGoogleAuth() {
+  if (googleAuthClient) return googleAuthClient;
+  const auth = new google.auth.GoogleAuth({
+    scopes: [
+      "https://www.googleapis.com/auth/spreadsheets",
+      "https://www.googleapis.com/auth/drive",
+    ],
+  });
+  googleAuthClient = await auth.getClient();
+  return googleAuthClient;
+}
 let sheetsApi = null;
 async function getSheetsApi() {
   if (sheetsApi) return sheetsApi;
-  const auth = new google.auth.GoogleAuth({
-    scopes: ["https://www.googleapis.com/auth/spreadsheets"],
-  });
-  sheetsApi = google.sheets({ version: "v4", auth: await auth.getClient() });
+  sheetsApi = google.sheets({ version: "v4", auth: await getGoogleAuth() });
   return sheetsApi;
+}
+let driveApi = null;
+async function getDriveApi() {
+  if (driveApi) return driveApi;
+  driveApi = google.drive({ version: "v3", auth: await getGoogleAuth() });
+  return driveApi;
+}
+
+// 画像/PDF を Drive の指定フォルダにアップロードして「リンクを知ってる人は閲覧可」に。
+// 失敗しても本体処理は止めない (null を返す)。
+async function uploadToDrive(buffer, filename, mimeType) {
+  if (!DRIVE_FOLDER_ID) return null;
+  try {
+    const drive = await getDriveApi();
+    const created = await drive.files.create({
+      requestBody: { name: filename, parents: [DRIVE_FOLDER_ID], mimeType },
+      media: { mimeType, body: Readable.from(buffer) },
+      fields: "id, webViewLink",
+    });
+    await drive.permissions.create({
+      fileId: created.data.id,
+      requestBody: { role: "reader", type: "anyone" },
+    });
+    const url = created.data.webViewLink || `https://drive.google.com/file/d/${created.data.id}/view`;
+    console.log(`[drive] uploaded id=${created.data.id} name=${filename}`);
+    return { id: created.data.id, url };
+  } catch (e) {
+    console.warn(`[drive] upload FAILED ${filename}: ${e.message}`);
+    return null;
+  }
 }
 const SHEET_HEADER = ["購入日", "購入者", "現場", "店舗", "金額", "費目", "工種", "支払方法", "メモ", "写真"];
 const sheetEnsuredCache = new Set(); // key = "<spreadsheetId>:<tab>" 1 度ヘッダー作ったタブはキャッシュ
@@ -200,9 +242,10 @@ async function appendRecordToSheet(r) {
     const sheets = await getSheetsApi();
     const ym = String(r.date || "").slice(0, 7) || "unknown";
     await ensureSheetTab(sheets, ym);
-    // 「写真」セルはアプリ内ビューアへの HYPERLINK
-    const viewUrl = r.id ? `https://keihi-496002.web.app/keihi/?view=${r.id}` : "";
-    const photoCell = viewUrl ? `=HYPERLINK("${String(viewUrl).replace(/"/g, '""')}","🧾")` : "";
+    // 「写真」セル: Drive URL (アプリ不要で見られる) を優先、無ければアプリ内ビューア
+    const photoLinkUrl = r.driveUrl
+      || (r.id ? `https://keihi-496002.web.app/keihi/?view=${r.id}` : "");
+    const photoCell = photoLinkUrl ? `=HYPERLINK("${String(photoLinkUrl).replace(/"/g, '""')}","🧾")` : "";
     await sheets.spreadsheets.values.append({
       spreadsheetId: SHEET_ID,
       range: `${ym}!A:J`,
@@ -242,12 +285,11 @@ async function appendInvoiceToSheet(r) {
     const statusLbl = r.status === "paid"
       ? (r.direction === "out" ? "入金済" : "支払済")
       : (r.direction === "out" ? "未入金" : "未払い");
-    // 「写真」セル: seikyu の view パラメータ経由でアプリ内ビューアに飛ばす HYPERLINK
-    const viewUrl = r.imageUrl
-      ? `https://keihi-496002.web.app/seikyu/?view=${encodeURIComponent(r.imageUrl)}`
-      : "";
-    const photoCell = viewUrl
-      ? `=HYPERLINK("${String(viewUrl).replace(/"/g, '""')}","🧾")`
+    // 「写真」セル: Drive URL (アプリ不要、税理士共有用) を優先、無ければアプリ内ビューア
+    const photoLinkUrl = r.driveUrl
+      || (r.imageUrl ? `https://keihi-496002.web.app/seikyu/?view=${encodeURIComponent(r.imageUrl)}` : "");
+    const photoCell = photoLinkUrl
+      ? `=HYPERLINK("${String(photoLinkUrl).replace(/"/g, '""')}","🧾")`
       : "";
     await sheets.spreadsheets.values.append({
       spreadsheetId: INVOICE_SHEET_ID,
@@ -356,6 +398,22 @@ function getPool() {
   });
   return pool;
 }
+
+// 起動時のスキーマ自動マイグレーション (新しい列の追加のみ。冪等)
+let schemaMigrated = false;
+async function ensureSchema() {
+  if (schemaMigrated) return;
+  const p = getPool();
+  if (!p) return;
+  try {
+    await p.query("ALTER TABLE records ADD COLUMN IF NOT EXISTS drive_url TEXT");
+    schemaMigrated = true;
+    console.log("[schema] migration ok: records.drive_url ensured");
+  } catch (e) {
+    console.warn(`[schema] migration warning: ${e.message}`);
+  }
+}
+ensureSchema().catch(() => {});
 
 app.get("/health", (req, res) => {
   res.json({
@@ -483,23 +541,29 @@ app.post("/api/scan", async (req, res) => {
     if (!image) return res.status(400).json({ error: "image (base64) is required" });
 
     let imageUrl = null;
-    // PDF は GCS にもアップロードしておく（後から見返せる用）
-    // 保存に失敗しても AI 読取は続行（一覧の 🧾 アイコンが出ない不具合を切り分け易く）
+    let driveUrl = null;
+    const buf = Buffer.from(image, "base64");
+    const ext = mimeType === "application/pdf" ? "pdf" : "jpg";
+    const key = `${new Date().toISOString().slice(0, 10)}/${crypto.randomUUID()}.${ext}`;
+    // GCS にアップロード (本体ストレージ。失敗しても AI 読取は続行)
     if (storage && RECEIPTS_BUCKET) {
-      const ext = mimeType === "application/pdf" ? "pdf" : "jpg";
-      const key = `${new Date().toISOString().slice(0, 10)}/${crypto.randomUUID()}.${ext}`;
       try {
         await storage
           .bucket(RECEIPTS_BUCKET)
           .file(key)
-          .save(Buffer.from(image, "base64"), { contentType: mimeType, resumable: false });
+          .save(buf, { contentType: mimeType, resumable: false });
         imageUrl = `gs://${RECEIPTS_BUCKET}/${key}`;
-        console.log(`[scan] uploaded ${imageUrl} (${Buffer.from(image, "base64").length} bytes, ${mimeType})`);
+        console.log(`[scan] uploaded ${imageUrl} (${buf.length} bytes, ${mimeType})`);
       } catch (e) {
         console.warn(`[scan] GCS upload FAILED (bucket=${RECEIPTS_BUCKET}, key=${key}): ${e.code || ""} ${e.message}`);
       }
     } else {
       console.warn(`[scan] image not saved (storage=${!!storage}, bucket=${RECEIPTS_BUCKET || "(empty)"})`);
+    }
+    // Drive にもアップロード (税理士共有用。リンクを知ってる人は閲覧可)
+    if (DRIVE_FOLDER_ID) {
+      const dr = await uploadToDrive(buf, key.replace(/\//g, "_"), mimeType);
+      if (dr) driveUrl = dr.url;
     }
 
     const today = new Date().toISOString().slice(0, 10);
@@ -535,7 +599,7 @@ app.post("/api/scan", async (req, res) => {
     const receipts = Array.isArray(raw?.receipts)
       ? raw.receipts
       : (raw && (raw.store || raw.total || raw.date || raw.issuer)) ? [raw] : [];
-    res.json({ receipts, imageUrl, modelUsed });
+    res.json({ receipts, imageUrl, driveUrl, modelUsed });
   } catch (err) {
     console.error("scan error", err);
     const msg = String(err?.message || err);
@@ -2885,7 +2949,7 @@ app.get("/api/records", async (req, res) => {
     const { rows } = await p.query(
       `SELECT id, date::text AS date, store, total, category,
               work_type AS "workType", payment, buyer, site, memo,
-              image_url AS "imageUrl", created_at AS "createdAt"
+              image_url AS "imageUrl", drive_url AS "driveUrl", created_at AS "createdAt"
          FROM records
         ORDER BY date DESC, id DESC LIMIT 1000`
     );
@@ -2905,10 +2969,10 @@ app.post("/api/records", async (req, res) => {
     const r = req.body || {};
     console.log(`[records] POST imageUrl=${r.imageUrl ? r.imageUrl.slice(0, 80) : "(none)"} store="${r.store}" total=${r.total}`);
     const { rows } = await p.query(
-      `INSERT INTO records (date, store, total, category, work_type, payment, buyer, site, memo, image_url)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+      `INSERT INTO records (date, store, total, category, work_type, payment, buyer, site, memo, image_url, drive_url)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
        RETURNING id, created_at`,
-      [r.date, r.store, r.total, r.category, r.workType, r.payment, r.buyer, r.site, r.memo || "", r.imageUrl || null]
+      [r.date, r.store, r.total, r.category, r.workType, r.payment, r.buyer, r.site, r.memo || "", r.imageUrl || null, r.driveUrl || null]
     );
     // 現場が設定されてればシートにも追記 (空なら未 SORT で送らない)
     appendRecordToSheet({ ...r, id: rows[0].id }).catch(() => {});
@@ -2927,9 +2991,10 @@ app.put("/api/records/:id", async (req, res) => {
     const { rowCount } = await p.query(
       `UPDATE records SET
          date=$1, store=$2, total=$3, category=$4, work_type=$5,
-         payment=$6, buyer=$7, site=$8, memo=$9
-       WHERE id=$10`,
-      [r.date, r.store, r.total, r.category, r.workType, r.payment, r.buyer, r.site, r.memo || "", req.params.id]
+         payment=$6, buyer=$7, site=$8, memo=$9,
+         drive_url=COALESCE($10, drive_url)
+       WHERE id=$11`,
+      [r.date, r.store, r.total, r.category, r.workType, r.payment, r.buyer, r.site, r.memo || "", r.driveUrl || null, req.params.id]
     );
     if (!rowCount) return res.status(404).json({ error: "not found" });
     // 編集後もシートに append (現場が空なら送らない)。重複は当面手動で削除

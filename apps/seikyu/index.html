@@ -359,6 +359,7 @@ let currentDirection = ""; // メイン画面で選択中の方向 (in/out)
 let currentImgUrl = "";
 let currentThumb = "";
 let currentImageUrl = "";
+let currentDriveUrl = "";
 let currentMimeType = "image/jpeg";
 let editingId = null;
 let editingDirection = "in";
@@ -505,6 +506,7 @@ async function handleFile(input) {
       direction: currentDirection,
     });
     currentImageUrl = resp?.imageUrl || "";
+    currentDriveUrl = resp?.driveUrl || "";
     const list = resp?.receipts || [];
     const parsed = list[0] || {};
     showConfirm(parsed, list.length === 0 ? "請求書を検出できませんでした" : "");
@@ -585,7 +587,7 @@ function openEdit(b) {
   $("fAccType").value = ["普通","当座","貯蓄","振替"].includes(acc.type) ? acc.type : "";
   $("fAccNumber").value = acc.number || "";
   $("fAccHolder").value = acc.holder || "";
-  currentImgUrl = ""; currentThumb = b.thumb || ""; currentImageUrl = b.imageUrl || ""; currentMimeType = b.mimeType || "image/jpeg";
+  currentImgUrl = ""; currentThumb = b.thumb || ""; currentImageUrl = b.imageUrl || ""; currentDriveUrl = b.driveUrl || ""; currentMimeType = b.mimeType || "image/jpeg";
   updatePreview();
   $("errBox").style.display = "none";
   show("confirmScreen");
@@ -705,6 +707,7 @@ $("submitBtn").addEventListener("click", async () => {
         paidAt: null,
         thumb: currentThumb || "",
         imageUrl: currentImageUrl || "",
+        driveUrl: currentDriveUrl || "",
         mimeType: currentMimeType,
         ...rec,
       };
