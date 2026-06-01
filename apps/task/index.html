@@ -19,9 +19,10 @@
   --text: #42455e; --text2: rgba(66,69,94,0.52); --text3: rgba(66,69,94,0.28);
   --accent: #4961ff; --accent2: #6a7eff; --accent-glow: rgba(73,97,255,0.35);
   --hi: #e85b5b; --mid: #e0a040; --lo: #9098b0;
-  --role-left: #9098b0;       /* 相手 = 灰 */
-  --role-center: #8b6ad6;     /* 共同 = 紫 */
-  --role-right: #4961ff;      /* 自分 = 青 */
+  /* Google カレンダー準拠 */
+  --role-natori: #7986cb;     /* ラベンダー */
+  --role-konishi: #616161;    /* グラファイト */
+  --role-both: #e67c73;       /* フラミンゴ */
 }
 body { font-family: 'Outfit', -apple-system, sans-serif; font-weight: 400; background: var(--bg); color: var(--text); min-height: 100vh; overflow-x: hidden; }
 
@@ -49,9 +50,9 @@ body { font-family: 'Outfit', -apple-system, sans-serif; font-weight: 400; backg
 /* 担当ピッカー (左端) */
 .role-picker { display: flex; gap: 4px; align-items: center; flex-shrink: 0; }
 .role-btn { width: 34px; height: 34px; border-radius: 50%; border: none; font-family: 'Outfit', sans-serif; font-weight: 800; font-size: 13px; color: white; cursor: pointer; flex-shrink: 0; transition: all 0.12s; box-shadow: 3px 3px 8px var(--sd), -3px -3px 8px var(--sl); }
-.role-btn.role-left { background: var(--role-left); }
-.role-btn.role-center { background: var(--role-center); }
-.role-btn.role-right { background: var(--role-right); }
+.role-btn.role-natori { background: var(--role-natori); }
+.role-btn.role-konishi { background: var(--role-konishi); }
+.role-btn.role-both { background: var(--role-both); }
 .role-picker:not(.open) .role-btn { display: none; }
 .role-picker:not(.open) .role-btn.current { display: block; }
 .role-picker.open .role-btn:not(.current) { opacity: 0.5; }
@@ -222,6 +223,16 @@ const PARTNER_OF = {
   "banaxart@gmail.com": "konishi0221@gmail.com",
   "konishi0221@gmail.com": "info@banax.tokyo",
 };
+const PERSON_KEY = {
+  "info@banax.tokyo": "natori",
+  "banaxart@gmail.com": "natori",
+  "konishi0221@gmail.com": "konishi",
+};
+function colorKey(pos) {
+  if (pos === "center") return "both";
+  const em = pos === "right" ? me : partner;
+  return PERSON_KEY[em] || "konishi";
+}
 let me = "";
 let partner = "";
 function nameOf(em) { return NAME_BY_EMAIL[(em || "").toLowerCase()] || em || "?"; }
@@ -344,7 +355,7 @@ function renderRow(t, lastSeen) {
   picker.className = "role-picker" + (pickerOpenId === t.id ? " open" : "");
   for (const pos of ["left", "center", "right"]) {
     const btn = document.createElement("button");
-    btn.className = "role-btn role-" + pos + (pos === cur ? " current" : "");
+    btn.className = "role-btn role-" + colorKey(pos) + (pos === cur ? " current" : "");
     btn.textContent = roleLabel(pos);
     btn.addEventListener("click", async (e) => {
       e.stopPropagation();
