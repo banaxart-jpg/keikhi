@@ -143,10 +143,12 @@ async function uploadToDrive(buffer, filename, mimeType) {
       requestBody: { name: filename, parents: [DRIVE_FOLDER_ID], mimeType },
       media: { mimeType, body: Readable.from(buffer) },
       fields: "id, webViewLink",
+      supportsAllDrives: true,
     });
     await drive.permissions.create({
       fileId: created.data.id,
       requestBody: { role: "reader", type: "anyone" },
+      supportsAllDrives: true,
     });
     const url = created.data.webViewLink || `https://drive.google.com/file/d/${created.data.id}/view`;
     console.log(`[drive] uploaded id=${created.data.id} name=${filename}`);
