@@ -134,8 +134,9 @@ body { font-family: 'Outfit', -apple-system, sans-serif; font-weight: 400; backg
 .choice button.sel.p1 { color: var(--hi); }
 .choice button.sel.p2 { color: var(--mid); }
 .choice button.sel.p3 { color: var(--lo); }
-.save { width: 100%; padding: 16px; border: none; border-radius: 20px; cursor: pointer; font-size: 16px; font-weight: 800; color: white; font-family: 'Outfit', sans-serif; background: linear-gradient(145deg, var(--accent2), var(--accent)); box-shadow: 6px 6px 18px rgba(50,70,200,0.45), -3px -3px 10px var(--sl); margin-top: 10px; }
+.save { width: 100%; padding: 16px; border: none; border-radius: 20px; cursor: pointer; font-size: 16px; font-weight: 800; color: white; font-family: 'Outfit', sans-serif; background: linear-gradient(145deg, var(--accent2), var(--accent)); box-shadow: 6px 6px 18px rgba(50,70,200,0.45), -3px -3px 10px var(--sl); margin-top: 10px; transition: opacity 200ms ease; }
 .save:active { transform: scale(0.97); }
+.save:disabled { opacity: 0.6; cursor: wait; }
 </style>
 </head>
 <body>
@@ -568,10 +569,15 @@ function setupModal() {
   $("fabAdd").addEventListener("click", () => openModal(null));
   $("modal").addEventListener("click", (e) => { if (e.target.id === "modal") closeModal(); });
   $("saveBtn").addEventListener("click", async () => {
+    const btn = $("saveBtn");
+    if (btn.disabled) return;            // 多重発火ガード (連打対策)
     const title = $("iTitle").value.trim();
     if (!title) { $("iTitle").focus(); return; }
     const deadline = $("iDeadline").value || null;
     const toEmail = emailOfPos(modalWho);
+    const origText = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = "保存中…";
     try {
       if (editingId) {
         await api("PUT", "/api/tasks/" + editingId, { title, toEmail, priority: modalPriority, deadline });
@@ -580,7 +586,12 @@ function setupModal() {
       }
       closeModal();
       await reload();
-    } catch (e) { alert("保存に失敗: " + e.message); }
+    } catch (e) {
+      alert("保存に失敗: " + e.message);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = origText;
+    }
   });
 }
 function openModal(t) {
