@@ -157,10 +157,13 @@ async function uploadToDrive(buffer, filename, mimeType) {
   }
 }
 const SHEET_HEADER = ["購入日", "購入者", "現場", "店舗", "金額", "費目", "工種", "支払方法", "メモ", "写真"];
-const sheetEnsuredCache = new Set(); // key = "<spreadsheetId>:<tab>" 1 度ヘッダー作ったタブはキャッシュ
+// 短期キャッシュ (60秒)。タブ削除→再登録の整合性のため永続キャッシュは避ける。
+const sheetEnsuredCache = new Map(); // key -> timestamp (ms)
+const SHEET_ENSURED_TTL = 60_000;
 async function ensureSheetTabGeneric(sheets, spreadsheetId, ym, header, dateCols = [], hiddenCols = []) {
   const key = `${spreadsheetId}:${ym}`;
-  if (sheetEnsuredCache.has(key)) return;
+  const cachedAt = sheetEnsuredCache.get(key);
+  if (cachedAt && Date.now() - cachedAt < SHEET_ENSURED_TTL) return;
   const meta = await sheets.spreadsheets.get({ spreadsheetId, fields: "sheets.properties" });
   let found = (meta.data.sheets || []).find((s) => s.properties && s.properties.title === ym);
   let sheetId;
@@ -229,7 +232,7 @@ async function ensureSheetTabGeneric(sheets, spreadsheetId, ym, header, dateCols
     }
     if (requests.length) await sheets.spreadsheets.batchUpdate({ spreadsheetId, requestBody: { requests } });
   }
-  sheetEnsuredCache.add(key);
+  sheetEnsuredCache.set(key, Date.now());
 }
 async function ensureSheetTab(sheets, ym) {
   return ensureSheetTabGeneric(sheets, SHEET_ID, ym, SHEET_HEADER, [0]);
