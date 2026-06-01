@@ -175,7 +175,7 @@ async function ensureSheetTabGeneric(sheets, spreadsheetId, ym, header, dateCols
       const firstCell = a1.data.values?.[0]?.[0];
       if (firstCell !== header[0]) {
         // 旧フォーマット → リネームして新規作成
-        const oldTitle = `${ym}-old`;
+        const oldTitle = `${ym}-old-${Date.now()}`;
         await sheets.spreadsheets.batchUpdate({
           spreadsheetId,
           requestBody: { requests: [{
