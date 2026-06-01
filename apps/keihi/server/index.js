@@ -324,58 +324,45 @@ async function appendInvoiceToSheet(r) {
 }
 
 // 年別サマリータブ (YYYY-サマリー) の対象月の行を更新
-// 同じ ID の行が複数あれば「最後の行 (最新の状態)」だけ集計に使う
+// SUMIFS 式をセルに埋め込むので、データ追加・状態変更があったら Sheets 側で
+// 自動的に再計算される (サーバ側で値を読んで書き直す必要がない)
 async function updateInvoiceSummary(sheets, year, ym) {
   const summaryTab = `${year}-サマリー`;
   await ensureSheetTabGeneric(sheets, INVOICE_SHEET_ID, summaryTab, SUMMARY_HEADER, []);
-  const sales = { total: 0, paid: 0, unpaid: 0 };
-  const exp = { total: 0, paid: 0, unpaid: 0 };
-  for (const [tab, target, paidLbl] of [
-    [`${ym}-売上`, sales, "入金済"],
-    [`${ym}-支払`, exp, "支払済"],
-  ]) {
-    try {
-      const res = await sheets.spreadsheets.values.get({
-        spreadsheetId: INVOICE_SHEET_ID,
-        range: `${tab}!A2:G`, // ID(0), 発行日(1), 期限(2), 状態(3), 完了日(4), 振込先(5), 金額(6)
-        valueRenderOption: "UNFORMATTED_VALUE",
-      });
-      // 同 ID は後勝ち。ID 無し (旧データ) はインデックスをキーに個別扱い
-      const latestById = new Map();
-      let noIdSeq = 0;
-      for (const row of res.data.values || []) {
-        const id = String(row[0] || "");
-        latestById.set(id || `__noid_${noIdSeq++}`, row);
-      }
-      for (const row of latestById.values()) {
-        const status = row[3] || "";
-        const amount = Number(row[6]) || 0;
-        target.total += amount;
-        if (status === paidLbl) target.paid += amount;
-        else target.unpaid += amount;
-      }
-    } catch { /* タブが無い場合は無視 */ }
-  }
+  const salesTab = `${ym}-売上`;
+  const expTab = `${ym}-支払`;
+  // 金額 = G, 状態 = D
+  const sumAll = (t) => `IFERROR(SUM('${t}'!G2:G),0)`;
+  const sumIf = (t, lbl) => `IFERROR(SUMIFS('${t}'!G:G,'${t}'!D:D,"${lbl}"),0)`;
+  // 月セルは先頭にアポストロフィを付けて Sheets に文字列として保存させる
+  // (USER_ENTERED は "2026-05" を日付シリアルに変換するため)
+  const rowValues = [
+    `'${ym}`,
+    `=${sumAll(salesTab)}`,
+    `=${sumIf(salesTab, "入金済")}`,
+    `=${sumIf(salesTab, "未入金")}`,
+    `=${sumAll(expTab)}`,
+    `=${sumIf(expTab, "支払済")}`,
+    `=${sumIf(expTab, "未払い")}`,
+  ];
   const sumRes = await sheets.spreadsheets.values.get({
     spreadsheetId: INVOICE_SHEET_ID,
     range: `${summaryTab}!A:A`,
   });
   const monthCol = (sumRes.data.values || []).map((r) => r[0]);
   const rowIdx = monthCol.findIndex((m) => m === ym);
-  const rowValues = [ym, sales.total, sales.paid, sales.unpaid, exp.total, exp.paid, exp.unpaid];
-  // RAW: "2026-05" を日付に解釈させず文字列のまま保存
   if (rowIdx > 0) {
     await sheets.spreadsheets.values.update({
       spreadsheetId: INVOICE_SHEET_ID,
-      range: `${summaryTab}!A${rowIdx + 1}`,
-      valueInputOption: "RAW",
+      range: `${summaryTab}!A${rowIdx + 1}:G${rowIdx + 1}`,
+      valueInputOption: "USER_ENTERED",
       requestBody: { values: [rowValues] },
     });
   } else {
     await sheets.spreadsheets.values.append({
       spreadsheetId: INVOICE_SHEET_ID,
       range: `${summaryTab}!A:G`,
-      valueInputOption: "RAW",
+      valueInputOption: "USER_ENTERED",
       insertDataOption: "INSERT_ROWS",
       requestBody: { values: [rowValues] },
     });
