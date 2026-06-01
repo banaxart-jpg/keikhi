@@ -123,6 +123,7 @@ import {
 import {
   getFirestore, doc, getDoc, setDoc,
 } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
+import { registerPushForUser } from "/push-register.js";
 
 // ───────── ミニアプリ一覧 ─────────
 // 新しいミニアプリを追加する手順:
@@ -407,6 +408,7 @@ let fbAuth = null;
     cfg.authDomain = location.hostname; // 認証フローを Hosting と同一オリジンに（iOS Safari ITP でセッション喪失するため）
     diagLog(`init.json project=${cfg.projectId} authDomain=${origAuthDomain}→${cfg.authDomain}`);
     const fbApp = initializeApp(cfg);
+    window._fbApp = fbApp;
     fbAuth = getAuth(fbApp);
     fsDb = getFirestore(fbApp);
     await setPersistence(fbAuth, browserLocalPersistence);
@@ -437,6 +439,9 @@ let fbAuth = null;
       // バッジ + ユーザー設定 (Firestore) は後追いで取得 → 取れたら再 render
       fetchTechstudyBadge(user);
       loadPrefs(user);
+      // FCM ハンドシェイク (Notification 許可 + token を Firestore に保存)。
+      // 失敗しても致命じゃないので fire-and-forget。
+      registerPushForUser(window._fbApp, user);
     }
 
     document.getElementById("signinBtn").addEventListener("click", async () => {

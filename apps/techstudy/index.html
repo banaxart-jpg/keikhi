@@ -1498,7 +1498,9 @@ window.doSignOut = async () => {
   try {
     const cfg = await fetch("/__/firebase/init.json").then((r) => r.json());
     cfg.authDomain = location.hostname; // iOS Safari ITP 対策で Hosting と同一オリジン
-    fbAuth = getAuth(initializeApp(cfg));
+    const fbApp = initializeApp(cfg);
+    window._fbApp = fbApp;
+    fbAuth = getAuth(fbApp);
     await setPersistence(fbAuth, browserLocalPersistence);
     const provider = new GoogleAuthProvider();
     provider.setCustomParameters({ prompt: "select_account" });
@@ -1535,6 +1537,11 @@ window.doSignOut = async () => {
       authToken = await user.getIdToken();
       setInterval(async () => { authToken = await user.getIdToken(true); }, 30 * 60 * 1000);
       loadHome();
+      // FCM ハンドシェイク (fire-and-forget)
+      try {
+        const m = await import("/push-register.js");
+        m.registerPushForUser(window._fbApp, user);
+      } catch (_) {}
     });
   } catch (e) {
     sErr("初期化エラー: " + e.message);

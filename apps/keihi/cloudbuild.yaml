@@ -16,6 +16,10 @@ substitutions:
   _ALLOWED_EMAILS: info@banax.tokyo,konishi0221@gmail.com,banaxart@gmail.com
   # Firebase Hosting site id for the keihi frontend (must be globally unique).
   _HOSTING_SITE: keihi-496002
+  # Firebase Cloud Messaging Web Push 用 VAPID 公開鍵 (Console > Project Settings
+  # > Cloud Messaging > Web Push certificates で生成 → ここに貼る)。
+  # 空のままだと Push 登録はスキップ (アプリは動く)。
+  _FCM_VAPID_KEY: ""
 
 steps:
   # Kaniko: レイヤキャッシュで差分のみビルド（package.json 不変なら
@@ -73,7 +77,7 @@ steps:
           --role=roles/run.invoker --quiet
         RUN_URL=$$(gcloud run services describe ${_SERVICE} \
           --region=${_REGION} --format='value(status.url)')
-        echo "window.API_BASE='$$RUN_URL';" > apps/config.js
+        echo "window.API_BASE='$$RUN_URL'; window.FCM_VAPID_KEY='${_FCM_VAPID_KEY}';" > apps/config.js
         echo "API_BASE = $$RUN_URL (direct Cloud Run call)"
         # kaigi 自動進行（Cloud Tasks → 自身の /api/internal/kaigi/tick へ）に
         # 必要な SELF URL と queue 情報を Cloud Run の env として後注入する。

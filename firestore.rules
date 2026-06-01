@@ -10,6 +10,12 @@ service cloud.firestore {
       allow read, write: if request.auth != null && request.auth.uid == uid;
     }
 
+    // FCM (Web Push) device tokens: 各ユーザーは自分のサブコレクションのみ
+    // 読み書きできる。サーバ (firebase-admin) はルールをバイパスして全部読める。
+    match /fcm_tokens/{uid}/devices/{tokenId} {
+      allow read, write: if request.auth != null && request.auth.uid == uid;
+    }
+
     // それ以外は禁止 (明示)
     match /{document=**} {
       allow read, write: if false;
