@@ -1,0 +1,511 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="タスク">
+<link rel="apple-touch-icon" href="/task/icon.svg">
+<title>タスク</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+:root {
+  --bg: #e4e6ee; --bg2: #d8dae4; --bg3: #ededf3;
+  --sl: rgba(255,255,255,1); --sd: rgba(168,172,192,0.75); --sd2: rgba(148,152,176,0.55);
+  --text: #42455e; --text2: rgba(66,69,94,0.52); --text3: rgba(66,69,94,0.28);
+  --accent: #4961ff; --accent2: #6a7eff; --accent-glow: rgba(73,97,255,0.35);
+  --hi: #e85b5b; --mid: #e0a040; --lo: #9098b0;
+}
+body { font-family: 'Outfit', -apple-system, sans-serif; font-weight: 400; background: var(--bg); color: var(--text); min-height: 100vh; overflow-x: hidden; }
+
+/* sign in overlay (auth gate) */
+#signinOverlay { display: none; position: fixed; inset: 0; z-index: 400; background: var(--bg); flex-direction: column; align-items: center; justify-content: center; padding: 32px; text-align: center; gap: 18px; }
+#signinOverlay .pill { padding: 14px 28px; border-radius: 30px; background: var(--bg); box-shadow: 6px 6px 16px var(--sd), -6px -6px 16px var(--sl); font-weight: 700; }
+#signinErr { font-size: 11px; color: #b04040; max-width: 340px; white-space: pre-wrap; font-family: monospace; word-break: break-word; }
+
+/* top bar */
+.top { padding: 56px 18px 18px; display: flex; justify-content: space-between; align-items: center; }
+.back, .signout { font-size: 13px; font-weight: 800; color: var(--text2); background: none; border: none; cursor: pointer; font-family: 'Outfit', sans-serif; padding: 6px 10px; }
+.title { font-size: 22px; font-weight: 800; letter-spacing: -0.5px; }
+
+/* who-am-i pill */
+.me-pill { display: inline-flex; align-items: center; gap: 8px; padding: 8px 16px; border-radius: 30px; background: var(--bg); box-shadow: inset 3px 3px 8px var(--sd), inset -3px -3px 8px var(--sl); font-size: 12px; font-weight: 700; color: var(--text2); margin: 0 18px 12px; }
+.me-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 8px var(--accent-glow); }
+
+/* tab row */
+.tabs { display: flex; gap: 10px; padding: 0 18px 14px; }
+.tab { flex: 1; padding: 14px 8px; border-radius: 18px; border: none; cursor: pointer; font-family: 'Outfit', sans-serif; font-weight: 800; font-size: 14px; color: var(--text2); background: var(--bg); box-shadow: 6px 6px 14px var(--sd), -6px -6px 14px var(--sl); transition: all 0.15s; display: flex; align-items: center; justify-content: center; gap: 8px; position: relative; }
+.tab.active { box-shadow: inset 5px 5px 12px var(--sd), inset -5px -5px 12px var(--sl); color: var(--accent); }
+.tab .badge { background: var(--hi); color: white; font-size: 11px; font-weight: 900; padding: 2px 8px; border-radius: 20px; box-shadow: 0 2px 6px rgba(232,91,91,0.55); }
+
+/* list */
+.list { padding: 4px 16px 140px; }
+.section-label { font-size: 10px; letter-spacing: 0.18em; color: var(--text3); font-weight: 800; text-transform: uppercase; margin: 18px 6px 8px; }
+
+.row { background: var(--bg); border-radius: 18px; padding: 13px 14px; margin-bottom: 9px; box-shadow: 6px 6px 14px var(--sd), -5px -5px 12px var(--sl); display: flex; align-items: center; gap: 11px; cursor: pointer; transition: all 0.18s; }
+.row.done { opacity: 0.45; box-shadow: inset 3px 3px 8px var(--sd), inset -3px -3px 8px var(--sl); }
+.row.done .row-title { text-decoration: line-through; }
+.row.expanded { box-shadow: inset 4px 4px 10px var(--sd), inset -4px -4px 10px var(--sl); }
+
+.pip { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+.pip.p1 { background: var(--hi); box-shadow: 0 0 8px rgba(232,91,91,0.55); }
+.pip.p2 { background: var(--mid); box-shadow: 0 0 8px rgba(224,160,64,0.45); }
+.pip.p3 { background: var(--lo); }
+
+.row-main { flex: 1; min-width: 0; }
+.row-title { font-size: 14px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.row-meta { font-size: 10px; color: var(--text3); font-weight: 700; margin-top: 2px; display: flex; gap: 8px; align-items: center; }
+.row-deadline { color: var(--accent); font-weight: 800; }
+.row-deadline.soon { color: var(--mid); }
+.row-deadline.over { color: var(--hi); }
+.row-from { font-size: 10px; color: var(--text3); font-weight: 700; }
+
+.row-unread { width: 7px; height: 7px; border-radius: 50%; background: var(--hi); box-shadow: 0 0 6px rgba(232,91,91,0.65); flex-shrink: 0; }
+
+/* expanded action bar */
+.actions { display: none; flex-wrap: wrap; gap: 6px; padding: 9px 12px 11px; margin: 0 0 9px; }
+.row.expanded + .actions { display: flex; }
+.act-btn { padding: 8px 13px; border-radius: 14px; border: none; cursor: pointer; font-family: 'Outfit', sans-serif; font-weight: 700; font-size: 12px; color: var(--text2); background: var(--bg); box-shadow: 4px 4px 10px var(--sd), -4px -4px 10px var(--sl); transition: all 0.12s; }
+.act-btn:active { box-shadow: inset 3px 3px 6px var(--sd), inset -3px -3px 6px var(--sl); transform: scale(0.96); }
+.act-btn.del { color: #b04040; }
+.act-btn.done { color: #3a9a6a; }
+
+/* FAB */
+.fab { position: fixed; right: 22px; bottom: 28px; width: 60px; height: 60px; border-radius: 50%; background: linear-gradient(145deg, var(--accent2), var(--accent)); color: white; font-size: 32px; font-weight: 300; line-height: 1; border: none; cursor: pointer; box-shadow: 8px 8px 22px rgba(50,70,200,0.45), -3px -3px 10px var(--sl); z-index: 10; transition: transform 0.15s; }
+.fab:active { transform: scale(0.93); }
+
+/* add modal */
+.modal { position: fixed; inset: 0; background: rgba(180,184,205,0.42); display: none; align-items: flex-end; justify-content: center; z-index: 50; }
+.modal.open { display: flex; }
+.sheet { background: var(--bg); border-radius: 32px 32px 0 0; box-shadow: -2px -10px 35px rgba(148,152,176,0.4); width: 100%; max-width: 480px; padding: 14px 20px 32px; max-height: 90vh; overflow-y: auto; }
+.handle { width: 44px; height: 5px; border-radius: 3px; background: rgba(100,104,130,0.22); margin: 0 auto 16px; }
+.sheet h3 { font-size: 17px; font-weight: 800; margin-bottom: 14px; }
+
+.field { margin-bottom: 14px; }
+.field label { font-size: 11px; color: var(--text2); display: block; margin-bottom: 6px; font-weight: 700; }
+.inp { width: 100%; padding: 12px 14px; font-size: 15px; color: var(--text); outline: none; border: none; border-radius: 14px; font-family: 'Outfit', sans-serif; font-weight: 600; background: var(--bg2); box-shadow: inset 4px 4px 10px var(--sd), inset -4px -4px 10px var(--sl); -webkit-appearance: none; appearance: none; }
+.inp::placeholder { color: var(--text3); }
+
+.choice { display: flex; gap: 8px; }
+.choice button { flex: 1; padding: 12px 6px; border-radius: 14px; border: none; cursor: pointer; font-family: 'Outfit', sans-serif; font-weight: 700; font-size: 13px; color: var(--text2); background: var(--bg); box-shadow: 4px 4px 10px var(--sd), -4px -4px 10px var(--sl); transition: all 0.12s; }
+.choice button.sel { box-shadow: inset 3px 3px 8px var(--sd), inset -3px -3px 8px var(--sl); color: var(--accent); }
+.choice button.sel.p1 { color: var(--hi); }
+.choice button.sel.p2 { color: var(--mid); }
+.choice button.sel.p3 { color: var(--lo); }
+
+.save { width: 100%; padding: 16px; border: none; border-radius: 20px; cursor: pointer; font-size: 16px; font-weight: 800; color: white; letter-spacing: 0.3px; font-family: 'Outfit', sans-serif; background: linear-gradient(145deg, var(--accent2), var(--accent)); box-shadow: 6px 6px 18px rgba(50,70,200,0.45), -3px -3px 10px var(--sl); margin-top: 10px; transition: transform 0.12s; }
+.save:active { transform: scale(0.97); }
+.save:disabled { opacity: 0.5; }
+
+.empty { text-align: center; padding: 40px 20px; color: var(--text3); font-size: 13px; font-weight: 600; }
+</style>
+</head>
+<body>
+
+<!-- 認証 -->
+<div id="signinOverlay">
+  <div class="pill">サインインしてください</div>
+  <button class="pill" onclick="location.href='/?next=' + encodeURIComponent('/task/')">ランチャーへ戻る</button>
+  <div id="signinErr"></div>
+</div>
+
+<!-- メイン -->
+<div id="app" style="display:none">
+  <div class="top">
+    <button class="back" onclick="location.href='/'">← 戻る</button>
+    <div class="title">タスク</div>
+    <button class="signout" onclick="window.doSignOut && window.doSignOut()">⏻</button>
+  </div>
+  <div class="me-pill"><span class="me-dot"></span><span id="meLabel">…</span></div>
+  <div class="tabs">
+    <button class="tab active" id="tabMine" data-tab="mine">やること <span id="badgeMine" class="badge" style="display:none">0</span></button>
+    <button class="tab" id="tabTheirs" data-tab="theirs">お願い中 <span id="badgeTheirs" class="badge" style="display:none">0</span></button>
+  </div>
+  <div class="list" id="list"></div>
+  <button class="fab" id="fabAdd">＋</button>
+</div>
+
+<!-- 追加 / 編集 モーダル -->
+<div class="modal" id="modal">
+  <div class="sheet">
+    <div class="handle"></div>
+    <h3 id="modalTitle">新規タスク</h3>
+    <div class="field">
+      <label>内容</label>
+      <input class="inp" id="iTitle" placeholder="やること（1行）" maxlength="120">
+    </div>
+    <div class="field">
+      <label>誰がやる</label>
+      <div class="choice">
+        <button id="aTheirs" data-who="theirs">相手</button>
+        <button id="aMine" data-who="mine">自分</button>
+      </div>
+    </div>
+    <div class="field">
+      <label>優先度</label>
+      <div class="choice">
+        <button id="p1" data-p="1">高</button>
+        <button id="p2" data-p="2">中</button>
+        <button id="p3" data-p="3">低</button>
+      </div>
+    </div>
+    <div class="field">
+      <label>期限（任意）</label>
+      <input class="inp" type="date" id="iDeadline">
+    </div>
+    <button class="save" id="saveBtn">保存</button>
+  </div>
+</div>
+
+<script src="/config.js"></script>
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js";
+import {
+  getAuth, setPersistence, browserLocalPersistence,
+  onAuthStateChanged, signOut,
+} from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
+import { gateInternal } from "/internal-gate.js";
+
+const API_BASE = (window.API_BASE || "").replace(/\/$/, "");
+let fbAuth = null;
+async function idToken() {
+  const u = fbAuth?.currentUser;
+  return u ? await u.getIdToken() : null;
+}
+
+(async function initAuth() {
+  if (window.DEV_NO_AUTH) {
+    document.getElementById("signinOverlay").style.display = "none";
+    boot("dev@local");
+    return;
+  }
+  try {
+    const cfg = await fetch("/__/firebase/init.json").then((r) => r.json());
+    cfg.authDomain = location.hostname;
+    fbAuth = getAuth(initializeApp(cfg));
+    await setPersistence(fbAuth, browserLocalPersistence);
+    gateInternal(fbAuth);
+    let entered = false;
+    onAuthStateChanged(fbAuth, async (user) => {
+      if (user) {
+        if (entered) return;
+        entered = true;
+        sessionStorage.removeItem("authBounce");
+        document.getElementById("signinOverlay").style.display = "none";
+        boot((user.email || "").toLowerCase());
+        return;
+      }
+      if (sessionStorage.getItem("authBounce")) {
+        document.getElementById("signinOverlay").style.display = "flex";
+        return;
+      }
+      sessionStorage.setItem("authBounce", "1");
+      location.replace("/?next=" + encodeURIComponent("/task/"));
+    });
+  } catch (e) {
+    document.getElementById("signinOverlay").style.display = "flex";
+    document.getElementById("signinErr").textContent = "init失敗: " + e.message;
+  }
+})();
+window.doSignOut = async () => { if (fbAuth) await signOut(fbAuth); location.reload(); };
+
+// ───── identity ─────
+const NAME_BY_EMAIL = {
+  "info@banax.tokyo": "名取",
+  "banaxart@gmail.com": "名取",
+  "konishi0221@gmail.com": "小西",
+};
+const PARTNER_OF = {
+  "info@banax.tokyo": "konishi0221@gmail.com",
+  "banaxart@gmail.com": "konishi0221@gmail.com",
+  "konishi0221@gmail.com": "info@banax.tokyo",
+};
+let me = "";
+let partner = "";
+function nameOf(em) { return NAME_BY_EMAIL[(em || "").toLowerCase()] || em || "?"; }
+
+// ───── api ─────
+async function api(method, path, body) {
+  const token = await idToken();
+  const r = await fetch(API_BASE + path, {
+    method,
+    headers: {
+      "content-type": "application/json",
+      ...(token ? { authorization: "Bearer " + token } : {}),
+    },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  if (!r.ok) {
+    const t = await r.text().catch(() => "");
+    throw new Error(`${r.status}: ${t}`);
+  }
+  return r.status === 204 ? null : r.json();
+}
+
+// ───── state ─────
+let tasks = [];
+let currentTab = "mine"; // "mine" | "theirs"
+let expandedId = null;
+let editingId = null;
+let modalWho = "theirs"; // "theirs" | "mine"
+let modalPriority = 2;
+
+const LAST_SEEN_KEY = "task_last_seen";
+function getLastSeen() { return localStorage.getItem(LAST_SEEN_KEY) || "1970-01-01T00:00:00Z"; }
+function setLastSeen() { localStorage.setItem(LAST_SEEN_KEY, new Date().toISOString()); }
+
+function $(id) { return document.getElementById(id); }
+
+// ───── boot ─────
+async function boot(email) {
+  me = (email || "").toLowerCase();
+  partner = PARTNER_OF[me] || "";
+  $("meLabel").textContent = nameOf(me) + (partner ? `（相手: ${nameOf(partner)}）` : "");
+  $("app").style.display = "block";
+  setupTabs();
+  setupModal();
+  await reload();
+  // 既読タイミング = アプリ開いた瞬間
+  setTimeout(setLastSeen, 1500);
+}
+
+async function reload() {
+  try {
+    const j = await api("GET", "/api/tasks");
+    tasks = j.tasks || [];
+    render();
+  } catch (e) {
+    console.warn("[task] reload failed", e);
+  }
+}
+
+function setupTabs() {
+  document.querySelectorAll(".tab").forEach((t) => {
+    t.addEventListener("click", () => {
+      currentTab = t.dataset.tab;
+      document.querySelectorAll(".tab").forEach((x) => x.classList.toggle("active", x === t));
+      expandedId = null;
+      render();
+    });
+  });
+}
+
+function fmtDate(d) {
+  if (!d) return "";
+  const s = String(d).slice(0, 10);
+  return s.replace(/^\d{4}-/, "").replace("-", "/");
+}
+function deadlineClass(d) {
+  if (!d) return "";
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const due = new Date(String(d).slice(0, 10) + "T00:00:00");
+  const days = (due - today) / 86400000;
+  if (days < 0) return "over";
+  if (days <= 3) return "soon";
+  return "";
+}
+
+function render() {
+  const lastSeen = getLastSeen();
+  const mine = tasks.filter((t) => (t.toEmail || "").toLowerCase() === me);
+  const theirs = tasks.filter((t) => (t.fromEmail || "").toLowerCase() === me && (t.toEmail || "").toLowerCase() !== me);
+  // 未読 = 自分宛 active で createdAt > last_seen
+  const unreadMine = mine.filter((t) => t.status === "active" && t.createdAt > lastSeen).length;
+  // 「お願い中」側の未読は「相手が完了した」もの (updatedAt > last_seen かつ status=done)
+  const unreadTheirs = theirs.filter((t) => t.status === "done" && t.updatedAt > lastSeen).length;
+  $("badgeMine").textContent = unreadMine;
+  $("badgeMine").style.display = unreadMine > 0 ? "" : "none";
+  $("badgeTheirs").textContent = unreadTheirs;
+  $("badgeTheirs").style.display = unreadTheirs > 0 ? "" : "none";
+
+  const list = currentTab === "mine" ? mine : theirs;
+  const active = list.filter((t) => t.status === "active");
+  const done = list.filter((t) => t.status === "done");
+
+  const el = $("list");
+  el.innerHTML = "";
+  if (!active.length && !done.length) {
+    el.innerHTML = `<div class="empty">${currentTab === "mine" ? "やることはありません" : "お願い中のタスクはありません"}</div>`;
+    return;
+  }
+  if (active.length) {
+    el.appendChild(label("Active"));
+    active.forEach((t) => el.appendChild(renderRow(t)));
+  }
+  if (done.length) {
+    el.appendChild(label("完了"));
+    done.forEach((t) => el.appendChild(renderRow(t)));
+  }
+}
+function label(text) {
+  const d = document.createElement("div");
+  d.className = "section-label";
+  d.textContent = text;
+  return d;
+}
+
+function renderRow(t) {
+  const wrap = document.createDocumentFragment();
+  const row = document.createElement("div");
+  row.className = "row" + (t.status === "done" ? " done" : "") + (expandedId === t.id ? " expanded" : "");
+  const pip = document.createElement("div");
+  pip.className = "pip p" + (t.priority || 2);
+  const main = document.createElement("div");
+  main.className = "row-main";
+  const ttl = document.createElement("div");
+  ttl.className = "row-title";
+  ttl.textContent = t.title || "(無題)";
+  const meta = document.createElement("div");
+  meta.className = "row-meta";
+  const parts = [];
+  if (t.deadline) {
+    const cls = deadlineClass(t.deadline);
+    parts.push(`<span class="row-deadline ${cls}">⏰ ${fmtDate(t.deadline)}</span>`);
+  }
+  if (currentTab === "mine") parts.push(`<span class="row-from">from ${nameOf(t.fromEmail)}</span>`);
+  else parts.push(`<span class="row-from">→ ${nameOf(t.toEmail)}</span>`);
+  meta.innerHTML = parts.join("");
+  main.append(ttl, meta);
+  row.append(pip, main);
+  // 自分宛で未読なら赤丸
+  if (currentTab === "mine" && t.status === "active" && t.createdAt > getLastSeen()) {
+    const u = document.createElement("div");
+    u.className = "row-unread";
+    row.appendChild(u);
+  }
+  row.addEventListener("click", () => {
+    expandedId = expandedId === t.id ? null : t.id;
+    render();
+  });
+  wrap.appendChild(row);
+  if (expandedId === t.id) {
+    wrap.appendChild(renderActions(t));
+  }
+  return wrap;
+}
+
+function renderActions(t) {
+  const bar = document.createElement("div");
+  bar.className = "actions";
+  // 完了 / 戻す
+  const doneBtn = document.createElement("button");
+  doneBtn.className = "act-btn done";
+  doneBtn.textContent = t.status === "done" ? "未完了に戻す" : "完了";
+  doneBtn.addEventListener("click", async (e) => {
+    e.stopPropagation();
+    await api("PUT", "/api/tasks/" + t.id, { status: t.status === "done" ? "active" : "done" });
+    await reload();
+  });
+  // 担当切替
+  const swapBtn = document.createElement("button");
+  swapBtn.className = "act-btn";
+  const swapTo = (t.toEmail || "").toLowerCase() === me ? partner : me;
+  swapBtn.textContent = "→ " + nameOf(swapTo) + "に切替";
+  swapBtn.addEventListener("click", async (e) => {
+    e.stopPropagation();
+    await api("PUT", "/api/tasks/" + t.id, { toEmail: swapTo });
+    expandedId = null;
+    await reload();
+  });
+  // 優先度サイクル
+  const priBtn = document.createElement("button");
+  priBtn.className = "act-btn";
+  priBtn.textContent = "優先度 " + ["高","中","低"][((t.priority || 2) - 1)];
+  priBtn.addEventListener("click", async (e) => {
+    e.stopPropagation();
+    const next = ((t.priority || 2) % 3) + 1;
+    await api("PUT", "/api/tasks/" + t.id, { priority: next });
+    await reload();
+  });
+  // 編集
+  const editBtn = document.createElement("button");
+  editBtn.className = "act-btn";
+  editBtn.textContent = "編集";
+  editBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    openModal(t);
+  });
+  // 削除
+  const delBtn = document.createElement("button");
+  delBtn.className = "act-btn del";
+  delBtn.textContent = "削除";
+  delBtn.addEventListener("click", async (e) => {
+    e.stopPropagation();
+    if (!confirm("削除しますか？")) return;
+    await api("DELETE", "/api/tasks/" + t.id);
+    expandedId = null;
+    await reload();
+  });
+  bar.append(doneBtn, swapBtn, priBtn, editBtn, delBtn);
+  return bar;
+}
+
+// ───── modal ─────
+function setupModal() {
+  document.querySelectorAll('[data-who]').forEach((b) => {
+    b.addEventListener("click", () => {
+      modalWho = b.dataset.who;
+      document.querySelectorAll('[data-who]').forEach((x) => x.classList.toggle("sel", x === b));
+    });
+  });
+  document.querySelectorAll('[data-p]').forEach((b) => {
+    b.addEventListener("click", () => {
+      modalPriority = Number(b.dataset.p);
+      document.querySelectorAll('[data-p]').forEach((x) => {
+        x.classList.toggle("sel", x === b);
+        x.classList.toggle("p1", x === b && modalPriority === 1);
+        x.classList.toggle("p2", x === b && modalPriority === 2);
+        x.classList.toggle("p3", x === b && modalPriority === 3);
+      });
+    });
+  });
+  $("fabAdd").addEventListener("click", () => openModal(null));
+  $("modal").addEventListener("click", (e) => { if (e.target.id === "modal") closeModal(); });
+  $("saveBtn").addEventListener("click", async () => {
+    const title = $("iTitle").value.trim();
+    if (!title) { $("iTitle").focus(); return; }
+    const deadline = $("iDeadline").value || null;
+    const toEmail = modalWho === "mine" ? me : partner;
+    try {
+      if (editingId) {
+        await api("PUT", "/api/tasks/" + editingId, { title, toEmail, priority: modalPriority, deadline });
+      } else {
+        await api("POST", "/api/tasks", { title, toEmail, priority: modalPriority, deadline });
+      }
+      closeModal();
+      await reload();
+    } catch (e) {
+      alert("保存に失敗: " + e.message);
+    }
+  });
+}
+
+function openModal(t) {
+  editingId = t ? t.id : null;
+  $("modalTitle").textContent = t ? "編集" : "新規タスク";
+  $("iTitle").value = t ? (t.title || "") : "";
+  $("iDeadline").value = t && t.deadline ? String(t.deadline).slice(0, 10) : "";
+  modalWho = t ? ((t.toEmail || "").toLowerCase() === me ? "mine" : "theirs") : "theirs";
+  modalPriority = t ? (t.priority || 2) : 2;
+  document.querySelectorAll('[data-who]').forEach((x) => x.classList.toggle("sel", x.dataset.who === modalWho));
+  document.querySelectorAll('[data-p]').forEach((x) => {
+    const isSel = Number(x.dataset.p) === modalPriority;
+    x.classList.toggle("sel", isSel);
+    x.classList.toggle("p1", isSel && modalPriority === 1);
+    x.classList.toggle("p2", isSel && modalPriority === 2);
+    x.classList.toggle("p3", isSel && modalPriority === 3);
+  });
+  $("modal").classList.add("open");
+  setTimeout(() => $("iTitle").focus(), 50);
+}
+function closeModal() {
+  $("modal").classList.remove("open");
+  editingId = null;
+}
+</script>
+</body>
+</html>

@@ -400,8 +400,21 @@ async function ensureSchema() {
   if (!p) return;
   try {
     await p.query("ALTER TABLE records ADD COLUMN IF NOT EXISTS drive_url TEXT");
+    await p.query(`
+      CREATE TABLE IF NOT EXISTS tasks (
+        id TEXT PRIMARY KEY,
+        title TEXT NOT NULL,
+        from_email TEXT NOT NULL,
+        to_email TEXT NOT NULL,
+        priority INT NOT NULL DEFAULT 2,
+        deadline DATE,
+        status TEXT NOT NULL DEFAULT 'active',
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `);
     schemaMigrated = true;
-    console.log("[schema] migration ok: records.drive_url ensured");
+    console.log("[schema] migration ok: records.drive_url + tasks ensured");
   } catch (e) {
     console.warn(`[schema] migration warning: ${e.message}`);
   }
@@ -524,6 +537,96 @@ app.get("/api/image-signed", async (req, res) => {
   } catch (err) {
     console.error("image-signed error", err);
     res.status(500).json({ error: err.message });
+  }
+});
+
+// ─────────────────────────────
+// Tasks (task ミニアプリ用。小西↔名取の依頼ボード)
+// ─────────────────────────────
+app.get("/api/tasks", async (req, res) => {
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "db not configured" });
+  await ensureSchema();
+  const me = (req.user?.email || "").toLowerCase();
+  try {
+    const { rows } = await p.query(
+      `SELECT id, title, from_email AS "fromEmail", to_email AS "toEmail",
+              priority, deadline, status, created_at AS "createdAt", updated_at AS "updatedAt"
+       FROM tasks
+       WHERE LOWER(from_email) = $1 OR LOWER(to_email) = $1
+       ORDER BY status ASC, priority ASC, COALESCE(deadline, '9999-12-31') ASC, created_at DESC`,
+      [me],
+    );
+    res.json({ tasks: rows, me });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post("/api/tasks", async (req, res) => {
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "db not configured" });
+  await ensureSchema();
+  const me = (req.user?.email || "").toLowerCase();
+  const { title, toEmail, priority, deadline } = req.body || {};
+  if (!title || !toEmail) return res.status(400).json({ error: "title and toEmail required" });
+  const id = crypto.randomUUID();
+  try {
+    await p.query(
+      `INSERT INTO tasks (id, title, from_email, to_email, priority, deadline)
+       VALUES ($1, $2, $3, $4, $5, $6)`,
+      [id, String(title).trim(), me, String(toEmail).toLowerCase(), Number(priority) || 2, deadline || null],
+    );
+    res.json({ ok: true, id });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.put("/api/tasks/:id", async (req, res) => {
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "db not configured" });
+  await ensureSchema();
+  const me = (req.user?.email || "").toLowerCase();
+  const body = req.body || {};
+  // 指定されたフィールドだけ動的に SET。deadline は明示的に null を送れば「期限なし」
+  const sets = [];
+  const args = [req.params.id, me];
+  const add = (col, val) => { args.push(val); sets.push(`${col} = $${args.length}`); };
+  if ("title" in body) add("title", String(body.title).trim());
+  if ("toEmail" in body) add("to_email", String(body.toEmail).toLowerCase());
+  if ("priority" in body) add("priority", Number(body.priority));
+  if ("deadline" in body) add("deadline", body.deadline || null);
+  if ("status" in body) add("status", String(body.status));
+  if (!sets.length) return res.json({ ok: true });
+  sets.push("updated_at = NOW()");
+  try {
+    const { rowCount } = await p.query(
+      `UPDATE tasks SET ${sets.join(", ")}
+       WHERE id = $1 AND (LOWER(from_email) = $2 OR LOWER(to_email) = $2)`,
+      args,
+    );
+    if (!rowCount) return res.status(404).json({ error: "not found" });
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.delete("/api/tasks/:id", async (req, res) => {
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "db not configured" });
+  await ensureSchema();
+  const me = (req.user?.email || "").toLowerCase();
+  try {
+    const { rowCount } = await p.query(
+      `DELETE FROM tasks WHERE id = $1 AND (LOWER(from_email) = $2 OR LOWER(to_email) = $2)`,
+      [req.params.id, me],
+    );
+    if (!rowCount) return res.status(404).json({ error: "not found" });
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
   }
 });
 
