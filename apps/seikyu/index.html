@@ -355,7 +355,7 @@ window.doSignOut = async () => { if (fbAuth) await signOut(fbAuth); location.rel
 const STORAGE_KEY = "seikyu_records";
 let bills = []; // {id, direction, issuer, total, dueDate, issueDate, category, site, account:{bank,branch,type,number,holder}, memo, status, paidAt, imageUrl, thumb, mimeType}
 let sites = []; // 経費アプリと共有の現場リスト [{id,name}]
-let selectedSite = "";    // 確認シートで選択中の現場
+let selectedSites = new Set();    // 確認シートで選択中の現場 (複数可。カンマ区切りで保存)
 let tabDir = "in";        // "in" | "out"
 let tabStatus = "unpaid"; // "unpaid" | "paid"
 let currentDirection = ""; // メイン画面で選択中の方向 (in/out)
@@ -550,7 +550,10 @@ function showConfirm(parsed, errMsg) {
   $("fCat").value = parsed.category || (editingDirection === "out" ? "工事代金" : "光熱費");
   $("fMemo").value = parsed.memo || "";
   // 現場: AI が拾った値があり既存リストに存在すれば選択、なければ「なし」
-  selectedSite = (parsed.site && sites.some((s) => s.name === parsed.site)) ? parsed.site : "";
+  // AI 推定された現場が既存リストにあれば初期選択 (なければ空)
+  selectedSites = new Set(
+    (parsed.site && sites.some((s) => s.name === parsed.site)) ? [parsed.site] : []
+  );
   renderSiteGrid();
   $("fNewSite").value = "";
   // 振込先口座
@@ -581,7 +584,10 @@ function openEdit(b) {
   $("fIssueDate").value = b.issueDate || "";
   $("fCat").value = b.category || "光熱費";
   $("fMemo").value = b.memo || "";
-  selectedSite = b.site || "";
+  // 既存データはカンマ区切り文字列、複数選択を Set に復元
+  selectedSites = new Set(
+    (b.site || "").split(",").map((s) => s.trim()).filter(Boolean)
+  );
   renderSiteGrid();
   $("fNewSite").value = "";
   const acc = b.account || {};
@@ -596,23 +602,27 @@ function openEdit(b) {
   show("confirmScreen");
 }
 
-// ───────── Site grid (経費アプリと現場リスト共有) ─────────
+// ───────── Site grid (経費アプリと現場リスト共有 / 複数選択可) ─────────
 function renderSiteGrid() {
   const grid = $("siteGrid");
   grid.textContent = "";
-  // 「現場なし」を最初に
+  // 「現場なし」: タップすると全選択を解除
   const none = document.createElement("button");
   none.type = "button";
-  none.className = "site-btn" + (selectedSite === "" ? " selected" : "");
+  none.className = "site-btn" + (selectedSites.size === 0 ? " selected" : "");
   none.textContent = "現場なし";
-  none.addEventListener("click", () => { selectedSite = ""; renderSiteGrid(); });
+  none.addEventListener("click", () => { selectedSites.clear(); renderSiteGrid(); });
   grid.appendChild(none);
   for (const s of sites) {
     const btn = document.createElement("button");
     btn.type = "button";
-    btn.className = "site-btn" + (selectedSite === s.name ? " selected" : "");
+    btn.className = "site-btn" + (selectedSites.has(s.name) ? " selected" : "");
     btn.textContent = s.name;
-    btn.addEventListener("click", () => { selectedSite = s.name; renderSiteGrid(); });
+    btn.addEventListener("click", () => {
+      if (selectedSites.has(s.name)) selectedSites.delete(s.name);
+      else selectedSites.add(s.name);
+      renderSiteGrid();
+    });
     grid.appendChild(btn);
   }
   const add = document.createElement("button");
@@ -655,19 +665,19 @@ $("submitBtn").addEventListener("click", async () => {
   try {
     const total = Number($("fTotal").value) || 0;
     if (!total) { toast("金額を入れてください", true); return; }
-    // 新規現場を入力していたら経費アプリと共有の DB に登録
-    let site = selectedSite;
+    // 新規現場を入力していたら経費アプリと共有の DB に登録 + 選択中に追加
     const newSiteName = $("fNewSite").value.trim();
-    if (!site && newSiteName) {
+    if (newSiteName) {
       try {
         const created = await api("POST", "/api/sites", { name: newSiteName });
-        sites.push(created);
-        site = created.name;
+        if (!sites.find((s) => s.name === created.name)) sites.push(created);
+        selectedSites.add(created.name);
       } catch (e) {
         console.warn("site create failed", e);
-        site = newSiteName; // ローカルでは保存する
+        selectedSites.add(newSiteName); // 失敗してもローカル選択に入れる
       }
     }
+    const siteStr = Array.from(selectedSites).join(", ");
     const rec = {
       direction: editingDirection,
       issuer: $("fIssuer").value.trim(),
@@ -675,7 +685,7 @@ $("submitBtn").addEventListener("click", async () => {
       dueDate: $("fDueDate").value || "",
       issueDate: $("fIssueDate").value || new Date().toISOString().slice(0, 10),
       category: $("fCat").value,
-      site: site || "",
+      site: siteStr,
       account: {
         bank: $("fAccBank").value.trim(),
         branch: $("fAccBranch").value.trim(),
