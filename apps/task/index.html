@@ -39,13 +39,15 @@ body { font-family: 'Outfit', -apple-system, sans-serif; font-weight: 400; backg
 .list { padding: 0 16px 130px; display: flex; flex-direction: column; gap: 9px; }
 .empty { text-align: center; padding: 40px 20px; color: var(--text3); font-size: 13px; font-weight: 600; }
 
-/* カード本体 */
-.card-wrap { position: relative; }
-.card { background: var(--bg); border-radius: 16px; padding: 11px 14px 11px 11px; box-shadow: 6px 6px 14px var(--sd), -5px -5px 12px var(--sl); display: flex; align-items: center; gap: 11px; touch-action: pan-y; user-select: none; transition: box-shadow 200ms ease, transform 200ms ease, opacity 200ms ease; position: relative; }
-.card.dragging { z-index: 100; box-shadow: 12px 12px 28px var(--sd), -4px -4px 14px var(--sl); }
-.card.done { opacity: 0.45; box-shadow: inset 3px 3px 8px var(--sd), inset -3px -3px 8px var(--sl); }
-.card.done .card-title { text-decoration: line-through; }
-.card.expanded { box-shadow: inset 4px 4px 10px var(--sd), inset -4px -4px 10px var(--sl); }
+/* カード本体: 外側 .card-wrap がシャドウ + 背景を持ち、展開時はそのまま下に
+   actions を内包して縦に伸びる。.card 自体は透明な inner row。 */
+.card-wrap { position: relative; background: var(--bg); border-radius: 16px; box-shadow: 6px 6px 14px var(--sd), -5px -5px 12px var(--sl); transition: box-shadow 200ms ease; overflow: hidden; }
+.card-wrap.expanded { box-shadow: 9px 9px 20px var(--sd), -6px -6px 14px var(--sl); }
+.card-wrap.done { opacity: 0.55; }
+.card { background: transparent; padding: 11px 14px 11px 11px; display: flex; align-items: center; gap: 11px; touch-action: pan-y; user-select: none; transition: transform 200ms ease, opacity 200ms ease, box-shadow 200ms ease; position: relative; }
+/* 横スワイプ中の card は wrap から浮き上がって見せる */
+.card.dragging { z-index: 100; background: var(--bg); border-radius: 16px; box-shadow: 12px 12px 28px var(--sd), -4px -4px 14px var(--sl); }
+.card-wrap.done .card-title { text-decoration: line-through; }
 
 /* 担当ピッカー (左端) */
 .role-picker { display: flex; gap: 4px; align-items: center; flex-shrink: 0; }
@@ -80,10 +82,12 @@ body { font-family: 'Outfit', -apple-system, sans-serif; font-weight: 400; backg
 .card.swiping-right ~ .swipe-hint.right { opacity: 1; }
 
 /* アクションバー (展開時) */
-.actions { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 10px 4px; overflow: hidden; animation: slide-down 200ms ease-out; transform-origin: top; }
+/* 展開時に card-wrap 内部の下に追加される操作行。
+   card と wrap が同じ背景なので継ぎ目なく「カードが伸びた」風に見える。 */
+.actions { display: flex; flex-wrap: wrap; gap: 6px; padding: 4px 11px 12px; border-top: 1px solid rgba(168,172,192,0.18); margin-top: 2px; overflow: hidden; animation: slide-down 200ms ease-out; transform-origin: top; }
 @keyframes slide-down {
-  from { opacity: 0; max-height: 0; padding-top: 0; padding-bottom: 0; transform: translateY(-6px); }
-  to   { opacity: 1; max-height: 200px; padding-top: 8px; padding-bottom: 4px; transform: translateY(0); }
+  from { opacity: 0; max-height: 0; padding-top: 0; padding-bottom: 0; border-top-color: transparent; }
+  to   { opacity: 1; max-height: 200px; padding-top: 8px; padding-bottom: 12px; }
 }
 .act-btn { padding: 7px 11px; border-radius: 12px; border: none; cursor: pointer; font-family: 'Outfit', sans-serif; font-weight: 700; font-size: 11px; color: var(--text2); background: var(--bg); box-shadow: 3px 3px 8px var(--sd), -3px -3px 8px var(--sl); }
 .act-btn:active { box-shadow: inset 2px 2px 5px var(--sd), inset -2px -2px 5px var(--sl); transform: scale(0.96); }
@@ -344,16 +348,19 @@ function render() {
     return;
   }
   for (const t of sorted) {
-    el.appendChild(renderRow(t, lastSeen));
-    if (expandedId === t.id) el.appendChild(renderActions(t));
+    const wrap = renderRow(t, lastSeen);
+    el.appendChild(wrap);
+    if (expandedId === t.id) wrap.appendChild(renderActions(t));
   }
 }
 
 function renderRow(t, lastSeen) {
   const wrap = document.createElement("div");
-  wrap.className = "card-wrap";
+  wrap.className = "card-wrap" +
+    (t.status === "done" ? " done" : "") +
+    (expandedId === t.id ? " expanded" : "");
   const card = document.createElement("div");
-  card.className = "card" + (t.status === "done" ? " done" : "") + (expandedId === t.id ? " expanded" : "");
+  card.className = "card";
   card.dataset.id = t.id;
 
   // 担当ピッカー
