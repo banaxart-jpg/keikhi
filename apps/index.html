@@ -46,6 +46,26 @@ body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); 
 .app-desc { font-size: 11px; color: var(--text2); font-weight: 600; line-height: 1.5; }
 .app-badge { position: absolute; top: 12px; right: 12px; font-size: 9px; font-weight: 800; letter-spacing: 0.1em; color: var(--text3); }
 
+/* ───── 編集モード (iOS 風 jiggle + ドラッグ並べ替え + × で非表示) ───── */
+body.edit-mode .app-card { animation: jiggle 0.25s ease-in-out infinite alternate; cursor: grab; }
+body.edit-mode .app-card.is-dragging { animation: none; opacity: 0.4; transform: scale(0.96); transition: none; cursor: grabbing; }
+body.edit-mode .app-card.hidden-tile { opacity: 0.42; filter: grayscale(0.6); animation-delay: 0.12s; }
+@keyframes jiggle {
+  from { transform: rotate(-0.7deg); }
+  to   { transform: rotate(0.7deg); }
+}
+.app-card .hide-btn {
+  position: absolute; top: -6px; left: -6px; width: 26px; height: 26px; border-radius: 13px;
+  background: #ef4444; color: white; border: 2px solid var(--bg);
+  display: none; align-items: center; justify-content: center;
+  font-size: 16px; font-weight: 900; line-height: 1; padding: 0; cursor: pointer; z-index: 3;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.2); font-family: -apple-system, sans-serif;
+}
+.app-card .hide-btn.show-btn { background: #22c55e; }
+body.edit-mode .app-card .hide-btn { display: flex; }
+body.edit-mode .app-card { user-select: none; -webkit-user-select: none; }
+body.edit-mode #editBtn { background: var(--bulb2); color: white; box-shadow: inset 3px 3px 8px rgba(0,0,0,0.15); }
+
 #signinOverlay { display: none; position: fixed; inset: 0; z-index: 400; background: var(--bg); flex-direction: column; align-items: center; justify-content: center; padding: 32px; text-align: center; gap: 18px; }
 #signinOverlay .title { font-size: 26px; }
 .gbtn { padding: 16px 30px; border-radius: 40px; font-size: 15px; font-weight: 700; border: none; cursor: pointer; font-family: 'Outfit', sans-serif; color: var(--text); background: var(--bg); box-shadow: 8px 8px 18px var(--sd), -6px -6px 16px var(--sl); }
@@ -61,7 +81,10 @@ body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); 
 <div id="app" style="display:none;">
   <div class="top-bar">
     <span class="hint-text">App Launcher</span>
-    <button class="pill-btn" onclick="doSignOut()">ログアウト</button>
+    <div style="display:flex; gap:8px;">
+      <button class="pill-btn" id="editBtn" onclick="toggleEditMode()">編集</button>
+      <button class="pill-btn" onclick="doSignOut()">ログアウト</button>
+    </div>
   </div>
   <div class="wrap">
     <div class="title">アプリ</div>
@@ -87,6 +110,9 @@ import {
   getRedirectResult, setPersistence, browserLocalPersistence,
   onAuthStateChanged, signOut,
 } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
+import {
+  getFirestore, doc, getDoc, setDoc,
+} from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
 
 // ───────── ミニアプリ一覧 ─────────
 // 新しいミニアプリを追加する手順:
@@ -130,24 +156,153 @@ const INTERNAL_EMAILS = new Set(["info@banax.tokyo", "konishi0221@gmail.com", "b
 let currentUserEmail = null;
 function isInternal() { return INTERNAL_EMAILS.has((currentUserEmail || "").toLowerCase()); }
 
+// ─── ユーザー別ランチャー設定 (Firestore: launcher_prefs/{uid} に保存) ───
+// uid をキーにすれば Firebase Auth 1本でユーザー識別できて、メアド変更にも追従する。
+let prefs = { order: [], hidden: [] };
+let editMode = false;
+let prefsSaveTimer = null;
+let fsDb = null;
+
+async function loadPrefs(user) {
+  try {
+    if (!fsDb || !user) return;
+    const snap = await getDoc(doc(fsDb, "launcher_prefs", user.uid));
+    if (snap.exists()) {
+      const p = snap.data() || {};
+      prefs = {
+        order: Array.isArray(p.order) ? p.order : [],
+        hidden: Array.isArray(p.hidden) ? p.hidden : [],
+      };
+      renderGrid();
+    }
+  } catch (e) { console.warn("loadPrefs:", e?.message || e); }
+}
+
+function savePrefs() {
+  clearTimeout(prefsSaveTimer);
+  prefsSaveTimer = setTimeout(async () => {
+    try {
+      const user = fbAuth?.currentUser;
+      if (!user || !fsDb) return;
+      await setDoc(doc(fsDb, "launcher_prefs", user.uid), {
+        order: prefs.order || [],
+        hidden: prefs.hidden || [],
+        updatedAt: Date.now(),
+      }, { merge: true });
+    } catch (e) { console.warn("savePrefs:", e?.message || e); }
+  }, 600); // debounce
+}
+
+function orderedApps() {
+  const visible = APPS.filter((a) => isInternal() || a.id === "techstudy");
+  const pos = new Map(prefs.order.map((id, i) => [id, i]));
+  return visible.slice().sort((a, b) => {
+    const ai = pos.has(a.id) ? pos.get(a.id) : 1e9;
+    const bi = pos.has(b.id) ? pos.get(b.id) : 1e9;
+    return ai - bi;
+  });
+}
+
+function isHidden(id) { return prefs.hidden.includes(id); }
+
 function renderGrid() {
   const g = document.getElementById("grid");
   g.innerHTML = "";
-  const visible = APPS.filter((a) => isInternal() || a.id === "techstudy");
-  for (const a of visible) {
+  const ordered = orderedApps();
+  // 通常: 非表示はスキップ。編集モード: 非表示も薄く出して再表示できるように。
+  for (const a of ordered) {
+    if (!editMode && isHidden(a.id)) continue;
     const card = document.createElement("button");
-    card.className = "app-card" + (a.soon ? " soon" : "");
+    card.className = "app-card" + (a.soon ? " soon" : "") + (isHidden(a.id) ? " hidden-tile" : "");
+    card.dataset.appId = a.id;
     if (a.accent) card.style.setProperty("--accent", a.accent);
     const badge = appBadges[a.id];
+    const hidden = isHidden(a.id);
     card.innerHTML =
+      `<button class="hide-btn${hidden ? " show-btn" : ""}" onclick="event.stopPropagation();toggleHidden('${a.id}')">${hidden ? "+" : "×"}</button>` +
       `<div class="app-icon">${a.icon}</div>` +
       `<div class="app-name">${a.name}</div>` +
       `<div class="app-desc">${a.desc}</div>` +
       (a.soon ? `<div class="app-badge">SOON</div>` : "") +
       (badge ? `<div class="warn-badge">${badge}</div>` : "");
-    if (!a.soon) card.onclick = () => { location.href = a.path; };
+    if (!a.soon) {
+      card.onclick = (e) => {
+        if (editMode) return; // 編集モード中はナビ無効
+        location.href = a.path;
+      };
+    }
+    attachDragHandlers(card, a.id);
     g.appendChild(card);
   }
+}
+
+function toggleHidden(id) {
+  if (prefs.hidden.includes(id)) prefs.hidden = prefs.hidden.filter((x) => x !== id);
+  else prefs.hidden = [...prefs.hidden, id];
+  renderGrid();
+  savePrefs();
+}
+window.toggleHidden = toggleHidden;
+
+function toggleEditMode() {
+  editMode = !editMode;
+  document.body.classList.toggle("edit-mode", editMode);
+  document.getElementById("editBtn").textContent = editMode ? "完了" : "編集";
+  renderGrid();
+}
+window.toggleEditMode = toggleEditMode;
+
+// ───── ドラッグ並び替え (pointer events, mobile/desktop 両対応) ─────
+let dragId = null;
+let dragEl = null;
+function attachDragHandlers(card, id) {
+  card.addEventListener("pointerdown", (e) => {
+    if (!editMode || card.classList.contains("soon")) return;
+    // hide-btn 直接タップはドラッグ開始しない
+    if (e.target.closest(".hide-btn")) return;
+    dragId = id;
+    dragEl = card;
+    card.classList.add("is-dragging");
+    card.setPointerCapture?.(e.pointerId);
+  });
+  card.addEventListener("pointermove", (e) => {
+    if (!dragId || !dragEl) return;
+    e.preventDefault();
+    // 指の下にある別のカードを探して順序入れ替え
+    const under = document.elementFromPoint(e.clientX, e.clientY)?.closest(".app-card");
+    if (under && under.dataset.appId && under.dataset.appId !== dragId) {
+      swapOrder(dragId, under.dataset.appId);
+      renderGrid();
+      // 再 render 後の自分の card を再 grab (dragEl はもう DOM から消えてる)
+      const grid = document.getElementById("grid");
+      const next = grid.querySelector(`[data-app-id="${dragId}"]`);
+      if (next) {
+        next.classList.add("is-dragging");
+        try { next.setPointerCapture?.(e.pointerId); } catch (_) {}
+        dragEl = next;
+      }
+    }
+  });
+  card.addEventListener("pointerup", () => endDrag());
+  card.addEventListener("pointercancel", () => endDrag());
+}
+function endDrag() {
+  if (!dragId) return;
+  dragId = null;
+  if (dragEl) dragEl.classList.remove("is-dragging");
+  dragEl = null;
+  savePrefs();
+}
+
+function swapOrder(a, b) {
+  // 現状の visible 順序を取得 → a を b の位置へ移動
+  const cur = orderedApps().map((x) => x.id);
+  const ia = cur.indexOf(a);
+  const ib = cur.indexOf(b);
+  if (ia < 0 || ib < 0) return;
+  cur.splice(ia, 1);
+  cur.splice(ib, 0, a);
+  prefs.order = cur;
 }
 
 // ───────── 共通ログイン（全ミニアプリで共有） ─────────
@@ -206,7 +361,9 @@ let fbAuth = null;
     const origAuthDomain = cfg.authDomain;
     cfg.authDomain = location.hostname; // 認証フローを Hosting と同一オリジンに（iOS Safari ITP でセッション喪失するため）
     diagLog(`init.json project=${cfg.projectId} authDomain=${origAuthDomain}→${cfg.authDomain}`);
-    fbAuth = getAuth(initializeApp(cfg));
+    const fbApp = initializeApp(cfg);
+    fbAuth = getAuth(fbApp);
+    fsDb = getFirestore(fbApp);
     await setPersistence(fbAuth, browserLocalPersistence);
     const provider = new GoogleAuthProvider();
     provider.setCustomParameters({ prompt: "select_account" });
@@ -232,8 +389,9 @@ let fbAuth = null;
       document.getElementById("app").style.display = "block";
       document.getElementById("who").textContent = user?.email || "サインイン済み";
       renderGrid();
-      // バッジは後追いで取得 (renderGrid を再呼び出し)
+      // バッジ + ユーザー設定 (Firestore) は後追いで取得 → 取れたら再 render
       fetchTechstudyBadge(user);
+      loadPrefs(user);
     }
 
     document.getElementById("signinBtn").addEventListener("click", async () => {

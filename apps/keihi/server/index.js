@@ -3085,6 +3085,10 @@ app.put("/api/kotonoha/me/visibility", async (req, res) => {
   }
 });
 
+// (ランチャーのタイル並び/非表示は Firestore (launcher_prefs/{uid}) に保存。
+//  別 DB に持つと整合変なので Firebase 側で完結させる。)
+
+
 // ─────────────────────────────
 // Records
 // ─────────────────────────────
