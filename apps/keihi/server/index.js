@@ -603,7 +603,7 @@ app.put("/api/tasks/:id", async (req, res) => {
   try {
     const { rowCount } = await p.query(
       `UPDATE tasks SET ${sets.join(", ")}
-       WHERE id = $1 AND (LOWER(from_email) = $2 OR LOWER(to_email) = $2)`,
+       WHERE id = $1 AND (LOWER(from_email) = $2 OR LOWER(to_email) = $2 OR to_email = 'both')`,
       args,
     );
     if (!rowCount) return res.status(404).json({ error: "not found" });
@@ -620,7 +620,7 @@ app.delete("/api/tasks/:id", async (req, res) => {
   const me = (req.user?.email || "").toLowerCase();
   try {
     const { rowCount } = await p.query(
-      `DELETE FROM tasks WHERE id = $1 AND (LOWER(from_email) = $2 OR LOWER(to_email) = $2)`,
+      `DELETE FROM tasks WHERE id = $1 AND (LOWER(from_email) = $2 OR LOWER(to_email) = $2 OR to_email = 'both')`,
       [req.params.id, me],
     );
     if (!rowCount) return res.status(404).json({ error: "not found" });
