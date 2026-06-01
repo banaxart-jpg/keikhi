@@ -220,8 +220,14 @@ function isHidden(id) { return prefs.hidden.includes(id); }
 function renderGrid() {
   const g = document.getElementById("grid");
   g.innerHTML = "";
-  const ordered = orderedApps();
-  // 通常: 非表示はスキップ。編集モード: 非表示も薄く出して再表示できるように。
+  // 通常: 非表示はスキップ。
+  // 編集モード: 非表示は薄く出すが、画面下のほうに固める (visible が先)。
+  let ordered = orderedApps();
+  if (editMode) {
+    const vis = ordered.filter((a) => !isHidden(a.id));
+    const hid = ordered.filter((a) => isHidden(a.id));
+    ordered = [...vis, ...hid];
+  }
   for (const a of ordered) {
     if (!editMode && isHidden(a.id)) continue;
     const card = document.createElement("button");
