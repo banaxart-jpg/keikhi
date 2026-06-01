@@ -32,18 +32,18 @@ body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); 
 .title { font-size: 30px; font-weight: 800; margin-bottom: 6px; }
 .subtitle { font-size: 13px; color: var(--text2); font-weight: 600; margin-bottom: 32px; }
 
-.grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; }
-.app-card { position: relative; overflow: visible; border-radius: 20px; padding: 18px 8px; background: var(--bg); cursor: pointer; text-align: center; border: none; font-family: 'Outfit', sans-serif; color: var(--text); box-shadow: 8px 8px 18px var(--sd), -6px -6px 14px var(--sl); transition: box-shadow 0.18s, transform 0.14s; }
+.grid { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+.app-card { position: relative; overflow: visible; border-radius: 24px; padding: 26px 18px; background: var(--bg); cursor: pointer; text-align: center; border: none; font-family: 'Outfit', sans-serif; color: var(--text); box-shadow: 10px 10px 24px var(--sd), -8px -8px 20px var(--sl); transition: box-shadow 0.18s, transform 0.14s; }
 .warn-badge { position: absolute; top: -6px; right: -6px; min-width: 24px; height: 24px; padding: 0 8px; border-radius: 12px; background: #ef4444; color: white; font-weight: 900; font-size: 13px; display: flex; align-items: center; justify-content: center; box-shadow: 0 3px 8px rgba(239,68,68,0.4); animation: warnpulse 1.6s infinite; z-index: 2; }
 @keyframes warnpulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.12); } }
 .app-card::before { content: ""; position: absolute; top: 0; left: 8%; right: 8%; height: 44%; background: linear-gradient(180deg, rgba(255,255,255,0.5) 0%, rgba(255,255,255,0) 100%); border-radius: 30px 30px 50% 50%; pointer-events: none; }
 .app-card:active { box-shadow: inset 7px 7px 18px var(--sd), inset -5px -5px 14px var(--sl); transform: scale(0.96); }
 .app-card.soon { opacity: 0.5; cursor: default; }
 .app-card.soon:active { box-shadow: 10px 10px 24px var(--sd), -8px -8px 20px var(--sl); transform: none; }
-.app-icon { font-size: 36px; line-height: 1; margin-bottom: 8px; color: color-mix(in srgb, var(--accent, var(--text)) 55%, white 45%); font-variation-settings: 'FILL' 1, 'wght' 500, 'GRAD' 0, 'opsz' 40; }
+.app-icon { font-size: 48px; line-height: 1; margin-bottom: 12px; color: color-mix(in srgb, var(--accent, var(--text)) 55%, white 45%); font-variation-settings: 'FILL' 1, 'wght' 500, 'GRAD' 0, 'opsz' 48; }
 .app-card.soon .app-icon { color: var(--text2); }
-.app-name { font-size: 13px; font-weight: 700; margin-bottom: 2px; }
-.app-desc { font-size: 10px; color: var(--text2); font-weight: 600; line-height: 1.4; }
+.app-name { font-size: 17px; font-weight: 700; margin-bottom: 4px; }
+.app-desc { font-size: 11px; color: var(--text2); font-weight: 600; line-height: 1.5; }
 .app-badge { position: absolute; top: 12px; right: 12px; font-size: 9px; font-weight: 800; letter-spacing: 0.1em; color: var(--text3); }
 
 /* ───── 編集モード (iOS 風 jiggle + ドラッグ並べ替え + × で非表示) ───── */
@@ -65,6 +65,10 @@ body.edit-mode .app-card.hidden-tile { opacity: 0.42; filter: grayscale(0.6); an
 body.edit-mode .app-card .hide-btn { display: flex; }
 body.edit-mode .app-card { user-select: none; -webkit-user-select: none; }
 body.edit-mode #editBtn { background: var(--bulb2); color: white; box-shadow: inset 3px 3px 8px rgba(0,0,0,0.15); }
+body.edit-mode #sortBar { display: flex; }
+.sort-btn { padding: 6px 12px; border-radius: 14px; border: none; font-family: 'Outfit', sans-serif; font-size: 11px; font-weight: 700; cursor: pointer; background: var(--bg); color: var(--text2); box-shadow: 3px 3px 6px var(--sd), -2px -2px 5px var(--sl); }
+.sort-btn.on { background: var(--bulb2); color: white; box-shadow: inset 2px 2px 5px rgba(0,0,0,0.18); }
+.sort-btn:active { transform: scale(0.96); }
 
 #signinOverlay { display: none; position: fixed; inset: 0; z-index: 400; background: var(--bg); flex-direction: column; align-items: center; justify-content: center; padding: 32px; text-align: center; gap: 18px; }
 #signinOverlay .title { font-size: 26px; }
@@ -89,6 +93,12 @@ body.edit-mode #editBtn { background: var(--bulb2); color: white; box-shadow: in
   <div class="wrap">
     <div class="title">アプリ</div>
     <div class="subtitle" id="who">サインイン済み</div>
+    <div id="sortBar" style="display:none; gap:8px; margin-bottom:14px; align-items:center; flex-wrap:wrap;">
+      <span style="font-size:11px; color:var(--text2); font-weight:700; letter-spacing:0.1em;">並び順:</span>
+      <button class="sort-btn" data-mode="default" onclick="applySort('default')">標準</button>
+      <button class="sort-btn" data-mode="aiueo" onclick="applySort('aiueo')">あいうえお</button>
+      <button class="sort-btn" data-mode="custom" onclick="applySort('custom')">自分で並べる</button>
+    </div>
     <div class="grid" id="grid"></div>
   </div>
 </div>
@@ -158,7 +168,7 @@ function isInternal() { return INTERNAL_EMAILS.has((currentUserEmail || "").toLo
 
 // ─── ユーザー別ランチャー設定 (Firestore: launcher_prefs/{uid} に保存) ───
 // uid をキーにすれば Firebase Auth 1本でユーザー識別できて、メアド変更にも追従する。
-let prefs = { order: [], hidden: [] };
+let prefs = { order: [], hidden: [], sort: "default" };
 let editMode = false;
 let prefsSaveTimer = null;
 let fsDb = null;
@@ -172,6 +182,7 @@ async function loadPrefs(user) {
       prefs = {
         order: Array.isArray(p.order) ? p.order : [],
         hidden: Array.isArray(p.hidden) ? p.hidden : [],
+        sort: typeof p.sort === "string" ? p.sort : "default",
       };
       renderGrid();
     }
@@ -187,6 +198,7 @@ function savePrefs() {
       await setDoc(doc(fsDb, "launcher_prefs", user.uid), {
         order: prefs.order || [],
         hidden: prefs.hidden || [],
+        sort: prefs.sort || "default",
         updatedAt: Date.now(),
       }, { merge: true });
     } catch (e) { console.warn("savePrefs:", e?.message || e); }
@@ -219,7 +231,7 @@ function renderGrid() {
     const badge = appBadges[a.id];
     const hidden = isHidden(a.id);
     card.innerHTML =
-      `<button class="hide-btn${hidden ? " show-btn" : ""}" onclick="event.stopPropagation();toggleHidden('${a.id}')">${hidden ? "+" : "×"}</button>` +
+      `<button class="hide-btn${hidden ? " show-btn" : ""}" onclick="event.stopPropagation();toggleHidden('${a.id}')">${hidden ? "+" : "−"}</button>` +
       `<div class="app-icon">${a.icon}</div>` +
       `<div class="app-name">${a.name}</div>` +
       `<div class="app-desc">${a.desc}</div>` +
@@ -248,9 +260,33 @@ function toggleEditMode() {
   editMode = !editMode;
   document.body.classList.toggle("edit-mode", editMode);
   document.getElementById("editBtn").textContent = editMode ? "完了" : "編集";
+  refreshSortBar();
   renderGrid();
 }
 window.toggleEditMode = toggleEditMode;
+
+// 並び順モード: "default"(APPS定義順) / "aiueo"(あいうえお順) / "custom"(ドラッグで自由)
+// prefs.sort に保存。custom は prefs.order を尊重。default/aiueo は order を上書き&固定。
+function applySort(mode) {
+  prefs.sort = mode;
+  if (mode === "default") {
+    prefs.order = APPS.map((a) => a.id); // 定義順
+  } else if (mode === "aiueo") {
+    prefs.order = APPS.slice().sort((a, b) => (a.name || "").localeCompare(b.name || "", "ja")).map((a) => a.id);
+  }
+  // custom はそのまま (現在の prefs.order を維持)
+  refreshSortBar();
+  renderGrid();
+  savePrefs();
+}
+window.applySort = applySort;
+
+function refreshSortBar() {
+  const mode = prefs.sort || (prefs.order && prefs.order.length ? "custom" : "default");
+  document.querySelectorAll(".sort-btn").forEach((b) => {
+    b.classList.toggle("on", b.dataset.mode === mode);
+  });
+}
 
 // ───── ドラッグ並び替え (pointer events, mobile/desktop 両対応) ─────
 let dragId = null;
@@ -291,6 +327,9 @@ function endDrag() {
   dragId = null;
   if (dragEl) dragEl.classList.remove("is-dragging");
   dragEl = null;
+  // ドラッグ後は強制的に custom モード扱い (= 自分で並べた順を維持)
+  prefs.sort = "custom";
+  refreshSortBar();
   savePrefs();
 }
 
