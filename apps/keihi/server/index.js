@@ -361,18 +361,19 @@ async function updateInvoiceSummary(sheets, year, ym) {
   const monthCol = (sumRes.data.values || []).map((r) => r[0]);
   const rowIdx = monthCol.findIndex((m) => m === ym);
   const rowValues = [ym, sales.total, sales.paid, sales.unpaid, exp.total, exp.paid, exp.unpaid];
+  // RAW: "2026-05" を日付に解釈させず文字列のまま保存
   if (rowIdx > 0) {
     await sheets.spreadsheets.values.update({
       spreadsheetId: INVOICE_SHEET_ID,
       range: `${summaryTab}!A${rowIdx + 1}`,
-      valueInputOption: "USER_ENTERED",
+      valueInputOption: "RAW",
       requestBody: { values: [rowValues] },
     });
   } else {
     await sheets.spreadsheets.values.append({
       spreadsheetId: INVOICE_SHEET_ID,
       range: `${summaryTab}!A:G`,
-      valueInputOption: "USER_ENTERED",
+      valueInputOption: "RAW",
       insertDataOption: "INSERT_ROWS",
       requestBody: { values: [rowValues] },
     });
