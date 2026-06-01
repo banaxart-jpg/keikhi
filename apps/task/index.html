@@ -123,7 +123,8 @@ body { font-family: 'Outfit', -apple-system, sans-serif; font-weight: 400; backg
   <div class="me-pill"><span class="me-dot"></span><span id="meLabel">…</span></div>
   <div class="tabs">
     <button class="tab active" id="tabMine" data-tab="mine">やること <span id="badgeMine" class="badge" style="display:none">0</span></button>
-    <button class="tab" id="tabTheirs" data-tab="theirs">お願い中 <span id="badgeTheirs" class="badge" style="display:none">0</span></button>
+    <button class="tab" id="tabBoth" data-tab="both">お互い</button>
+    <button class="tab" id="tabTheirs" data-tab="theirs">→ <span id="badgeTheirs" class="badge" style="display:none">0</span></button>
   </div>
   <div class="list" id="list"></div>
   <button class="fab" id="fabAdd">＋</button>
@@ -322,12 +323,29 @@ function render() {
   $("badgeTheirs").textContent = unreadTheirs;
   $("badgeTheirs").style.display = unreadTheirs > 0 ? "" : "none";
 
+  const el = $("list");
+  el.innerHTML = "";
+
+  if (currentTab === "both") {
+    const sections = [
+      { label: "やること", items: mine.filter((t) => t.status === "active") },
+      { label: "→ お願い中", items: theirs.filter((t) => t.status === "active") },
+      { label: "完了", items: [...mine, ...theirs].filter((t) => t.status === "done") },
+    ];
+    let any = false;
+    for (const s of sections) {
+      if (!s.items.length) continue;
+      any = true;
+      el.appendChild(label(s.label));
+      s.items.forEach((t) => el.appendChild(renderRow(t)));
+    }
+    if (!any) el.innerHTML = `<div class="empty">タスクはまだありません</div>`;
+    return;
+  }
+
   const list = currentTab === "mine" ? mine : theirs;
   const active = list.filter((t) => t.status === "active");
   const done = list.filter((t) => t.status === "done");
-
-  const el = $("list");
-  el.innerHTML = "";
   if (!active.length && !done.length) {
     el.innerHTML = `<div class="empty">${currentTab === "mine" ? "やることはありません" : "お願い中のタスクはありません"}</div>`;
     return;
@@ -366,13 +384,14 @@ function renderRow(t) {
     const cls = deadlineClass(t.deadline);
     parts.push(`<span class="row-deadline ${cls}">⏰ ${fmtDate(t.deadline)}</span>`);
   }
-  if (currentTab === "mine") parts.push(`<span class="row-from">from ${nameOf(t.fromEmail)}</span>`);
+  const isMine = (t.toEmail || "").toLowerCase() === me;
+  if (isMine) parts.push(`<span class="row-from">from ${nameOf(t.fromEmail)}</span>`);
   else parts.push(`<span class="row-from">→ ${nameOf(t.toEmail)}</span>`);
   meta.innerHTML = parts.join("");
   main.append(ttl, meta);
   row.append(pip, main);
   // 自分宛で未読なら赤丸
-  if (currentTab === "mine" && t.status === "active" && t.createdAt > getLastSeen()) {
+  if (isMine && t.status === "active" && t.createdAt > getLastSeen()) {
     const u = document.createElement("div");
     u.className = "row-unread";
     row.appendChild(u);
