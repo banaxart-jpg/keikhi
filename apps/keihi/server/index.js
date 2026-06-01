@@ -553,7 +553,7 @@ app.get("/api/tasks", async (req, res) => {
       `SELECT id, title, from_email AS "fromEmail", to_email AS "toEmail",
               priority, deadline, status, created_at AS "createdAt", updated_at AS "updatedAt"
        FROM tasks
-       WHERE LOWER(from_email) = $1 OR LOWER(to_email) = $1
+       WHERE LOWER(from_email) = $1 OR LOWER(to_email) = $1 OR to_email = 'both'
        ORDER BY status ASC, priority ASC, COALESCE(deadline, '9999-12-31') ASC, created_at DESC`,
       [me],
     );
