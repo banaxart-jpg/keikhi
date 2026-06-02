@@ -141,7 +141,7 @@ steps:
       - |
         set -e
         npm install -g firebase-tools@13 --silent --no-audit --no-fund
-        firebase deploy --only hosting,firestore:rules \
+        firebase deploy --only hosting,firestore:rules,storage \
           --project=$PROJECT_ID \
           --config=firebase.json \
           --non-interactive

@@ -1,0 +1,19 @@
+// Firebase Storage セキュリティルール (Firebase project: keikhi)。
+// kaimono (手配リスト) の添付画像を置く場所だけ規定。
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    // 手配リスト: kaimono/<itemId>/<filename>
+    // サインインしてれば誰でも read/write 可。10MB 上限。
+    match /kaimono/{itemId}/{file=**} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null
+        && request.resource.size < 10 * 1024 * 1024
+        && request.resource.contentType.matches("image/.*");
+    }
+    // それ以外は禁止 (明示)
+    match /{path=**} {
+      allow read, write: if false;
+    }
+  }
+}
