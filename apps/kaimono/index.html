@@ -327,6 +327,8 @@ const App = {
     }
 
     async function del(item) {
+      const label = displayName(item) + (item.qty ? ` × ${item.qty} ${item.unit || ""}` : "");
+      if (!confirm(`「${label}」を削除しますか?`)) return;
       try { await deleteDoc(doc(db, SHOPPING, item.id)); }
       catch (e) { err.value = e.message; }
     }
