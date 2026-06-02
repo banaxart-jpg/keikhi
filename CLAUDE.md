@@ -250,9 +250,22 @@ Gemini / GPT / Claude を使うアプリなら：
 何を作るか迷ってる時、選択肢として：
 - 認証も API も要らないシンプル系 → `/cost/` を例に出す（HTML/CSS/JS 1ファイル完結）
 - ログインして API 叩く系 → `/keihi/` を例に出す（同パターンで作れる）
+- リアルタイム同期 / フォーム / タブ等 Vue が向く系 → `/kaimono/` を例に出す（Vue 3 + Firestore で書いた最初の例）
 
 「これを参考にこう作ろう」ではなく「こういうのがあるよ、似た感じで作ってもいいし全然違っててもOK」程度の紹介。
 本人がやりたい形を最優先に尊重する。
+
+**3.5 フロントの技術選択（vanilla / Vue どっちでも OK）**
+
+新しいミニアプリは **vanilla HTML/JS でも Vue 3 でも好きな方** で書いてよい。
+- vanilla: 既存アプリの大半 (`keihi` / `task` / `techstudy` etc.)。ビルドステップなしで `apps/<id>/index.html` 1ファイル完結
+- Vue 3: `/kaimono/` が初採用例。CDN の `vue@3/dist/vue.esm-browser.prod.js` を import するだけでビルド不要
+  - 状態が多い / リアルタイム購読 (`onSnapshot`) / フォーム多め / タブ切替 みたいに reactive が欲しい時は Vue が断然ラク
+  - `setup()` で `ref` / `computed` / `onMounted` / `onBeforeUnmount` 使う書き方。Composition API
+  - **罠**: template を `` const TEMPLATE = `...` `` で書くとき、template 内に `` ` `` を使うと外側を閉じてしまう。動的文字列は computed で作る (例: `inputPlaceholder`)
+  - SFC (`.vue`) ファイルはビルドステップ要るので使わない。テンプレートは文字列で書く
+
+Nuxt 等のフレームワーク全面導入はまだ。導入検討は小西と相談の上で。
 
 **4. 自分のディレクトリは完全に自分のもの感**
 `apps/<自分のID>/` の中身は **何書いても OK、誰にも判定されない領域**。
