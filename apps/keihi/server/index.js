@@ -90,8 +90,12 @@ app.use("/api", async (req, res, next) => {
     const decoded = await admin.auth().verifyIdToken(m[1]);
     // techstudy (kotonoha) だけは社外含む任意の Firebase 認証ユーザーに開放。
     // 他のミニアプリ (keihi/kaigi 等) は引き続き ALLOWED_EMAILS の社内限定。
+    // techstudy (/kotonoha) と「現場一覧の GET」は社外 auth ユーザーにも開放。
+    //   手配リスト (kaimono) が誰でも入れる仕様で、現場タブを構築するのに /sites
+    //   の読み取りだけは要る (POST/DELETE は社内限定のまま)
     const isKotonoha = req.path.startsWith("/kotonoha/");
-    if (!isKotonoha && allowList.length && !allowList.includes((decoded.email || "").toLowerCase())) {
+    const isPublicSitesRead = req.method === "GET" && req.path === "/sites";
+    if (!isKotonoha && !isPublicSitesRead && allowList.length && !allowList.includes((decoded.email || "").toLowerCase())) {
       return res.status(403).json({ error: `権限がありません (${decoded.email || "?"})` });
     }
     req.user = decoded;

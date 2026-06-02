@@ -16,16 +16,11 @@ service cloud.firestore {
       allow read, write: if request.auth != null && request.auth.uid == uid;
     }
 
-    // 買い物リスト (現場ごとの共有買い物メモ): 社内 3 アカウントのみ。
+    // 手配リスト (現場ごとの共有 工具・材料 メモ): サインインしてれば誰でも。
     // 全員が全アイテム読み書き可。書き込み時刻 / 投稿者 はサーバ無しで
     // ドキュメント内に持つ。
     match /shopping_items/{itemId} {
-      allow read, write: if request.auth != null
-        && request.auth.token.email in [
-          "info@banax.tokyo",
-          "konishi0221@gmail.com",
-          "banaxart@gmail.com"
-        ];
+      allow read, write: if request.auth != null;
     }
 
     // それ以外は禁止 (明示)

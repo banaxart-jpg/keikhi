@@ -5,9 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
-<meta name="apple-mobile-web-app-title" content="買い物">
+<meta name="apple-mobile-web-app-title" content="手配リスト">
 <link rel="apple-touch-icon" href="/kaimono/icon.png">
-<title>買い物</title>
+<title>手配リスト</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
@@ -162,8 +162,6 @@ import {
   getFirestore, collection, addDoc, deleteDoc, doc, updateDoc,
   onSnapshot, query, orderBy, serverTimestamp, where, writeBatch,
 } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
-import { gateInternal } from "/internal-gate.js";
-
 // 現場は keihi2 と同じソース (/api/sites = Cloud SQL の sites テーブル) から取る。
 // 並び順は「最近そのタブで動きがあった順」(items の createdAt/checkedAt の max)。
 // 初回 fetch までは空配列 → タブも出ず、ロード中表示のみ。
@@ -173,7 +171,7 @@ const TEMPLATE = `
 <div>
   <div class="header-fix">
     <div class="top">
-      <span class="title"><span class="icon" style="vertical-align:-0.18em;">shopping_cart</span> 買い物</span>
+      <span class="title"><span class="icon" style="vertical-align:-0.18em;">inventory_2</span> 手配リスト</span>
       <button class="pill" @click="back">← 戻る</button>
     </div>
 
@@ -474,7 +472,8 @@ const App = {
         const app = initializeApp(cfg);
         const auth = getAuth(app);
         await setPersistence(auth, browserLocalPersistence);
-        gateInternal(auth);
+        // 手配リストは techstudy と同じく「サインインしてれば誰でも」開放。
+        // gateInternal は呼ばない (社外 Google ユーザーも入れる)
         db = getFirestore(app);
         onAuthStateChanged(auth, async (u) => {
           if (!u) {

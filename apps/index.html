@@ -137,7 +137,7 @@ const APPS = [
   { id: "keihi2", name: "経費2",        icon: "add_a_photo",   accent: "#10b981", desc: "撮影連発→後でまとめて仕分け",  path: "/keihi2/" },
   { id: "seikyu", name: "請求書",       icon: "request_quote", accent: "#d97706", desc: "光熱費・税金の未払い管理",    path: "/seikyu/" },
   { id: "task",    name: "タスク",       icon: "checklist",      accent: "#4961ff", desc: "",                             path: "/task/" },
-  { id: "kaimono", name: "買い物",       icon: "shopping_cart",  accent: "#2a8c3a", desc: "現場ごとリストをリアルタイム共有", path: "/kaimono/" },
+  { id: "kaimono", name: "手配リスト",   icon: "inventory_2",    accent: "#2a8c3a", desc: "現場ごとに必要な工具・材料を共有", path: "/kaimono/" },
   { id: "cost",    name: "AIコスト計算", icon: "calculate",      accent: "#7c3aed", desc: "Gemini/GPT/Claude の費用見積", path: "/cost/" },
   { id: "kaigi",  name: "AI会議",       icon: "forum",         accent: "#4961ff", desc: "3者AIで検討して結論を出す",    path: "/kaigi/" },
   { id: "techstudy", name: "techstudy", icon: "school",        accent: "#6d28d9", desc: "ITまわりの用語・仕組みを身につける", path: "/techstudy/" },
@@ -208,7 +208,9 @@ function savePrefs() {
 }
 
 function orderedApps() {
-  const visible = APPS.filter((a) => isInternal() || a.id === "techstudy");
+  // techstudy と 手配リスト (kaimono) は社外 auth ユーザーにも公開
+  const PUBLIC_APPS = new Set(["techstudy", "kaimono"]);
+  const visible = APPS.filter((a) => isInternal() || PUBLIC_APPS.has(a.id));
   const pos = new Map(prefs.order.map((id, i) => [id, i]));
   return visible.slice().sort((a, b) => {
     const ai = pos.has(a.id) ? pos.get(a.id) : 1e9;
