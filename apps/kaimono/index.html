@@ -23,9 +23,11 @@
   --danger: #b04040;
 }
 html, body { height: 100%; }
-body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; overflow-x: hidden; padding-bottom: 120px; }
+body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; overflow-x: hidden; padding-bottom: 180px; }
 .icon { font-family: 'Material Symbols Outlined'; font-size: 1.1em; display: inline-block; vertical-align: -0.18em; font-variation-settings: 'FILL' 0, 'wght' 500, 'GRAD' 0, 'opsz' 20; }
 
+/* 上部 (タイトル + タブ) を sticky にしてスクロール中も常時表示 */
+.header-fix { position: sticky; top: 0; z-index: 10; background: var(--bg); box-shadow: 0 2px 10px rgba(168,172,192,0.18); }
 .top { display: flex; justify-content: space-between; align-items: center; padding: 54px 18px 14px; }
 .title { font-size: 22px; font-weight: 800; letter-spacing: -0.3px; }
 .pill { padding: 8px 16px; border-radius: 24px; font-size: 12px; font-weight: 700; border: none; color: var(--text2); background: var(--bg); box-shadow: 4px 4px 10px var(--sd), -4px -4px 10px var(--sl); cursor: pointer; font-family: inherit; }
@@ -131,19 +133,21 @@ const SHOPPING = "shopping_items";
 
 const TEMPLATE = `
 <div>
-  <div class="top">
-    <span class="title"><span class="icon" style="vertical-align:-0.18em;">shopping_cart</span> 買い物</span>
-    <button class="pill" @click="back">← 戻る</button>
-  </div>
+  <div class="header-fix">
+    <div class="top">
+      <span class="title"><span class="icon" style="vertical-align:-0.18em;">shopping_cart</span> 買い物</span>
+      <button class="pill" @click="back">← 戻る</button>
+    </div>
 
-  <div class="tabs">
-    <button
-      v-for="s in sortedSites" :key="s"
-      class="tab" :class="{ on: activeSite === s }"
-      @click="activeSite = s"
-    >
-      {{ s }}<span class="count" v-if="countBySite[s]">{{ countBySite[s] }}</span>
-    </button>
+    <div class="tabs">
+      <button
+        v-for="s in sortedSites" :key="s"
+        class="tab" :class="{ on: activeSite === s }"
+        @click="activeSite = s"
+      >
+        {{ s }}<span class="count" v-if="countBySite[s]">{{ countBySite[s] }}</span>
+      </button>
+    </div>
   </div>
 
   <div v-if="!ready" class="loading"><span class="realtime-dot"></span>接続中…</div>
