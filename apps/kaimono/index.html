@@ -287,6 +287,7 @@ const TEMPLATE = `
               </span>
             </div>
             <div class="item-meta">
+              <span class="checker-dot" :style="{ background: colorForEmail(item.addedBy) }" :title="'追加: ' + displayNameOf(item.addedBy)"></span>
               {{ formatMeta(item) }}
               <button class="detail-toggle" @click="toggleDetail(item)">{{ expandedId === item.id ? '閉じる' : (hasDetail(item) ? '詳細 📎' : '詳細') }}</button>
             </div>
@@ -377,8 +378,12 @@ const TEMPLATE = `
               <b>{{ displayName(item) }}</b><span v-if="item.qty" class="qty-suffix">× {{ item.qty }} {{ item.unit || '' }}</span>
               <span v-if="item.category" class="tag-pill" :class="catClass(item.category)" style="margin-left:6px;">{{ item.category }}</span>
             </div>
-            <div class="meta">
-              {{ item.site }} · {{ displayNameOf(item.checkedBy) }} が {{ formatTimeShort(item.checkedAt) }} に
+            <div class="meta" style="display:flex; align-items:center; gap:4px; flex-wrap:wrap;">
+              <b>{{ item.site }}</b>
+              <span>·</span>
+              <span class="checker-dot" :style="{ background: colorForEmail(item.addedBy) }"></span>{{ displayNameOf(item.addedBy) }} が追加
+              <span>→</span>
+              <span class="checker-dot" :style="{ background: colorForEmail(item.checkedBy) }"></span>{{ displayNameOf(item.checkedBy) }} が {{ formatTimeShort(item.checkedAt) }} に済み
             </div>
           </div>
         </div>
