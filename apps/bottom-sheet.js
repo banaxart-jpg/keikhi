@@ -3,7 +3,9 @@
 // 機能:
 // - v-model でモーダル開閉。backdrop タップで閉じる
 // - title プロップでヘッダー表示
-// - 上部ハンドルを下にドラッグで閉じる (距離 / 速度しきい値)
+// - 上部ハンドル / タイトル領域を下にドラッグで閉じる (距離しきい値)
+// - expandable=true のとき: ハンドルを上に引っ張ると expanded=true をエミット
+//   (parent は v-model:expanded で受けて、追加 UI を v-if で出す想定)
 // - body はスクロール可能 (overflow-y: auto)
 // - 中身は <slot> で自由
 //
@@ -11,11 +13,12 @@
 //   import { BottomSheet } from "/bottom-sheet.js";
 //   createApp(App).component('bottom-sheet', BottomSheet).mount('#app');
 //   <bottom-sheet v-model="open" title="アーカイブ"> ...slot... </bottom-sheet>
+//   <bottom-sheet v-model="open" expandable v-model:expanded="full"> ... </bottom-sheet>
 
 import { ref, computed, watch } from "https://unpkg.com/vue@3.4.27/dist/vue.esm-browser.prod.js";
 
 // グローバル CSS は 1 回だけ inject
-const STYLE_ID = "_bottomsheet_styles_v1";
+const STYLE_ID = "_bottomsheet_styles_v2";
 const CSS = `
 .bs-modal { position: fixed; inset: 0; display: flex; align-items: flex-end; justify-content: center;
   background: rgba(180,184,205,0); visibility: hidden; opacity: 0; pointer-events: none; z-index: 50;
@@ -49,8 +52,14 @@ export const BottomSheet = {
     title: { type: String, default: "" },
     // 閉じるしきい値 (px)。これより下にドラッグされたら close emit。
     dismissThreshold: { type: Number, default: 100 },
+    // true のとき、ハンドルを上に引っ張ると expanded=true を emit。
+    expandable: { type: Boolean, default: false },
+    // 展開状態 (v-model:expanded)。expandable=true のときだけ意味を持つ。
+    expanded: { type: Boolean, default: false },
+    // 展開しきい値 (px、上方向の生の指移動量)。
+    expandThreshold: { type: Number, default: 40 },
   },
-  emits: ["update:modelValue"],
+  emits: ["update:modelValue", "update:expanded"],
   template: `
     <div class="bs-modal" :class="{ open: modelValue }" @click="onBgClick">
       <div class="bs-sheet" :style="sheetStyle" @click.stop>
@@ -70,12 +79,13 @@ export const BottomSheet = {
     const dragY = ref(0);
     const dragging = ref(false);
     let startY = null;
+    let rawDy = 0;  // 指の生移動量 (上下しきい値判定に使う)
 
-    // dragY > 0 のときだけ inline transform を当てる。
-    // 閉じてる時 (modelValue=false) は何も当てない → CSS の translateY(100%) が走って下に消える。
+    // dragY != 0 のときだけ inline transform を当てる。
+    // 閉じてる時 (modelValue=false) は何も当てない → CSS の translateY(100%) が走る。
     const sheetStyle = computed(() => {
       if (!props.modelValue) return {};
-      if (dragging.value || dragY.value > 0) {
+      if (dragging.value || dragY.value !== 0) {
         return {
           transform: `translateY(${dragY.value}px)`,
           transition: dragging.value ? "none" : "transform 200ms cubic-bezier(.2,.8,.2,1)",
@@ -93,25 +103,44 @@ export const BottomSheet = {
 
     function onDown(e) {
       startY = e.clientY;
+      rawDy = 0;
       dragging.value = true;
       try { e.currentTarget.setPointerCapture?.(e.pointerId); } catch (_) {}
     }
     function onMove(e) {
       if (startY === null) return;
-      const dy = e.clientY - startY;
-      dragY.value = Math.max(0, dy);   // 上方向はクランプ
+      rawDy = e.clientY - startY;
+      if (rawDy >= 0) {
+        dragY.value = rawDy;          // 下方向はそのまま追従
+      } else if (props.expandable && !props.expanded) {
+        dragY.value = rawDy / 3;      // 上方向は 1/3 抵抗で「引っ張れる」感
+      } else {
+        dragY.value = 0;              // expanded 中 or expandable=false は上に動かない
+      }
     }
     function onUp() {
       if (startY === null) return;
-      const shouldClose = dragY.value > props.dismissThreshold;
       dragging.value = false;
       startY = null;
-      if (shouldClose) {
-        emit("update:modelValue", false);
-        // dragY はそのまま残し、CSS の translateY(100%) が引き継いで close 続行
+      if (rawDy > props.dismissThreshold) {
+        // 下方向超過
+        if (props.expandable && props.expanded) {
+          // expanded → collapsed (1 段だけ閉じる)
+          emit("update:expanded", false);
+          dragY.value = 0;
+        } else {
+          // close (CSS translateY(100%) が引き継ぐので dragY は残す)
+          emit("update:modelValue", false);
+        }
+      } else if (rawDy < -props.expandThreshold && props.expandable && !props.expanded) {
+        // 上方向超過 → expand
+        emit("update:expanded", true);
+        dragY.value = 0;
       } else {
-        dragY.value = 0;  // スナップバック (computed の transition で 200ms)
+        // スナップバック
+        dragY.value = 0;
       }
+      rawDy = 0;
     }
 
     return { sheetStyle, onBgClick, onDown, onMove, onUp };

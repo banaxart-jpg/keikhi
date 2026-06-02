@@ -113,6 +113,7 @@ body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); 
 
 /* 入力フォーム (BottomSheet の slot 内) */
 .input-form { display: flex; flex-direction: column; gap: 10px; padding-top: 4px; }
+.input-extra { display: flex; flex-direction: column; gap: 10px; animation: slide-open 200ms ease-out; }
 .input-row { display: flex; gap: 8px; }
 .input-row input {
   padding: 12px 14px; border: none; border-radius: 22px; font-size: 14px;
@@ -312,8 +313,8 @@ const TEMPLATE = `
   <!-- FAB: 常時表示、タップで入力モーダル開閉 -->
   <button class="fab" :class="{ open: showInput }" @click="showInput = !showInput" :disabled="!ready || !activeSite">+</button>
 
-  <!-- 入力モーダル: 共通 BottomSheet コンポーネント (drag-to-close 対応) -->
-  <bottom-sheet v-model="showInput">
+  <!-- 入力モーダル: 共通 BottomSheet (drag-to-close + 上ドラッグで詳細展開) -->
+  <bottom-sheet v-model="showInput" expandable v-model:expanded="inputExpanded">
     <form @submit.prevent="add" class="input-form">
       <div class="input-row">
         <input class="name" v-model="newName" :placeholder="inputPlaceholder" :disabled="adding || !activeSite" autocomplete="off" ref="nameInput">
@@ -328,10 +329,20 @@ const TEMPLATE = `
           <option>枚</option>
         </select>
       </div>
+      <!-- 上ドラッグで展開: メモ + 画像 (任意) -->
+      <div v-if="inputExpanded" class="input-extra">
+        <textarea class="detail-textarea" v-model="newNote" placeholder="説明・メモ (型番・サイズ・備考など)" :disabled="adding"></textarea>
+        <label class="detail-filepick">
+          <input type="file" accept="image/*" @change="onNewFilePick" :disabled="adding">
+          <span v-if="!newFile"><span class="icon" style="vertical-align:-0.18em;">photo_camera</span> 画像を選ぶ</span>
+          <span v-else>{{ newFile.name }}</span>
+        </label>
+        <img v-if="newPreview" :src="newPreview" alt="preview" class="detail-img">
+      </div>
       <div class="cat-row">
         <button type="button" class="cat-pill zairyo" :class="{ on: newCategory === '材料' }" @click="newCategory = newCategory === '材料' ? null : '材料'">材料</button>
         <button type="button" class="cat-pill kogu" :class="{ on: newCategory === '工具' }" @click="newCategory = newCategory === '工具' ? null : '工具'">工具</button>
-        <button class="add" type="submit" :disabled="!newName.trim() || adding || !activeSite">+ 追加</button>
+        <button class="add" type="submit" :disabled="!newName.trim() || adding || !activeSite">{{ adding ? "追加中…" : "+ 追加" }}</button>
       </div>
     </form>
   </bottom-sheet>
@@ -386,6 +397,10 @@ const App = {
     const adding = ref(false);
     const seeding = ref(false);
     const showInput = ref(false);   // FAB トグル: 入力モーダルの開閉
+    const inputExpanded = ref(false);  // 入力シートを上に引っ張って詳細展開した状態
+    const newNote = ref("");
+    const newFile = ref(null);
+    const newPreview = ref("");
     const expandedId = ref(null);   // 詳細展開中の item id (一度に1つ)
     const editingDetailId = ref(null); // 編集モード中の item id
     const editNote = ref("");
@@ -539,7 +554,9 @@ const App = {
       adding.value = true;
       try {
         const qty = Number(newQty.value);
-        await addDoc(collection(db, SHOPPING), {
+        const note = newNote.value.trim() || null;
+        // 1) 基本情報で addDoc → 生成された id を画像 path に使う
+        const docRef = await addDoc(collection(db, SHOPPING), {
           name,
           qty: qty > 0 ? qty : null,
           unit: newUnit.value.trim() || null,
@@ -548,17 +565,49 @@ const App = {
           checked: false,
           createdAt: serverTimestamp(),
           addedBy: (user.value.email || "").toLowerCase(),
+          note,
         });
+        // 2) 画像があれば Storage にアップして imageUrl を update
+        if (newFile.value) {
+          const storage = getStorage(fbApp, "gs://static-epigram-496002-v8.firebasestorage.app");
+          const safe = newFile.value.name.replace(/[^\w.\-]/g, "_");
+          const path = `kaimono/${docRef.id}/${Date.now()}_${safe}`;
+          const r = storageRef(storage, path);
+          await uploadBytes(r, newFile.value);
+          const imageUrl = await getDownloadURL(r);
+          await updateDoc(docRef, { imageUrl });
+        }
+        // 3) フォーム reset (category は保持 = 連続入力で楽)
         newName.value = "";
         newQty.value = "1";
         newUnit.value = "個";
-        // category は保持 (連続入力で楽)
+        newNote.value = "";
+        newFile.value = null;
+        newPreview.value = "";
+        inputExpanded.value = false;
       } catch (e) {
         err.value = "追加失敗: " + (e.message || e);
       } finally {
         adding.value = false;
       }
     }
+    function onNewFilePick(e) {
+      const f = e.target.files?.[0];
+      if (!f) return;
+      newFile.value = f;
+      const reader = new FileReader();
+      reader.onload = () => { newPreview.value = reader.result; };
+      reader.readAsDataURL(f);
+    }
+    // 入力モーダルが閉じた時、展開状態と画像/メモ草稿は捨てる (name/qty/category は保持)
+    watch(showInput, (v) => {
+      if (!v) {
+        inputExpanded.value = false;
+        newNote.value = "";
+        newFile.value = null;
+        newPreview.value = "";
+      }
+    });
 
     async function toggle(item) {
       try {
@@ -786,6 +835,7 @@ const App = {
     return {
       sites, sortedSites, activeSite, items, ready, err,
       newName, newQty, newUnit, newCategory, adding, seeding, showInput,
+      inputExpanded, newNote, newFile, newPreview, onNewFilePick,
       expandedId, editingDetailId, editNote, editFile, editPreview, savingDetail,
       showArchive, archExpandedId, archivedByDay, restore,
       isOwner, canSeedKomagome,
