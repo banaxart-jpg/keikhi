@@ -57,13 +57,49 @@ body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); 
 .clear-btn { font-size: 11px; font-weight: 700; color: var(--text3); background: none; border: none; cursor: pointer; padding: 4px 10px; font-family: inherit; }
 .clear-btn:hover { color: var(--danger); }
 
-/* 入力 fixed ボトム */
-.input-bar { position: fixed; left: 0; right: 0; bottom: 0; padding: 14px 18px calc(20px + env(safe-area-inset-bottom)); background: linear-gradient(180deg, rgba(228,230,238,0) 0%, var(--bg) 30%); display: flex; gap: 10px; z-index: 20; max-width: 600px; margin: 0 auto; }
-.input-bar input { flex: 1; padding: 13px 18px; border: none; border-radius: 26px; font-size: 15px; font-family: inherit; color: var(--text); background: var(--bg); box-shadow: inset 4px 4px 10px var(--sd), inset -3px -3px 8px var(--sl); outline: none; }
-.input-bar input::placeholder { color: var(--text3); }
-.input-bar .add { width: 52px; height: 52px; border-radius: 26px; border: none; cursor: pointer; background: linear-gradient(145deg, var(--accent2), var(--accent)); color: white; font-size: 28px; font-weight: 300; line-height: 1; box-shadow: 6px 6px 16px rgba(42,140,58,0.4), -3px -3px 10px var(--sl); flex-shrink: 0; transition: transform 200ms ease; }
-.input-bar .add:active { transform: scale(0.94); }
-.input-bar .add:disabled { opacity: 0.5; }
+/* 入力 fixed ボトム — 2行レイアウト (name + qty + unit, 下にカテゴリ + 追加) */
+.input-bar {
+  position: fixed; left: 0; right: 0; bottom: 0;
+  padding: 14px 18px calc(20px + env(safe-area-inset-bottom));
+  background: linear-gradient(180deg, rgba(228,230,238,0) 0%, var(--bg) 30%);
+  z-index: 20; max-width: 600px; margin: 0 auto;
+  display: flex; flex-direction: column; gap: 8px;
+}
+.input-row { display: flex; gap: 8px; }
+.input-row input {
+  padding: 12px 14px; border: none; border-radius: 22px; font-size: 14px;
+  font-family: inherit; color: var(--text); background: var(--bg);
+  box-shadow: inset 4px 4px 10px var(--sd), inset -3px -3px 8px var(--sl); outline: none;
+}
+.input-row input.name { flex: 1; min-width: 0; }
+.input-row input.qty { width: 56px; text-align: center; }
+.input-row input.unit { width: 60px; text-align: center; font-size: 13px; }
+.input-row input::placeholder { color: var(--text3); }
+.cat-row { display: flex; gap: 6px; align-items: center; padding-left: 4px; }
+.cat-pill { padding: 4px 12px; border-radius: 12px; font-size: 11px; font-weight: 700; border: none; cursor: pointer; background: var(--bg); box-shadow: 2px 2px 5px var(--sd), -2px -2px 5px var(--sl); color: var(--text2); font-family: inherit; }
+.cat-pill.on.zairyo { background: #fef0c8; color: #8b6914; box-shadow: inset 2px 2px 5px rgba(0,0,0,0.08); }
+.cat-pill.on.kogu { background: #ffe0e0; color: #8b3030; box-shadow: inset 2px 2px 5px rgba(0,0,0,0.08); }
+.add {
+  margin-left: auto; padding: 10px 22px; height: 40px; border-radius: 22px; border: none;
+  cursor: pointer; background: linear-gradient(145deg, var(--accent2), var(--accent));
+  color: white; font-size: 14px; font-weight: 800;
+  box-shadow: 5px 5px 14px rgba(42,140,58,0.4), -2px -2px 8px var(--sl);
+  flex-shrink: 0; transition: transform 200ms ease; font-family: inherit;
+}
+.add:active { transform: scale(0.96); }
+.add:disabled { opacity: 0.5; }
+
+/* アイテム表示の category タグ */
+.tag-pill { display: inline-block; padding: 2px 7px; border-radius: 6px; font-size: 9px; font-weight: 800; letter-spacing: 0.04em; margin-right: 6px; vertical-align: 1px; }
+.tag-pill.zairyo { background: #fef0c8; color: #8b6914; }
+.tag-pill.kogu { background: #ffe0e0; color: #8b3030; }
+.qty-suffix { color: var(--text2); font-weight: 600; margin-left: 6px; font-size: 12px; }
+
+/* seed ボタン (owner だけ表示) */
+.seed-row { padding: 14px 18px 80px; text-align: center; }
+.seed-btn { padding: 8px 16px; border-radius: 14px; font-size: 11px; font-weight: 700; color: var(--text3); background: none; border: 1px dashed var(--text3); cursor: pointer; font-family: inherit; }
+.seed-btn:hover { color: var(--accent); border-color: var(--accent); }
+.seed-btn:disabled { opacity: 0.4; cursor: default; }
 
 .err { color: var(--danger); font-size: 11px; padding: 0 18px; margin-top: 6px; font-family: ui-monospace, Menlo, monospace; }
 .loading { text-align: center; color: var(--text3); padding: 60px 0; font-size: 13px; font-weight: 700; }
@@ -119,7 +155,9 @@ const TEMPLATE = `
       <div v-for="item in filteredItems" :key="item.id" class="item" :class="{ checked: item.checked }">
         <button class="check" @click="toggle(item)">{{ item.checked ? 'check' : '' }}</button>
         <div style="flex:1; min-width:0;">
-          <div class="item-text">{{ item.text }}</div>
+          <div class="item-text">
+            <span v-if="item.category" class="tag-pill" :class="catClass(item.category)">{{ item.category }}</span>{{ displayName(item) }}<span v-if="item.qty" class="qty-suffix">× {{ item.qty }} {{ item.unit || '' }}</span>
+          </div>
           <div class="item-meta">{{ formatMeta(item) }}</div>
         </div>
         <button class="del" @click="del(item)" title="削除">×</button>
@@ -129,13 +167,28 @@ const TEMPLATE = `
     <div v-if="hasChecked" class="clear-row">
       <button class="clear-btn" @click="clearChecked">✓ 済みを削除 ({{ checkedCount }})</button>
     </div>
+
+    <!-- owner だけ表示: 駒込の材料 15件を seed (1回限り) -->
+    <div class="seed-row" v-if="isOwner && canSeedKomagome">
+      <button class="seed-btn" @click="seedKomagome" :disabled="seeding">
+        {{ seeding ? "投入中…" : "🌱 駒込: 材料 15件を seed (1回限り)" }}
+      </button>
+    </div>
   </template>
 
   <div class="err" v-if="err">{{ err }}</div>
 
   <form class="input-bar" @submit.prevent="add">
-    <input v-model="newText" :placeholder="inputPlaceholder" :disabled="!ready || adding || !activeSite" autocomplete="off">
-    <button class="add" type="submit" :disabled="!newText.trim() || adding || !activeSite">+</button>
+    <div class="input-row">
+      <input class="name" v-model="newName" :placeholder="inputPlaceholder" :disabled="!ready || adding || !activeSite" autocomplete="off">
+      <input class="qty" v-model="newQty" type="number" min="1" placeholder="数" :disabled="!ready || adding || !activeSite">
+      <input class="unit" v-model="newUnit" placeholder="単位" :disabled="!ready || adding || !activeSite">
+    </div>
+    <div class="cat-row">
+      <button type="button" class="cat-pill zairyo" :class="{ on: newCategory === '材料' }" @click="newCategory = newCategory === '材料' ? null : '材料'">材料</button>
+      <button type="button" class="cat-pill kogu" :class="{ on: newCategory === '工具' }" @click="newCategory = newCategory === '工具' ? null : '工具'">工具</button>
+      <button class="add" type="submit" :disabled="!newName.trim() || adding || !activeSite">+ 追加</button>
+    </div>
   </form>
 </div>
 `;
@@ -148,10 +201,18 @@ const App = {
     const items = ref([]);
     const ready = ref(false);
     const err = ref("");
-    const newText = ref("");
+    const newName = ref("");
+    const newQty = ref("");
+    const newUnit = ref("");
+    const newCategory = ref(null);   // "材料" | "工具" | null
     const adding = ref(false);
+    const seeding = ref(false);
+    const OWNER_EMAILS = new Set(["info@banax.tokyo", "konishi0221@gmail.com"]);
+    const isOwner = computed(() => OWNER_EMAILS.has((user.value?.email || "").toLowerCase()));
+    // 駒込の seed 済みフラグ: 同じ seedTag のアイテムが1件でもあれば「投入済」扱い
+    const canSeedKomagome = computed(() => !items.value.some((i) => i.seedTag === "komagome_v1"));
     let db = null;
-    let user = null;
+    const user = ref(null);    // ref にして Vue 側で reactive に
     let unsubscribe = null;
 
     // 各サイトの最終アクティビティ時刻 (createdAt or checkedAt の max)。
@@ -211,6 +272,10 @@ const App = {
       items.value.filter((i) => i.site === activeSite.value && i.checked).length
     );
 
+    // 旧 docs (text フィールドのみ) と新 docs (name/qty/unit/category) 両対応
+    function displayName(item) { return item.name || item.text || ""; }
+    function catClass(c) { return c === "材料" ? "zairyo" : c === "工具" ? "kogu" : ""; }
+
     function formatMeta(item) {
       const who = (item.addedBy || "").split("@")[0] || "";
       if (!item.createdAt?.toDate) return who;
@@ -224,19 +289,26 @@ const App = {
     }
 
     async function add() {
-      if (!db || !user) return;
-      const text = newText.value.trim();
-      if (!text || adding.value) return;
+      if (!db || !user.value) return;
+      const name = newName.value.trim();
+      if (!name || adding.value) return;
       adding.value = true;
       try {
+        const qty = Number(newQty.value);
         await addDoc(collection(db, SHOPPING), {
-          text,
+          name,
+          qty: qty > 0 ? qty : null,
+          unit: newUnit.value.trim() || null,
+          category: newCategory.value || null,
           site: activeSite.value,
           checked: false,
           createdAt: serverTimestamp(),
-          addedBy: (user.email || "").toLowerCase(),
+          addedBy: (user.value.email || "").toLowerCase(),
         });
-        newText.value = "";
+        newName.value = "";
+        newQty.value = "";
+        newUnit.value = "";
+        // category は保持 (連続入力で楽)
       } catch (e) {
         err.value = "追加失敗: " + (e.message || e);
       } finally {
@@ -249,7 +321,7 @@ const App = {
         await updateDoc(doc(db, SHOPPING, item.id), {
           checked: !item.checked,
           checkedAt: !item.checked ? serverTimestamp() : null,
-          checkedBy: !item.checked ? (user.email || "").toLowerCase() : null,
+          checkedBy: !item.checked ? (user.value.email || "").toLowerCase() : null,
         });
       } catch (e) { err.value = e.message; }
     }
@@ -272,6 +344,75 @@ const App = {
 
     function back() { location.href = "/"; }
 
+    // 駒込の材料 15件を1回限り seed (owner 専用)。
+    // 同じ seedTag のドキュメントが1件でもあれば再実行不可。
+    const KOMAGOME_SEED = [
+      { name: "90間柱3m",      qty: 2,  unit: "本" },
+      { name: "ハケ",          qty: null, unit: null },
+      { name: "脚立3尺",       qty: 2,  unit: "本" },
+      { name: "ボードビス",    qty: null, unit: null },
+      { name: "垂木",          qty: 1,  unit: "本" },
+      { name: "タッチアップ塗料", qty: null, unit: null },
+      { name: "換気口",        qty: 2,  unit: "枚" },
+      { name: "タコ脚タップ",  qty: 1,  unit: "個" },
+      { name: "床モール1m 白", qty: 3,  unit: "本" },
+      { name: "両面テープ",    qty: 2,  unit: "個" },
+      { name: "延長コード2.5m", qty: 1, unit: "本" },
+      { name: "床モール1m",    qty: 3,  unit: "本" },
+      { name: "ボード12.5",    qty: 12, unit: null },
+      { name: "65スタッド2500", qty: 13, unit: "本" },
+      { name: "65ランナー4m",  qty: 4,  unit: "本" },
+    ];
+
+    async function seedKomagome() {
+      if (!isOwner.value || !canSeedKomagome.value || seeding.value) return;
+      if (!confirm("駒込に材料 15件を投入します。1回限りの操作です。続けますか?")) return;
+      seeding.value = true;
+      try {
+        // 1) サイト「駒込」を Cloud SQL に確保 (既存ならサーバ側で UNIQUE 制約により無視 or 409)
+        try {
+          const token = await user.value.getIdToken();
+          await fetch((window.API_BASE || "") + "/api/sites", {
+            method: "POST",
+            headers: { authorization: "Bearer " + token, "content-type": "application/json" },
+            body: JSON.stringify({ name: "駒込" }),
+          });
+          // 失敗してもサイトはすでに存在してる可能性。サイト一覧再取得
+          const r = await fetch((window.API_BASE || "") + "/api/sites", {
+            headers: { authorization: "Bearer " + token },
+          });
+          if (r.ok) {
+            const rows = await r.json();
+            sites.value = (Array.isArray(rows) ? rows : []).map((x) => x.name).filter(Boolean);
+          }
+        } catch (_) {}
+        // 2) Firestore へ 15件を batch write
+        const batch = writeBatch(db);
+        const col = collection(db, SHOPPING);
+        const addedBy = (user.value.email || "").toLowerCase();
+        for (const it of KOMAGOME_SEED) {
+          const ref = doc(col); // auto id
+          batch.set(ref, {
+            name: it.name,
+            qty: it.qty,
+            unit: it.unit,
+            category: "材料",
+            site: "駒込",
+            checked: false,
+            createdAt: serverTimestamp(),
+            addedBy,
+            seedTag: "komagome_v1",
+          });
+        }
+        await batch.commit();
+        activeSite.value = "駒込";
+      } catch (e) {
+        err.value = "seed 失敗: " + (e.message || e);
+      } finally {
+        seeding.value = false;
+      }
+    }
+
     onMounted(async () => {
       try {
         const cfg = await fetch("/__/firebase/init.json").then((r) => r.json());
@@ -286,10 +427,10 @@ const App = {
             location.href = "/?next=" + encodeURIComponent(location.pathname);
             return;
           }
-          user = u;
+          user.value = u;
           // 1) /api/sites (Cloud SQL) から現場一覧。keihi2 と同じソース。
           try {
-            const token = await user.getIdToken();
+            const token = await u.getIdToken();
             const res = await fetch((window.API_BASE || "") + "/api/sites", {
               headers: { authorization: "Bearer " + token },
             });
@@ -322,9 +463,12 @@ const App = {
     onBeforeUnmount(() => { if (unsubscribe) unsubscribe(); });
 
     return {
-      sites, sortedSites, activeSite, items, ready, err, newText, adding,
+      sites, sortedSites, activeSite, items, ready, err,
+      newName, newQty, newUnit, newCategory, adding, seeding,
+      isOwner, canSeedKomagome,
       filteredItems, countBySite, hasChecked, checkedCount, inputPlaceholder,
-      formatMeta, add, toggle, del, clearChecked, back,
+      formatMeta, displayName, catClass,
+      add, toggle, del, clearChecked, back, seedKomagome,
     };
   },
 };
