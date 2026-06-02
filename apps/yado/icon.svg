@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="180" height="180" viewBox="0 0 180 180">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#f59e0b"/>
+      <stop offset="100%" stop-color="#b45309"/>
+    </linearGradient>
+  </defs>
+  <rect width="180" height="180" rx="40" fill="url(#bg)"/>
+  <!-- 屋根 (和風の反り) -->
+  <path d="M30 86 Q90 36 150 86 L138 86 Q90 50 42 86 Z" fill="#ffffff" opacity="0.95"/>
+  <!-- 建物本体 -->
+  <rect x="48" y="86" width="84" height="58" fill="#ffffff" opacity="0.95"/>
+  <!-- 障子(格子)風の窓 -->
+  <rect x="60" y="96" width="22" height="30" fill="#fde68a"/>
+  <line x1="71" y1="96" x2="71" y2="126" stroke="#b45309" stroke-width="1.6"/>
+  <line x1="60" y1="111" x2="82" y2="111" stroke="#b45309" stroke-width="1.6"/>
+  <rect x="98" y="96" width="22" height="30" fill="#fde68a"/>
+  <line x1="109" y1="96" x2="109" y2="126" stroke="#b45309" stroke-width="1.6"/>
+  <line x1="98" y1="111" x2="120" y2="111" stroke="#b45309" stroke-width="1.6"/>
+  <!-- 暖簾 -->
+  <rect x="78" y="130" width="24" height="14" fill="#d97706"/>
+  <line x1="90" y1="130" x2="90" y2="144" stroke="#fde68a" stroke-width="1.5"/>
+</svg>

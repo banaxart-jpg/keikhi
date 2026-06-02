@@ -634,6 +634,96 @@ app.delete("/api/tasks/:id", async (req, res) => {
   }
 });
 
+// ───── 宿 (yado): 満竹華庵の Beds24 予約 + AI戦略 ─────
+// Beds24 v2 API は token をヘッダで渡すだけのシンプル設計。トークン未設定なら
+// sample 表示用のフラグを返してフロントが自前のサンプルを描く。
+const BEDS24_API_TOKEN = (process.env.BEDS24_API_TOKEN || "").trim();
+const BEDS24_BASE = "https://beds24.com/api/v2";
+
+app.get("/api/yado/bookings", async (req, res) => {
+  if (!BEDS24_API_TOKEN) return res.json({ sample: true, bookings: [] });
+  const from = String(req.query.from || "").slice(0, 10);
+  const to = String(req.query.to || "").slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to)) {
+    return res.status(400).json({ error: "from/to (YYYY-MM-DD) required" });
+  }
+  try {
+    // Beds24 v2: GET /bookings?arrivalFrom=...&arrivalTo=...
+    // 月跨ぎ予約を拾うため arrival は from の少し前、to は通常の to で良い。
+    const url = `${BEDS24_BASE}/bookings?arrivalFrom=${from}&arrivalTo=${to}&includeInvoiceItems=false`;
+    const r = await fetch(url, { headers: { token: BEDS24_API_TOKEN, accept: "application/json" } });
+    if (!r.ok) {
+      const t = await r.text();
+      return res.status(r.status).json({ error: `beds24 ${r.status}: ${t.slice(0, 300)}` });
+    }
+    const j = await r.json();
+    // Beds24 のレスポンスは { success: true, data: [...] } 形式
+    const data = Array.isArray(j) ? j : (j.data || j.bookings || []);
+    const bookings = data.map((b) => {
+      const nights = b.arrival && b.departure
+        ? Math.round((new Date(b.departure) - new Date(b.arrival)) / 86400000)
+        : 1;
+      return {
+        id: String(b.id || b.bookId || crypto.randomUUID()),
+        arrival: (b.arrival || "").slice(0, 10),
+        departure: (b.departure || "").slice(0, 10),
+        nights,
+        referer: b.referer || b.apiSourceReferer || b.bookingSource || "",
+        price: Number(b.price) || 0,
+        adult: Number(b.numAdult) || 0,
+        child: Number(b.numChild) || 0,
+        guestName: [b.lastName, b.firstName].filter(Boolean).join(" ") || b.guestName || "",
+        status: b.status || "",
+      };
+    });
+    res.json({ bookings });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post("/api/yado/strategy", async (req, res) => {
+  if (!genAI) return res.status(503).json({ error: "GEMINI_API_KEY not configured" });
+  const { month, bookings = [], revenue = 0, occupancyPct = 0, revenueByChannel = {}, usingSample = false } = req.body || {};
+  if (!month) return res.status(400).json({ error: "month required" });
+
+  // Gemini に渡すコンテキスト。個人情報 (名前) は落とす。
+  const compact = bookings.map((b) => ({
+    arr: b.arrival, dep: b.departure, ch: b.channel, n: b.nights, p: b.price, a: b.adult, c: b.child,
+  }));
+  const today = new Date().toISOString().slice(0, 10);
+  const prompt = `あなたは日本の小規模旅館の経営アドバイザーです。以下は満竹華庵 (Mantake Kaan) の予約データです。
+
+【今日】${today}
+【対象月】${month}
+【当月売上】¥${Math.round(revenue).toLocaleString("ja-JP")}
+【稼働率】${occupancyPct}%
+【チャネル別売上】${JSON.stringify(revenueByChannel)}
+【予約一覧 (${compact.length}件)】${JSON.stringify(compact)}
+${usingSample ? "\n※このデータはサンプル (本物のAPI未接続) です。分析はあくまで例示としてください。\n" : ""}
+
+以下の観点で、宿泊数を増やすための戦略を提案してください。Google検索を使って最新の情報を取り入れてください:
+1. 季節要因 (この時期の日本の観光トレンド・連休・気候)
+2. 周辺の民泊・旅館の状況 (Airbnb / Booking.com の周辺価格帯、競合状況)
+3. 物価・為替・世界情勢 (インバウンド需要・国内旅行の動向)
+4. チャネル別の稼働傾向から見える改善点
+5. 具体的なアクション提案 (3-5個、優先度の高い順に)
+
+回答は日本語で、見出しと箇条書きで読みやすく。各提案には「なぜそれが効くか」の理由を1行添えてください。`;
+
+  try {
+    const { result, modelUsed } = await callGeminiWithFallback(prompt, {
+      primaryModel: "gemini-2.5-flash",
+      maxOutputTokens: 4096,
+      useGoogleSearch: true,
+    });
+    const text = result?.response?.text?.() || "";
+    res.json({ strategy: text, model: modelUsed });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 app.post("/api/scan", async (req, res) => {
   try {
     if (!genAI) return res.status(503).json({ error: "GEMINI_API_KEY not configured" });
