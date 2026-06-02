@@ -43,7 +43,9 @@ body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); 
 /* リスト */
 .list { padding: 0 16px 30px; display: flex; flex-direction: column; gap: 8px; min-height: 200px; }
 .empty { text-align: center; color: var(--text3); font-size: 13px; font-weight: 600; padding: 60px 0; }
-.item { display: flex; align-items: center; gap: 12px; background: var(--bg); border-radius: 16px; padding: 12px 14px; box-shadow: 5px 5px 12px var(--sd), -4px -4px 10px var(--sl); transition: opacity 200ms ease, transform 200ms ease; }
+.item { display: flex; align-items: center; gap: 12px; background: var(--bg); border-radius: 16px; padding: 12px 14px 12px 18px; box-shadow: 5px 5px 12px var(--sd), -4px -4px 10px var(--sl); transition: opacity 200ms ease, transform 200ms ease; position: relative; overflow: hidden; }
+/* 左端の細い縦バー = 追加者の色 (誰が頼んだか) */
+.item .adder-bar { position: absolute; left: 0; top: 8px; bottom: 8px; width: 4px; border-radius: 0 3px 3px 0; }
 .item.checked { opacity: 0.5; }
 .item.checked .item-text { text-decoration: line-through; color: var(--text2); }
 .check { width: 28px; height: 28px; border-radius: 14px; border: none; cursor: pointer; background: var(--bg); box-shadow: inset 3px 3px 6px var(--sd), inset -2px -2px 5px var(--sl); display: flex; align-items: center; justify-content: center; color: var(--accent); font-size: 18px; flex-shrink: 0; font-family: 'Material Symbols Outlined'; transition: all 200ms ease; }
@@ -254,7 +256,7 @@ const TEMPLATE = `
     <div class="top">
       <span class="title"><span class="icon" style="vertical-align:-0.18em;">inventory_2</span> 手配リスト</span>
       <div style="display:flex; gap:6px;">
-        <button class="pill" @click="showArchive = true" title="アーカイブ">📚</button>
+        <button class="pill" @click="showArchive = true" title="アーカイブ"><span class="icon" style="vertical-align:-0.18em;">archive</span></button>
         <button class="pill" @click="back">← 戻る</button>
       </div>
     </div>
@@ -278,21 +280,22 @@ const TEMPLATE = `
       <div v-else-if="filteredItems.length === 0" class="empty">「{{ activeSite }}」に追加するものはまだ無し</div>
       <template v-for="item in filteredItems" :key="item.id">
         <div class="item" :class="{ checked: item.checked }">
-          <button class="check" @click="toggle(item)" :style="item.checked ? { background: colorForEmail(item.checkedBy), color: 'white', boxShadow: '4px 4px 10px ' + colorForEmail(item.checkedBy) + '55' } : null">{{ item.checked ? 'check' : '' }}</button>
+          <!-- 左端の縦バー = 追加者の色 -->
+          <span class="adder-bar" :style="{ background: colorForEmail(item.addedBy) }" :title="'追加: ' + displayNameOf(item.addedBy)"></span>
+          <button class="check" @click="toggle(item)" :style="item.checked ? { background: colorForEmail(item.checkedBy), color: 'white', boxShadow: '3px 3px 8px ' + colorForEmail(item.checkedBy) + '55' } : null">{{ item.checked ? 'check' : '' }}</button>
           <div style="flex:1; min-width:0;">
             <div class="item-text">
               <span v-if="item.category" class="tag-pill" :class="catClass(item.category)">{{ item.category }}</span>{{ displayName(item) }}<span v-if="item.qty" class="qty-suffix">× {{ item.qty }} {{ item.unit || '' }}</span>
-              <span v-if="item.checked && item.checkedBy" class="checker-chip" :style="{ background: colorForEmail(item.checkedBy) }">
-                <span class="checker-dot" style="background:white; opacity:0.9;"></span>{{ displayNameOf(item.checkedBy) }}
-              </span>
             </div>
             <div class="item-meta">
-              <span class="checker-dot" :style="{ background: colorForEmail(item.addedBy) }" :title="'追加: ' + displayNameOf(item.addedBy)"></span>
               {{ formatMeta(item) }}
-              <button class="detail-toggle" @click="toggleDetail(item)">{{ expandedId === item.id ? '閉じる' : (hasDetail(item) ? '詳細 📎' : '詳細') }}</button>
+              <button class="detail-toggle" @click="toggleDetail(item)">
+                <span v-if="expandedId === item.id">閉じる</span>
+                <span v-else><span v-if="hasDetail(item)" class="icon" style="font-size:11px;vertical-align:-0.15em;">attach_file</span> 詳細</span>
+              </button>
             </div>
           </div>
-          <button class="del" @click="del(item)" title="削除">×</button>
+          <button class="del" @click="del(item)" title="削除"><span class="icon" style="font-size:18px;">close</span></button>
         </div>
 
         <!-- 詳細パネル: 画像 + 説明 inline 展開 -->
@@ -302,7 +305,10 @@ const TEMPLATE = `
             <textarea v-model="editNote" placeholder="説明・メモ (型番・サイズ・備考など)"></textarea>
             <label class="file-pick">
               <input type="file" accept="image/*" @change="onFilePick">
-              <span>{{ editFile ? editFile.name : "📷 画像を選ぶ" }}</span>
+              <span>
+                <span v-if="!editFile" class="icon" style="vertical-align:-0.18em;">photo_camera</span>
+                {{ editFile ? editFile.name : "画像を選ぶ" }}
+              </span>
             </label>
             <img v-if="editPreview" :src="editPreview" alt="preview">
             <div class="row">
@@ -328,7 +334,8 @@ const TEMPLATE = `
     <!-- owner だけ表示: 駒込の材料 15件を seed (1回限り) -->
     <div class="seed-row" v-if="isOwner && canSeedKomagome">
       <button class="seed-btn" @click="seedKomagome" :disabled="seeding">
-        {{ seeding ? "投入中…" : "🌱 駒込: 材料 15件を seed (1回限り)" }}
+        <span v-if="seeding">投入中…</span>
+        <span v-else><span class="icon" style="vertical-align:-0.18em;">spa</span> 駒込: 材料 15件を seed (1回限り)</span>
       </button>
     </div>
   </template>
@@ -367,11 +374,11 @@ const TEMPLATE = `
   <div class="arch-modal" :class="{ open: showArchive }" @click="showArchive = false">
     <div class="arch-sheet" @click.stop>
       <div class="handle"></div>
-      <div class="arch-title">📚 アーカイブ <small>(済み → 1時間後にここに)</small></div>
+      <div class="arch-title"><span class="icon" style="vertical-align:-0.18em;">archive</span> アーカイブ <small>(済み → 1時間後にここに)</small></div>
       <div v-if="archivedByDay.length === 0" class="arch-empty">アーカイブされたものはまだ無し</div>
       <div v-for="[day, list] in archivedByDay" :key="day" class="arch-day">
         <div class="arch-day-head"><span>{{ day }}</span><span>{{ list.length }} 件</span></div>
-        <div v-for="item in list" :key="item.id" class="arch-row" :style="{ background: colorForEmail(item.checkedBy) + '14' }">
+        <div v-for="item in list" :key="item.id" class="arch-row">
           <span class="checker-dot" :style="{ background: colorForEmail(item.checkedBy), width: '10px', height: '10px' }"></span>
           <div class="body">
             <div>
@@ -463,8 +470,9 @@ const App = {
     const filteredItems = computed(() =>
       items.value
         .filter((i) => i.site === activeSite.value && !isArchived(i))
-        // checked でソートはしない。createdAt desc (新しい順) 固定。
+        // 未チェック先、済みを下に。同じ状態内は createdAt desc (新しい順)。
         .sort((a, b) => {
+          if (a.checked !== b.checked) return a.checked ? 1 : -1;
           const ta = a.createdAt?.toMillis?.() || 0;
           const tb = b.createdAt?.toMillis?.() || 0;
           return tb - ta;
