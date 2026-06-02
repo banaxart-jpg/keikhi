@@ -286,9 +286,22 @@ const App = {
       });
     });
 
+    // チェックして 1 時間経過したらアーカイブ扱い (= 一覧から消す)。
+    // cron/Cloud Functions 使わず、誰かが画面を見たタイミングで判定。
+    // `now` を 30 秒ごとに更新して computed が反応 → 開いたままでも自動で消える。
+    const ARCHIVE_AFTER_MS = 60 * 60 * 1000;
+    const now = ref(Date.now());
+    let nowTimer = null;
+    function isArchived(item) {
+      if (!item.checked) return false;
+      const t = item.checkedAt?.toMillis?.() || 0;
+      if (!t) return false;
+      return (now.value - t) > ARCHIVE_AFTER_MS;
+    }
+
     const filteredItems = computed(() =>
       items.value
-        .filter((i) => i.site === activeSite.value)
+        .filter((i) => i.site === activeSite.value && !isArchived(i))
         // 未チェック先、チェック済み後ろ。同じ状態内は新しい順 (createdAt desc は serverTimestamp)。
         .sort((a, b) => {
           if (a.checked !== b.checked) return a.checked ? 1 : -1;
@@ -303,6 +316,7 @@ const App = {
       for (const s of sites.value) m[s] = 0;
       for (const it of items.value) {
         if (it.checked) continue;
+        if (isArchived(it)) continue;
         // master list に無い site (= keihi2 で削除済み等) もタブには出さないが、
         // items は残ってる可能性があるので両方ケアする (孤児 items は計上しない)
         if (it.site in m) m[it.site]++;
@@ -313,11 +327,12 @@ const App = {
     const inputPlaceholder = computed(() =>
       activeSite.value ? "「" + activeSite.value + "」に追加…" : "現場なし"
     );
+    // hasChecked / checkedCount は「まだアーカイブされてない済み」のみ対象
     const hasChecked = computed(() =>
-      items.value.some((i) => i.site === activeSite.value && i.checked)
+      items.value.some((i) => i.site === activeSite.value && i.checked && !isArchived(i))
     );
     const checkedCount = computed(() =>
-      items.value.filter((i) => i.site === activeSite.value && i.checked).length
+      items.value.filter((i) => i.site === activeSite.value && i.checked && !isArchived(i)).length
     );
 
     // 旧 docs (text フィールドのみ) と新 docs (name/qty/unit/category) 両対応
@@ -465,6 +480,9 @@ const App = {
       }
     }
 
+    // now を 30 秒ごとに更新して、開きっぱなしでも 1 時間アーカイブが効くように
+    nowTimer = setInterval(() => { now.value = Date.now(); }, 30_000);
+
     onMounted(async () => {
       try {
         const cfg = await fetch("/__/firebase/init.json").then((r) => r.json());
@@ -513,7 +531,10 @@ const App = {
       }
     });
 
-    onBeforeUnmount(() => { if (unsubscribe) unsubscribe(); });
+    onBeforeUnmount(() => {
+      if (unsubscribe) unsubscribe();
+      if (nowTimer) clearInterval(nowTimer);
+    });
 
     return {
       sites, sortedSites, activeSite, items, ready, err,
