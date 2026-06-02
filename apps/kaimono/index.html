@@ -204,10 +204,29 @@ body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); 
 .arch-title small { font-size: 11px; color: var(--text3); font-weight: 600; }
 .arch-day { margin-bottom: 18px; }
 .arch-day-head { font-size: 12px; font-weight: 800; color: var(--text2); padding: 8px 12px; background: var(--bg2); border-radius: 10px; margin-bottom: 6px; display: flex; justify-content: space-between; }
-.arch-row { display: flex; align-items: center; gap: 10px; padding: 9px 12px; border-radius: 10px; }
+/* アーカイブの 1 行: collapsed = 2 色ドット + 品名 + 現場 + 時刻のみ。
+   タップで展開して「誰が何時に追加 / 完了」+ 復元ボタン。 */
+.arch-row { padding: 9px 12px; border-radius: 10px; transition: background 200ms ease; }
+.arch-row:hover { background: var(--bg2); }
+.arch-row.open { background: var(--bg2); }
+.arch-row-top { display: flex; align-items: center; gap: 10px; cursor: pointer; }
+.arch-dots { display: inline-flex; flex-direction: column; gap: 3px; flex-shrink: 0; }
+.arch-dots .dot { width: 8px; height: 8px; border-radius: 50%; display: block; }
 .arch-row .body { flex: 1; min-width: 0; font-size: 13px; }
 .arch-row .body b { font-weight: 700; }
+.arch-row .body .qty { color: var(--text2); font-weight: 600; margin-left: 6px; font-size: 12px; }
 .arch-row .body .meta { font-size: 10px; color: var(--text3); margin-top: 2px; }
+.arch-row .chev { color: var(--text3); font-family: 'Material Symbols Outlined'; font-size: 18px; transition: transform 200ms ease; flex-shrink: 0; }
+.arch-row.open .chev { transform: rotate(180deg); }
+.arch-detail {
+  margin-top: 8px; padding-top: 8px; border-top: 1px solid rgba(168,172,192,0.18);
+  display: flex; flex-direction: column; gap: 8px;
+  animation: slide-open 200ms ease-out;
+}
+.arch-detail .who-line { font-size: 11px; color: var(--text2); display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.arch-detail .who-line .dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+.arch-detail .restore-btn { align-self: flex-end; padding: 7px 14px; border: none; border-radius: 10px; font-family: inherit; font-size: 12px; font-weight: 700; cursor: pointer; color: var(--accent); background: var(--bg); box-shadow: 3px 3px 8px var(--sd), -2px -2px 6px var(--sl); }
+.arch-detail .restore-btn:active { box-shadow: inset 2px 2px 6px var(--sd); }
 .arch-empty { text-align: center; color: var(--text3); font-size: 12px; padding: 40px 0; }
 
 /* seed ボタン (owner だけ表示) */
@@ -376,10 +395,28 @@ const TEMPLATE = `
       <div v-if="archivedByDay.length === 0" class="arch-empty">アーカイブされたものはまだ無し</div>
       <div v-for="[day, list] in archivedByDay" :key="day" class="arch-day">
         <div class="arch-day-head"><span>{{ day }}</span><span>{{ list.length }} 件</span></div>
-        <div v-for="item in list" :key="item.id" class="arch-row">
-          <div class="body">
-            <div><b>{{ displayName(item) }}</b><span v-if="item.qty" class="qty">× {{ item.qty }} {{ item.unit || '' }}</span></div>
-            <div class="meta">{{ item.site }} · {{ displayNameOf(item.checkedBy) }} {{ formatTimeShort(item.checkedAt) }}</div>
+        <div v-for="item in list" :key="item.id" class="arch-row" :class="{ open: archExpandedId === item.id }">
+          <div class="arch-row-top" @click="archExpandedId = archExpandedId === item.id ? null : item.id">
+            <span class="arch-dots">
+              <span class="dot" :style="{ background: colorForEmail(item.addedBy) }" :title="'追加: ' + displayNameOf(item.addedBy)"></span>
+              <span class="dot" :style="{ background: colorForEmail(item.checkedBy) }" :title="'完了: ' + displayNameOf(item.checkedBy)"></span>
+            </span>
+            <div class="body">
+              <div><b>{{ displayName(item) }}</b><span v-if="item.qty" class="qty">× {{ item.qty }} {{ item.unit || '' }}</span></div>
+              <div class="meta">{{ item.site }} · {{ formatTimeShort(item.checkedAt) }}</div>
+            </div>
+            <span class="chev">expand_more</span>
+          </div>
+          <div v-if="archExpandedId === item.id" class="arch-detail">
+            <div class="who-line">
+              <span class="dot" :style="{ background: colorForEmail(item.addedBy) }"></span>
+              {{ displayNameOf(item.addedBy) }} が {{ formatTimeShort(item.createdAt) }} に追加
+            </div>
+            <div class="who-line">
+              <span class="dot" :style="{ background: colorForEmail(item.checkedBy) }"></span>
+              {{ displayNameOf(item.checkedBy) }} が {{ formatTimeShort(item.checkedAt) }} に済み
+            </div>
+            <button class="restore-btn" @click="restore(item)">未済みに戻す</button>
           </div>
         </div>
       </div>
@@ -410,6 +447,7 @@ const App = {
     const editPreview = ref("");     // 画像プレビュー (dataURL or existing imageUrl)
     const savingDetail = ref(false);
     const showArchive = ref(false);   // アーカイブモーダル開閉
+    const archExpandedId = ref(null); // アーカイブで展開中の item id
     const OWNER_EMAILS = new Set(["info@banax.tokyo", "konishi0221@gmail.com"]);
     const isOwner = computed(() => OWNER_EMAILS.has((user.value?.email || "").toLowerCase()));
     // 駒込の seed 済みフラグ: 同じ seedTag のアイテムが1件でもあれば「投入済」扱い
@@ -591,6 +629,20 @@ const App = {
       if (!confirm(`「${label}」を削除しますか?`)) return;
       try { await deleteDoc(doc(db, SHOPPING, item.id)); }
       catch (e) { err.value = e.message; }
+    }
+
+    // アーカイブから戻す: checked / checkedAt / checkedBy をクリア → 未済として復活
+    async function restore(item) {
+      const label = displayName(item) + (item.qty ? ` × ${item.qty} ${item.unit || ""}` : "");
+      if (!confirm(`「${label}」を未済みリストに戻しますか?`)) return;
+      try {
+        await updateDoc(doc(db, SHOPPING, item.id), {
+          checked: false,
+          checkedAt: null,
+          checkedBy: null,
+        });
+        archExpandedId.value = null;
+      } catch (e) { err.value = e.message; }
     }
 
     async function clearChecked() {
@@ -791,7 +843,7 @@ const App = {
       sites, sortedSites, activeSite, items, ready, err,
       newName, newQty, newUnit, newCategory, adding, seeding, showInput,
       expandedId, editingDetailId, editNote, editFile, editPreview, savingDetail,
-      showArchive, archivedByDay,
+      showArchive, archExpandedId, archivedByDay, restore,
       isOwner, canSeedKomagome,
       filteredItems, countBySite, hasChecked, checkedCount, inputPlaceholder,
       formatMeta, displayName, catClass, hasDetail,
