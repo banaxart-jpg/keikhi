@@ -645,7 +645,8 @@ const App = {
         const updates = { note: editNote.value.trim() || null };
         if (editFile.value) {
           // Firebase Storage に kaimono/<itemId>/<ts>_<filename> でアップ
-          const storage = getStorage(fbApp);
+          // バケットを明示。init.json の storageBucket が古い形式の可能性に備える。
+          const storage = getStorage(fbApp, "gs://static-epigram-496002-v8.firebasestorage.app");
           const safe = editFile.value.name.replace(/[^\w.\-]/g, "_");
           const path = `kaimono/${item.id}/${Date.now()}_${safe}`;
           const r = storageRef(storage, path);
