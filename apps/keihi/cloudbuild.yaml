@@ -77,7 +77,19 @@ steps:
           --role=roles/run.invoker --quiet
         RUN_URL=$$(gcloud run services describe ${_SERVICE} \
           --region=${_REGION} --format='value(status.url)')
-        echo "window.API_BASE='$$RUN_URL'; window.FCM_VAPID_KEY='${_FCM_VAPID_KEY}';" > apps/config.js
+        cat > apps/config.js <<CONFIG_EOF
+        window.API_BASE = '$$RUN_URL';
+        window.FCM_VAPID_KEY = '${_FCM_VAPID_KEY}';
+        window.APP_VERSION = '$SHORT_SHA';
+        // 全ページ共通: 右下に小さくバージョン (commit hash) を表示。
+        // スクリーンショットを Claude に送ったとき「どの deploy か」即判別できる。
+        document.addEventListener('DOMContentLoaded', function () {
+          var d = document.createElement('div');
+          d.textContent = 'v.' + (window.APP_VERSION || 'dev');
+          d.style.cssText = 'position:fixed;bottom:3px;right:5px;font:10px ui-monospace,Menlo,monospace;color:rgba(0,0,0,0.32);background:rgba(255,255,255,0.55);padding:1px 5px;border-radius:4px;z-index:99999;pointer-events:none;letter-spacing:0;';
+          document.body.appendChild(d);
+        });
+        CONFIG_EOF
         echo "API_BASE = $$RUN_URL (direct Cloud Run call)"
         # kaigi 自動進行（Cloud Tasks → 自身の /api/internal/kaigi/tick へ）に
         # 必要な SELF URL と queue 情報を Cloud Run の env として後注入する。
