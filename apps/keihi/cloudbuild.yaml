@@ -86,7 +86,7 @@ steps:
         document.addEventListener('DOMContentLoaded', function () {
           var d = document.createElement('div');
           d.textContent = 'v.' + (window.APP_VERSION || 'dev');
-          d.style.cssText = 'position:fixed;bottom:2px;right:4px;font:8px ui-monospace,Menlo,monospace;color:rgba(0,0,0,0.18);z-index:99999;pointer-events:none;letter-spacing:0;';
+          d.style.cssText = 'position:fixed;top:calc(env(safe-area-inset-top,0px) + 2px);left:6px;font:8px ui-monospace,Menlo,monospace;color:rgba(0,0,0,0.22);z-index:99999;pointer-events:none;letter-spacing:0;';
           document.body.appendChild(d);
         });
         CONFIG_EOF
