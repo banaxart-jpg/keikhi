@@ -23,7 +23,7 @@
   --danger: #b04040;
 }
 html, body { height: 100%; }
-body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; overflow-x: hidden; padding-bottom: 180px; }
+body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; overflow-x: hidden; padding-bottom: 110px; }
 .icon { font-family: 'Material Symbols Outlined'; font-size: 1.1em; display: inline-block; vertical-align: -0.18em; font-variation-settings: 'FILL' 0, 'wght' 500, 'GRAD' 0, 'opsz' 20; }
 
 /* 上部 (タイトル + タブ) を sticky にしてスクロール中も常時表示 */
@@ -59,13 +59,51 @@ body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); 
 .clear-btn { font-size: 11px; font-weight: 700; color: var(--text3); background: none; border: none; cursor: pointer; padding: 4px 10px; font-family: inherit; }
 .clear-btn:hover { color: var(--danger); }
 
-/* 入力 fixed ボトム — 2行レイアウト (name + qty + unit, 下にカテゴリ + 追加) */
-.input-bar {
-  position: fixed; left: 0; right: 0; bottom: 0;
-  padding: 14px 18px calc(20px + env(safe-area-inset-bottom));
-  background: linear-gradient(180deg, rgba(228,230,238,0) 0%, var(--bg) 30%);
-  z-index: 20; max-width: 600px; margin: 0 auto;
-  display: flex; flex-direction: column; gap: 8px;
+/* FAB: 常時右下に出てる + ボタン。タップで入力モーダル開く。 */
+.fab {
+  position: fixed; right: 22px; bottom: calc(22px + env(safe-area-inset-bottom));
+  width: 58px; height: 58px; border-radius: 29px;
+  background: linear-gradient(145deg, var(--accent2), var(--accent));
+  color: white; font-size: 30px; font-weight: 300; line-height: 1;
+  border: none; cursor: pointer; padding: 0;
+  box-shadow: 6px 6px 18px rgba(42,140,58,0.45), -3px -3px 10px var(--sl);
+  z-index: 30;
+  transition: transform 200ms ease;
+  display: flex; align-items: center; justify-content: center;
+}
+.fab:active { transform: scale(0.93); }
+.fab.open { transform: rotate(45deg); }  /* + → × 回転 */
+.fab.open:active { transform: rotate(45deg) scale(0.93); }
+
+/* 入力モーダル: backdrop + 下からスライドアップするシート */
+.modal {
+  position: fixed; inset: 0;
+  display: flex; align-items: flex-end; justify-content: center;
+  background: rgba(180,184,205,0);
+  visibility: hidden; opacity: 0; pointer-events: none;
+  z-index: 40;
+  transition: background 200ms ease, opacity 200ms ease, visibility 0s linear 200ms;
+}
+.modal.open {
+  background: rgba(180,184,205,0.42);
+  visibility: visible; opacity: 1; pointer-events: auto;
+  transition: background 200ms ease, opacity 200ms ease, visibility 0s linear 0s;
+}
+.sheet {
+  background: var(--bg);
+  border-radius: 28px 28px 0 0;
+  box-shadow: -2px -10px 30px rgba(148,152,176,0.35);
+  width: 100%; max-width: 600px;
+  padding: 14px 18px calc(28px + env(safe-area-inset-bottom));
+  transform: translateY(100%);
+  transition: transform 200ms cubic-bezier(.2,.8,.2,1);
+  display: flex; flex-direction: column; gap: 10px;
+}
+.modal.open .sheet { transform: translateY(0); }
+.handle {
+  width: 46px; height: 5px; border-radius: 3px;
+  background: rgba(168,172,192,0.45);
+  margin: 0 auto 6px;
 }
 .input-row { display: flex; gap: 8px; }
 .input-row input {
@@ -182,18 +220,25 @@ const TEMPLATE = `
 
   <div class="err" v-if="err">{{ err }}</div>
 
-  <form class="input-bar" @submit.prevent="add">
-    <div class="input-row">
-      <input class="name" v-model="newName" :placeholder="inputPlaceholder" :disabled="!ready || adding || !activeSite" autocomplete="off">
-      <input class="qty" v-model="newQty" type="number" min="1" placeholder="数" :disabled="!ready || adding || !activeSite">
-      <input class="unit" v-model="newUnit" placeholder="単位" :disabled="!ready || adding || !activeSite">
-    </div>
-    <div class="cat-row">
-      <button type="button" class="cat-pill zairyo" :class="{ on: newCategory === '材料' }" @click="newCategory = newCategory === '材料' ? null : '材料'">材料</button>
-      <button type="button" class="cat-pill kogu" :class="{ on: newCategory === '工具' }" @click="newCategory = newCategory === '工具' ? null : '工具'">工具</button>
-      <button class="add" type="submit" :disabled="!newName.trim() || adding || !activeSite">+ 追加</button>
-    </div>
-  </form>
+  <!-- FAB: 常時表示、タップで入力モーダル開閉 -->
+  <button class="fab" :class="{ open: showInput }" @click="showInput = !showInput" :disabled="!ready || !activeSite">+</button>
+
+  <!-- 入力モーダル: backdrop タップで閉じる -->
+  <div class="modal" :class="{ open: showInput }" @click="onModalBgClick">
+    <form class="sheet" @submit.prevent="add" @click.stop>
+      <div class="handle"></div>
+      <div class="input-row">
+        <input class="name" v-model="newName" :placeholder="inputPlaceholder" :disabled="adding || !activeSite" autocomplete="off" ref="nameInput">
+        <input class="qty" v-model="newQty" type="number" min="1" placeholder="数" :disabled="adding || !activeSite">
+        <input class="unit" v-model="newUnit" placeholder="単位" :disabled="adding || !activeSite">
+      </div>
+      <div class="cat-row">
+        <button type="button" class="cat-pill zairyo" :class="{ on: newCategory === '材料' }" @click="newCategory = newCategory === '材料' ? null : '材料'">材料</button>
+        <button type="button" class="cat-pill kogu" :class="{ on: newCategory === '工具' }" @click="newCategory = newCategory === '工具' ? null : '工具'">工具</button>
+        <button class="add" type="submit" :disabled="!newName.trim() || adding || !activeSite">+ 追加</button>
+      </div>
+    </form>
+  </div>
 </div>
 `;
 
@@ -211,6 +256,7 @@ const App = {
     const newCategory = ref(null);   // "材料" | "工具" | null
     const adding = ref(false);
     const seeding = ref(false);
+    const showInput = ref(false);   // FAB トグル: 入力モーダルの開閉
     const OWNER_EMAILS = new Set(["info@banax.tokyo", "konishi0221@gmail.com"]);
     const isOwner = computed(() => OWNER_EMAILS.has((user.value?.email || "").toLowerCase()));
     // 駒込の seed 済みフラグ: 同じ seedTag のアイテムが1件でもあれば「投入済」扱い
@@ -349,6 +395,8 @@ const App = {
     }
 
     function back() { location.href = "/"; }
+    // modal 背景タップで閉じる (sheet 内の click は @click.stop で吸われる)
+    function onModalBgClick() { showInput.value = false; }
 
     // 駒込の材料 15件を1回限り seed (owner 専用)。
     // 同じ seedTag のドキュメントが1件でもあれば再実行不可。
@@ -470,11 +518,11 @@ const App = {
 
     return {
       sites, sortedSites, activeSite, items, ready, err,
-      newName, newQty, newUnit, newCategory, adding, seeding,
+      newName, newQty, newUnit, newCategory, adding, seeding, showInput,
       isOwner, canSeedKomagome,
       filteredItems, countBySite, hasChecked, checkedCount, inputPlaceholder,
       formatMeta, displayName, catClass,
-      add, toggle, del, clearChecked, back, seedKomagome,
+      add, toggle, del, clearChecked, back, seedKomagome, onModalBgClick,
     };
   },
 };
