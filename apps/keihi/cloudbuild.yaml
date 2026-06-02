@@ -111,7 +111,7 @@ steps:
         npm install --prefix /tmp sharp --silent --no-audit --no-fund
         node -e "
           const sharp = require('/tmp/node_modules/sharp');
-          const svgs = ['apps/icon.svg','apps/keihi/icon.svg','apps/keihi2/icon.svg','apps/seikyu/icon.svg'];
+          const svgs = ['apps/icon.svg','apps/keihi/icon.svg','apps/keihi2/icon.svg','apps/seikyu/icon.svg','apps/kaimono/icon.svg'];
           (async () => {
             for (const svg of svgs) {
               const png = svg.replace(/\.svg$/, '.png');
