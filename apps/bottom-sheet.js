@@ -28,10 +28,13 @@ const CSS = `
   padding: 6px 18px calc(28px + env(safe-area-inset-bottom));
   transform: translateY(100%); transition: transform 200ms cubic-bezier(.2,.8,.2,1); }
 .bs-modal.open .bs-sheet { transform: translateY(0); }
-.bs-handle-area { padding: 8px 0; cursor: grab; touch-action: none; user-select: none; -webkit-user-select: none; }
-.bs-handle-area:active { cursor: grabbing; }
+/* grab area: handle + (あれば) title をまとめて掴める広い領域に。
+   margin: 0 -18px で .bs-sheet の左右 padding を打ち消し、端まで掴める。 */
+.bs-grab { padding: 14px 18px 10px; margin: 0 -18px 8px; cursor: grab;
+  touch-action: none; user-select: none; -webkit-user-select: none; }
+.bs-grab:active { cursor: grabbing; }
 .bs-handle { width: 46px; height: 5px; border-radius: 3px; background: rgba(168,172,192,0.45); margin: 0 auto; }
-.bs-title { font-size: 17px; font-weight: 800; margin: 2px 4px 14px; }
+.bs-title { font-size: 17px; font-weight: 800; margin: 10px 4px 0; }
 `;
 if (typeof document !== "undefined" && !document.getElementById(STYLE_ID)) {
   const s = document.createElement("style");
@@ -51,14 +54,14 @@ export const BottomSheet = {
   template: `
     <div class="bs-modal" :class="{ open: modelValue }" @click="onBgClick">
       <div class="bs-sheet" :style="sheetStyle" @click.stop>
-        <div class="bs-handle-area"
+        <div class="bs-grab"
              @pointerdown="onDown"
              @pointermove="onMove"
              @pointerup="onUp"
              @pointercancel="onUp">
           <div class="bs-handle"></div>
+          <div v-if="title" class="bs-title">{{ title }}</div>
         </div>
-        <div v-if="title" class="bs-title">{{ title }}</div>
         <slot></slot>
       </div>
     </div>
