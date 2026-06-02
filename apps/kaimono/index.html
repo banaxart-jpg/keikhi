@@ -43,18 +43,52 @@ body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); 
 /* リスト */
 .list { padding: 0 16px 30px; display: flex; flex-direction: column; gap: 8px; min-height: 200px; }
 .empty { text-align: center; color: var(--text3); font-size: 13px; font-weight: 600; padding: 60px 0; }
-.item { display: flex; align-items: center; gap: 12px; background: var(--bg); border-radius: 16px; padding: 12px 14px 12px 18px; box-shadow: 5px 5px 12px var(--sd), -4px -4px 10px var(--sl); transition: opacity 200ms ease, transform 200ms ease; position: relative; overflow: hidden; }
-/* 左端の細い縦バー = 追加者の色 (誰が頼んだか) */
-.item .adder-bar { position: absolute; left: 0; top: 8px; bottom: 8px; width: 4px; border-radius: 0 3px 3px 0; }
-.item.checked { opacity: 0.5; }
-.item.checked .item-text { text-decoration: line-through; color: var(--text2); }
+
+/* ── アイテムカード: 默認は最小限の 1 行。タップで詳細展開。 ── */
+.item-card { background: var(--bg); border-radius: 16px; box-shadow: 5px 5px 12px var(--sd), -4px -4px 10px var(--sl); transition: opacity 200ms ease; overflow: hidden; }
+.item-card.checked { opacity: 0.55; }
+.item-row { display: flex; align-items: center; gap: 12px; padding: 12px 14px; cursor: pointer; }
+.item-name { flex: 1; font-size: 14px; font-weight: 600; min-width: 0; word-break: break-word; color: var(--text); }
+.item-card.checked .item-name { text-decoration: line-through; color: var(--text2); }
+.item-name .qty { color: var(--text2); font-weight: 600; margin-left: 6px; font-size: 12px; }
+.chev { width: 22px; height: 22px; display: flex; align-items: center; justify-content: center; color: var(--text3); font-family: 'Material Symbols Outlined'; font-size: 20px; flex-shrink: 0; transition: transform 200ms ease; }
+.item-card.open .chev { transform: rotate(180deg); color: var(--text2); }
+
 .check { width: 28px; height: 28px; border-radius: 14px; border: none; cursor: pointer; background: var(--bg); box-shadow: inset 3px 3px 6px var(--sd), inset -2px -2px 5px var(--sl); display: flex; align-items: center; justify-content: center; color: var(--accent); font-size: 18px; flex-shrink: 0; font-family: 'Material Symbols Outlined'; transition: all 200ms ease; }
-.item.checked .check { background: var(--accent); color: white; box-shadow: 4px 4px 10px rgba(42,140,58,0.4); }
-.item-text { flex: 1; font-size: 14px; font-weight: 600; min-width: 0; word-break: break-word; }
-.item-meta { font-size: 9px; color: var(--text3); font-weight: 600; margin-top: 2px; letter-spacing: 0.04em; }
-.del { width: 28px; height: 28px; border-radius: 14px; border: none; cursor: pointer; background: var(--bg); box-shadow: 3px 3px 8px var(--sd), -2px -2px 6px var(--sl); color: var(--text3); font-size: 20px; line-height: 1; display: flex; align-items: center; justify-content: center; flex-shrink: 0; font-family: -apple-system, sans-serif; }
-.del:hover { color: var(--danger); }
-.del:active { box-shadow: inset 2px 2px 6px var(--sd); }
+.item-card.checked .check { background: var(--accent); color: white; box-shadow: 4px 4px 10px rgba(42,140,58,0.4); }
+
+/* 展開: メタ情報 + メモ + 画像 + 編集/削除 */
+.item-detail {
+  border-top: 1px solid rgba(168,172,192,0.18);
+  padding: 10px 14px 14px; display: flex; flex-direction: column; gap: 10px;
+  animation: slide-open 200ms ease-out; overflow: hidden;
+}
+@keyframes slide-open {
+  from { opacity: 0; max-height: 0; padding-top: 0; padding-bottom: 0; }
+  to   { opacity: 1; max-height: 700px; padding-top: 10px; padding-bottom: 14px; }
+}
+.meta-line { font-size: 11px; color: var(--text3); display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.meta-line .by { display: inline-flex; align-items: center; gap: 4px; }
+.meta-line .by .dot { width: 7px; height: 7px; border-radius: 50%; }
+.detail-note { font-size: 13px; color: var(--text); line-height: 1.6; white-space: pre-wrap; word-break: break-word; padding: 8px 10px; border-radius: 8px; background: var(--bg2); box-shadow: inset 3px 3px 6px var(--sd), inset -2px -2px 5px var(--sl); }
+.detail-img { max-width: 100%; max-height: 240px; border-radius: 10px; object-fit: contain; align-self: center; cursor: zoom-in; }
+.detail-textarea { width: 100%; padding: 10px 12px; border: none; border-radius: 10px; font-size: 13px; font-family: inherit; color: var(--text); background: var(--bg2); box-shadow: inset 3px 3px 8px var(--sd), inset -2px -2px 6px var(--sl); outline: none; min-height: 70px; resize: vertical; box-sizing: border-box; }
+.detail-filepick {
+  display: flex; align-items: center; gap: 8px; padding: 9px 12px; border-radius: 10px;
+  background: var(--bg); box-shadow: 3px 3px 8px var(--sd), -2px -2px 6px var(--sl);
+  cursor: pointer; font-size: 12px; font-weight: 700; color: var(--text2); justify-content: center;
+}
+.detail-filepick input { display: none; }
+.detail-actions { display: flex; gap: 8px; }
+.detail-actions button {
+  flex: 1; padding: 9px; border: none; border-radius: 10px; font-weight: 700; font-size: 13px;
+  cursor: pointer; font-family: inherit;
+  background: var(--bg); color: var(--text2);
+  box-shadow: 3px 3px 8px var(--sd), -2px -2px 6px var(--sl);
+}
+.detail-actions button.primary { background: linear-gradient(145deg, var(--accent2), var(--accent)); color: white; box-shadow: 4px 4px 10px rgba(42,140,58,0.3); }
+.detail-actions button.danger { color: var(--danger); }
+.detail-actions button:disabled { opacity: 0.5; cursor: wait; }
 
 /* 一括クリア */
 .clear-row { display: flex; justify-content: flex-end; padding: 4px 18px 14px; }
@@ -142,45 +176,6 @@ body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); 
 .tag-pill { display: inline-block; padding: 2px 7px; border-radius: 6px; font-size: 9px; font-weight: 800; letter-spacing: 0.04em; margin-right: 6px; vertical-align: 1px; }
 .tag-pill.zairyo { background: #fef0c8; color: #8b6914; }
 .tag-pill.kogu { background: #ffe0e0; color: #8b3030; }
-.qty-suffix { color: var(--text2); font-weight: 600; margin-left: 6px; font-size: 12px; }
-
-/* 詳細パネル: 画像 + 説明 を inline 展開 */
-.detail-toggle { background: none; border: none; color: var(--accent); font-size: 11px; font-weight: 700; padding: 4px 8px; cursor: pointer; font-family: inherit; }
-.detail-toggle:hover { text-decoration: underline; }
-.detail {
-  margin: 6px 14px 0; padding: 12px 14px; border-radius: 12px;
-  background: var(--bg2); box-shadow: inset 3px 3px 8px var(--sd), inset -2px -2px 6px var(--sl);
-  display: flex; flex-direction: column; gap: 10px;
-  animation: slide-down 200ms ease-out; overflow: hidden;
-}
-@keyframes slide-down {
-  from { opacity: 0; max-height: 0; padding-top: 0; padding-bottom: 0; }
-  to   { opacity: 1; max-height: 600px; padding-top: 12px; padding-bottom: 12px; }
-}
-.detail img { max-width: 100%; max-height: 240px; border-radius: 10px; object-fit: contain; align-self: center; background: var(--bg); padding: 4px; }
-.detail .note { font-size: 13px; color: var(--text); line-height: 1.6; white-space: pre-wrap; word-break: break-word; }
-.detail .empty-detail { font-size: 12px; color: var(--text3); font-style: italic; text-align: center; padding: 10px; }
-.detail textarea {
-  width: 100%; padding: 10px 12px; border: none; border-radius: 10px; font-size: 13px;
-  font-family: inherit; color: var(--text); background: var(--bg);
-  box-shadow: inset 3px 3px 8px var(--sd), inset -2px -2px 6px var(--sl);
-  outline: none; min-height: 70px; resize: vertical; box-sizing: border-box;
-}
-.detail .file-pick {
-  display: flex; align-items: center; gap: 8px; padding: 9px 12px;
-  border-radius: 10px; background: var(--bg); box-shadow: 3px 3px 8px var(--sd), -2px -2px 6px var(--sl);
-  cursor: pointer; font-size: 12px; font-weight: 700; color: var(--text2); justify-content: center;
-}
-.detail .file-pick input { display: none; }
-.detail .row { display: flex; gap: 8px; }
-.detail .row button { flex: 1; padding: 10px; border: none; border-radius: 10px; font-weight: 800; font-size: 13px; cursor: pointer; font-family: inherit; }
-.detail .row .save { background: linear-gradient(145deg, var(--accent2), var(--accent)); color: white; box-shadow: 4px 4px 10px rgba(42,140,58,0.3); }
-.detail .row .cancel { background: var(--bg); color: var(--text2); box-shadow: 3px 3px 8px var(--sd), -2px -2px 6px var(--sl); }
-.detail .row button:disabled { opacity: 0.5; cursor: wait; }
-
-/* チェッカー色のチップ (誰がチェックしたか色で示す) */
-.checker-chip { display: inline-flex; align-items: center; gap: 4px; padding: 1px 7px 1px 5px; border-radius: 10px; color: white; font-size: 9px; font-weight: 800; margin-left: 6px; }
-.checker-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
 
 /* アーカイブモーダル (日付ごと) */
 .arch-modal {
@@ -278,53 +273,56 @@ const TEMPLATE = `
     <div class="list">
       <div v-if="sortedSites.length === 0" class="empty">現場が登録されてません。経費2 で追加してください。</div>
       <div v-else-if="filteredItems.length === 0" class="empty">「{{ activeSite }}」に追加するものはまだ無し</div>
-      <template v-for="item in filteredItems" :key="item.id">
-        <div class="item" :class="{ checked: item.checked }">
-          <!-- 左端の縦バー = 追加者の色 -->
-          <span class="adder-bar" :style="{ background: colorForEmail(item.addedBy) }" :title="'追加: ' + displayNameOf(item.addedBy)"></span>
-          <button class="check" @click="toggle(item)" :style="item.checked ? { background: colorForEmail(item.checkedBy), color: 'white', boxShadow: '3px 3px 8px ' + colorForEmail(item.checkedBy) + '55' } : null">{{ item.checked ? 'check' : '' }}</button>
-          <div style="flex:1; min-width:0;">
-            <div class="item-text">
-              <span v-if="item.category" class="tag-pill" :class="catClass(item.category)">{{ item.category }}</span>{{ displayName(item) }}<span v-if="item.qty" class="qty-suffix">× {{ item.qty }} {{ item.unit || '' }}</span>
-            </div>
-            <div class="item-meta">
-              {{ formatMeta(item) }}
-              <button class="detail-toggle" @click="toggleDetail(item)">
-                <span v-if="expandedId === item.id">閉じる</span>
-                <span v-else><span v-if="hasDetail(item)" class="icon" style="font-size:11px;vertical-align:-0.15em;">attach_file</span> 詳細</span>
-              </button>
-            </div>
+      <div v-for="item in filteredItems" :key="item.id" class="item-card" :class="{ checked: item.checked, open: expandedId === item.id }">
+        <!-- collapsed row: 最小限の情報だけ -->
+        <div class="item-row" @click="toggleDetail(item)">
+          <button class="check" @click.stop="toggle(item)" :style="item.checked ? { background: colorForEmail(item.checkedBy), color: 'white', boxShadow: '3px 3px 8px ' + colorForEmail(item.checkedBy) + '55' } : null">{{ item.checked ? 'check' : '' }}</button>
+          <div class="item-name">
+            {{ displayName(item) }}<span v-if="item.qty" class="qty">× {{ item.qty }} {{ item.unit || '' }}</span>
           </div>
-          <button class="del" @click="del(item)" title="削除"><span class="icon" style="font-size:18px;">close</span></button>
+          <span class="chev">expand_more</span>
         </div>
 
-        <!-- 詳細パネル: 画像 + 説明 inline 展開 -->
-        <div v-if="expandedId === item.id" class="detail">
+        <!-- 展開: メタ情報 + 詳細 + アクション -->
+        <div v-if="expandedId === item.id" class="item-detail">
+          <!-- メタ: カテゴリ + 追加者 + 完了者 -->
+          <div class="meta-line">
+            <span v-if="item.category" class="tag-pill" :class="catClass(item.category)">{{ item.category }}</span>
+            <span class="by"><span class="dot" :style="{ background: colorForEmail(item.addedBy) }"></span>{{ displayNameOf(item.addedBy) }}</span>
+            <span v-if="item.createdAt">が {{ formatTimeShort(item.createdAt) }} に追加</span>
+            <template v-if="item.checked">
+              <span>·</span>
+              <span class="by"><span class="dot" :style="{ background: colorForEmail(item.checkedBy) }"></span>{{ displayNameOf(item.checkedBy) }}</span>
+              <span v-if="item.checkedAt">が {{ formatTimeShort(item.checkedAt) }} に済み</span>
+            </template>
+          </div>
+
+          <!-- 編集モード -->
           <template v-if="editingDetailId === item.id">
-            <!-- 編集モード -->
-            <textarea v-model="editNote" placeholder="説明・メモ (型番・サイズ・備考など)"></textarea>
-            <label class="file-pick">
+            <textarea class="detail-textarea" v-model="editNote" placeholder="説明・メモ (型番・サイズ・備考など)"></textarea>
+            <label class="detail-filepick">
               <input type="file" accept="image/*" @change="onFilePick">
-              <span>
-                <span v-if="!editFile" class="icon" style="vertical-align:-0.18em;">photo_camera</span>
-                {{ editFile ? editFile.name : "画像を選ぶ" }}
-              </span>
+              <span v-if="!editFile"><span class="icon" style="vertical-align:-0.18em;">photo_camera</span> 画像を選ぶ</span>
+              <span v-else>{{ editFile.name }}</span>
             </label>
-            <img v-if="editPreview" :src="editPreview" alt="preview">
-            <div class="row">
-              <button class="cancel" @click="cancelDetailEdit" :disabled="savingDetail">キャンセル</button>
-              <button class="save" @click="saveDetail(item)" :disabled="savingDetail">{{ savingDetail ? "保存中…" : "保存" }}</button>
+            <img v-if="editPreview" :src="editPreview" alt="preview" class="detail-img">
+            <div class="detail-actions">
+              <button @click="cancelDetailEdit" :disabled="savingDetail">キャンセル</button>
+              <button class="primary" @click="saveDetail(item)" :disabled="savingDetail">{{ savingDetail ? "保存中…" : "保存" }}</button>
             </div>
           </template>
+
+          <!-- 表示モード -->
           <template v-else>
-            <!-- 表示モード -->
-            <img v-if="item.imageUrl" :src="item.imageUrl" alt="" @click="openImage(item.imageUrl)" style="cursor:zoom-in;">
-            <div v-if="item.note" class="note">{{ item.note }}</div>
-            <div v-if="!item.imageUrl && !item.note" class="empty-detail">説明・画像はまだ無し</div>
-            <button class="detail-toggle" @click="startDetailEdit(item)" style="align-self:center;">✎ 編集</button>
+            <img v-if="item.imageUrl" :src="item.imageUrl" alt="" @click="openImage(item.imageUrl)" class="detail-img">
+            <div v-if="item.note" class="detail-note">{{ item.note }}</div>
+            <div class="detail-actions">
+              <button @click="startDetailEdit(item)">編集</button>
+              <button class="danger" @click="del(item)">削除</button>
+            </div>
           </template>
         </div>
-      </template>
+      </div>
     </div>
 
     <div v-if="hasChecked" class="clear-row">
@@ -379,19 +377,9 @@ const TEMPLATE = `
       <div v-for="[day, list] in archivedByDay" :key="day" class="arch-day">
         <div class="arch-day-head"><span>{{ day }}</span><span>{{ list.length }} 件</span></div>
         <div v-for="item in list" :key="item.id" class="arch-row">
-          <span class="checker-dot" :style="{ background: colorForEmail(item.checkedBy), width: '10px', height: '10px' }"></span>
           <div class="body">
-            <div>
-              <b>{{ displayName(item) }}</b><span v-if="item.qty" class="qty-suffix">× {{ item.qty }} {{ item.unit || '' }}</span>
-              <span v-if="item.category" class="tag-pill" :class="catClass(item.category)" style="margin-left:6px;">{{ item.category }}</span>
-            </div>
-            <div class="meta" style="display:flex; align-items:center; gap:4px; flex-wrap:wrap;">
-              <b>{{ item.site }}</b>
-              <span>·</span>
-              <span class="checker-dot" :style="{ background: colorForEmail(item.addedBy) }"></span>{{ displayNameOf(item.addedBy) }} が追加
-              <span>→</span>
-              <span class="checker-dot" :style="{ background: colorForEmail(item.checkedBy) }"></span>{{ displayNameOf(item.checkedBy) }} が {{ formatTimeShort(item.checkedAt) }} に済み
-            </div>
+            <div><b>{{ displayName(item) }}</b><span v-if="item.qty" class="qty">× {{ item.qty }} {{ item.unit || '' }}</span></div>
+            <div class="meta">{{ item.site }} · {{ displayNameOf(item.checkedBy) }} {{ formatTimeShort(item.checkedAt) }}</div>
           </div>
         </div>
       </div>
