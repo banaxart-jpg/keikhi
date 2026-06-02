@@ -141,10 +141,17 @@ steps:
       - |
         set -e
         npm install -g firebase-tools@13 --silent --no-audit --no-fund
-        firebase deploy --only hosting,firestore:rules,storage \
+        # hosting + firestore rules は必須。Storage は未有効化の可能性ある (project で
+        # Storage 作ってないと storage.rules deploy が失敗して全 deploy が巻き戻る)
+        # ので別ステップにして失敗を許容する。
+        firebase deploy --only hosting,firestore:rules \
           --project=$PROJECT_ID \
           --config=firebase.json \
           --non-interactive
+        firebase deploy --only storage \
+          --project=$PROJECT_ID \
+          --config=firebase.json \
+          --non-interactive || echo "[deploy] storage skipped (Console で Storage 有効化が必要)"
 
 options:
   logging: CLOUD_LOGGING_ONLY
