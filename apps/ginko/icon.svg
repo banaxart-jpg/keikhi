@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="180" height="180" viewBox="0 0 180 180">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#14b8a6"/>
+      <stop offset="100%" stop-color="#0d9488"/>
+    </linearGradient>
+  </defs>
+  <rect width="180" height="180" rx="40" fill="url(#bg)"/>
+  <!-- 屋根（三角ペディメント） -->
+  <path d="M30 80 L90 38 L150 80 Z" fill="#ffffff" opacity="0.95"/>
+  <!-- 柱 -->
+  <rect x="48" y="86" width="10" height="50" fill="#ffffff" opacity="0.95"/>
+  <rect x="74" y="86" width="10" height="50" fill="#ffffff" opacity="0.95"/>
+  <rect x="96" y="86" width="10" height="50" fill="#ffffff" opacity="0.95"/>
+  <rect x="122" y="86" width="10" height="50" fill="#ffffff" opacity="0.95"/>
+  <!-- 基壇 -->
+  <rect x="36" y="138" width="108" height="10" fill="#ffffff" opacity="0.95"/>
+  <!-- ¥ 円マーク (ペディメント内) -->
+  <text x="90" y="74" font-family="system-ui,sans-serif" font-size="28" font-weight="900" fill="#0d9488" text-anchor="middle">¥</text>
+</svg>

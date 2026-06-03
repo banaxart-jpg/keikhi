@@ -753,6 +753,151 @@ app.post("/api/tx/append", async (req, res) => {
   else res.status(500).json(result);
 });
 
+// ───── 銀行 CSV 取り込み (ginko ミニアプリから) ─────
+// 現状は PayPay 銀行のフォーマットだけ対応。base64 で受信した CSV をデコードして
+// 行配列に正規化、摘要文の正規表現で自動分類。フロントが per-row 編集 + 送信。
+function ginkoDecodeCsv(buf) {
+  // Node 20+ TextDecoder で UTF-8 を試して、置換文字が多すぎたら Shift-JIS にフォールバック
+  let text = new TextDecoder("utf-8", { fatal: false }).decode(buf);
+  const badChars = (text.match(/�/g) || []).length;
+  if (badChars > 5) {
+    try { text = new TextDecoder("shift_jis", { fatal: false }).decode(buf); }
+    catch (_) { /* shift_jis 未対応環境は UTF-8 のまま */ }
+  }
+  if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1);
+  return text;
+}
+function ginkoParseCsvLine(line) {
+  const cols = [];
+  let cur = "", inQuote = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (inQuote) {
+      if (ch === '"' && line[i + 1] === '"') { cur += '"'; i++; }
+      else if (ch === '"') inQuote = false;
+      else cur += ch;
+    } else {
+      if (ch === ',') { cols.push(cur); cur = ""; }
+      else if (ch === '"') inQuote = true;
+      else cur += ch;
+    }
+  }
+  cols.push(cur);
+  return cols;
+}
+function ginkoParseNum(s) {
+  if (!s) return 0;
+  const cleaned = String(s).replace(/[,¥￥\s"]/g, "").trim();
+  if (!cleaned || cleaned === "-") return 0;
+  return Math.abs(Number(cleaned) || 0);
+}
+function ginkoNormalizeDate(s) {
+  if (!s) return null;
+  const cleaned = String(s).trim();
+  let m = cleaned.match(/^(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})/);
+  if (m) return `${m[1]}-${m[2].padStart(2, "0")}-${m[3].padStart(2, "0")}`;
+  m = cleaned.match(/^(\d{4})(\d{2})(\d{2})$/);
+  if (m) return `${m[1]}-${m[2]}-${m[3]}`;
+  return null;
+}
+function ginkoHash(s) {
+  let h = 0;
+  for (let i = 0; i < s.length; i++) h = ((h << 5) - h + s.charCodeAt(i)) | 0;
+  return Math.abs(h).toString(36);
+}
+// 摘要文 → 大分類 / 小分類 / 対象 の推定 (マッチしないものは「未分類」)
+function ginkoClassify(desc, type) {
+  const PATTERNS = [
+    [/給与|ｷｭｳﾖ|キュウヨ/i,        "固定費", "給料",   ""],
+    [/利息|ﾘｿｸ/i,                  "その他", "利息",   "銀行"],
+    [/airbnb|ｴｱﾋﾞ|エアビ/i,        "旅館",   "Airbnb", "Airbnb"],
+    [/booking|ﾌﾞｯｸ|ブッキング/i,   "旅館",   "Booking.com", "Booking.com"],
+    [/楽天|ﾗｸﾃﾝ/i,                 "旅館",   "楽天トラベル", "楽天トラベル"],
+    [/じゃらん|ｼﾞｬﾗﾝ/i,            "旅館",   "じゃらん", "じゃらん"],
+    [/google|ｸﾞ-ｸﾞ|ｸﾞｰｸﾞﾙ|グーグル/i, "固定費", "web", "googleworkspace"],
+    [/adobe|ｱﾄﾞﾋﾞ|アドビ/i,         "固定費", "web", "adobe"],
+    [/indeed|ｲﾝﾃﾞｨ|インディード/i,  "固定費", "web", "indeed"],
+    [/openai|chatgpt|ｵ-ﾌﾟﾝai/i,    "固定費", "web", "chatGPT"],
+    [/lolipop|ﾛﾘﾎﾟ|ロリポップ/i,   "固定費", "web", "ロリポップ"],
+    [/家賃|ﾔﾁﾝ|ヤチン/i,            "固定費", "家賃", ""],
+    [/保険|ﾎｹﾝ|ホケン/i,            "固定費", "保険", ""],
+    [/年金|ﾈﾝｷﾝ|ネンキン/i,         "固定費", "保険", "年金"],
+    [/tepco|ﾃﾎﾟｺ|電気|ﾃﾞﾝｷ|デンキ/i, "固定費", "光熱費", "電気"],
+    [/ガス|ｶﾞｽ|tokyogas|東京ガス/i,  "固定費", "光熱費", "ガス"],
+    [/水道|ｽｲﾄﾞ|スイドウ/i,         "固定費", "光熱費", "水道"],
+    [/税|ｾﾞｲ|ゼイ/i,                "固定費", "税金", ""],
+    [/自動車|ｼﾞﾄﾞｳｼｬ|車検|ｼｬｹﾝ/i,   "固定費", "車両費", ""],
+    [/atm|ｴｰﾃｨｰｴﾑ|ATM|現金引出/i,  "経費",   "現金引出", ""],
+    [/手数料|ﾃｽｳﾘｮｳ|テスウリョウ/i, "経費",   "手数料", "銀行手数料"],
+    [/振込|ﾌﾘｺﾐ|フリコミ/i, type === "収入" ? "工事" : "経費", "振込", ""],
+  ];
+  for (const [re, cat, sub, cp] of PATTERNS) {
+    if (re.test(desc)) return { category: cat, subcategory: sub, counterparty: cp };
+  }
+  return { category: type === "収入" ? "その他" : "未分類", subcategory: "未分類", counterparty: "" };
+}
+
+app.post("/api/ginko/parse", async (req, res) => {
+  const { fileBase64, bank = "paypay" } = req.body || {};
+  if (!fileBase64) return res.status(400).json({ error: "fileBase64 required" });
+  try {
+    const buf = Buffer.from(fileBase64, "base64");
+    const text = ginkoDecodeCsv(buf);
+    const lines = text.split(/\r?\n/).filter((l) => l.trim());
+    if (lines.length < 2) return res.json({ rows: [], count: 0, warning: "ヘッダー1行とデータ0行" });
+
+    const header = ginkoParseCsvLine(lines[0]);
+    const idx = {
+      date: header.findIndex((h) => /日付|年月日|取扱日/.test(h)),
+      desc: header.findIndex((h) => /摘要|内容|お取引内容/.test(h)),
+      out:  header.findIndex((h) => /引出|出金|支払金額|お引出|お引落/.test(h)),
+      in:   header.findIndex((h) => /預入|入金|お預入/.test(h)),
+      bal:  header.findIndex((h) => /残高/.test(h)),
+      memo: header.findIndex((h) => /メモ|備考/.test(h)),
+    };
+    if (idx.date < 0 || (idx.out < 0 && idx.in < 0)) {
+      return res.status(400).json({ error: `CSV ヘッダーを認識できません: ${header.join(", ")}` });
+    }
+
+    const rows = [];
+    for (let i = 1; i < lines.length; i++) {
+      const cols = ginkoParseCsvLine(lines[i]);
+      if (cols.length < 2) continue;
+      const isoDate = ginkoNormalizeDate(cols[idx.date]);
+      if (!isoDate) continue;
+      const desc = (cols[idx.desc] || "").trim();
+      const memoText = idx.memo >= 0 ? (cols[idx.memo] || "").trim() : "";
+      const out = idx.out >= 0 ? ginkoParseNum(cols[idx.out]) : 0;
+      const inn = idx.in  >= 0 ? ginkoParseNum(cols[idx.in])  : 0;
+      const type = inn > 0 ? "収入" : "支出";
+      const amount = inn > 0 ? inn : out;
+      if (amount === 0) continue;
+      const cls = ginkoClassify(desc, type);
+      rows.push({
+        date: isoDate,
+        type,
+        category: cls.category,
+        subcategory: cls.subcategory,
+        amount,
+        counterparty: cls.counterparty || desc.slice(0, 60),
+        site: "",
+        status: "確定",
+        paymentMethod: "口座振替",
+        memo: memoText ? `${desc} / ${memoText}` : desc,
+        source: `銀行(${bank})`,
+        refId: `bank:${bank}:${isoDate}:${type === "収入" ? "in" : "out"}:${amount}:${ginkoHash(desc)}`,
+        include: true,    // フロントのチェックボックス初期値
+        // 原文表示用 (フロントで参照)
+        rawDesc: desc,
+      });
+    }
+    res.json({ rows, count: rows.length });
+  } catch (e) {
+    console.error("[ginko] parse error:", e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // 任意の gs://... パスから 5 分有効の signed URL を発行。seikyu のシート連携で
 // 写真リンクをアプリ内表示するために使う。認証経由のみ。
 app.get("/api/image-signed", async (req, res) => {
