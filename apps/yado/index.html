@@ -197,9 +197,10 @@ const TEMPLATE = `
     </div>
   </div>
 
-  <div v-if="usingSample" class="warn">
+  <div v-if="usingSample && !err" class="warn">
     <span class="icon">info</span>
-    Beds24 のAPIトークンがまだ未設定です。下のはサンプル予約。トークンを Secret Manager に入れたら本物に切り替わります。
+    Beds24 の API トークンがまだ未設定です。下のはサンプル予約。Cloud Run の env var
+    (MANCHIKAN_BEDS_KEY) に入れたら本物に切り替わります。
   </div>
   <div v-if="err" class="err">{{ err }}</div>
 
@@ -508,9 +509,9 @@ const App = {
           }));
         }
       } catch (e) {
-        // 通信失敗時もサンプルで画面を埋める (試せるように)
+        // 通信失敗時もサンプルで画面を埋める (試せるように)。ただし usingSample は
+        // 立てない (= サーバが明示的に sample 返した時だけ警告出す)。err と区別。
         err.value = "取得失敗: " + (e.message || e) + " (サンプル表示中)";
-        usingSample.value = true;
         bookings.value = sampleBookings(yyyymm.value);
       } finally {
         loading.value = false;
