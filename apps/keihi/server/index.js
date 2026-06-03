@@ -244,17 +244,37 @@ async function ensureSheetTab(sheets, ym) {
   return ensureSheetTabGeneric(sheets, SHEET_ID, ym, SHEET_HEADER, [0]);
 }
 async function appendRecordToSheet(r) {
+  // 「写真」セル: Drive URL (アプリ不要で見られる) を優先、無ければアプリ内ビューア
+  const photoLinkUrl = r.driveUrl
+    || (r.id ? `https://keihi-496002.web.app/keihi/?view=${r.id}` : "");
+  const photoCell = photoLinkUrl ? `=HYPERLINK("${String(photoLinkUrl).replace(/"/g, '""')}","🧾")` : "";
+
+  // 新「取引」シートに append (1 行 1 取引の統一フォーマット)。
+  // 領収書アプリ (keihi/keihi2) は買い物 = 支出。現場が「満竹華庵」なら 大分類=旅館、
+  // それ以外で現場アリなら 工事、現場無しなら経費。fire-and-forget。
+  appendTx({
+    date: r.date || "",
+    type: "支出",
+    category: !r.site ? "経費" : (r.site === "満竹華庵" ? "旅館" : "工事"),
+    subcategory: r.category || "",
+    amount: Number(r.total) || 0,
+    counterparty: r.store || "",
+    site: r.site || "",
+    status: "確定",
+    paymentMethod: r.payment || "",
+    memo: [r.buyer, r.workType, r.memo].filter(Boolean).join(" / "),
+    photoCell,
+    source: "領収書",
+    refId: r.id || "",
+  }).catch(() => {});
+
+  // 旧フォーマットの月別タブにも引き続き書き込む (バックアップ・互換)
   if (!SHEET_ID) return;
-  // 現場が未設定 (未 SORT) のレコードはシートに送らない
   if (!r.site) return;
   try {
     const sheets = await getSheetsApi();
     const ym = String(r.date || "").slice(0, 7) || "unknown";
     await ensureSheetTab(sheets, ym);
-    // 「写真」セル: Drive URL (アプリ不要で見られる) を優先、無ければアプリ内ビューア
-    const photoLinkUrl = r.driveUrl
-      || (r.id ? `https://keihi-496002.web.app/keihi/?view=${r.id}` : "");
-    const photoCell = photoLinkUrl ? `=HYPERLINK("${String(photoLinkUrl).replace(/"/g, '""')}","🧾")` : "";
     await sheets.spreadsheets.values.append({
       spreadsheetId: SHEET_ID,
       range: `${ym}!A:J`,
@@ -282,6 +302,32 @@ const INVOICE_HEADER = ["ID", "発行日", "期限", "状態", "完了日", "振
 const SUMMARY_HEADER = ["月", "売上合計", "入金済", "未入金", "支払合計", "支払済", "未払"];
 
 async function appendInvoiceToSheet(r) {
+  // 「写真」セル: Drive URL (アプリ不要、税理士共有用) を優先、無ければアプリ内ビューア
+  const photoLinkUrl = r.driveUrl
+    || (r.imageUrl ? `https://keihi-496002.web.app/seikyu/?view=${encodeURIComponent(r.imageUrl)}` : "");
+  const photoCell = photoLinkUrl
+    ? `=HYPERLINK("${String(photoLinkUrl).replace(/"/g, '""')}","🧾")`
+    : "";
+
+  // 新「取引」シートにも append。direction=out (送る) は売上、in (受け取った請求) は支出。
+  // 完了日があればそれを日付に、無ければ発行日。状態は確定 / 未入金 / 未払い。
+  const isOut = r.direction === "out";
+  appendTx({
+    date: r.paidAt || r.issueDate || "",
+    type: isOut ? "収入" : "支出",
+    category: r.site === "満竹華庵" ? "旅館" : "工事",
+    subcategory: r.category || "",
+    amount: Number(r.total) || 0,
+    counterparty: r.issuer || "",
+    site: r.site || "",
+    status: r.status === "paid" ? "確定" : (isOut ? "未入金" : "未払い"),
+    paymentMethod: "振込",
+    memo: r.memo || "",
+    photoCell,
+    source: "請求書",
+    refId: r.id || "",
+  }).catch(() => {});
+
   if (!INVOICE_SHEET_ID) return { skipped: true };
   try {
     const sheets = await getSheetsApi();
@@ -294,12 +340,6 @@ async function appendInvoiceToSheet(r) {
     const statusLbl = r.status === "paid"
       ? (r.direction === "out" ? "入金済" : "支払済")
       : (r.direction === "out" ? "未入金" : "未払い");
-    // 「写真」セル: Drive URL (アプリ不要、税理士共有用) を優先、無ければアプリ内ビューア
-    const photoLinkUrl = r.driveUrl
-      || (r.imageUrl ? `https://keihi-496002.web.app/seikyu/?view=${encodeURIComponent(r.imageUrl)}` : "");
-    const photoCell = photoLinkUrl
-      ? `=HYPERLINK("${String(photoLinkUrl).replace(/"/g, '""')}","🧾")`
-      : "";
     await sheets.spreadsheets.values.append({
       spreadsheetId: INVOICE_SHEET_ID,
       range: `${tabName}!A:P`,
@@ -327,7 +367,144 @@ async function appendInvoiceToSheet(r) {
   }
 }
 
-// 年別サマリータブ (YYYY-サマリー) の対象月の行を更新
+// ───── 統一取引シート (tx-sheet): 会社の金の動きを 1 タブに集約 ─────
+// 領収書 (keihi) / 経費2 (keihi2) / 請求書 (seikyu) / 宿 (yado) からの全データを
+// 1 行 1 取引で「取引」タブに append、月別/現場別/カテゴリ別 dashboard は SUMIFS+QUERY で
+// Sheets 側が自動再計算する。月横並びを廃止して並び替え自由な形に。
+const TX_SHEET_ID = (process.env.TX_SHEET_ID || "1MFeJCDurzRqQiJB3aeIjwNH9PRocZzNW_poOEfDJKAc").trim();
+const TX_TAB = "取引";
+const TX_HEADER = [
+  "日付", "種別", "大分類", "小分類", "金額", "対象", "現場",
+  "状態", "支払方法", "メモ", "写真", "ソース", "元ID",
+];
+// 元ID 列 (M=12) の重複を避けるための簡易キャッシュ。再起動でリセットされるが
+// 二重投入の主な原因は「短時間の連打」なので実用上は十分。
+const txSeenRefIds = new Set();
+// dashboard セットアップを cold start 後 1 回だけ走らせるためのフラグ。
+let txDashboardsInit = false;
+
+async function appendTx(r) {
+  if (!TX_SHEET_ID) return { skipped: true };
+  // 元ID で de-dup (短時間の二重投入対策)。
+  if (r.refId && txSeenRefIds.has(`${r.source}:${r.refId}`)) {
+    return { skipped: true, reason: "duplicate refId in cache" };
+  }
+  try {
+    const sheets = await getSheetsApi();
+    await ensureSheetTabGeneric(sheets, TX_SHEET_ID, TX_TAB, TX_HEADER, [0]);
+    // cold start 後の初回 append で dashboard タブも揃える (失敗しても本体は続行)
+    if (!txDashboardsInit) {
+      txDashboardsInit = true; // 先にフラグ立てて並行呼び出しでの多重実行を防ぐ
+      ensureTxDashboards().catch((e) => {
+        txDashboardsInit = false; // 失敗時は次回再挑戦できるよう戻す
+        console.warn(`[tx] dashboard setup failed (continuing): ${e.message}`);
+      });
+    }
+    await sheets.spreadsheets.values.append({
+      spreadsheetId: TX_SHEET_ID,
+      range: `${TX_TAB}!A:M`,
+      valueInputOption: "USER_ENTERED",
+      insertDataOption: "INSERT_ROWS",
+      requestBody: {
+        values: [[
+          r.date || "", r.type || "", r.category || "", r.subcategory || "",
+          Number(r.amount) || 0, r.counterparty || "", r.site || "",
+          r.status || "確定", r.paymentMethod || "", r.memo || "",
+          r.photoCell || "", r.source || "", r.refId || "",
+        ]],
+      },
+    });
+    if (r.refId) txSeenRefIds.add(`${r.source}:${r.refId}`);
+    console.log(`[tx] appended source=${r.source} type=${r.type} amount=${r.amount} site=${r.site || "-"}`);
+    return { ok: true };
+  } catch (e) {
+    console.warn(`[tx] append FAILED: ${e.message}`);
+    return { ok: false, error: e.message };
+  }
+}
+
+// 月別 / 現場別 / カテゴリ別の3つの dashboard タブを作成 (idempotent)。
+// データタブ「取引」が無ければ先に作る。
+async function ensureTxDashboards() {
+  if (!TX_SHEET_ID) throw new Error("TX_SHEET_ID not configured");
+  const sheets = await getSheetsApi();
+  await ensureSheetTabGeneric(sheets, TX_SHEET_ID, TX_TAB, TX_HEADER, [0]);
+
+  // 1) 月別タブ: 1行=1ヶ月、12行プリフィル (2026 年)。日付セル A は 月初日。
+  const MONTHLY_TAB = "月別";
+  const MONTHLY_HEADER = [
+    "月", "工事売上", "旅館売上", "その他収入", "収入合計",
+    "工事原価", "旅館原価", "固定費", "光熱費", "その他支出", "支出合計", "利益",
+  ];
+  await ensureSheetTabGeneric(sheets, TX_SHEET_ID, MONTHLY_TAB, MONTHLY_HEADER, [0]);
+  // 12 ヶ月分の行を投入 (既に行があれば上書きで OK = idempotent)
+  const monthlyRows = [];
+  for (let m = 1; m <= 12; m++) {
+    const ym = `2026-${String(m).padStart(2, "0")}-01`;
+    const row = m + 1; // ヘッダー行が 1
+    const f = (col) => `'${TX_TAB}'!${col}:${col}`;
+    const range = `, ${f("A")}, ">="&$A${row}, ${f("A")}, "<"&EDATE($A${row},1)`;
+    const sumByType = (typ) => `IFERROR(SUMIFS(${f("E")}${range}, ${f("B")}, "${typ}"),0)`;
+    const sumByCat = (typ, cat) => `IFERROR(SUMIFS(${f("E")}${range}, ${f("B")}, "${typ}", ${f("C")}, "${cat}"),0)`;
+    monthlyRows.push([
+      ym,
+      `=${sumByCat("収入", "工事")}`,
+      `=${sumByCat("収入", "旅館")}`,
+      `=${sumByType("収入")} - B${row} - C${row}`,
+      `=B${row} + C${row} + D${row}`,
+      `=${sumByCat("支出", "工事")}`,
+      `=${sumByCat("支出", "旅館")}`,
+      `=${sumByCat("支出", "固定費")}`,
+      `=${sumByCat("支出", "光熱費")}`,
+      `=${sumByType("支出")} - F${row} - G${row} - H${row} - I${row}`,
+      `=F${row} + G${row} + H${row} + I${row} + J${row}`,
+      `=E${row} - K${row}`,
+    ]);
+  }
+  await sheets.spreadsheets.values.update({
+    spreadsheetId: TX_SHEET_ID,
+    range: `${MONTHLY_TAB}!A2:L13`,
+    valueInputOption: "USER_ENTERED",
+    requestBody: { values: monthlyRows },
+  });
+
+  // 2) 現場別タブ: QUERY で動的に現場一覧 + 売上を集計
+  const SITE_TAB = "現場別";
+  const SITE_HEADER = ["現場別ダッシュボード（自動集計）"];
+  await ensureSheetTabGeneric(sheets, TX_SHEET_ID, SITE_TAB, SITE_HEADER, []);
+  await sheets.spreadsheets.values.update({
+    spreadsheetId: TX_SHEET_ID,
+    range: `${SITE_TAB}!A2`,
+    valueInputOption: "USER_ENTERED",
+    requestBody: { values: [[
+      `=IFERROR(QUERY('${TX_TAB}'!A2:M, "SELECT G, SUM(E) WHERE G IS NOT NULL AND B='収入' GROUP BY G ORDER BY SUM(E) DESC LABEL G '現場', SUM(E) '売上'"), "データなし")`,
+    ]] },
+  });
+  // 右側に「支出」も別 QUERY で並べる
+  await sheets.spreadsheets.values.update({
+    spreadsheetId: TX_SHEET_ID,
+    range: `${SITE_TAB}!D2`,
+    valueInputOption: "USER_ENTERED",
+    requestBody: { values: [[
+      `=IFERROR(QUERY('${TX_TAB}'!A2:M, "SELECT G, SUM(E) WHERE G IS NOT NULL AND B='支出' GROUP BY G ORDER BY SUM(E) DESC LABEL G '現場', SUM(E) '原価'"), "データなし")`,
+    ]] },
+  });
+
+  // 3) カテゴリ別タブ: 大分類×小分類で件数+金額を出す。支出に絞る (経費の内訳が見たいケース)
+  const CAT_TAB = "カテゴリ別";
+  const CAT_HEADER = ["カテゴリ別ダッシュボード（支出・自動集計）"];
+  await ensureSheetTabGeneric(sheets, TX_SHEET_ID, CAT_TAB, CAT_HEADER, []);
+  await sheets.spreadsheets.values.update({
+    spreadsheetId: TX_SHEET_ID,
+    range: `${CAT_TAB}!A2`,
+    valueInputOption: "USER_ENTERED",
+    requestBody: { values: [[
+      `=IFERROR(QUERY('${TX_TAB}'!A2:M, "SELECT C, D, COUNT(C), SUM(E) WHERE B='支出' GROUP BY C, D ORDER BY SUM(E) DESC LABEL C '大分類', D '小分類', COUNT(C) '件数', SUM(E) '金額'"), "データなし")`,
+    ]] },
+  });
+}
+
+// ───── 既存ヘルパー：年別サマリータブ (YYYY-サマリー) の対象月の行を更新 (旧請求書フォーマット) ─────
 // SUMIFS 式をセルに埋め込むので、データ追加・状態変更があったら Sheets 側で
 // 自動的に再計算される (サーバ側で値を読んで書き直す必要がない)
 async function updateInvoiceSummary(sheets, year, ym) {
@@ -521,6 +698,25 @@ async function callGeminiWithFallback(content, { primaryModel, maxOutputTokens, 
 app.post("/api/invoice-sheet", async (req, res) => {
   const result = await appendInvoiceToSheet(req.body || {});
   res.json(result);
+});
+
+// ───── 新「取引」シートのセットアップ (4タブ作成 + dashboard 数式投入) ─────
+// 1 回叩けば 月別/現場別/カテゴリ別 タブを idempotent に作成する。
+app.post("/api/tx/setup", async (req, res) => {
+  try {
+    await ensureTxDashboards();
+    res.json({ ok: true, sheetUrl: `https://docs.google.com/spreadsheets/d/${TX_SHEET_ID}/edit` });
+  } catch (e) {
+    console.error("tx setup error", e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// 取引シートへの汎用 append (手入力用、テスト用、固定費の月初テンプレ等から)
+app.post("/api/tx/append", async (req, res) => {
+  const result = await appendTx(req.body || {});
+  if (result.ok) res.json(result);
+  else res.status(500).json(result);
 });
 
 // 任意の gs://... パスから 5 分有効の signed URL を発行。seikyu のシート連携で
@@ -719,6 +915,66 @@ ${usingSample ? "\n※このデータはサンプル (本物のAPI未接続) で
     });
     const text = result?.response?.text?.() || "";
     res.json({ strategy: text, model: modelUsed });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Beds24 の予約を「取引」シートに同期 (旅館売上として記録)。チャネル毎に行を分ける。
+// 既に同期済みの予約は元ID で de-dup されるが、Cloud Run 再起動でキャッシュが
+// 飛ぶので、シート側で「ソース=宿 AND 元ID」での重複除去を最終手段としておく想定。
+app.post("/api/yado/sync", async (req, res) => {
+  const { from, to } = req.body || {};
+  if (!from || !to) return res.status(400).json({ error: "from/to required" });
+  try {
+    // 初回同期時に dashboard タブも一緒にセットアップ (idempotent)
+    await ensureTxDashboards().catch((e) => console.warn(`[tx] dashboard setup failed (continuing): ${e.message}`));
+    let bookings = [];
+    if (BEDS24_API_TOKEN) {
+      const url = `${BEDS24_BASE}/bookings?arrivalFrom=${from}&arrivalTo=${to}&includeInvoiceItems=false`;
+      const r = await fetch(url, { headers: { token: BEDS24_API_TOKEN, accept: "application/json" } });
+      if (!r.ok) {
+        const t = await r.text();
+        return res.status(r.status).json({ error: `beds24 ${r.status}: ${t.slice(0, 200)}` });
+      }
+      const j = await r.json();
+      bookings = Array.isArray(j) ? j : (j.data || j.bookings || []);
+    } else if (Array.isArray(req.body.bookings)) {
+      // フロント側で取得済みの bookings をそのまま受け取って同期 (Beds24 トークンが
+      // 未設定でも、ユーザーがフロントで取れたものをそのまま流せる経路を用意)
+      bookings = req.body.bookings;
+    }
+    const today = new Date().toISOString().slice(0, 10);
+    let count = 0;
+    for (const b of bookings) {
+      const referer = (b.referer || b.apiSourceReferer || b.bookingSource || "").toLowerCase();
+      let ch = "その他";
+      if (referer.includes("airbnb")) ch = "Airbnb";
+      else if (referer.includes("booking")) ch = "Booking.com";
+      else if (referer.includes("direct") || referer.includes("website") || referer.includes("自社")) ch = "自社サイト";
+      const arr = (b.arrival || "").slice(0, 10);
+      if (!arr) continue;
+      const nights = b.arrival && b.departure
+        ? Math.max(1, Math.round((new Date(b.departure) - new Date(b.arrival)) / 86400000))
+        : 1;
+      const result = await appendTx({
+        date: arr,
+        type: "収入",
+        category: "旅館",
+        subcategory: ch,
+        amount: Number(b.price) || 0,
+        counterparty: [b.lastName, b.firstName].filter(Boolean).join(" ") || b.guestName || ch,
+        site: "満竹華庵",
+        status: arr <= today ? "確定" : "予定",
+        paymentMethod: ch === "自社サイト" ? "現地" : "振込",
+        memo: `${nights}泊 大${b.numAdult || 0} 小${b.numChild || 0}`,
+        photoCell: "",
+        source: "宿",
+        refId: String(b.id || b.bookId || ""),
+      });
+      if (result.ok) count++;
+    }
+    res.json({ ok: true, synced: count, total: bookings.length });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }

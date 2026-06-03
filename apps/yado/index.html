@@ -114,6 +114,13 @@ body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); 
 .bars-grid .seg.direct { background: var(--ch-direct); }
 .bars-grid .seg.other { background: var(--ch-other); }
 
+/* シート同期ボタン (サマリータブ末尾) */
+.sync-btn { width: 100%; padding: 14px 16px; border-radius: 18px; border: none; background: var(--bg); color: var(--text); font-size: 13px; font-weight: 700; cursor: pointer; box-shadow: 5px 5px 12px var(--sd), -4px -4px 10px var(--sl); font-family: inherit; display: flex; align-items: center; justify-content: center; gap: 8px; margin-top: 4px; }
+.sync-btn:disabled { opacity: 0.55; }
+.sync-btn:active { box-shadow: inset 3px 3px 8px var(--sd), inset -2px -2px 6px var(--sl); }
+.sync-btn .icon { font-size: 18px; }
+.sync-msg { font-size: 11px; color: var(--text2); text-align: center; margin-top: 8px; font-weight: 600; }
+
 /* 戦略タブ */
 .strategy { padding: 0 18px 40px; }
 .strategy .intro { font-size: 12px; color: var(--text2); line-height: 1.7; margin-bottom: 14px; }
@@ -290,6 +297,12 @@ const TEMPLATE = `
         </div>
       </div>
     </div>
+
+    <button class="sync-btn" :disabled="syncing" @click="syncToSheet">
+      <span class="icon">cloud_upload</span>
+      {{ syncing ? '同期中…' : '取引シートに同期' }}
+    </button>
+    <div v-if="syncMsg" class="sync-msg">{{ syncMsg }}</div>
   </div>
 
   <!-- ───── 戦略タブ ───── -->
@@ -536,6 +549,42 @@ const App = {
       }
     }
 
+    const syncing = ref(false);
+    const syncMsg = ref("");
+    async function syncToSheet() {
+      if (!user.value || syncing.value) return;
+      syncing.value = true;
+      syncMsg.value = "";
+      try {
+        const token = await user.value.getIdToken();
+        const d = cur.value;
+        const from = isoDate(new Date(d.getFullYear(), d.getMonth() - 1, 1));
+        const to = isoDate(new Date(d.getFullYear(), d.getMonth() + 2, 0));
+        const res = await fetch((window.API_BASE || "") + "/api/yado/sync", {
+          method: "POST",
+          headers: { authorization: "Bearer " + token, "content-type": "application/json" },
+          body: JSON.stringify({
+            from, to,
+            // BEDS24 トークンが未設定の場合に備えて、フロントで持ってる bookings も渡す。
+            // サーバー側で BEDS24_API_TOKEN があれば本物を再取得して上書きされる。
+            bookings: usingSample.value ? [] : bookings.value.map((b) => ({
+              id: b.id, arrival: b.arrival, departure: b.departure,
+              referer: b.referer || b.channel, price: b.price,
+              numAdult: b.adult, numChild: b.child,
+              firstName: b.guestName, lastName: "",
+            })),
+          }),
+        });
+        const j = await res.json();
+        if (!res.ok) throw new Error(j.error || res.status);
+        syncMsg.value = `${j.synced}/${j.total} 件をシートに送信しました`;
+      } catch (e) {
+        syncMsg.value = "同期失敗: " + (e.message || e);
+      } finally {
+        syncing.value = false;
+      }
+    }
+
     function back() { location.href = "/"; }
 
     onMounted(async () => {
@@ -562,10 +611,11 @@ const App = {
 
     return {
       tab, cur, bookings, loading, err, usingSample, selectedDate, strategy, strategyAt, generating,
+      syncing, syncMsg,
       channels, chLabel, monthLabel, yyyymm, calendarCells, selectedDayBookings,
       monthlyBookings, totalNights, monthlyRevenue, availableNights, occupancyPct,
       revenueByChannel, revenueBarPct, dailyRevenue, maxDayRevenue,
-      shiftMonth, formatYen, formatJP, fetchBookings, generateStrategy, back,
+      shiftMonth, formatYen, formatJP, fetchBookings, generateStrategy, syncToSheet, back,
     };
   },
 };
