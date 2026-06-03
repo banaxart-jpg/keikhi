@@ -318,6 +318,18 @@ const TEMPLATE = `
     <div v-if="syncMsg" class="sync-msg">{{ syncMsg }}</div>
   </div>
 
+  <!-- ───── 戦略タブ ───── -->
+  <div v-else-if="tab === 'str'" class="strategy">
+    <div class="intro">
+      この月のデータと、季節 / 周辺の民泊状況 / 物価 / 世界情勢を踏まえて、AIが宿泊数を増やす戦略を提案します。
+    </div>
+    <button class="gen-btn" :disabled="generating || loading" @click="generateStrategy">
+      {{ generating ? '分析中… (30秒くらい)' : (strategy ? '🔄 再生成' : '✨ 戦略を分析する') }}
+    </button>
+    <div v-if="strategy" class="result">{{ strategy }}</div>
+    <div v-if="strategyAt" class="meta">生成: {{ strategyAt }}</div>
+  </div>
+
   <!-- ───── 生 JSON 取得モーダル (debug 用、サンプル取れたら削除) ───── -->
   <bottom-sheet v-model="showRaw" title="beds24 生 JSON">
     <div class="raw-controls">
@@ -332,18 +344,6 @@ const TEMPLATE = `
     <div v-if="rawText" class="raw-meta">{{ rawSize }} bytes / {{ rawCount }} bookings</div>
     <pre v-if="rawText" class="raw-pre">{{ rawText }}</pre>
   </bottom-sheet>
-
-  <!-- ───── 戦略タブ ───── -->
-  <div v-else-if="tab === 'str'" class="strategy">
-    <div class="intro">
-      この月のデータと、季節 / 周辺の民泊状況 / 物価 / 世界情勢を踏まえて、AIが宿泊数を増やす戦略を提案します。
-    </div>
-    <button class="gen-btn" :disabled="generating || loading" @click="generateStrategy">
-      {{ generating ? '分析中… (30秒くらい)' : (strategy ? '🔄 再生成' : '✨ 戦略を分析する') }}
-    </button>
-    <div v-if="strategy" class="result">{{ strategy }}</div>
-    <div v-if="strategyAt" class="meta">生成: {{ strategyAt }}</div>
-  </div>
 </div>
 `;
 
