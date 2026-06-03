@@ -898,7 +898,152 @@ app.post("/api/ginko/parse", async (req, res) => {
   }
 });
 
-// 任意の gs://... パスから 5 分有効の signed URL を発行。seikyu のシート連携で
+// ───── 経理ダッシュボード (keiri ミニアプリ) ─────
+// 「取引」タブを読んで月別 KPI / 現場別 / カテゴリ別 / 月次推移を返す。
+// 5 分キャッシュ。連打しても Sheets API を叩きすぎない。
+const keiriCache = { fetchedAt: 0, rows: [] };
+const KEIRI_TTL = 5 * 60 * 1000;
+
+async function fetchAllTransactions() {
+  if (Date.now() - keiriCache.fetchedAt < KEIRI_TTL && keiriCache.rows.length) {
+    return keiriCache.rows;
+  }
+  const sheets = await getSheetsApi();
+  const r = await sheets.spreadsheets.values.get({
+    spreadsheetId: TX_SHEET_ID,
+    range: `${TX_TAB}!A2:M`,
+    valueRenderOption: "UNFORMATTED_VALUE",
+    dateTimeRenderOption: "FORMATTED_STRING",
+  });
+  // 各行: [日付, 種別, 大分類, 小分類, 金額, 対象, 現場, 状態, 支払方法, メモ, 写真, ソース, 元ID]
+  const rows = (r.data.values || []).map((row) => ({
+    date: String(row[0] || "").slice(0, 10),
+    type: row[1] || "",
+    category: row[2] || "",
+    subcategory: row[3] || "",
+    amount: Number(row[4]) || 0,
+    counterparty: row[5] || "",
+    site: row[6] || "",
+    status: row[7] || "",
+    paymentMethod: row[8] || "",
+    memo: row[9] || "",
+    source: row[11] || "",
+    refId: row[12] || "",
+  })).filter((r) => /^\d{4}-\d{2}-\d{2}$/.test(r.date) && (r.type === "収入" || r.type === "支出") && r.amount > 0);
+  keiriCache.fetchedAt = Date.now();
+  keiriCache.rows = rows;
+  return rows;
+}
+
+function ymToDateBounds(ym) {
+  const [y, m] = ym.split("-").map(Number);
+  const start = `${y}-${String(m).padStart(2, "0")}-01`;
+  const next = new Date(y, m, 1);   // m is 1-12, JS month is 0-11; passing m gives next month
+  const end = `${next.getFullYear()}-${String(next.getMonth() + 1).padStart(2, "0")}-01`;
+  return { start, end };
+}
+function subMonths(ym, n) {
+  const [y, m] = ym.split("-").map(Number);
+  const d = new Date(y, m - 1 - n, 1);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+}
+
+function aggregateMonth(allRows, ym) {
+  const { start, end } = ymToDateBounds(ym);
+  const monthRows = allRows.filter((r) => r.date >= start && r.date < end);
+  let revenue = 0, expense = 0;
+  for (const r of monthRows) {
+    if (r.type === "収入") revenue += r.amount;
+    else if (r.type === "支出") expense += r.amount;
+  }
+  return { count: monthRows.length, revenue, expense, profit: revenue - expense, rows: monthRows };
+}
+
+app.get("/api/keiri/summary", async (req, res) => {
+  const month = String(req.query.month || "").trim();
+  if (!/^\d{4}-\d{2}$/.test(month)) return res.status(400).json({ error: "month (YYYY-MM) required" });
+  try {
+    const all = await fetchAllTransactions();
+    const cur = aggregateMonth(all, month);
+    const prev = aggregateMonth(all, subMonths(month, 1));
+
+    // 現場別 (収入/支出/粗利、収入降順)
+    const siteMap = {};
+    for (const r of cur.rows) {
+      const s = r.site || "(現場なし)";
+      if (!siteMap[s]) siteMap[s] = { site: s, revenue: 0, expense: 0, count: 0 };
+      if (r.type === "収入") siteMap[s].revenue += r.amount;
+      else siteMap[s].expense += r.amount;
+      siteMap[s].count++;
+    }
+    const bySite = Object.values(siteMap)
+      .map((s) => ({ ...s, profit: s.revenue - s.expense }))
+      .sort((a, b) => (b.revenue + b.expense) - (a.revenue + a.expense));
+
+    // カテゴリ別支出 (大分類×小分類)
+    const catMap = {};
+    for (const r of cur.rows) {
+      if (r.type !== "支出") continue;
+      const key = `${r.category} ${r.subcategory}`;
+      if (!catMap[key]) catMap[key] = { category: r.category, subcategory: r.subcategory, amount: 0, count: 0 };
+      catMap[key].amount += r.amount;
+      catMap[key].count++;
+    }
+    const byCategory = Object.values(catMap).sort((a, b) => b.amount - a.amount);
+
+    // ソース別 (どのアプリ経由か)
+    const srcMap = {};
+    for (const r of cur.rows) {
+      const s = r.source || "(なし)";
+      if (!srcMap[s]) srcMap[s] = { source: s, count: 0, in: 0, out: 0 };
+      srcMap[s].count++;
+      if (r.type === "収入") srcMap[s].in += r.amount;
+      else srcMap[s].out += r.amount;
+    }
+    const bySource = Object.values(srcMap).sort((a, b) => b.count - a.count);
+
+    // 過去 12 ヶ月推移
+    const trend = [];
+    for (let i = 11; i >= 0; i--) {
+      const m = subMonths(month, i);
+      const agg = aggregateMonth(all, m);
+      trend.push({ month: m, revenue: agg.revenue, expense: agg.expense, profit: agg.profit, count: agg.count });
+    }
+
+    res.json({
+      month,
+      kpi: { revenue: cur.revenue, expense: cur.expense, profit: cur.profit, count: cur.count },
+      prevKpi: { revenue: prev.revenue, expense: prev.expense, profit: prev.profit, count: prev.count },
+      bySite, byCategory, bySource, trend,
+      cachedAt: new Date(keiriCache.fetchedAt).toISOString(),
+    });
+  } catch (e) {
+    console.error("[keiri] summary error:", e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.get("/api/keiri/transactions", async (req, res) => {
+  const month = String(req.query.month || "").trim();
+  if (!/^\d{4}-\d{2}$/.test(month)) return res.status(400).json({ error: "month (YYYY-MM) required" });
+  const site = String(req.query.site || "");
+  const category = String(req.query.category || "");
+  const subcategory = String(req.query.subcategory || "");
+  const type = String(req.query.type || "");
+  try {
+    const all = await fetchAllTransactions();
+    const { start, end } = ymToDateBounds(month);
+    const rows = all.filter((r) => r.date >= start && r.date < end)
+      .filter((r) => !site || (r.site || "(現場なし)") === site)
+      .filter((r) => !category || r.category === category)
+      .filter((r) => !subcategory || r.subcategory === subcategory)
+      .filter((r) => !type || r.type === type)
+      .sort((a, b) => b.date.localeCompare(a.date));
+    res.json({ rows, count: rows.length });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
 // 写真リンクをアプリ内表示するために使う。認証経由のみ。
 app.get("/api/image-signed", async (req, res) => {
   if (!storage) return res.status(503).json({ error: "storage not configured" });

@@ -1,0 +1,441 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="経理">
+<link rel="apple-touch-icon" href="/keiri/icon.svg">
+<title>経理</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@24,400,0,0">
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+:root {
+  --bg: #e4e6ee; --bg2: #d8dae4;
+  --sl: rgba(255,255,255,1); --sd: rgba(168,172,192,0.75); --sd2: rgba(148,152,176,0.55);
+  --text: #42455e; --text2: rgba(66,69,94,0.5); --text3: rgba(66,69,94,0.28);
+  --accent: #4338ca; --accent2: #6366f1;
+  --accent-soft: color-mix(in srgb, var(--accent) 12%, var(--bg) 88%);
+  --in: #16a34a; --out: #dc2626; --neutral: #6b7280;
+}
+html, body { height: 100%; }
+body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; overflow-x: hidden; padding-bottom: calc(40px + env(safe-area-inset-bottom)); }
+.icon { font-family: 'Material Symbols Outlined'; font-size: 1.1em; display: inline-block; vertical-align: -0.18em; font-variation-settings: 'FILL' 0, 'wght' 500, 'GRAD' 0, 'opsz' 20; }
+.icon.spin { animation: spin 1s linear infinite; }
+@keyframes spin { from { transform: rotate(0); } to { transform: rotate(360deg); } }
+
+.header-fix { position: sticky; top: 0; z-index: 10; background: var(--bg); box-shadow: 0 2px 10px rgba(168,172,192,0.18); }
+.top { display: flex; justify-content: space-between; align-items: center; padding: 54px 18px 12px; }
+.title { font-size: 22px; font-weight: 800; letter-spacing: -0.3px; }
+.pill { padding: 8px 16px; border-radius: 24px; font-size: 12px; font-weight: 700; border: none; color: var(--text2); background: var(--bg); box-shadow: 4px 4px 10px var(--sd), -4px -4px 10px var(--sl); cursor: pointer; font-family: inherit; }
+.pill:active { box-shadow: inset 3px 3px 8px var(--sd), inset -3px -3px 8px var(--sl); transform: scale(0.97); }
+.pill .icon { font-size: 14px; }
+
+/* 月切替 */
+.month-bar { display: flex; align-items: center; padding: 4px 18px 12px; gap: 10px; }
+.month-bar .nav { width: 36px; height: 36px; border-radius: 18px; border: none; background: var(--bg); box-shadow: 4px 4px 10px var(--sd), -4px -4px 10px var(--sl); font-size: 18px; color: var(--text2); cursor: pointer; font-family: inherit; flex-shrink: 0; }
+.month-bar .nav:active { box-shadow: inset 3px 3px 8px var(--sd), inset -3px -3px 8px var(--sl); }
+.month-bar .label { font-size: 17px; font-weight: 800; letter-spacing: 0.02em; flex: 1; text-align: center; }
+.month-bar .today { font-size: 10px; padding: 6px 10px; border-radius: 12px; }
+
+.wrap { padding: 4px 18px 30px; display: flex; flex-direction: column; gap: 18px; }
+
+/* KPI カード (3列) */
+.kpi-row { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; }
+.kpi { background: var(--bg); border-radius: 16px; padding: 12px 10px; box-shadow: 5px 5px 12px var(--sd), -3px -3px 8px var(--sl); display: flex; flex-direction: column; gap: 2px; }
+.kpi-lbl { font-size: 9px; font-weight: 700; color: var(--text2); letter-spacing: 0.08em; text-transform: uppercase; }
+.kpi-val { font-size: 17px; font-weight: 800; color: var(--text); letter-spacing: -0.02em; font-family: ui-monospace, Menlo, monospace; }
+.kpi-val.in { color: var(--in); }
+.kpi-val.out { color: var(--out); }
+.kpi-val.profit-plus { color: var(--in); }
+.kpi-val.profit-minus { color: var(--out); }
+.kpi-delta { font-size: 9px; font-weight: 700; color: var(--text3); }
+.kpi-delta.up { color: var(--in); }
+.kpi-delta.down { color: var(--out); }
+
+/* セクション (現場別、カテゴリ別など) */
+.section { display: flex; flex-direction: column; gap: 8px; }
+.section-h { display: flex; justify-content: space-between; align-items: baseline; padding: 0 4px; }
+.section-h .h { font-size: 13px; font-weight: 800; color: var(--text); }
+.section-h .sub { font-size: 10px; color: var(--text3); font-weight: 700; }
+
+/* ランキング行 */
+.rank-row { background: var(--bg); border-radius: 14px; padding: 11px 14px; box-shadow: 4px 4px 10px var(--sd), -3px -3px 8px var(--sl); cursor: pointer; display: flex; flex-direction: column; gap: 6px; transition: transform 100ms ease; }
+.rank-row:active { transform: scale(0.98); }
+.rank-top { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.rank-name { font-size: 13px; font-weight: 800; color: var(--text); word-break: break-word; min-width: 0; flex: 1; }
+.rank-amount { font-size: 14px; font-weight: 800; font-family: ui-monospace, Menlo, monospace; flex-shrink: 0; }
+.rank-amount.in { color: var(--in); }
+.rank-amount.out { color: var(--out); }
+.rank-amount.neutral { color: var(--text); }
+.rank-meta { font-size: 10px; color: var(--text2); font-weight: 700; display: flex; gap: 10px; flex-wrap: wrap; }
+.rank-meta .m-in { color: var(--in); }
+.rank-meta .m-out { color: var(--out); }
+.rank-meta .m-prof { color: var(--text); }
+.rank-bar { height: 4px; border-radius: 2px; background: var(--bg2); overflow: hidden; }
+.rank-bar > div { height: 100%; background: linear-gradient(90deg, var(--accent2), var(--accent)); border-radius: 2px; }
+
+/* 月次推移ミニグラフ */
+.trend { background: var(--bg); border-radius: 16px; padding: 12px 12px 14px; box-shadow: 5px 5px 12px var(--sd), -3px -3px 8px var(--sl); }
+.trend-bars { display: flex; align-items: flex-end; gap: 3px; height: 80px; padding: 0 2px 4px; border-bottom: 1px solid rgba(168,172,192,0.3); }
+.trend-bars .col { flex: 1; display: flex; flex-direction: column; justify-content: flex-end; min-width: 0; gap: 1px; cursor: pointer; }
+.trend-bars .seg { width: 100%; border-radius: 2px; min-height: 1px; }
+.trend-bars .seg.rev { background: var(--in); }
+.trend-bars .seg.exp { background: var(--out); opacity: 0.8; }
+.trend-bars .col.cur .seg { box-shadow: 0 0 0 1.5px var(--accent); }
+.trend-labels { display: flex; gap: 3px; padding: 6px 2px 0; }
+.trend-labels .lbl { flex: 1; text-align: center; font-size: 8px; font-weight: 700; color: var(--text2); font-family: ui-monospace, Menlo, monospace; min-width: 0; }
+.trend-labels .lbl.cur { color: var(--accent); }
+.trend-legend { display: flex; gap: 12px; font-size: 10px; font-weight: 700; color: var(--text2); padding: 8px 4px 0; }
+.trend-legend .sw { width: 10px; height: 10px; border-radius: 3px; display: inline-block; vertical-align: -2px; margin-right: 5px; }
+
+/* ソース別 (どのアプリから取り込んだか、横並びチップ) */
+.sources { display: flex; gap: 6px; flex-wrap: wrap; }
+.src-chip { background: var(--bg); padding: 6px 10px; border-radius: 12px; font-size: 11px; font-weight: 700; color: var(--text2); box-shadow: 3px 3px 8px var(--sd), -2px -2px 6px var(--sl); display: inline-flex; align-items: center; gap: 4px; }
+.src-chip b { color: var(--text); font-weight: 800; }
+
+/* 空状態 / ローディング */
+.loading { text-align: center; color: var(--text2); font-size: 13px; padding: 60px 0; }
+.empty { text-align: center; color: var(--text3); font-size: 12px; font-weight: 700; padding: 24px; background: var(--bg); border-radius: 14px; box-shadow: inset 3px 3px 8px var(--sd), inset -2px -2px 6px var(--sl); }
+.err { padding: 12px 14px; border-radius: 14px; background: #fde0e0; color: #8a2727; font-size: 12px; font-weight: 600; }
+
+/* ドリルダウンモーダル (取引一覧) */
+.modal { position: fixed; inset: 0; background: rgba(180,184,205,0); display: flex; align-items: flex-end; visibility: hidden; opacity: 0; z-index: 60; transition: background 200ms ease, opacity 200ms ease, visibility 0s linear 200ms; }
+.modal.open { background: rgba(180,184,205,0.5); visibility: visible; opacity: 1; transition: background 200ms ease, opacity 200ms ease, visibility 0s linear 0s; }
+.sheet { background: var(--bg); border-radius: 24px 24px 0 0; box-shadow: -2px -10px 30px rgba(148,152,176,0.4); width: 100%; max-width: 600px; margin: 0 auto; max-height: 88vh; padding: 6px 16px calc(28px + env(safe-area-inset-bottom)); transform: translateY(100%); transition: transform 220ms cubic-bezier(.2,.8,.2,1); display: flex; flex-direction: column; overflow: hidden; }
+.modal.open .sheet { transform: translateY(0); }
+.handle { width: 46px; height: 5px; border-radius: 3px; background: rgba(168,172,192,0.45); margin: 10px auto 8px; cursor: pointer; }
+.sheet-h { font-size: 14px; font-weight: 800; padding: 0 4px 10px; color: var(--text); display: flex; justify-content: space-between; align-items: baseline; }
+.sheet-h .count { font-size: 11px; color: var(--text2); font-weight: 700; }
+.sheet-list { overflow-y: auto; display: flex; flex-direction: column; gap: 6px; padding-bottom: 8px; }
+.tx-row { background: var(--bg); border-radius: 12px; padding: 9px 12px; box-shadow: 3px 3px 8px var(--sd), -2px -2px 6px var(--sl); display: flex; gap: 10px; align-items: center; }
+.tx-date { font-size: 10px; color: var(--text2); font-weight: 700; font-family: ui-monospace, Menlo, monospace; flex-shrink: 0; min-width: 40px; }
+.tx-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.tx-name { font-size: 12px; font-weight: 700; color: var(--text); word-break: break-word; }
+.tx-meta { font-size: 9px; color: var(--text3); font-weight: 600; }
+.tx-amount { font-size: 12px; font-weight: 800; font-family: ui-monospace, Menlo, monospace; flex-shrink: 0; }
+.tx-amount.in { color: var(--in); }
+.tx-amount.out { color: var(--out); }
+</style>
+</head>
+<body>
+
+<div id="app"></div>
+
+<script src="/config.js"></script>
+<script type="module">
+import { createApp, ref, computed, onMounted } from "https://unpkg.com/vue@3.4.27/dist/vue.esm-browser.prod.js";
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js";
+import {
+  getAuth, onAuthStateChanged, setPersistence, browserLocalPersistence,
+} from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
+
+const TEMPLATE = `
+<div>
+  <div class="header-fix">
+    <div class="top">
+      <span class="title"><span class="icon">analytics</span> 経理</span>
+      <div style="display:flex; gap:6px;">
+        <button class="pill" :disabled="loading" @click="refresh" title="キャッシュ無視で再取得">
+          <span class="icon" :class="{ spin: loading }">{{ loading ? 'progress_activity' : 'refresh' }}</span>
+        </button>
+        <button class="pill" @click="back">← 戻る</button>
+      </div>
+    </div>
+    <div class="month-bar">
+      <button class="nav" @click="shiftMonth(-1)">‹</button>
+      <div class="label">{{ monthLabel }}</div>
+      <button v-if="yyyymm !== currentYm" class="pill today" @click="goToday">今月</button>
+      <button class="nav" @click="shiftMonth(1)">›</button>
+    </div>
+  </div>
+
+  <div v-if="err" class="wrap"><div class="err">{{ err }}</div></div>
+  <div v-if="loading" class="loading">集計中…</div>
+
+  <div v-if="data && !loading" class="wrap">
+    <!-- KPI -->
+    <div class="kpi-row">
+      <div class="kpi">
+        <div class="kpi-lbl">売上</div>
+        <div class="kpi-val in">¥{{ formatYen(data.kpi.revenue) }}</div>
+        <div class="kpi-delta" :class="deltaClass(data.kpi.revenue, data.prevKpi.revenue)">
+          {{ deltaText(data.kpi.revenue, data.prevKpi.revenue) }}
+        </div>
+      </div>
+      <div class="kpi">
+        <div class="kpi-lbl">支出</div>
+        <div class="kpi-val out">¥{{ formatYen(data.kpi.expense) }}</div>
+        <div class="kpi-delta" :class="deltaClass(data.prevKpi.expense, data.kpi.expense)">
+          {{ deltaText(data.kpi.expense, data.prevKpi.expense) }}
+        </div>
+      </div>
+      <div class="kpi">
+        <div class="kpi-lbl">利益</div>
+        <div class="kpi-val" :class="data.kpi.profit >= 0 ? 'profit-plus' : 'profit-minus'">
+          {{ data.kpi.profit >= 0 ? '' : '-' }}¥{{ formatYen(Math.abs(data.kpi.profit)) }}
+        </div>
+        <div class="kpi-delta" :class="deltaClass(data.kpi.profit, data.prevKpi.profit)">
+          {{ deltaText(data.kpi.profit, data.prevKpi.profit) }}
+        </div>
+      </div>
+    </div>
+
+    <!-- 月次推移 -->
+    <div class="trend">
+      <div class="section-h" style="padding:0 0 8px;">
+        <span class="h">月次推移</span>
+        <span class="sub">過去12ヶ月</span>
+      </div>
+      <div class="trend-bars">
+        <div v-for="t in data.trend" :key="t.month" class="col"
+             :class="{ cur: t.month === yyyymm }"
+             @click="jumpToMonth(t.month)"
+             :title="t.month + ': 売上 ¥' + formatYen(t.revenue) + ' / 支出 ¥' + formatYen(t.expense)">
+          <div class="seg rev" :style="{ height: barPct(t.revenue) + '%' }"></div>
+          <div class="seg exp" :style="{ height: barPct(t.expense) + '%' }"></div>
+        </div>
+      </div>
+      <div class="trend-labels">
+        <span v-for="t in data.trend" :key="t.month" class="lbl" :class="{ cur: t.month === yyyymm }">
+          {{ t.month.slice(5) }}
+        </span>
+      </div>
+      <div class="trend-legend">
+        <span><span class="sw" style="background:var(--in)"></span>売上</span>
+        <span><span class="sw" style="background:var(--out)"></span>支出</span>
+      </div>
+    </div>
+
+    <!-- 現場別 -->
+    <div class="section" v-if="data.bySite.length">
+      <div class="section-h">
+        <span class="h">現場別（{{ data.bySite.length }}件）</span>
+        <span class="sub">タップで明細</span>
+      </div>
+      <div v-for="s in data.bySite" :key="s.site" class="rank-row" @click="drillSite(s.site)">
+        <div class="rank-top">
+          <span class="rank-name">{{ s.site }}</span>
+          <span class="rank-amount" :class="s.profit >= 0 ? 'in' : 'out'">
+            {{ s.profit >= 0 ? '' : '-' }}¥{{ formatYen(Math.abs(s.profit)) }}
+          </span>
+        </div>
+        <div class="rank-meta">
+          <span class="m-in">↑ ¥{{ formatYen(s.revenue) }}</span>
+          <span class="m-out">↓ ¥{{ formatYen(s.expense) }}</span>
+          <span>{{ s.count }}件</span>
+        </div>
+        <div class="rank-bar"><div :style="{ width: siteBarPct(s) + '%' }"></div></div>
+      </div>
+    </div>
+    <div class="empty" v-else>この月に取引はありません</div>
+
+    <!-- カテゴリ別支出 -->
+    <div class="section" v-if="data.byCategory.length">
+      <div class="section-h">
+        <span class="h">支出カテゴリ（{{ data.byCategory.length }}件）</span>
+        <span class="sub">タップで明細</span>
+      </div>
+      <div v-for="c in data.byCategory" :key="c.category + c.subcategory" class="rank-row"
+           @click="drillCategory(c.category, c.subcategory)">
+        <div class="rank-top">
+          <span class="rank-name">{{ c.category }} · {{ c.subcategory }}</span>
+          <span class="rank-amount out">¥{{ formatYen(c.amount) }}</span>
+        </div>
+        <div class="rank-meta">
+          <span>{{ c.count }}件</span>
+          <span>{{ Math.round(c.amount / data.kpi.expense * 100) }}%</span>
+        </div>
+        <div class="rank-bar"><div :style="{ width: (c.amount / topCategoryAmount * 100) + '%' }"></div></div>
+      </div>
+    </div>
+
+    <!-- ソース別 (どのアプリ経由) -->
+    <div class="section" v-if="data.bySource.length">
+      <div class="section-h">
+        <span class="h">ソース別</span>
+        <span class="sub">どのアプリ経由</span>
+      </div>
+      <div class="sources">
+        <span v-for="s in data.bySource" :key="s.source" class="src-chip">
+          <b>{{ s.source }}</b> · {{ s.count }}件
+        </span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ドリルダウン -->
+  <div class="modal" :class="{ open: drillOpen }" @click="drillOpen = false">
+    <div class="sheet" @click.stop>
+      <div class="handle" @click="drillOpen = false"></div>
+      <div class="sheet-h">
+        <span>{{ drillTitle }}</span>
+        <span class="count">{{ drillRows.length }}件</span>
+      </div>
+      <div class="sheet-list">
+        <div v-if="drillLoading" class="loading">読み込み中…</div>
+        <div v-else-if="!drillRows.length" class="empty">該当なし</div>
+        <div v-for="(r, i) in drillRows" :key="i" class="tx-row">
+          <span class="tx-date">{{ r.date.slice(5) }}</span>
+          <div class="tx-body">
+            <div class="tx-name">{{ r.counterparty || '(対象なし)' }}</div>
+            <div class="tx-meta">{{ r.category }} · {{ r.subcategory }}<span v-if="r.site"> · {{ r.site }}</span><span v-if="r.source"> · {{ r.source }}</span></div>
+          </div>
+          <div class="tx-amount" :class="r.type === '収入' ? 'in' : 'out'">
+            {{ r.type === '収入' ? '+' : '-' }}¥{{ formatYen(r.amount) }}
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+`;
+
+const App = {
+  template: TEMPLATE,
+  setup() {
+    const cur = ref(new Date());
+    const data = ref(null);
+    const loading = ref(false);
+    const err = ref("");
+    const user = ref(null);
+    const drillOpen = ref(false);
+    const drillLoading = ref(false);
+    const drillRows = ref([]);
+    const drillTitle = ref("");
+
+    const yyyymm = computed(() => {
+      const d = cur.value;
+      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+    });
+    const monthLabel = computed(() => {
+      const d = cur.value;
+      return `${d.getFullYear()}年 ${d.getMonth() + 1}月`;
+    });
+    const currentYm = computed(() => {
+      const n = new Date();
+      return `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, "0")}`;
+    });
+    const topCategoryAmount = computed(() => {
+      if (!data.value || !data.value.byCategory.length) return 1;
+      return data.value.byCategory[0].amount || 1;
+    });
+
+    function formatYen(n) { return Math.round(Number(n) || 0).toLocaleString("ja-JP"); }
+    function back() { location.href = "/"; }
+    function goToday() { cur.value = new Date(); fetchSummary(); }
+    function jumpToMonth(ym) {
+      const [y, m] = ym.split("-").map(Number);
+      cur.value = new Date(y, m - 1, 1);
+      fetchSummary();
+    }
+    function shiftMonth(delta) {
+      const d = new Date(cur.value);
+      d.setMonth(d.getMonth() + delta);
+      cur.value = d;
+      fetchSummary();
+    }
+    function deltaText(now, prev) {
+      if (!prev && !now) return "前月: ¥0";
+      if (!prev) return "前月: ¥0";
+      const diff = now - prev;
+      const pct = Math.round(Math.abs(diff) / Math.abs(prev) * 100);
+      const sign = diff >= 0 ? "+" : "-";
+      return `前月比 ${sign}${pct}%`;
+    }
+    function deltaClass(now, prev) {
+      if (now > prev) return "up";
+      if (now < prev) return "down";
+      return "";
+    }
+    function siteBarPct(s) {
+      if (!data.value) return 0;
+      const max = Math.max(...data.value.bySite.map((x) => Math.max(x.revenue, x.expense)), 1);
+      return Math.max(s.revenue, s.expense) / max * 100;
+    }
+    function barPct(amount) {
+      if (!data.value || !data.value.trend.length) return 0;
+      const max = Math.max(...data.value.trend.map((t) => Math.max(t.revenue, t.expense)), 1);
+      return Math.max(0, Math.min(100, amount / max * 100));
+    }
+
+    async function fetchSummary(force = false) {
+      if (!user.value) return;
+      loading.value = true;
+      err.value = "";
+      try {
+        const token = await user.value.getIdToken();
+        const url = (window.API_BASE || "") + `/api/keiri/summary?month=${yyyymm.value}${force ? "&_t=" + Date.now() : ""}`;
+        const res = await fetch(url, { headers: { authorization: "Bearer " + token } });
+        const j = await res.json();
+        if (!res.ok) throw new Error(j.error || res.status);
+        data.value = j;
+      } catch (e) {
+        err.value = "取得失敗: " + (e.message || e);
+      } finally {
+        loading.value = false;
+      }
+    }
+    function refresh() { fetchSummary(true); }
+
+    async function fetchDrill(qs, title) {
+      drillLoading.value = true;
+      drillRows.value = [];
+      drillTitle.value = title;
+      drillOpen.value = true;
+      try {
+        const token = await user.value.getIdToken();
+        const res = await fetch((window.API_BASE || "") + `/api/keiri/transactions?month=${yyyymm.value}&${qs}`, {
+          headers: { authorization: "Bearer " + token },
+        });
+        const j = await res.json();
+        if (!res.ok) throw new Error(j.error || res.status);
+        drillRows.value = j.rows || [];
+      } catch (e) {
+        err.value = "明細取得失敗: " + (e.message || e);
+        drillOpen.value = false;
+      } finally {
+        drillLoading.value = false;
+      }
+    }
+    function drillSite(site) {
+      fetchDrill(`site=${encodeURIComponent(site)}`, `${site} の明細`);
+    }
+    function drillCategory(category, subcategory) {
+      fetchDrill(`category=${encodeURIComponent(category)}&subcategory=${encodeURIComponent(subcategory)}&type=支出`,
+        `${category} · ${subcategory} の明細`);
+    }
+
+    onMounted(async () => {
+      try {
+        const cfg = await fetch("/__/firebase/init.json").then((r) => r.json());
+        cfg.authDomain = location.hostname;
+        const app = initializeApp(cfg);
+        const auth = getAuth(app);
+        await setPersistence(auth, browserLocalPersistence);
+        onAuthStateChanged(auth, async (u) => {
+          if (!u) { location.href = "/?next=" + encodeURIComponent(location.pathname); return; }
+          user.value = u;
+          await fetchSummary();
+        });
+      } catch (e) { err.value = "初期化失敗: " + (e.message || e); }
+    });
+
+    return {
+      cur, data, loading, err, drillOpen, drillLoading, drillRows, drillTitle,
+      yyyymm, monthLabel, currentYm, topCategoryAmount,
+      formatYen, back, goToday, jumpToMonth, shiftMonth, refresh,
+      deltaText, deltaClass, siteBarPct, barPct,
+      drillSite, drillCategory,
+    };
+  },
+};
+
+createApp(App).mount("#app");
+</script>
+</body>
+</html>
