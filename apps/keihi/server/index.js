@@ -65,15 +65,27 @@ app.get("/api/version", (req, res) => {
 
 // 🚧 一時 debug endpoint (サンプル取れたら削除): beds24 v2 の生 JSON を素通しで返す。
 // 認証 middleware の前に置いてあるので curl 直叩きで使える。
-// 認可は ?key=<MANCHIKAN_BEDS_KEY> で beds24 トークン自体を共有秘密として要求。
-//   そもそも response は beds24 API token 持ってないと取れない情報なので、
-//   同じ token を入口の鍵にしても情報露出量は変わらない。
-// 使い方: curl 'https://<RUN_URL>/api/yado/debug/bookings?from=2026-06-01&to=2026-07-31&key=<TOKEN>'
+// 認可は MANCHIKAN_BEDS_KEY を共有秘密として要求 (token に + / = が混ざってても
+// ヘッダなら URL エンコード不要)。受け取り口は以下のどれか1つ:
+//   - Authorization: Bearer <KEY>
+//   - X-Beds-Key: <KEY>
+//   - ?key=<KEY>
+// 使い方: curl -H 'Authorization: Bearer <TOKEN>' \
+//          'https://<RUN_URL>/api/yado/debug/bookings?from=2026-06-01&to=2026-07-31'
 app.get("/api/yado/debug/bookings", async (req, res) => {
   const KEY = (process.env.MANCHIKAN_BEDS_KEY || "").trim();
   const PROP = (process.env.MANCHIKAN_PROP_ID || "").trim();
   if (!KEY) return res.status(503).json({ error: "MANCHIKAN_BEDS_KEY not set" });
-  if ((req.query.key || "") !== KEY) return res.status(403).json({ error: "key mismatch" });
+  const auth = req.headers.authorization || "";
+  const bearer = /^Bearer (.+)$/.exec(auth)?.[1] || "";
+  const provided = (bearer || req.headers["x-beds-key"] || req.query.key || "").trim();
+  if (provided !== KEY) {
+    return res.status(403).json({
+      error: "key mismatch",
+      hint: "send via Authorization: Bearer <KEY>, X-Beds-Key header, or ?key=<URL_ENCODED_KEY>",
+      providedLen: provided.length, expectedLen: KEY.length,
+    });
+  }
   const from = String(req.query.from || "").slice(0, 10);
   const to = String(req.query.to || "").slice(0, 10);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to)) {
