@@ -31,6 +31,10 @@ service cloud.firestore {
     match /koteihi_sent/{yyyymm} {
       allow read, write: if request.auth != null;
     }
+    // 初回 seed 済みフラグ。最初の認証ユーザーが書き込み、以降は読みのみ実質的に使う。
+    match /koteihi_meta/{docId} {
+      allow read, write: if request.auth != null;
+    }
 
     // それ以外は禁止 (明示)
     match /{document=**} {

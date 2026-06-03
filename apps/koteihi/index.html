@@ -114,12 +114,60 @@ import {
 } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
 import {
   getFirestore, collection, addDoc, deleteDoc, doc, updateDoc,
-  setDoc, getDoc, onSnapshot, query, orderBy, serverTimestamp,
+  setDoc, getDoc, onSnapshot, query, orderBy, serverTimestamp, writeBatch,
 } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
 import { BottomSheet } from "/bottom-sheet.js";
 
 const ITEMS_COL = "koteihi_items";
 const SENT_COL = "koteihi_sent";
+const META_DOC = "koteihi_meta/seed_v1";   // 初回 seed 済みフラグ (1度だけ実行する用)
+
+// 初期 seed: 既存の経理シートから写経した固定費マスタ。デフォルト金額は
+// 「2026年経理まとめ」の固定費タブを参考にしているので、正確な額はアプリ上で編集。
+// 金額不明 (年1回 / 月によって変動) は 0 で投入 → 月初に確認時に編集する想定。
+const SEED_KOTEIHI = [
+  // 給料
+  { subcategory: "給料",    counterparty: "小西",          amount: 370000, dayOfMonth: 25, paymentMethod: "振込" },
+  { subcategory: "給料",    counterparty: "名取",          amount: 320000, dayOfMonth: 25, paymentMethod: "振込" },
+  // 家賃
+  { subcategory: "家賃",    counterparty: "中目黒",        amount: 4400,   dayOfMonth: 27, paymentMethod: "口座振替" },
+  // 税金
+  { subcategory: "税金",    counterparty: "小西",          amount: 23100,  dayOfMonth: 27, paymentMethod: "口座振替" },
+  { subcategory: "税金",    counterparty: "名取",          amount: 7000,   dayOfMonth: 27, paymentMethod: "口座振替" },
+  { subcategory: "税金",    counterparty: "鹿浜倉庫",      amount: 187000, dayOfMonth: 27, paymentMethod: "口座振替" },
+  { subcategory: "税金",    counterparty: "満竹華庵",      amount: 108330, dayOfMonth: 27, paymentMethod: "口座振替" },
+  { subcategory: "税金",    counterparty: "新小岩事務所",  amount: 51700,  dayOfMonth: 27, paymentMethod: "口座振替" },
+  // 駐車場
+  { subcategory: "駐車場",  counterparty: "中目黒",        amount: 25000,  dayOfMonth: 27, paymentMethod: "口座振替" },
+  { subcategory: "駐車場",  counterparty: "鹿浜",          amount: 13000,  dayOfMonth: 27, paymentMethod: "口座振替" },
+  // 交通費
+  { subcategory: "交通費",  counterparty: "名取",          amount: 260000, dayOfMonth: 25, paymentMethod: "振込" },
+  // 保険
+  { subcategory: "保険",    counterparty: "社会保険",      amount: 20200,  dayOfMonth: 27, paymentMethod: "口座振替" },
+  { subcategory: "保険",    counterparty: "車両保険",      amount: 61180,  dayOfMonth: 27, paymentMethod: "口座振替" },
+  { subcategory: "保険",    counterparty: "工事保険",      amount: 41200,  dayOfMonth: 27, paymentMethod: "口座振替" },
+  // 車両費
+  { subcategory: "車両費",  counterparty: "車ローン",      amount: 24000,  dayOfMonth: 27, paymentMethod: "口座振替" },
+  { subcategory: "車両費",  counterparty: "自動車税",      amount: 0,      dayOfMonth: 27, paymentMethod: "口座振替" },
+  // 水道光熱費 (具体的な内訳は keihi シートから別途取り込み予定、ここは合計のプレースホルダ)
+  { subcategory: "水道光熱費", counterparty: "",            amount: 0,      dayOfMonth: 27, paymentMethod: "口座振替" },
+  // 返済
+  { subcategory: "返済",    counterparty: "",              amount: 10613,  dayOfMonth: 27, paymentMethod: "口座振替" },
+  // web (subscription)
+  { subcategory: "web",     counterparty: "chatGPT",       amount: 10780,  dayOfMonth: 1,  paymentMethod: "カード" },
+  { subcategory: "web",     counterparty: "adobe",         amount: 4180,   dayOfMonth: 1,  paymentMethod: "カード" },
+  { subcategory: "web",     counterparty: "googleworkspace", amount: 11169, dayOfMonth: 1,  paymentMethod: "カード" },
+  { subcategory: "web",     counterparty: "indeed",        amount: 440,    dayOfMonth: 1,  paymentMethod: "カード" },
+  { subcategory: "web",     counterparty: "ロリポップ",    amount: 0,      dayOfMonth: 1,  paymentMethod: "カード" },
+  // 宇佐美 (物件)
+  { subcategory: "宇佐美",  counterparty: "管理費",        amount: 0,      dayOfMonth: 27, paymentMethod: "口座振替" },
+  // 満竹華庵 (旅館関連の支出)
+  { subcategory: "満竹華庵", counterparty: "エアサポ 宿泊税", amount: 0,    dayOfMonth: 27, paymentMethod: "振込" },
+  { subcategory: "満竹華庵", counterparty: "消費税",        amount: 0,      dayOfMonth: 27, paymentMethod: "振込" },
+  { subcategory: "満竹華庵", counterparty: "不動産所得税,固定資産税", amount: 0, dayOfMonth: 27, paymentMethod: "口座振替" },
+  { subcategory: "満竹華庵", counterparty: "税理士",        amount: 0,      dayOfMonth: 27, paymentMethod: "振込" },
+  { subcategory: "満竹華庵", counterparty: "社労士",        amount: 0,      dayOfMonth: 27, paymentMethod: "振込" },
+];
 
 // 小分類のプリセット (新規追加フォームのドロップダウン用、自由入力も可)
 const SUBCATEGORIES = ["給料", "家賃", "保険", "税金", "車両費", "駐車場", "通信費", "web", "返済", "光熱費", "その他"];
@@ -145,8 +193,8 @@ const TEMPLATE = `
   <div v-if="!ready" class="loading">読み込み中…</div>
   <template v-else>
     <div v-if="items.length === 0" class="empty">
-      固定費マスタが空です。<br>
-      右下の<span class="icon" style="vertical-align:-3px;">add</span>ボタンから登録してください。
+      初期データ投入中…<br>
+      しばらく待っても出ない場合は、右下の<span class="icon" style="vertical-align:-3px;">add</span>から手動追加できます。
     </div>
     <div v-else class="list">
       <div v-for="item in items" :key="item.id" class="item"
@@ -438,6 +486,33 @@ const App = {
       }
     }
 
+    // 初回ロード時: meta が無ければ SEED_KOTEIHI を一括投入。
+    // meta フラグを使うので、削除後に再オープンしても再投入されない。
+    async function seedIfNeeded() {
+      try {
+        const metaRef = doc(db, META_DOC);
+        const metaSnap = await getDoc(metaRef);
+        if (metaSnap.exists()) return; // 既に投入済 → 何もしない
+        const batch = writeBatch(db);
+        const col = collection(db, ITEMS_COL);
+        const addedBy = (user.value?.email || "").toLowerCase();
+        SEED_KOTEIHI.forEach((it, idx) => {
+          const ref = doc(col);
+          batch.set(ref, {
+            ...it,
+            order: idx,
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp(),
+            updatedBy: addedBy,
+            seedTag: "v1",
+          });
+        });
+        batch.set(metaRef, { seededAt: serverTimestamp(), seededBy: addedBy, count: SEED_KOTEIHI.length });
+        await batch.commit();
+        console.log(`[koteihi] seeded ${SEED_KOTEIHI.length} master items`);
+      } catch (e) { console.warn(`[koteihi] seed failed: ${e.message}`); }
+    }
+
     onMounted(async () => {
       try {
         const cfg = await fetch("/__/firebase/init.json").then((r) => r.json());
@@ -452,6 +527,7 @@ const App = {
             return;
           }
           user.value = u;
+          await seedIfNeeded();    // 初回ユーザー操作前に seed
           const q = query(collection(db, ITEMS_COL), orderBy("order", "asc"));
           unsubItems = onSnapshot(q, (snap) => {
             items.value = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
