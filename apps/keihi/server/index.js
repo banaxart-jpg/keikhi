@@ -1549,7 +1549,7 @@ ${reviewBlock ? "6. **貼り付けレビューから読める強み・改善点*
       useGoogleSearch: true,
     });
     const text = result?.response?.text?.() || "";
-    res.json({ strategy: text, model: modelUsed, metrics: M });
+    res.json({ strategy: text, model: modelUsed, metrics: TM });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
