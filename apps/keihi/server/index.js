@@ -63,6 +63,33 @@ app.get("/api/version", (req, res) => {
   res.json({ version: APP_VERSION, buildId: BUILD_ID, startedAt: SERVER_STARTED_AT });
 });
 
+// 🚧 一時 debug endpoint (サンプル取れたら削除): beds24 v2 の生 JSON を素通しで返す。
+// 認証 middleware の前に置いてあるので curl 直叩きで使える。
+// 認可は ?key=<MANCHIKAN_BEDS_KEY> で beds24 トークン自体を共有秘密として要求。
+//   そもそも response は beds24 API token 持ってないと取れない情報なので、
+//   同じ token を入口の鍵にしても情報露出量は変わらない。
+// 使い方: curl 'https://<RUN_URL>/api/yado/debug/bookings?from=2026-06-01&to=2026-07-31&key=<TOKEN>'
+app.get("/api/yado/debug/bookings", async (req, res) => {
+  const KEY = (process.env.MANCHIKAN_BEDS_KEY || "").trim();
+  const PROP = (process.env.MANCHIKAN_PROP_ID || "").trim();
+  if (!KEY) return res.status(503).json({ error: "MANCHIKAN_BEDS_KEY not set" });
+  if ((req.query.key || "") !== KEY) return res.status(403).json({ error: "key mismatch" });
+  const from = String(req.query.from || "").slice(0, 10);
+  const to = String(req.query.to || "").slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to)) {
+    return res.status(400).json({ error: "from/to (YYYY-MM-DD) required" });
+  }
+  try {
+    const propParam = PROP ? `&propertyId=${encodeURIComponent(PROP)}` : "";
+    const url = `https://beds24.com/api/v2/bookings?arrivalFrom=${from}&arrivalTo=${to}&includeInvoiceItems=false${propParam}`;
+    const r = await fetch(url, { headers: { token: KEY, accept: "application/json" } });
+    const text = await r.text();
+    res.status(r.status).type(r.headers.get("content-type") || "application/json").send(text);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // Gate /api/* with a Firebase ID token. The browser calls this service
 // same-origin via Firebase Hosting rewrite, so no CORS/OAuth token is
 // involved — auth is a verified Firebase ID token instead.
