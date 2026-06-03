@@ -989,26 +989,6 @@ app.get("/api/yado/bookings", async (req, res) => {
   }
 });
 
-// 🚧 一時 raw endpoint (確認後に削除予定): beds24 v2 の生 JSON を素通し。
-// Firebase auth (= ALLOWED_EMAILS) でガード。フロントの「生 JSON 取得」ボタンから叩く。
-app.get("/api/yado/raw", async (req, res) => {
-  if (!BEDS24_API_TOKEN) return res.status(503).json({ error: "MANCHIKAN_BEDS_KEY not set" });
-  const from = String(req.query.from || "").slice(0, 10);
-  const to = String(req.query.to || "").slice(0, 10);
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to)) {
-    return res.status(400).json({ error: "from/to (YYYY-MM-DD) required" });
-  }
-  try {
-    const propParam = MANCHIKAN_PROP_ID ? `&propertyId=${encodeURIComponent(MANCHIKAN_PROP_ID)}` : "";
-    const url = `${BEDS24_BASE}/bookings?arrivalFrom=${from}&arrivalTo=${to}&includeInvoiceItems=false${propParam}`;
-    const r = await fetch(url, { headers: { token: BEDS24_API_TOKEN, accept: "application/json" } });
-    const text = await r.text();
-    res.status(r.status).type(r.headers.get("content-type") || "application/json").send(text);
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
 app.post("/api/yado/strategy", async (req, res) => {
   if (!genAI) return res.status(503).json({ error: "GEMINI_API_KEY not configured" });
   const { month, bookings = [], occupancyPct = 0, usingSample = false, reviews = {} } = req.body || {};
