@@ -905,7 +905,7 @@ app.get("/api/yado/raw", async (req, res) => {
 
 app.post("/api/yado/strategy", async (req, res) => {
   if (!genAI) return res.status(503).json({ error: "GEMINI_API_KEY not configured" });
-  const { month, bookings = [], revenue = 0, occupancyPct = 0, revenueByChannel = {}, usingSample = false } = req.body || {};
+  const { month, bookings = [], revenue = 0, occupancyPct = 0, revenueByChannel = {}, usingSample = false, reviews = {} } = req.body || {};
   if (!month) return res.status(400).json({ error: "month required" });
 
   // Gemini に渡すコンテキスト。個人情報 (名前) は落とす。
@@ -913,6 +913,17 @@ app.post("/api/yado/strategy", async (req, res) => {
     arr: b.arrival, dep: b.departure, ch: b.channel, n: b.nights, p: b.price, a: b.adult, c: b.child,
   }));
   const today = new Date().toISOString().slice(0, 10);
+
+  // 貼り付けレビューをチャネルラベル付きでまとめる。長文は 4000 字でカット (Gemini の入力枠節約)。
+  const trim = (s, n) => String(s || "").slice(0, n);
+  const reviewBlock = (() => {
+    const parts = [];
+    if (reviews.airbnb)  parts.push(`[Airbnb のゲストレビュー]\n${trim(reviews.airbnb, 4000)}`);
+    if (reviews.booking) parts.push(`[Booking.com のゲストレビュー]\n${trim(reviews.booking, 4000)}`);
+    if (reviews.other)   parts.push(`[その他のレビュー / 口頭の声]\n${trim(reviews.other, 4000)}`);
+    return parts.length ? `\n\n【貼り付けられたゲストレビュー (生データ)】\n${parts.join("\n\n")}` : "";
+  })();
+
   const prompt = `あなたは日本の小規模旅館の経営アドバイザーです。以下は満竹華庵 (Mantake Kaan) の予約データです。
 
 【今日】${today}
@@ -921,14 +932,15 @@ app.post("/api/yado/strategy", async (req, res) => {
 【稼働率】${occupancyPct}%
 【チャネル別売上】${JSON.stringify(revenueByChannel)}
 【予約一覧 (${compact.length}件)】${JSON.stringify(compact)}
-${usingSample ? "\n※このデータはサンプル (本物のAPI未接続) です。分析はあくまで例示としてください。\n" : ""}
+${usingSample ? "\n※このデータはサンプル (本物のAPI未接続) です。分析はあくまで例示としてください。\n" : ""}${reviewBlock}
 
 以下の観点で、宿泊数を増やすための戦略を提案してください。Google検索を使って最新の情報を取り入れてください:
 1. 季節要因 (この時期の日本の観光トレンド・連休・気候)
 2. 周辺の民泊・旅館の状況 (Airbnb / Booking.com の周辺価格帯、競合状況)
 3. 物価・為替・世界情勢 (インバウンド需要・国内旅行の動向)
 4. チャネル別の稼働傾向から見える改善点
-5. 具体的なアクション提案 (3-5個、優先度の高い順に)
+5. ${reviewBlock ? "貼り付けられたゲストレビューから読み取れる強み・改善点 (具体的にどのレビューがそれを示しているかも軽く触れる)" : "(レビュー未入力なので省略)"}
+6. 具体的なアクション提案 (3-5個、優先度の高い順に)
 
 回答は日本語で、見出しと箇条書きで読みやすく。各提案には「なぜそれが効くか」の理由を1行添えてください。`;
 

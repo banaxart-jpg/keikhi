@@ -36,6 +36,11 @@ service cloud.firestore {
       allow read, write: if request.auth != null;
     }
 
+    // 宿 (yado) 戦略タブの貼り付けレビュー。チャネル別テキストを 1 ドキュメントに保存。
+    match /yado_reviews/{docId} {
+      allow read, write: if request.auth != null;
+    }
+
     // それ以外は禁止 (明示)
     match /{document=**} {
       allow read, write: if false;
