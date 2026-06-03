@@ -98,7 +98,13 @@ body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); 
 
 /* サマリータブ */
 .summary { padding: 0 18px 30px; }
-.kpi-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 18px; }
+.kpi-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 14px; }
+/* 国別 chip 行 */
+.country-row { margin-bottom: 18px; }
+.country-lbl { font-size: 10px; font-weight: 700; color: var(--text2); letter-spacing: 0.1em; text-transform: uppercase; margin: 4px 4px 8px; }
+.country-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.cc-chip { display: inline-flex; align-items: center; gap: 4px; padding: 5px 10px; border-radius: 12px; font-size: 11px; font-weight: 700; color: var(--text2); background: var(--bg); box-shadow: 3px 3px 8px var(--sd), -2px -2px 5px var(--sl); }
+.cc-chip b { color: var(--accent); font-weight: 800; }
 .kpi { background: var(--bg); border-radius: 16px; padding: 16px 14px; box-shadow: 6px 6px 14px var(--sd), -4px -4px 10px var(--sl); }
 .kpi .lbl { font-size: 10px; font-weight: 700; color: var(--text2); letter-spacing: 0.1em; text-transform: uppercase; margin-bottom: 6px; }
 .kpi .val { font-size: 22px; font-weight: 800; color: var(--text); }
@@ -290,14 +296,33 @@ const TEMPLATE = `
     </div>
     <div class="kpi-row">
       <div class="kpi">
-        <div class="lbl">売上</div>
+        <div class="lbl">売上 (gross)</div>
         <div class="val">¥{{ formatYen(monthlyRevenue) }}</div>
         <div class="sub">{{ monthlyBookings.length }}件 · {{ totalNights }}泊</div>
       </div>
       <div class="kpi">
+        <div class="lbl">手取り (net)</div>
+        <div class="val">¥{{ formatYen(monthlyNet) }}</div>
+        <div class="sub">手取り率 {{ netRate }}% / 手数料 ¥{{ formatYen(monthlyCommission) }}</div>
+      </div>
+      <div class="kpi">
+        <div class="lbl">ADR</div>
+        <div class="val">¥{{ formatYen(adrGross) }}</div>
+        <div class="sub">net ¥{{ formatYen(adrNet) }} / 泊</div>
+      </div>
+      <div class="kpi">
         <div class="lbl">稼働率</div>
         <div class="val">{{ occupancyPct }}%</div>
-        <div class="sub">{{ totalNights }} / {{ availableNights }} 室泊</div>
+        <div class="sub">{{ totalNights }}/{{ availableNights }}泊 · 平均リード {{ avgLeadDays != null ? avgLeadDays + '日' : '—' }}</div>
+      </div>
+    </div>
+
+    <div v-if="countryDist.length" class="country-row">
+      <div class="country-lbl">国別 ({{ countryDist.length }} か国)</div>
+      <div class="country-chips">
+        <span v-for="[cc, n] in countryDist" :key="cc" class="cc-chip">
+          {{ countryEmoji(cc) }} {{ cc }} <b>{{ n }}</b>
+        </span>
       </div>
     </div>
 
@@ -438,6 +463,14 @@ const App = {
       return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, "0")}-${String(dt.getDate()).padStart(2, "0")}`;
     }
     function formatYen(n) { return Math.round(n).toLocaleString("ja-JP"); }
+    // ISO 2 文字国コード → 国旗絵文字。?? や 1 文字なら 🌐。ユーザーデータ由来なので
+    // 例外的に絵文字 OK (CLAUDE.md §6.5 ルール 4 の例外: 入力データ内)
+    function countryEmoji(cc) {
+      const s = (cc || "").toUpperCase();
+      if (s.length !== 2 || /[^A-Z]/.test(s)) return "🌐";
+      const A = 0x1F1E6 - 65;
+      return String.fromCodePoint(s.charCodeAt(0) + A, s.charCodeAt(1) + A);
+    }
     function formatJP(iso) {
       if (!iso) return "";
       const [y, m, d] = iso.split("-");
@@ -504,12 +537,35 @@ const App = {
       const nights = Math.round((end - start) / 86400000);
       return Math.max(0, nights);
     }
-    const totalNights = computed(() => monthlyBookings.value.reduce((s, b) => s + nightsInMonth(b), 0));
-    const monthlyRevenue = computed(() => monthlyBookings.value.reduce((s, b) => {
+    // 月跨ぎ予約は「対象月にかかる泊数」で按分。gross/net/commission 全て同じ係数。
+    function prorate(b, amount) {
       const n = nightsInMonth(b);
       const totalNightsB = Math.max(1, b.nights || 1);
-      return s + (b.price || 0) * (n / totalNightsB);
-    }, 0));
+      return (amount || 0) * (n / totalNightsB);
+    }
+    const totalNights = computed(() => monthlyBookings.value.reduce((s, b) => s + nightsInMonth(b), 0));
+    const monthlyRevenue = computed(() => monthlyBookings.value.reduce((s, b) => s + prorate(b, b.price), 0));
+    const monthlyCommission = computed(() => monthlyBookings.value.reduce((s, b) => s + prorate(b, b.commission || 0), 0));
+    const monthlyNet = computed(() => monthlyRevenue.value - monthlyCommission.value);
+    const netRate = computed(() => monthlyRevenue.value > 0
+      ? Math.round(monthlyNet.value / monthlyRevenue.value * 1000) / 10 : 0);
+    const adrGross = computed(() => totalNights.value > 0
+      ? Math.round(monthlyRevenue.value / totalNights.value) : 0);
+    const adrNet = computed(() => totalNights.value > 0
+      ? Math.round(monthlyNet.value / totalNights.value) : 0);
+    const avgLeadDays = computed(() => {
+      const ls = monthlyBookings.value.map((b) => b.leadDays).filter((l) => l != null);
+      return ls.length ? Math.round(ls.reduce((s, x) => s + x, 0) / ls.length) : null;
+    });
+    // 当月の国別カウント (chip 表示用)。降順、未設定は ??
+    const countryDist = computed(() => {
+      const m = {};
+      for (const b of monthlyBookings.value) {
+        const c = (b.country || "??").toUpperCase() || "??";
+        m[c] = (m[c] || 0) + 1;
+      }
+      return Object.entries(m).sort((a, b) => b[1] - a[1]);
+    });
     // 仮: 部屋数1室として稼働率を出す。実際は Beds24 から拾いたい。
     const NUM_ROOMS = 1;
     const availableNights = computed(() => daysInMonth.value * NUM_ROOMS);
@@ -754,7 +810,9 @@ const App = {
       syncing, syncMsg, reviews, reviewsSaved,
       showRaw, rawLoading, rawText, rawErr, rawCopied, rawSize, rawCount, fetchRaw, copyRaw,
       channels, chLabel, monthLabel, yyyymm, calendarCells, selectedDayBookings,
-      monthlyBookings, totalNights, monthlyRevenue, availableNights, occupancyPct,
+      monthlyBookings, totalNights, monthlyRevenue, monthlyNet, monthlyCommission, netRate,
+      adrGross, adrNet, avgLeadDays, countryDist, countryEmoji,
+      availableNights, occupancyPct,
       revenueByChannel, revenueBarPct, dailyRevenue, maxDayRevenue,
       shiftMonth, formatYen, formatJP, fetchBookings, generateStrategy, syncToSheet, back,
       onReviewInput,

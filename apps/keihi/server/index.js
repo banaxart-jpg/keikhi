@@ -840,6 +840,100 @@ const BEDS24_API_TOKEN = (process.env.MANCHIKAN_BEDS_KEY || process.env.BEDS24_A
 const MANCHIKAN_PROP_ID = (process.env.MANCHIKAN_PROP_ID || "").trim();
 const BEDS24_BASE = "https://beds24.com/api/v2";
 
+// 満竹華庵の施設プロフィール (AI 戦略 prompt 用、平文で OK)。
+// 出典: https://manchikan.tokyo/ + Beds24 上の現運用情報。
+// 公式サイトは情報やや古めの可能性あり (ベッド数・最大人数等)。
+const MANCHIKAN_PROFILE = `
+- 名称: 満竹華庵 (まんちかん)
+- 所在地: 東京都江戸川区松島4丁目21-14
+- アクセス: JR新小岩駅 徒歩10分 / 羽田空港 約65分 / 成田空港 約80分 (インバウンド動線上)
+- エリア: 江戸川区下町、新小岩 (商店街・ラーメン名店多数、観光地より穴場志向)
+- 形態: 古民家改装の一棟貸し (Beds24 上は「3ベッドルーム アパートメント」表記)
+- 構成: 2 階建て約 56㎡ (1F 32㎡ / 2F 24㎡)
+- 寝具 (公式): ダブルベッド 2 台 + 布団 4 セット
+  ※ 公式サイト記載は古い可能性。Beds24 現運用は最大宿泊 9-11 名で運用中 (布団追加済の可能性)
+- 設備: 室内檜風呂、エアコン、畳の間、ダイニング、フラットスクリーン TV、電気ケトル
+- アメニティ: ドライヤー、浴衣、基礎化粧品、歯ブラシ、バスタオル
+- ルール: 全室禁煙、ペット不可、駐車場なし、温浴のみ利用不可、食事提供なし
+- コンセプト: 喧騒から離れた静寂、侘び寂び × 現代感性、下町古民家滞在
+- ターゲット: グループ・ファミリー (定員大)、インバウンド主体
+- 現掲載チャネル: Booking.com (genius rate 適用) / Airbnb (host fee 適用) / 自社直販なし
+`.trim();
+
+// bookings 配列から戦略 prompt 用の集計値を導出
+function buildYadoMetrics(bookings) {
+  const total = bookings.length;
+  const totalGross = bookings.reduce((s, b) => s + (b.price || 0), 0);
+  const totalCommission = bookings.reduce((s, b) => s + (b.commission || 0), 0);
+  const totalNet = bookings.reduce((s, b) => s + (b.net || 0), 0);
+  const totalNights = bookings.reduce((s, b) => s + (b.nights || 0), 0);
+  const totalGuests = bookings.reduce((s, b) => s + (b.adult || 0) + (b.child || 0), 0);
+  const adrGross = totalNights ? Math.round(totalGross / totalNights) : 0;
+  const adrNet = totalNights ? Math.round(totalNet / totalNights) : 0;
+  const netRate = totalGross ? Math.round(totalNet / totalGross * 1000) / 10 : 0;
+
+  // チャネル別
+  const byChannel = {};
+  for (const b of bookings) {
+    const c = b.channel || "other";
+    if (!byChannel[c]) byChannel[c] = { gross: 0, commission: 0, net: 0, count: 0, nights: 0 };
+    byChannel[c].gross += b.price || 0;
+    byChannel[c].commission += b.commission || 0;
+    byChannel[c].net += b.net || 0;
+    byChannel[c].count += 1;
+    byChannel[c].nights += b.nights || 0;
+  }
+
+  // 国別
+  const countries = {};
+  for (const b of bookings) {
+    const c = (b.country || "??").toUpperCase() || "??";
+    countries[c] = (countries[c] || 0) + 1;
+  }
+
+  // リードタイム分布 (0-3, 4-14, 15-30, 31-60, 61-90, 90+ 日)
+  const lead = { d0_3: 0, d4_14: 0, d15_30: 0, d31_60: 0, d61_90: 0, d90plus: 0, unknown: 0 };
+  const leadDaysList = [];
+  for (const b of bookings) {
+    const l = b.leadDays;
+    if (l == null) { lead.unknown++; continue; }
+    leadDaysList.push(l);
+    if (l <= 3) lead.d0_3++;
+    else if (l <= 14) lead.d4_14++;
+    else if (l <= 30) lead.d15_30++;
+    else if (l <= 60) lead.d31_60++;
+    else if (l <= 90) lead.d61_90++;
+    else lead.d90plus++;
+  }
+  const avgLeadDays = leadDaysList.length
+    ? Math.round(leadDaysList.reduce((s, x) => s + x, 0) / leadDaysList.length)
+    : null;
+
+  // 曜日別 ADR (各予約の price/nights を泊まる各曜日に分配して平均)
+  const dowSum = [0,0,0,0,0,0,0];
+  const dowN = [0,0,0,0,0,0,0];
+  for (const b of bookings) {
+    if (!b.arrival || !b.nights || !b.price) continue;
+    const perNight = b.price / b.nights;
+    const dt = new Date(b.arrival);
+    for (let i = 0; i < b.nights; i++) {
+      dowSum[dt.getDay()] += perNight;
+      dowN[dt.getDay()] += 1;
+      dt.setDate(dt.getDate() + 1);
+    }
+  }
+  const adrByDow = dowSum.map((s, i) => dowN[i] ? Math.round(s / dowN[i]) : 0);
+
+  return {
+    total, totalGross, totalCommission, totalNet, totalNights, totalGuests,
+    adrGross, adrNet, netRate,
+    avgNights: total ? Math.round(totalNights / total * 10) / 10 : 0,
+    avgGuests: total ? Math.round(totalGuests / total * 10) / 10 : 0,
+    avgLeadDays,
+    byChannel, countries, lead, adrByDow,
+  };
+}
+
 app.get("/api/yado/bookings", async (req, res) => {
   if (!BEDS24_API_TOKEN) return res.json({ sample: true, bookings: [] });
   const from = String(req.query.from || "").slice(0, 10);
@@ -861,16 +955,28 @@ app.get("/api/yado/bookings", async (req, res) => {
     // Beds24 のレスポンスは { success: true, data: [...] } 形式
     const data = Array.isArray(j) ? j : (j.data || j.bookings || []);
     const bookings = data.map((b) => {
-      const nights = b.arrival && b.departure
-        ? Math.round((new Date(b.departure) - new Date(b.arrival)) / 86400000)
+      const arrival = (b.arrival || "").slice(0, 10);
+      const departure = (b.departure || "").slice(0, 10);
+      const nights = arrival && departure
+        ? Math.round((new Date(departure) - new Date(arrival)) / 86400000)
         : 1;
+      const price = Number(b.price) || 0;
+      const commission = Number(b.commission) || 0;
+      // lead time (予約日 → 到着日の日数差)
+      const bookedAt = b.bookingTime ? new Date(b.bookingTime).getTime() : null;
+      const arrivedAt = arrival ? new Date(arrival).getTime() : null;
+      const leadDays = (bookedAt && arrivedAt)
+        ? Math.max(0, Math.floor((arrivedAt - bookedAt) / 86400000))
+        : null;
       return {
         id: String(b.id || b.bookId || crypto.randomUUID()),
-        arrival: (b.arrival || "").slice(0, 10),
-        departure: (b.departure || "").slice(0, 10),
-        nights,
+        arrival, departure, nights,
         referer: b.referer || b.apiSourceReferer || b.bookingSource || "",
-        price: Number(b.price) || 0,
+        price,
+        commission,
+        net: Math.max(0, price - commission),
+        leadDays,
+        country: (b.country2 || b.country || "").toUpperCase(),
         adult: Number(b.numAdult) || 0,
         child: Number(b.numChild) || 0,
         guestName: [b.lastName, b.firstName].filter(Boolean).join(" ") || b.guestName || "",
@@ -905,14 +1011,20 @@ app.get("/api/yado/raw", async (req, res) => {
 
 app.post("/api/yado/strategy", async (req, res) => {
   if (!genAI) return res.status(503).json({ error: "GEMINI_API_KEY not configured" });
-  const { month, bookings = [], revenue = 0, occupancyPct = 0, revenueByChannel = {}, usingSample = false, reviews = {} } = req.body || {};
+  const { month, bookings = [], occupancyPct = 0, usingSample = false, reviews = {} } = req.body || {};
   if (!month) return res.status(400).json({ error: "month required" });
 
-  // Gemini に渡すコンテキスト。個人情報 (名前) は落とす。
+  // Gemini に渡すコンテキスト。PII (名前/メール/電話/住所/comments) は落とす。
   const compact = bookings.map((b) => ({
-    arr: b.arrival, dep: b.departure, ch: b.channel, n: b.nights, p: b.price, a: b.adult, c: b.child,
+    arr: b.arrival, dep: b.departure, ch: b.channel, n: b.nights,
+    p: b.price, com: b.commission, net: b.net, lead: b.leadDays,
+    cc: b.country, a: b.adult, c: b.child,
   }));
+  const M = buildYadoMetrics(bookings);
+  const dowLabels = ["日","月","火","水","木","金","土"];
+  const adrByDowStr = dowLabels.map((d, i) => `${d}¥${M.adrByDow[i].toLocaleString("ja-JP")}`).join(" / ");
   const today = new Date().toISOString().slice(0, 10);
+  const yen = (n) => `¥${Math.round(n).toLocaleString("ja-JP")}`;
 
   // 貼り付けレビューをチャネルラベル付きでまとめる。長文は 4000 字でカット (Gemini の入力枠節約)。
   const trim = (s, n) => String(s || "").slice(0, n);
@@ -924,25 +1036,48 @@ app.post("/api/yado/strategy", async (req, res) => {
     return parts.length ? `\n\n【貼り付けられたゲストレビュー (生データ)】\n${parts.join("\n\n")}` : "";
   })();
 
-  const prompt = `あなたは日本の小規模旅館の経営アドバイザーです。以下は満竹華庵 (Mantake Kaan) の予約データです。
+  const prompt = `あなたは満竹華庵 (江戸川区新小岩の一棟貸し古民家・インバウンド民泊) の経営アドバイザーです。
+
+【施設プロフィール】
+${MANCHIKAN_PROFILE}
 
 【今日】${today}
 【対象月】${month}
-【当月売上】¥${Math.round(revenue).toLocaleString("ja-JP")}
-【稼働率】${occupancyPct}%
-【チャネル別売上】${JSON.stringify(revenueByChannel)}
-【予約一覧 (${compact.length}件)】${JSON.stringify(compact)}
+【期間サマリ】
+  - 予約件数: ${M.total} 件
+  - 売上 (gross): ${yen(M.totalGross)}
+  - 手数料合計: ${yen(M.totalCommission)} (Booking commission + Airbnb host fee)
+  - 手取り (net): ${yen(M.totalNet)} (= 手取り率 ${M.netRate}%)
+  - 総泊数: ${M.totalNights} 泊 / 総泊客数: ${M.totalGuests} 名
+  - 稼働率: ${occupancyPct}%
+  - 平均: ${M.avgNights}泊/件、${M.avgGuests}名/件
+【ADR】
+  - gross ${yen(M.adrGross)} / net ${yen(M.adrNet)}
+  - 曜日別 (gross 平均): ${adrByDowStr}
+【チャネル別】${JSON.stringify(M.byChannel)}
+   (各チャネルの gross 売上 / commission / net 売上 / 件数 / 泊数)
+【リードタイム分布 (予約日 → 到着日)】
+  ${JSON.stringify(M.lead)} (平均 ${M.avgLeadDays}日)
+【国別構成】${JSON.stringify(M.countries)} (ISO 国コード、?? は不明)
+【予約一覧 (圧縮、${compact.length}件)】${JSON.stringify(compact)}
 ${usingSample ? "\n※このデータはサンプル (本物のAPI未接続) です。分析はあくまで例示としてください。\n" : ""}${reviewBlock}
 
-以下の観点で、宿泊数を増やすための戦略を提案してください。Google検索を使って最新の情報を取り入れてください:
-1. 季節要因 (この時期の日本の観光トレンド・連休・気候)
-2. 周辺の民泊・旅館の状況 (Airbnb / Booking.com の周辺価格帯、競合状況)
-3. 物価・為替・世界情勢 (インバウンド需要・国内旅行の動向)
-4. チャネル別の稼働傾向から見える改善点
-5. ${reviewBlock ? "貼り付けられたゲストレビューから読み取れる強み・改善点 (具体的にどのレビューがそれを示しているかも軽く触れる)" : "(レビュー未入力なので省略)"}
-6. 具体的なアクション提案 (3-5個、優先度の高い順に)
+以下を踏まえて宿泊数 (= 稼働率 × 単価 = 売上) を増やす戦略を立ててください。Google検索で最新情報も使って。
 
-回答は日本語で、見出しと箇条書きで読みやすく。各提案には「なぜそれが効くか」の理由を1行添えてください。`;
+1. 季節要因 (対象月の日本観光トレンド、連休、気候、インバウンド動向)
+2. 周辺市場 (新小岩〜江戸川区下町エリアの一棟貸し/民泊の Airbnb・Booking.com 競合価格帯、近隣観光資源)
+3. 物価/為替/世情 (円相場、ターゲット国のアウトバウンド動向)
+4. このデータから読み取れる傾向 (具体的に):
+   - チャネル別の手取り率と件数バランス
+   - リードタイム分布 (早期予約多数 vs 直前予約多数 → 早割 / 直前割どっち効くか)
+   - 国別構成から見たマーケ優先国 (上位 1-2 国に絞ったら何ができる)
+   - 曜日別 ADR (金土プレミアム効いてるか、平日埋まりが弱くないか)
+${reviewBlock ? "5. 貼り付けられたゲストレビューから読み取れる強み・改善点 (どのレビューが根拠かも軽く触れる)\n6." : "5."} 具体アクション提案 (3-5個、優先度順)。各提案に必ず:
+   - **なぜ効くか** (このデータの何を根拠にしてるか 1 行)
+   - **概算インパクト** (¥/月 or 稼働率%pt で具体数値、ざっくりで OK)
+   - **着手難易度** (低/中/高)
+
+回答は日本語、見出し+箇条書きで読みやすく。「一般論」じゃなく「このデータから言える」具体策に寄せて。`;
 
   try {
     const { result, modelUsed } = await callGeminiWithFallback(prompt, {
@@ -951,7 +1086,7 @@ ${usingSample ? "\n※このデータはサンプル (本物のAPI未接続) で
       useGoogleSearch: true,
     });
     const text = result?.response?.text?.() || "";
-    res.json({ strategy: text, model: modelUsed });
+    res.json({ strategy: text, model: modelUsed, metrics: M });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
