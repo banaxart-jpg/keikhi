@@ -848,14 +848,20 @@ app.post("/api/ginko/parse", async (req, res) => {
 
     const header = ginkoParseCsvLine(lines[0]);
     const idx = {
-      date: header.findIndex((h) => /日付|年月日|取扱日/.test(h)),
+      // 1列日付 (例: みずほの「日付」、楽天の「取扱日」)
+      date: header.findIndex((h) => /^(日付|年月日|取扱日|日)\s*$/.test(h)),
+      // 3列日付 (PayPay銀行: 操作日(年), 操作日(月), 操作日(日))
+      dateY: header.findIndex((h) => /日.*[(\(].*年.*[)\)]|^年$/.test(h)),
+      dateM: header.findIndex((h) => /日.*[(\(].*月.*[)\)]|^月$/.test(h)),
+      dateD: header.findIndex((h) => /日.*[(\(].*日.*[)\)]|^日$/.test(h)),
       desc: header.findIndex((h) => /摘要|内容|お取引内容/.test(h)),
-      out:  header.findIndex((h) => /引出|出金|支払金額|お引出|お引落/.test(h)),
-      in:   header.findIndex((h) => /預入|入金|お預入/.test(h)),
+      out:  header.findIndex((h) => /引出|出金|支払金額|お支払|お引出|お引落/.test(h)),
+      in:   header.findIndex((h) => /預入|入金|預り|お預入|お預り/.test(h)),
       bal:  header.findIndex((h) => /残高/.test(h)),
       memo: header.findIndex((h) => /メモ|備考/.test(h)),
     };
-    if (idx.date < 0 || (idx.out < 0 && idx.in < 0)) {
+    const has3ColDate = idx.dateY >= 0 && idx.dateM >= 0 && idx.dateD >= 0;
+    if ((idx.date < 0 && !has3ColDate) || (idx.out < 0 && idx.in < 0)) {
       return res.status(400).json({ error: `CSV ヘッダーを認識できません: ${header.join(", ")}` });
     }
 
@@ -863,7 +869,18 @@ app.post("/api/ginko/parse", async (req, res) => {
     for (let i = 1; i < lines.length; i++) {
       const cols = ginkoParseCsvLine(lines[i]);
       if (cols.length < 2) continue;
-      const isoDate = ginkoNormalizeDate(cols[idx.date]);
+      // 日付: 1列モード or 3列モード
+      let isoDate = null;
+      if (has3ColDate) {
+        const y = String(cols[idx.dateY] || "").trim();
+        const m = String(cols[idx.dateM] || "").trim();
+        const d = String(cols[idx.dateD] || "").trim();
+        if (/^\d{4}$/.test(y) && /^\d{1,2}$/.test(m) && /^\d{1,2}$/.test(d)) {
+          isoDate = `${y}-${m.padStart(2, "0")}-${d.padStart(2, "0")}`;
+        }
+      } else {
+        isoDate = ginkoNormalizeDate(cols[idx.date]);
+      }
       if (!isoDate) continue;
       const desc = (cols[idx.desc] || "").trim();
       const memoText = idx.memo >= 0 ? (cols[idx.memo] || "").trim() : "";
