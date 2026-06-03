@@ -21,21 +21,26 @@ keihi-api に以下のエンドポイントを追加：
 - `GET /api/yado/bookings?from=YYYY-MM-DD&to=YYYY-MM-DD` — Beds24 からの予約一覧
 - `POST /api/yado/strategy` — Gemini を呼んで戦略提案を生成（Google Search grounding 有）
 
-Beds24 API トークンは `BEDS24_API_TOKEN` env var（Secret Manager 経由）で渡す。
-未設定の場合はサンプル予約を返してフロントは「未設定です」の警告を表示する。
+Beds24 API への接続用 env var:
+- `MANCHIKAN_BEDS_KEY` — Beds24 v2 API token。Secret Manager (`manchikan-beds-key`) 経由。
+- `MANCHIKAN_PROP_ID` — 物件 ID (数値)。非 secret なので cloudbuild.yaml の `_MANCHIKAN_PROP_ID` substitution で渡す。空なら token のスコープ全件。
 
-### Beds24 トークンの登録手順（小西担当）
+`MANCHIKAN_BEDS_KEY` 未設定の場合はサンプル予約を返してフロントは「未設定です」の警告を表示する。
+
+### Beds24 鍵 / 物件 ID の登録手順（小西担当）
 ```bash
-# Secret Manager に登録
-echo -n "<TOKEN>" | gcloud secrets create beds24-api-token --replication-policy=automatic --data-file=-
+# 1) API key を Secret Manager に登録
+echo -n "<BEDS24_API_TOKEN>" | gcloud secrets create manchikan-beds-key \
+  --replication-policy=automatic --data-file=-
 
-# apps/keihi/cloudbuild.yaml の --set-secrets 行に追記:
-#   BEDS24_API_TOKEN=beds24-api-token:latest
+# 2) property ID は cloudbuild.yaml の substitution で渡す。
+#    apps/keihi/cloudbuild.yaml の `_MANCHIKAN_PROP_ID: ""` を物件 ID に書き換えるか、
+#    Cloud Build トリガー側の substitution variables (= _MANCHIKAN_PROP_ID) で上書き。
 # → main に push して再デプロイで反映
 ```
 
 ## 残課題 / 今後やりたいこと
-- [ ] Beds24 API トークンを Secret Manager に登録
+- [ ] Beds24 API key (`manchikan-beds-key`) を Secret Manager に登録 + `_MANCHIKAN_PROP_ID` を設定
 - [ ] 部屋ごとの稼働率
 - [ ] 周辺民泊の価格比較（外部スクレイピング or 手動入力）
 - [ ] 価格戦略のシミュレーション（この値段にしたら何泊埋まるか）
