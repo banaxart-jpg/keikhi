@@ -52,7 +52,9 @@ steps:
       - --no-allow-unauthenticated
       - --service-account=${_SA}@$PROJECT_ID.iam.gserviceaccount.com
       - --add-cloudsql-instances=$PROJECT_ID:${_REGION}:${_DB_INSTANCE}
-      - --update-secrets=GEMINI_API_KEY=gemini-api-key:latest,DB_PASSWORD=keihi-db-password:latest,OPENAI_API_KEY=openai-api-key:latest,ANTHROPIC_API_KEY=anthropic-api-key:latest,INTERNAL_TICK_SECRET=kaigi-tick-secret:latest
+      # --set-secrets で全置換 = stale な MANCHIKAN_BEDS_KEY→manchikan-beds-key
+      # binding (失敗 deploy 残骸) を消す。secret は完全にここに列挙して管理。
+      - --set-secrets=GEMINI_API_KEY=gemini-api-key:latest,DB_PASSWORD=keihi-db-password:latest,OPENAI_API_KEY=openai-api-key:latest,ANTHROPIC_API_KEY=anthropic-api-key:latest,INTERNAL_TICK_SECRET=kaigi-tick-secret:latest
       # ALLOWED_EMAILS は値にコンマを含むので、`^||^` で env vars 同士の
       # 区切り文字を `||` に切り替えて値内のコンマを誤分解させない。
       # --update- にしてあるのは、Console で直接設定した env (MANCHIKAN_BEDS_KEY 等)
