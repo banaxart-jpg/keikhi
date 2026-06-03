@@ -1351,6 +1351,46 @@ ${reviewBlock ? "5. 貼り付けられたゲストレビューから読み取れ
 // Beds24 の予約を「取引」シートに同期 (旅館売上として記録)。チャネル毎に行を分ける。
 // 既に同期済みの予約は元ID で de-dup されるが、Cloud Run 再起動でキャッシュが
 // 飛ぶので、シート側で「ソース=宿 AND 元ID」での重複除去を最終手段としておく想定。
+// レビューのスクショ画像から Gemini Vision で本文だけを文字起こし。
+// フロントが file → base64 で送ってくる。複数件あれば改行+「---」区切りで返す。
+app.post("/api/yado/ocr-reviews", async (req, res) => {
+  if (!genAI) return res.status(503).json({ error: "GEMINI_API_KEY not configured" });
+  const { image, mimeType = "image/jpeg", channel = "" } = req.body || {};
+  if (!image) return res.status(400).json({ error: "image required" });
+  try {
+    const chLabel = channel === "airbnb" ? "Airbnb"
+                  : channel === "booking" ? "Booking.com"
+                  : channel === "other" ? "楽天/じゃらん/Googleマップ 等"
+                  : "ゲストレビュー";
+    const prompt = `このスクリーンショットは ${chLabel} のゲストレビュー画面です。
+
+抽出するもの:
+- ゲストが書いたレビュー本文 (日本語・英語どちらでも)
+
+除外するもの:
+- 評価点数 (★ や 5.0 等の数字)
+- 日付・予約期間
+- ゲスト名・国旗・プロフィール写真
+- ホストからの返信
+- アプリのヘッダー・ボタン・タブ・メニュー
+- 「もっと見る」「翻訳」などのリンク
+
+出力形式:
+- 1件のレビュー = 1段落
+- 複数件あれば各レビューの間に空行
+- 英語のレビューは「[原文]\\n(日本語訳: ...)」の形式
+- 画像にレビュー本文が見当たらない場合は「(レビュー本文を検出できませんでした)」とだけ返す`;
+    const { result } = await callGeminiWithFallback([
+      { text: prompt },
+      { inlineData: { data: image, mimeType } },
+    ], { primaryModel: "gemini-2.5-flash", maxOutputTokens: 4096 });
+    const text = result?.response?.text?.() || "";
+    res.json({ text });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 app.post("/api/yado/sync", async (req, res) => {
   const { from, to } = req.body || {};
   if (!from || !to) return res.status(400).json({ error: "from/to required" });
