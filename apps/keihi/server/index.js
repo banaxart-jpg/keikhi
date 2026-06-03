@@ -1083,6 +1083,8 @@ async function setYadoMeta(key, value) {
 }
 
 // DB レコード → フロントが期待する形 (price/commission/net/leadDays/country/guestName)。
+// raw_json の中から「詳細パネルで見たい運用情報」だけ抜き出して同梱。
+// PII (email/phone/address) は出さない方針 (画面共有時のリスク回避)。
 function rowToFrontend(row) {
   const price = row.price || 0;
   const commission = row.commission || 0;
@@ -1091,6 +1093,7 @@ function rowToFrontend(row) {
   const leadDays = (bookedAt && arrivedAt)
     ? Math.max(0, Math.floor((arrivedAt - bookedAt) / 86400000))
     : null;
+  const raw = row.raw_json || {};
   return {
     id: String(row.id),
     arrival: row.arrival instanceof Date ? row.arrival.toISOString().slice(0, 10) : (row.arrival || "").slice(0, 10),
@@ -1106,6 +1109,14 @@ function rowToFrontend(row) {
     child: row.num_child || 0,
     guestName: row.guest_name || "",
     status: row.status || "",
+    // 詳細パネル用 (非 PII のみ)
+    bookingTime: row.booking_time ? new Date(row.booking_time).toISOString() : null,
+    lang: raw.lang || "",
+    flagText: raw.flagText || "",
+    apiReference: raw.apiReference || "",
+    comments: raw.comments || "",
+    rateDescription: raw.rateDescription || "",
+    apiMessage: raw.apiMessage || "",
   };
 }
 

@@ -87,16 +87,36 @@ body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); 
 /* 選択日の詳細 */
 .detail { padding: 0 18px 18px; }
 .detail .head { font-size: 14px; font-weight: 800; margin-bottom: 8px; }
-.book-card { background: var(--bg); border-radius: 14px; padding: 12px 14px; box-shadow: 4px 4px 10px var(--sd), -3px -3px 8px var(--sl); margin-bottom: 8px; display: flex; gap: 10px; align-items: center; }
+.book-card { background: var(--bg); border-radius: 14px; box-shadow: 4px 4px 10px var(--sd), -3px -3px 8px var(--sl); margin-bottom: 8px; overflow: hidden; }
+.book-top { padding: 12px 14px; display: flex; gap: 10px; align-items: center; cursor: pointer; }
 .book-card .ch-pill { width: 6px; align-self: stretch; border-radius: 3px; }
 .book-card .ch-pill.airbnb { background: var(--ch-airbnb); }
 .book-card .ch-pill.booking { background: var(--ch-booking); }
 .book-card .ch-pill.direct { background: var(--ch-direct); }
 .book-card .ch-pill.other { background: var(--ch-other); }
 .book-card .body { flex: 1; min-width: 0; }
-.book-card .name { font-size: 13px; font-weight: 700; }
+.book-card .name { font-size: 13px; font-weight: 700; word-break: break-word; }
 .book-card .meta { font-size: 11px; color: var(--text2); font-weight: 600; margin-top: 2px; letter-spacing: 0.02em; }
-.book-card .price { font-size: 14px; font-weight: 800; color: var(--accent); }
+.book-card .price { font-size: 14px; font-weight: 800; color: var(--accent); white-space: nowrap; }
+.book-card .chev { font-family: 'Material Symbols Outlined'; font-size: 20px; color: var(--text3); flex-shrink: 0; transition: transform 200ms ease; }
+.book-card.open .chev { transform: rotate(180deg); color: var(--text2); }
+
+.book-detail { border-top: 1px solid rgba(168,172,192,0.22); padding: 12px 14px 14px; display: flex; flex-direction: column; gap: 12px; }
+.bd-chips { display: flex; flex-wrap: wrap; gap: 5px; }
+.bd-chip { display: inline-flex; align-items: center; gap: 4px; padding: 4px 10px; border-radius: 11px; font-size: 11px; font-weight: 700; color: var(--text2); background: var(--bg); box-shadow: inset 2px 2px 5px var(--sd), inset -1px -1px 4px var(--sl); }
+.bd-chip.mono { font-family: ui-monospace, Menlo, monospace; font-size: 10px; }
+.bd-chip.danger { color: var(--danger); }
+.bd-price { background: var(--bg2); border-radius: 10px; padding: 10px 12px; display: flex; flex-direction: column; gap: 4px; box-shadow: inset 2px 2px 6px var(--sd), inset -1px -1px 4px var(--sl); }
+.bd-price-row { display: flex; justify-content: space-between; align-items: baseline; font-size: 12px; color: var(--text2); }
+.bd-price-row.sub { font-size: 11px; color: var(--text3); }
+.bd-price-row.primary { color: var(--text); font-weight: 700; padding-top: 4px; margin-top: 2px; border-top: 1px dashed rgba(168,172,192,0.4); }
+.bd-price-row b { color: var(--text); font-size: 14px; font-weight: 800; }
+.bd-price-row.primary b { color: var(--accent); font-size: 15px; }
+.bd-block { display: flex; flex-direction: column; gap: 4px; }
+.bd-block-lbl { font-size: 10px; font-weight: 800; color: var(--text3); letter-spacing: 0.1em; text-transform: uppercase; padding-left: 2px; }
+.bd-pre { background: var(--bg2); border-radius: 10px; padding: 10px 12px; font-family: ui-monospace, Menlo, monospace; font-size: 11px; line-height: 1.6; color: var(--text); white-space: pre-wrap; word-break: break-word; max-height: 180px; overflow-y: auto; box-shadow: inset 2px 2px 6px var(--sd), inset -1px -1px 4px var(--sl); }
+.bd-pre.small { font-size: 10px; max-height: 220px; }
+.bd-meta { display: flex; flex-wrap: wrap; gap: 8px; font-size: 10px; color: var(--text3); font-family: ui-monospace, Menlo, monospace; padding-top: 4px; border-top: 1px solid rgba(168,172,192,0.18); }
 
 /* サマリータブ */
 .summary { padding: 0 18px 30px; }
@@ -274,13 +294,54 @@ const TEMPLATE = `
 
       <div class="detail" v-if="selectedDayBookings.length">
         <div class="head">{{ formatJP(selectedDate) }} の宿泊</div>
-        <div v-for="b in selectedDayBookings" :key="b.id" class="book-card">
-          <div class="ch-pill" :class="b.channel"></div>
-          <div class="body">
-            <div class="name">{{ b.guestName || '名無し' }}</div>
-            <div class="meta">{{ chLabel(b.channel) }} · {{ b.nights }}泊 · {{ b.adult || 0 }}名{{ b.child ? ' + 小' + b.child : '' }} · {{ b.arrival.slice(5) }}〜{{ b.departure.slice(5) }}</div>
+        <div v-for="b in selectedDayBookings" :key="b.id" class="book-card" :class="{ open: expandedBookingId === b.id }">
+          <div class="book-top" @click="toggleBooking(b.id)">
+            <div class="ch-pill" :class="b.channel"></div>
+            <div class="body">
+              <div class="name">{{ b.guestName || '名無し' }}</div>
+              <div class="meta">{{ chLabel(b.channel) }} · {{ b.nights }}泊 · {{ b.adult || 0 }}名{{ b.child ? ' + 小' + b.child : '' }} · {{ b.arrival.slice(5) }}〜{{ b.departure.slice(5) }}</div>
+            </div>
+            <div class="price" v-if="b.price">¥{{ formatYen(b.price) }}</div>
+            <span class="chev">expand_more</span>
           </div>
-          <div class="price" v-if="b.price">¥{{ formatYen(b.price) }}</div>
+          <div v-if="expandedBookingId === b.id" class="book-detail">
+            <!-- 属性 chips -->
+            <div class="bd-chips">
+              <span v-if="b.country" class="bd-chip">{{ countryEmoji(b.country) }} {{ b.country }}</span>
+              <span v-if="b.lang" class="bd-chip">lang {{ b.lang }}</span>
+              <span v-if="b.leadDays != null" class="bd-chip">リード {{ b.leadDays }} 日前予約</span>
+              <span v-if="b.flagText" class="bd-chip">{{ b.flagText }}</span>
+              <span v-if="b.status && b.status !== 'new'" class="bd-chip danger">{{ b.status }}</span>
+              <span v-if="b.apiReference" class="bd-chip mono">#{{ b.apiReference }}</span>
+            </div>
+            <!-- 価格内訳 -->
+            <div class="bd-price">
+              <div class="bd-price-row"><span>売上 (gross)</span><b>¥{{ formatYen(b.price) }}</b></div>
+              <div class="bd-price-row sub"><span>手数料</span><span>-¥{{ formatYen(b.commission) }} ({{ b.price ? Math.round(b.commission / b.price * 1000) / 10 : 0 }}%)</span></div>
+              <div class="bd-price-row primary"><span>手取り (net)</span><b>¥{{ formatYen(b.net) }}</b></div>
+              <div class="bd-price-row sub"><span>ADR</span><span>¥{{ formatYen(Math.round(b.price / Math.max(1, b.nights))) }} / 泊</span></div>
+            </div>
+            <!-- コメント (Booking.com BOOKING NOTE 等) -->
+            <div v-if="b.comments" class="bd-block">
+              <div class="bd-block-lbl">コメント / 特記</div>
+              <pre class="bd-pre">{{ b.comments }}</pre>
+            </div>
+            <!-- 日次料金 (rateDescription) -->
+            <div v-if="b.rateDescription" class="bd-block">
+              <div class="bd-block-lbl">料金明細</div>
+              <pre class="bd-pre small">{{ b.rateDescription }}</pre>
+            </div>
+            <!-- 部屋情報 (apiMessage、Booking のみ持ってる) -->
+            <div v-if="b.apiMessage" class="bd-block">
+              <div class="bd-block-lbl">部屋情報</div>
+              <pre class="bd-pre small">{{ b.apiMessage }}</pre>
+            </div>
+            <!-- メタ -->
+            <div class="bd-meta">
+              <span v-if="b.bookingTime">予約: {{ formatTs(b.bookingTime) }}</span>
+              <span>ID {{ b.id }}</span>
+            </div>
+          </div>
         </div>
       </div>
       <div class="detail" v-else-if="selectedDate">
@@ -402,6 +463,16 @@ const App = {
     const syncMsgTop = ref("");
     let syncMsgTimer = null;
     const selectedDate = ref(null);
+    const expandedBookingId = ref(null);
+    function toggleBooking(id) {
+      expandedBookingId.value = expandedBookingId.value === id ? null : id;
+    }
+    function formatTs(iso) {
+      if (!iso) return "";
+      const d = new Date(iso);
+      if (isNaN(d)) return "";
+      return d.toLocaleString("ja-JP", { year: "numeric", month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
+    }
     const strategy = ref("");
     const strategyAt = ref("");
     const generating = ref(false);
@@ -433,6 +504,7 @@ const App = {
       d.setMonth(d.getMonth() + delta);
       cur.value = d;
       selectedDate.value = null;
+      expandedBookingId.value = null;
       fetchBookings();
     }
 
@@ -786,6 +858,7 @@ const App = {
       tab, cur, bookings, loading, err, usingSample, selectedDate, strategy, strategyAt, generating,
       syncing, syncMsg, reviews, reviewsSaved,
       needsBackfill, syncingNow, syncMsgTop, runSync,
+      expandedBookingId, toggleBooking, formatTs,
       channels, chLabel, monthLabel, yyyymm, calendarCells, selectedDayBookings,
       monthlyBookings, totalNights, monthlyRevenue, monthlyNet, monthlyCommission, netRate,
       adrGross, adrNet, avgLeadDays, countryDist, countryEmoji,
