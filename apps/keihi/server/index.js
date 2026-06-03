@@ -833,7 +833,10 @@ app.delete("/api/tasks/:id", async (req, res) => {
 // ───── 宿 (yado): 満竹華庵の Beds24 予約 + AI戦略 ─────
 // Beds24 v2 API は token をヘッダで渡すだけのシンプル設計。トークン未設定なら
 // sample 表示用のフラグを返してフロントが自前のサンプルを描く。
-const BEDS24_API_TOKEN = (process.env.BEDS24_API_TOKEN || "").trim();
+// env 名は MANCHIKAN_BEDS_KEY (新) を優先、BEDS24_API_TOKEN (旧) も互換で受ける。
+// プロパティ ID も任意で渡せる (複数物件持つ場合に絞り込み)。
+const BEDS24_API_TOKEN = (process.env.MANCHIKAN_BEDS_KEY || process.env.BEDS24_API_TOKEN || "").trim();
+const MANCHIKAN_PROP_ID = (process.env.MANCHIKAN_PROP_ID || "").trim();
 const BEDS24_BASE = "https://beds24.com/api/v2";
 
 app.get("/api/yado/bookings", async (req, res) => {
@@ -846,7 +849,8 @@ app.get("/api/yado/bookings", async (req, res) => {
   try {
     // Beds24 v2: GET /bookings?arrivalFrom=...&arrivalTo=...
     // 月跨ぎ予約を拾うため arrival は from の少し前、to は通常の to で良い。
-    const url = `${BEDS24_BASE}/bookings?arrivalFrom=${from}&arrivalTo=${to}&includeInvoiceItems=false`;
+    const propParam = MANCHIKAN_PROP_ID ? `&propertyId=${encodeURIComponent(MANCHIKAN_PROP_ID)}` : "";
+    const url = `${BEDS24_BASE}/bookings?arrivalFrom=${from}&arrivalTo=${to}&includeInvoiceItems=false${propParam}`;
     const r = await fetch(url, { headers: { token: BEDS24_API_TOKEN, accept: "application/json" } });
     if (!r.ok) {
       const t = await r.text();
@@ -931,7 +935,8 @@ app.post("/api/yado/sync", async (req, res) => {
     await ensureTxDashboards().catch((e) => console.warn(`[tx] dashboard setup failed (continuing): ${e.message}`));
     let bookings = [];
     if (BEDS24_API_TOKEN) {
-      const url = `${BEDS24_BASE}/bookings?arrivalFrom=${from}&arrivalTo=${to}&includeInvoiceItems=false`;
+      const propParam = MANCHIKAN_PROP_ID ? `&propertyId=${encodeURIComponent(MANCHIKAN_PROP_ID)}` : "";
+    const url = `${BEDS24_BASE}/bookings?arrivalFrom=${from}&arrivalTo=${to}&includeInvoiceItems=false${propParam}`;
       const r = await fetch(url, { headers: { token: BEDS24_API_TOKEN, accept: "application/json" } });
       if (!r.ok) {
         const t = await r.text();
