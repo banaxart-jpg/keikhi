@@ -67,8 +67,8 @@ body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); 
 .detail-actions button.primary { color: var(--accent); }
 .detail-actions button:active { box-shadow: inset 2px 2px 6px var(--sd); transform: scale(0.97); }
 
-/* 月合計表示 (左: 固定費総額、右: 送信予定) */
-.total-bar { padding: 14px 18px 18px; display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; font-size: 12px; color: var(--text2); font-weight: 700; }
+/* 月合計表示 (左: 固定費総額、右: 送信予定) — sticky ヘッダー内なので余白少なめ */
+.total-bar { padding: 8px 18px 14px; display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; font-size: 12px; color: var(--text2); font-weight: 700; border-top: 1px solid rgba(168,172,192,0.18); margin-top: 4px; }
 .total-col { display: flex; flex-direction: column; gap: 4px; }
 .total-col.right { text-align: right; }
 .total-lbl { font-size: 10px; letter-spacing: 0.04em; color: var(--text2); }
@@ -200,6 +200,16 @@ const TEMPLATE = `
       <span v-if="sentRecord" class="sent-badge"><span class="icon">check</span> 送信済</span>
       <button class="nav" @click="shiftMonth(1)">›</button>
     </div>
+    <div v-if="items.length" class="total-bar">
+      <div class="total-col">
+        <div class="total-lbl">固定費総額（{{ items.length }}件）</div>
+        <div class="total">¥{{ formatYen(totalAmount) }}</div>
+      </div>
+      <div class="total-col right">
+        <div class="total-lbl">送信予定（{{ activeCount }}件）</div>
+        <div class="total send">¥{{ formatYen(sendingAmount) }}</div>
+      </div>
+    </div>
   </div>
 
   <div v-if="err" class="err">{{ err }}</div>
@@ -254,16 +264,6 @@ const TEMPLATE = `
       </div>
     </div>
 
-    <div v-if="items.length" class="total-bar">
-      <div class="total-col">
-        <div class="total-lbl">固定費総額（{{ items.length }}件）</div>
-        <div class="total">¥{{ formatYen(totalAmount) }}</div>
-      </div>
-      <div class="total-col right">
-        <div class="total-lbl">送信予定（{{ activeCount }}件）</div>
-        <div class="total send">¥{{ formatYen(sendingAmount) }}</div>
-      </div>
-    </div>
   </template>
 
   <!-- + 追加 FAB -->
