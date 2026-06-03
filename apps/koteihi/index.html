@@ -169,8 +169,13 @@ const SEED_KOTEIHI = [
   { subcategory: "満竹華庵", counterparty: "社労士",        amount: 0,      dayOfMonth: 27, paymentMethod: "振込" },
 ];
 
-// 小分類のプリセット (新規追加フォームのドロップダウン用、自由入力も可)
-const SUBCATEGORIES = ["給料", "家賃", "保険", "税金", "車両費", "駐車場", "通信費", "web", "返済", "光熱費", "その他"];
+// 小分類のプリセット (フォームの datalist 候補)。これに無い値も自由入力OK。
+// 既存の seed の subcategory (宇佐美 / 満竹華庵 等) もここに入れて補完候補に出す。
+const SUBCATEGORIES = [
+  "給料", "家賃", "保険", "税金", "車両費", "駐車場", "交通費",
+  "通信費", "web", "返済", "光熱費", "水道光熱費",
+  "宇佐美", "満竹華庵", "その他",
+];
 const PAYMENT_METHODS = ["振込", "現金", "カード", "PayPay", "口座振替"];
 
 const TEMPLATE = `
@@ -250,9 +255,10 @@ const TEMPLATE = `
   <bottom-sheet v-model="formOpen" :title="editingId ? '編集' : '新規追加'">
     <div class="form">
       <label>小分類</label>
-      <select v-model="form.subcategory">
-        <option v-for="c in subcategories" :key="c" :value="c">{{ c }}</option>
-      </select>
+      <input type="text" v-model="form.subcategory" list="subcategoryList" placeholder="給料 / 家賃 / 保険 など" autocomplete="off">
+      <datalist id="subcategoryList">
+        <option v-for="c in subcategories" :key="c" :value="c"></option>
+      </datalist>
       <label>対象（誰宛て / どの口座 等）</label>
       <input type="text" v-model="form.counterparty" placeholder="小西 / 中目黒事務所 / 社会保険 など">
       <div class="row">
@@ -266,9 +272,10 @@ const TEMPLATE = `
         </div>
       </div>
       <label>支払方法</label>
-      <select v-model="form.paymentMethod">
-        <option v-for="p in paymentMethods" :key="p" :value="p">{{ p }}</option>
-      </select>
+      <input type="text" v-model="form.paymentMethod" list="paymentList" placeholder="振込 / 口座振替 など" autocomplete="off">
+      <datalist id="paymentList">
+        <option v-for="p in paymentMethods" :key="p" :value="p"></option>
+      </datalist>
       <div class="form-actions">
         <button @click="formOpen = false">キャンセル</button>
         <button class="primary" @click="saveForm" :disabled="!form.subcategory">{{ editingId ? '更新' : '追加' }}</button>
