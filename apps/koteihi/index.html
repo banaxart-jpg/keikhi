@@ -67,9 +67,18 @@ body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); 
 .detail-actions button.primary { color: var(--accent); }
 .detail-actions button:active { box-shadow: inset 2px 2px 6px var(--sd); transform: scale(0.97); }
 
-/* 月合計表示 */
-.total-bar { padding: 14px 18px 18px; display: flex; justify-content: space-between; align-items: baseline; font-size: 12px; color: var(--text2); font-weight: 700; }
-.total-bar .total { font-size: 18px; font-weight: 800; color: var(--text); letter-spacing: 0.02em; }
+/* 月合計表示 (左: 固定費総額、右: 送信予定) */
+.total-bar { padding: 14px 18px 18px; display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; font-size: 12px; color: var(--text2); font-weight: 700; }
+.total-col { display: flex; flex-direction: column; gap: 4px; }
+.total-col.right { text-align: right; }
+.total-lbl { font-size: 10px; letter-spacing: 0.04em; color: var(--text2); }
+.total-bar .total { font-size: 17px; font-weight: 800; color: var(--text); letter-spacing: 0.02em; }
+.total-bar .total.send { color: var(--accent); }
+
+/* 「送信しない」設定アイテムの見た目 */
+.item.skip .item-name { color: var(--text2); }
+.skip-badge { display: inline-block; margin-left: 8px; padding: 2px 8px; border-radius: 8px; font-size: 9px; font-weight: 800; color: var(--text2); background: var(--bg2); letter-spacing: 0.05em; vertical-align: 2px; }
+.skip-icon { color: var(--text3); font-size: 14px; }
 
 /* FAB (+ 追加) */
 .fab { position: fixed; right: 22px; bottom: calc(86px + env(safe-area-inset-bottom)); width: 54px; height: 54px; border-radius: 27px; background: var(--bg); color: var(--accent); font-size: 28px; line-height: 1; border: none; cursor: pointer; padding: 0; box-shadow: 5px 5px 14px var(--sd), -4px -4px 10px var(--sl); z-index: 30; display: flex; align-items: center; justify-content: center; font-family: inherit; }
@@ -203,13 +212,17 @@ const TEMPLATE = `
     </div>
     <div v-else class="list">
       <div v-for="item in items" :key="item.id" class="item"
-           :class="{ on: amounts[item.id] != null && amounts[item.id] !== '0' && amounts[item.id] !== '', off: !active[item.id] }">
+           :class="{ on: active[item.id], off: !active[item.id], skip: item.skipSend }">
         <div class="row" @click="toggleExpand(item.id)">
-          <button class="check" @click.stop="toggleActive(item.id)">
+          <button class="check" @click.stop="toggleActive(item.id)" :title="item.skipSend ? '別アプリ送信扱い: 普段は送らない' : '送信する'">
             <span v-if="active[item.id]">check</span>
+            <span v-else-if="item.skipSend" class="skip-icon">block</span>
           </button>
           <div class="item-body">
-            <div class="item-name">{{ item.subcategory }}<span v-if="item.counterparty"> · {{ item.counterparty }}</span></div>
+            <div class="item-name">
+              {{ item.subcategory }}<span v-if="item.counterparty"> · {{ item.counterparty }}</span>
+              <span v-if="item.skipSend" class="skip-badge">送信しない</span>
+            </div>
             <div class="item-sub">{{ item.paymentMethod || '振込' }} · 毎月{{ item.dayOfMonth || 1 }}日</div>
           </div>
           <span class="amount-pref">¥</span>
@@ -225,7 +238,13 @@ const TEMPLATE = `
             <b>対象:</b> {{ item.counterparty || '(なし)' }}<br>
             <b>支払方法:</b> {{ item.paymentMethod || '振込' }}<br>
             <b>支払日:</b> 毎月 {{ item.dayOfMonth || 1 }} 日<br>
-            <b>デフォルト金額:</b> ¥{{ formatYen(item.amount) }}
+            <b>デフォルト金額:</b> ¥{{ formatYen(item.amount) }}<br>
+            <b>送信設定:</b> {{ item.skipSend ? '送信しない（領収書/請求書アプリで処理）' : '送信する' }}
+          </div>
+          <div class="detail-actions">
+            <button class="primary" @click.stop="toggleSkipSend(item)">
+              {{ item.skipSend ? '送信するに戻す' : '送信しないに設定' }}
+            </button>
           </div>
           <div class="detail-actions">
             <button class="primary" @click.stop="openEdit(item)">編集</button>
@@ -236,8 +255,14 @@ const TEMPLATE = `
     </div>
 
     <div v-if="items.length" class="total-bar">
-      <span>今月分（{{ activeCount }}件）</span>
-      <span class="total">¥{{ formatYen(totalAmount) }}</span>
+      <div class="total-col">
+        <div class="total-lbl">固定費総額（{{ items.length }}件）</div>
+        <div class="total">¥{{ formatYen(totalAmount) }}</div>
+      </div>
+      <div class="total-col right">
+        <div class="total-lbl">送信予定（{{ activeCount }}件）</div>
+        <div class="total send">¥{{ formatYen(sendingAmount) }}</div>
+      </div>
     </div>
   </template>
 
@@ -319,8 +344,20 @@ const App = {
       const d = cur.value;
       return `${d.getFullYear()}年 ${d.getMonth() + 1}月`;
     });
+    // 「送信予定」件数 = 今月チェック入ってるアイテムの数 (= active)
     const activeCount = computed(() => items.value.filter((i) => active.value[i.id]).length);
+    // 「固定費総額」= 全アイテムの amount 合計 (送信オフのもアプリ上では総額に含める)
+    // ※ amounts は当月分の編集値、未編集ならマスタの amount にフォールバック
     const totalAmount = computed(() => {
+      let s = 0;
+      for (const it of items.value) {
+        const m = amounts.value[it.id];
+        s += (m == null || m === "") ? (Number(it.amount) || 0) : (Number(m) || 0);
+      }
+      return s;
+    });
+    // 「送信予定」金額 = チェック入ってるアイテムだけの合計 (実際に取引タブに送る額)
+    const sendingAmount = computed(() => {
       let s = 0;
       for (const it of items.value) {
         if (!active.value[it.id]) continue;
@@ -349,7 +386,8 @@ const App = {
       const nextActive = {};
       for (const it of items.value) {
         nextAmounts[it.id] = String(it.amount || 0);
-        nextActive[it.id] = true;
+        // skipSend なアイテムはデフォルトで「送信しない」(チェック外し) で起動
+        nextActive[it.id] = !it.skipSend;
       }
       amounts.value = nextAmounts;
       active.value = nextActive;
@@ -357,6 +395,22 @@ const App = {
 
     function toggleActive(id) {
       active.value[id] = !active.value[id];
+    }
+
+    // 「送信しない」フラグを Firestore マスタに保存。次月以降もこの設定が引き継がれる。
+    async function toggleSkipSend(item) {
+      const next = !item.skipSend;
+      try {
+        await updateDoc(doc(db, ITEMS_COL, item.id), {
+          skipSend: next,
+          updatedAt: serverTimestamp(),
+          updatedBy: (user.value?.email || "").toLowerCase(),
+        });
+        // 当月の active 表示も即座に同期
+        active.value[item.id] = !next;
+      } catch (e) {
+        err.value = "更新失敗: " + (e.message || e);
+      }
     }
     function toggleExpand(id) {
       expanded.value = expanded.value === id ? null : id;
@@ -425,10 +479,12 @@ const App = {
     async function confirmSend() {
       const targets = items.value.filter((i) => active.value[i.id]);
       if (!targets.length) return;
-      const total = totalAmount.value;
+      const send = sendingAmount.value;
+      const skipped = items.value.length - targets.length;
+      const skipNote = skipped > 0 ? `（${skipped}件は「送信しない」設定で除外）` : "";
       const msg = sentRecord.value
         ? `${yyyymm.value} は既に送信済です（${sentRecord.value.itemCount || '?'}件 / ¥${formatYen(sentRecord.value.totalAmount || 0)}）。\n\n再送信すると「取引」タブに同じ内容が追加されます。続けますか？`
-        : `${monthLabel.value} の固定費 ${targets.length}件 (合計 ¥${formatYen(total)}) を「取引」タブに送信します。よろしいですか？`;
+        : `${monthLabel.value} の固定費 ${targets.length}件 (¥${formatYen(send)}) を「取引」タブに送信します${skipNote}。よろしいですか？`;
       if (!confirm(msg)) return;
       await sendNow(targets);
     }
@@ -554,8 +610,8 @@ const App = {
     return {
       cur, items, amounts, active, expanded, ready, err, sending, toast, sentRecord, formOpen, editingId, form,
       subcategories, paymentMethods,
-      yyyymm, monthLabel, activeCount, totalAmount,
-      formatYen, back, shiftMonth, toggleActive, toggleExpand, openAdd, openEdit, saveForm, del, confirmSend,
+      yyyymm, monthLabel, activeCount, totalAmount, sendingAmount,
+      formatYen, back, shiftMonth, toggleActive, toggleExpand, toggleSkipSend, openAdd, openEdit, saveForm, del, confirmSend,
     };
   },
 };
