@@ -224,6 +224,7 @@ const TEMPLATE = `
     <div class="tabs">
       <button class="tab" :class="{ on: tab === 'cal' }" @click="tab = 'cal'">カレンダー</button>
       <button class="tab" :class="{ on: tab === 'sum' }" @click="tab = 'sum'">サマリー</button>
+      <button class="tab" :class="{ on: tab === 'rev' }" @click="tab = 'rev'">レビュー</button>
       <button class="tab" :class="{ on: tab === 'str' }" @click="tab = 'str'">戦略</button>
     </div>
   </div>
@@ -404,16 +405,16 @@ const TEMPLATE = `
     <div v-if="syncMsg" class="sync-msg">{{ syncMsg }}</div>
   </div>
 
-  <!-- ───── 戦略タブ ───── -->
-  <div v-else-if="tab === 'str'" class="strategy">
+  <!-- ───── レビュータブ ───── -->
+  <div v-else-if="tab === 'rev'" class="strategy">
     <div class="intro">
-      この月のデータと、季節 / 周辺の民泊状況 / 物価 / 世界情勢、それに <b>下の貼り付け欄に入れたレビュー</b> を踏まえて、AIが宿泊数を増やす戦略を提案します。
+      OTA のレビュー画面から貼り付け or スクショで読み取り。保存内容は <b>戦略タブの AI 分析</b> にそのまま投入されます。
     </div>
 
     <div class="reviews-block">
       <div class="reviews-head">
         <span class="icon">rate_review</span>
-        <span class="reviews-title">ゲストレビュー貼り付け</span>
+        <span class="reviews-title">ゲストレビュー</span>
         <span v-if="reviewsSaved" class="saved-dot" title="保存済">●</span>
       </div>
       <label class="rv-label">Airbnb（<a href="https://www.airbnb.jp/hosting/reviews" target="_blank" rel="noopener">ホスト→レビュー</a>）</label>
@@ -440,7 +441,13 @@ const TEMPLATE = `
         <input type="file" accept="image/*" multiple :disabled="ocrLoading.other" @change="onUploadReviews('other', $event)" hidden>
       </label>
     </div>
+  </div>
 
+  <!-- ───── 戦略タブ ───── -->
+  <div v-else-if="tab === 'str'" class="strategy">
+    <div class="intro">
+      この月のデータと、季節 / 周辺の民泊状況 / 物価 / 世界情勢、それに <b>「レビュー」タブに保存したレビュー</b> を踏まえて、AIが宿泊数を増やす戦略を提案します。
+    </div>
     <button class="gen-btn" :disabled="generating || loading" @click="generateStrategy">
       {{ generating ? '分析中… (30秒くらい)' : (strategy ? '🔄 再生成' : '✨ 戦略を分析する') }}
     </button>
