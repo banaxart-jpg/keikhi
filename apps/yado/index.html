@@ -30,6 +30,8 @@
 html, body { height: 100%; }
 body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; overflow-x: hidden; padding-bottom: 60px; }
 .icon { font-family: 'Material Symbols Outlined'; font-size: 1.1em; display: inline-block; vertical-align: -0.18em; font-variation-settings: 'FILL' 0, 'wght' 500, 'GRAD' 0, 'opsz' 20; }
+.icon.spin { animation: spin 1.1s linear infinite; }
+@keyframes spin { from { transform: rotate(0); } to { transform: rotate(360deg); } }
 
 .header-fix { position: sticky; top: 0; z-index: 10; background: var(--bg); box-shadow: 0 2px 10px rgba(168,172,192,0.18); }
 .top { display: flex; justify-content: space-between; align-items: center; padding: 54px 18px 14px; }
@@ -208,7 +210,12 @@ const TEMPLATE = `
   <div class="header-fix">
     <div class="top">
       <span class="title"><span class="icon">hotel</span> 宿</span>
-      <button class="pill" @click="back">← 戻る</button>
+      <div style="display:flex; gap:6px; align-items:center;">
+        <button class="pill" :disabled="syncingNow" @click="runSync" :title="needsBackfill ? '全期間取込' : '差分同期'">
+          <span class="icon" :class="{ 'spin': syncingNow }">{{ syncingNow ? 'sync' : 'refresh' }}</span>
+        </button>
+        <button class="pill" @click="back">← 戻る</button>
+      </div>
     </div>
     <div class="tabs">
       <button class="tab" :class="{ on: tab === 'cal' }" @click="tab = 'cal'">カレンダー</button>
@@ -224,11 +231,10 @@ const TEMPLATE = `
   </div>
   <div v-if="needsBackfill && !err && !usingSample" class="warn">
     <span class="icon">info</span>
-    ローカル DB がまだ空です。初回バックフィルで Beds24 から過去分を取り込みます。
-    <button class="pill" :disabled="backfilling" @click="runBackfill" style="margin-left:8px;">
-      {{ backfilling ? '取込中…' : 'バックフィル実行' }}
-    </button>
-    <div v-if="backfillMsg" style="margin-top:8px; font-size:11px;">{{ backfillMsg }}</div>
+    ローカル DB がまだ空です。上の <span class="icon" style="vertical-align:-0.18em;">refresh</span> を押すと Beds24 から取込開始 (初回は 5-30 秒)。
+  </div>
+  <div v-if="syncMsgTop && !err" class="warn" style="background:#e8f5d8; color:#3a6018;">
+    <span class="icon">check_circle</span> {{ syncMsgTop }}
   </div>
   <div v-if="err" class="err">{{ err }}</div>
 
@@ -392,8 +398,9 @@ const App = {
     const err = ref("");
     const usingSample = ref(false);
     const needsBackfill = ref(false);
-    const backfilling = ref(false);
-    const backfillMsg = ref("");
+    const syncingNow = ref(false);
+    const syncMsgTop = ref("");
+    let syncMsgTimer = null;
     const selectedDate = ref(null);
     const strategy = ref("");
     const strategyAt = ref("");
@@ -723,31 +730,29 @@ const App = {
       }
     }
 
-    // 初回バックフィル: 過去 5 年〜未来 5 年を Beds24 から全件取り込み (id 衝突は upsert)。
-    // 完了したら fetchBookings を再実行して画面に反映。
-    async function runBackfill() {
-      if (!user.value || backfilling.value) return;
-      backfilling.value = true;
-      backfillMsg.value = "Beds24 からページング取得中…";
+    // ワンタップ同期: サーバが「初回=全取込 / 以降=差分」を自動判定する /api/yado/sync を叩く。
+    // 完了したら fetchBookings を再走して画面反映、結果メッセージを 3 秒表示。
+    async function runSync() {
+      if (!user.value || syncingNow.value) return;
+      syncingNow.value = true;
+      syncMsgTop.value = "";
+      clearTimeout(syncMsgTimer);
       try {
         const token = await user.value.getIdToken();
-        const today = new Date();
-        const from = `${today.getFullYear() - 5}-01-01`;
-        const to   = `${today.getFullYear() + 5}-12-31`;
-        const res = await fetch((window.API_BASE || "") + "/api/yado/backfill", {
+        const res = await fetch((window.API_BASE || "") + "/api/yado/refresh", {
           method: "POST",
-          headers: { authorization: "Bearer " + token, "content-type": "application/json" },
-          body: JSON.stringify({ from, to }),
+          headers: { authorization: "Bearer " + token },
         });
         const j = await res.json();
         if (!res.ok) throw new Error(j.error || res.status);
-        backfillMsg.value = `完了: ${j.fetched} 件取得 / ${j.upserted} 件保存`;
-        // 画面を最新化
+        const label = j.kind === "backfill" ? "全期間取込" : "差分同期";
+        syncMsgTop.value = `${label}完了: ${j.fetched} 件取得 / ${j.upserted} 件保存`;
         await fetchBookings();
       } catch (e) {
-        backfillMsg.value = "失敗: " + (e.message || e);
+        syncMsgTop.value = "同期失敗: " + (e.message || e);
       } finally {
-        backfilling.value = false;
+        syncingNow.value = false;
+        syncMsgTimer = setTimeout(() => { syncMsgTop.value = ""; }, 5000);
       }
     }
 
@@ -780,7 +785,7 @@ const App = {
     return {
       tab, cur, bookings, loading, err, usingSample, selectedDate, strategy, strategyAt, generating,
       syncing, syncMsg, reviews, reviewsSaved,
-      needsBackfill, backfilling, backfillMsg, runBackfill,
+      needsBackfill, syncingNow, syncMsgTop, runSync,
       channels, chLabel, monthLabel, yyyymm, calendarCells, selectedDayBookings,
       monthlyBookings, totalNights, monthlyRevenue, monthlyNet, monthlyCommission, netRate,
       adrGross, adrNet, avgLeadDays, countryDist, countryEmoji,

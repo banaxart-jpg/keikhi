@@ -36,10 +36,12 @@ Beds24 を毎回叩かず DB キャッシュ経由にすることで:
 
 ### エンドポイント
 - `GET /api/yado/bookings?from=&to=` — SQL から予約取得。空なら `{ needsBackfill: true }` を返す
-- `POST /api/yado/backfill` (Firebase auth) — 指定範囲を Beds24 から全件取得→ DB upsert
-- `POST /api/internal/yado/sync-bookings` (`x-tick-secret` ヘッダ) — 差分同期。Cloud Scheduler 日次起動
+- `POST /api/yado/refresh` (Firebase auth) — **ワンタップ同期**。初回は全期間バックフィル、以降は差分。
+  画面上部の 🔄 ボタンから叩く想定。
+- `POST /api/yado/backfill` (Firebase auth) — 指定範囲を Beds24 から全件取得 → DB upsert (明示的に範囲指定したい時)
+- `POST /api/internal/yado/sync-bookings` (`x-tick-secret` ヘッダ) — 差分同期。Cloud Scheduler で自動化したい場合に使う (任意)
 - `POST /api/yado/strategy` — Gemini に予約集計 + 施設情報 + 過去 12 ヶ月推移を渡して戦略生成
-- `POST /api/yado/sync` — 取引シートへの同期
+- `POST /api/yado/sync` — 取引シートへの同期 (Beds24 同期とは別物、命名紛らわしいが既存名維持)
 
 ### env var (Cloud Run の env で管理)
 - `MANCHIKAN_BEDS_KEY` — Beds24 v2 API token
@@ -48,24 +50,14 @@ Beds24 を毎回叩かず DB キャッシュ経由にすることで:
 
 ### 初回セットアップ（小西担当）
 1. Cloud Run console で `MANCHIKAN_BEDS_KEY` を環境変数に登録 (`MANCHIKAN_PROP_ID=223365` は cloudbuild で固定済)
-2. /yado/ を開くと「バックフィル実行」ボタンが出る → 1 回押すと過去 5 年〜未来 5 年を Beds24 から取得して DB に保存
-3. Cloud Scheduler に日次同期ジョブを作成 (差分取り込み、深夜 03:00 JST):
-
-```bash
-SECRET=$(gcloud secrets versions access latest --secret=kaigi-tick-secret)
-RUN_URL=$(gcloud run services describe keihi-api --region=asia-northeast1 --format='value(status.url)')
-
-gcloud scheduler jobs create http yado-sync-daily \
-  --location=asia-northeast1 \
-  --schedule="0 3 * * *" \
-  --time-zone="Asia/Tokyo" \
-  --uri="${RUN_URL}/api/internal/yado/sync-bookings" \
-  --http-method=POST \
-  --headers="x-tick-secret=${SECRET},content-type=application/json" \
-  --message-body='{}'
-```
+2. /yado/ を開いて画面右上の **🔄 ボタンをタップ** → 初回は過去 5 年〜未来 5 年を Beds24 から取得して DB に保存 (5-30 秒)
+3. 以降も同じボタンで差分同期できる。サーバ側で「last_sync_modified の有無」で全 / 差分を自動判定するので、ユーザはタップするだけで OK
 
 cloudbuild.yaml は `--update-env-vars` 運用なので、deploy しても Console で設定した値は消えない。
+
+### Cloud Scheduler で自動化したい場合 (任意、後回し可)
+スマホからだとセットアップ面倒なので未実装デフォルト。/yado/ を毎日見る運用なら 🔄 ボタンで十分。
+自動化したくなったら `/api/internal/yado/sync-bookings` (`x-tick-secret` 認証) を Cloud Scheduler の HTTP target にすれば動く。コマンド例は git ログ参照 (commit 69bdc67)。
 
 ### DB スキーマ (`yado_bookings`)
 `apps/keihi/infra/schema.sql` 参照。サーバ起動時の `ensureSchema()` で冪等に CREATE される。

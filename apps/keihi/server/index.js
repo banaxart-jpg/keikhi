@@ -1190,7 +1190,36 @@ app.post("/api/yado/backfill", async (req, res) => {
   }
 });
 
-// /api/internal/yado/sync-bookings: 差分同期 (Cloud Scheduler が日次で叩く)。
+// /api/yado/refresh: ワンタップ同期 (Firebase auth)。
+// last_sync_modified が無ければ全期間バックフィル、あれば差分同期。フロントの
+// 「🔄 同期」ボタンから叩く想定。Cloud Scheduler 使わなくてもこれだけで完結。
+// (既存の /api/yado/sync は別目的 (取引シート同期) なので名前を分けてある)
+app.post("/api/yado/refresh", async (req, res) => {
+  if (!BEDS24_API_TOKEN) return res.status(503).json({ error: "MANCHIKAN_BEDS_KEY not set" });
+  try {
+    const lastSync = await getYadoMeta("last_sync_modified");
+    let raw, kind;
+    if (lastSync) {
+      // 差分: 前回の最新 modifiedTime 以降
+      raw = await fetchBeds24All({ modifiedFrom: lastSync });
+      kind = "diff";
+    } else {
+      // 初回: 過去 5 年〜未来 5 年を arrival ベースで全部
+      const y = new Date().getFullYear();
+      raw = await fetchBeds24All({ arrivalFrom: `${y - 5}-01-01`, arrivalTo: `${y + 5}-12-31` });
+      kind = "backfill";
+    }
+    const { upserted, latestModified } = await upsertYadoBookings(raw);
+    if (latestModified && (!lastSync || latestModified > lastSync)) {
+      await setYadoMeta("last_sync_modified", latestModified);
+    }
+    res.json({ ok: true, kind, fetched: raw.length, upserted, latestModified });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// /api/internal/yado/sync-bookings: 差分同期 (Cloud Scheduler が日次で叩く場合用、任意)。
 // 認証は INTERNAL_TICK_SECRET ヘッダ (kaigi と同方式、auth middleware の /internal 分岐で済む)。
 // last_sync_modified 以降に変更された予約 (= 新規 + 変更 + キャンセル) を全部拾う。
 app.post("/api/internal/yado/sync-bookings", async (req, res) => {
