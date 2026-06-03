@@ -1158,6 +1158,151 @@ async function getYadoMonthlySummary(monthsBack = 12) {
   return r.rows;
 }
 
+// 過去 N ヶ月の全予約を取得 (戦略 prompt の集計用、24 ヶ月で数百件想定)
+async function getYadoBookingsLastNMonths(monthsBack = 24) {
+  const p = getPool();
+  if (!p) return [];
+  await ensureSchema();
+  const r = await p.query(`
+    SELECT * FROM yado_bookings
+    WHERE arrival >= (date_trunc('month', now()) - ($1::int || ' months')::interval)::date
+    ORDER BY arrival ASC
+  `, [monthsBack]);
+  return r.rows.map(rowToFrontend);
+}
+
+// 対象月の予約 (overlap 判定込み) を取得
+async function getYadoBookingsForMonth(yyyymm) {
+  const p = getPool();
+  if (!p) return [];
+  await ensureSchema();
+  // yyyymm = "2026-06" の場合 → 月初〜翌月初の半開区間で overlap
+  const r = await p.query(`
+    SELECT * FROM yado_bookings
+    WHERE departure > ($1 || '-01')::date
+      AND arrival < (($1 || '-01')::date + interval '1 month')::date
+      AND status != 'cancelled'
+    ORDER BY arrival ASC
+  `, [yyyymm]);
+  return r.rows.map(rowToFrontend);
+}
+
+// 集計ヘルパー (rowToFrontend 形を入れ込んで諸統計を返す)
+function summarizeYadoBookings(bookings) {
+  if (!bookings.length) return null;
+  const total = bookings.length;
+  const gross = bookings.reduce((s, b) => s + (b.price || 0), 0);
+  const commission = bookings.reduce((s, b) => s + (b.commission || 0), 0);
+  const net = gross - commission;
+  const nights = bookings.reduce((s, b) => s + (b.nights || 0), 0);
+  const guests = bookings.reduce((s, b) => s + (b.adult || 0) + (b.child || 0), 0);
+  return {
+    total, gross, commission, net, nights, guests,
+    adrGross: nights ? Math.round(gross / nights) : 0,
+    adrNet: nights ? Math.round(net / nights) : 0,
+    netRate: gross ? Math.round(net / gross * 1000) / 10 : 0,
+  };
+}
+
+// 全期間の曜日別 ADR (sample 数が多くて信頼できる)
+function dowAdrAllTime(bookings) {
+  const sum = [0,0,0,0,0,0,0];
+  const cnt = [0,0,0,0,0,0,0];
+  for (const b of bookings) {
+    if (!b.arrival || !b.nights || !b.price) continue;
+    const per = b.price / b.nights;
+    const dt = new Date(b.arrival);
+    for (let i = 0; i < b.nights; i++) {
+      sum[dt.getDay()] += per;
+      cnt[dt.getDay()] += 1;
+      dt.setDate(dt.getDate() + 1);
+    }
+  }
+  return sum.map((s, i) => cnt[i] ? Math.round(s / cnt[i]) : 0);
+}
+
+// 国別 (件数 + gross 売上 + シェア%) ranking
+function countryRanking(bookings, topN = 12) {
+  const m = new Map();
+  let totalCount = 0, totalGross = 0;
+  for (const b of bookings) {
+    const cc = (b.country || "??").toUpperCase() || "??";
+    const cur = m.get(cc) || { count: 0, gross: 0 };
+    cur.count += 1;
+    cur.gross += b.price || 0;
+    m.set(cc, cur);
+    totalCount += 1;
+    totalGross += b.price || 0;
+  }
+  const arr = [...m.entries()].map(([cc, v]) => ({
+    cc, count: v.count, gross: v.gross,
+    countShare: totalCount ? Math.round(v.count / totalCount * 1000) / 10 : 0,
+    grossShare: totalGross ? Math.round(v.gross / totalGross * 1000) / 10 : 0,
+  }));
+  arr.sort((a, b) => b.count - a.count);
+  return arr.slice(0, topN);
+}
+
+// リードタイム分布
+function leadHistogram(bookings) {
+  const h = { d0_3: 0, d4_14: 0, d15_30: 0, d31_60: 0, d61_90: 0, d90plus: 0, unknown: 0 };
+  const ls = [];
+  for (const b of bookings) {
+    const l = b.leadDays;
+    if (l == null) { h.unknown++; continue; }
+    ls.push(l);
+    if (l <= 3) h.d0_3++;
+    else if (l <= 14) h.d4_14++;
+    else if (l <= 30) h.d15_30++;
+    else if (l <= 60) h.d31_60++;
+    else if (l <= 90) h.d61_90++;
+    else h.d90plus++;
+  }
+  const sorted = ls.slice().sort((a, b) => a - b);
+  const median = sorted.length ? sorted[Math.floor(sorted.length / 2)] : null;
+  const avg = ls.length ? Math.round(ls.reduce((a, b) => a + b, 0) / ls.length) : null;
+  return { hist: h, median, avg };
+}
+
+// チャネル別の集計 + 前月比トレンド
+function channelSummary(bookings) {
+  const m = {};
+  for (const b of bookings) {
+    const c = b.channel || "other";
+    if (!m[c]) m[c] = { count: 0, gross: 0, commission: 0, net: 0, nights: 0 };
+    m[c].count += 1;
+    m[c].gross += b.price || 0;
+    m[c].commission += b.commission || 0;
+    m[c].net += b.net || 0;
+    m[c].nights += b.nights || 0;
+  }
+  // share %
+  const totalCount = bookings.length || 1;
+  const totalGross = bookings.reduce((s, b) => s + (b.price || 0), 0) || 1;
+  for (const c of Object.keys(m)) {
+    m[c].countShare = Math.round(m[c].count / totalCount * 1000) / 10;
+    m[c].grossShare = Math.round(m[c].gross / totalGross * 1000) / 10;
+    m[c].netRate = m[c].gross ? Math.round(m[c].net / m[c].gross * 1000) / 10 : 0;
+    m[c].adr = m[c].nights ? Math.round(m[c].gross / m[c].nights) : 0;
+  }
+  return m;
+}
+
+// キャンセル件数 (status = cancelled) のカウント (* 入れて取り直す)
+async function getYadoCancellationStats(monthsBack = 12) {
+  const p = getPool();
+  if (!p) return { cancelled: 0, total: 0 };
+  await ensureSchema();
+  const r = await p.query(`
+    SELECT
+      COUNT(*) FILTER (WHERE status = 'cancelled')::int AS cancelled,
+      COUNT(*)::int AS total
+    FROM yado_bookings
+    WHERE arrival >= (date_trunc('month', now()) - ($1::int || ' months')::interval)::date
+  `, [monthsBack]);
+  return r.rows[0] || { cancelled: 0, total: 0 };
+}
+
 // /api/yado/bookings: SQL から取得 (Beds24 直叩きやめ、ローカルキャッシュ経由)
 app.get("/api/yado/bookings", async (req, res) => {
   const from = String(req.query.from || "").slice(0, 10);
@@ -1255,32 +1400,82 @@ app.post("/api/internal/yado/sync-bookings", async (req, res) => {
 
 app.post("/api/yado/strategy", async (req, res) => {
   if (!genAI) return res.status(503).json({ error: "GEMINI_API_KEY not configured" });
-  const { month, bookings = [], occupancyPct = 0, usingSample = false, reviews = {} } = req.body || {};
-  if (!month) return res.status(400).json({ error: "month required" });
+  const { month, reviews = {} } = req.body || {};
+  if (!month || !/^\d{4}-\d{2}$/.test(month)) return res.status(400).json({ error: "month (YYYY-MM) required" });
 
-  // Gemini に渡すコンテキスト。PII (名前/メール/電話/住所/comments) は落とす。
-  const compact = bookings.map((b) => ({
-    arr: b.arrival, dep: b.departure, ch: b.channel, n: b.nights,
-    p: b.price, com: b.commission, net: b.net, lead: b.leadDays,
-    cc: b.country, a: b.adult, c: b.child,
-  }));
-  const M = buildYadoMetrics(bookings);
-  const dowLabels = ["日","月","火","水","木","金","土"];
-  const adrByDowStr = dowLabels.map((d, i) => `${d}¥${M.adrByDow[i].toLocaleString("ja-JP")}`).join(" / ");
   const today = new Date().toISOString().slice(0, 10);
   const yen = (n) => `¥${Math.round(n).toLocaleString("ja-JP")}`;
 
-  // 過去 12 ヶ月の月次推移 (SQL から)。AI が推移・前年同月比・季節性を把握できるように。
-  let monthlySummary = [];
-  try { monthlySummary = await getYadoMonthlySummary(12); } catch (_) {}
+  // ───── DB から全部引く (フロント payload には依存しない) ─────
+  let targetMonth = [], last24 = [], monthlySummary = [], cancelStats = { cancelled: 0, total: 0 };
+  try {
+    [targetMonth, last24, monthlySummary, cancelStats] = await Promise.all([
+      getYadoBookingsForMonth(month),
+      getYadoBookingsLastNMonths(24),
+      getYadoMonthlySummary(12),
+      getYadoCancellationStats(12),
+    ]);
+  } catch (e) {
+    return res.status(500).json({ error: "DB query failed: " + e.message });
+  }
+
+  // 対象月の集計 (KPI)
+  const TM = summarizeYadoBookings(targetMonth) || { total:0, gross:0, commission:0, net:0, nights:0, guests:0, adrGross:0, adrNet:0, netRate:0 };
+  // 部屋数 = 1 で固定 (満竹華庵は一棟貸し)。対象月の日数で稼働率算出。
+  const [Y, M_] = month.split("-").map(Number);
+  const daysInMonth = new Date(Y, M_, 0).getDate();
+  const occupancyPct = Math.round(TM.nights / daysInMonth * 100);
+
+  // 前年同月との比較 (= YoY)
+  const prevYearMonth = `${Y - 1}-${String(M_).padStart(2, "0")}`;
+  const lastYear = last24.filter((b) => {
+    const ai = new Date(b.arrival), de = new Date(b.departure);
+    const ms = new Date(Y - 1, M_ - 1, 1), me = new Date(Y - 1, M_, 1);
+    return de > ms && ai < me;
+  });
+  const LY = summarizeYadoBookings(lastYear);
+  const yoyLine = LY
+    ? `${prevYearMonth}: ${LY.total}件 / ${LY.nights}泊 / gross ${yen(LY.gross)} / net ${yen(LY.net)} / ADR ${yen(LY.adrGross)} / 稼働率 ${Math.round(LY.nights / new Date(Y - 1, M_, 0).getDate() * 100)}%`
+    : "(前年同月データなし)";
+
+  // 全期間 (24 ヶ月) の信頼性高い曜日別 ADR
+  const dowLabels = ["日","月","火","水","木","金","土"];
+  const dowAdr = dowAdrAllTime(last24);
+  const adrByDowStr = dowLabels.map((d, i) => `${d}${yen(dowAdr[i])}`).join(" / ");
+
+  // 過去 12 ヶ月での「ターゲット国上位」「リードタイム傾向」「チャネル mix」
+  const last12 = last24.filter((b) => {
+    const m = b.arrival.slice(0, 7);
+    return m >= `${Y}-${String(M_).padStart(2, "0")}` || m.localeCompare(`${Y - 1}-${String(M_).padStart(2, "0")}`) >= 0;
+  });
+  const countries = countryRanking(last12, 10);
+  const countriesStr = countries.length
+    ? countries.map((c) => `${c.cc}: ${c.count}件 (${c.countShare}%) / 売上 ${yen(c.gross)} (${c.grossShare}%)`).join("\n  ")
+    : "(データなし)";
+  const lead = leadHistogram(last12);
+  const channels = channelSummary(last12);
+  const channelsStr = Object.entries(channels)
+    .map(([c, v]) => `${c}: ${v.count}件 (${v.countShare}%) / gross ${yen(v.gross)} / net ${yen(v.net)} / 手取り率 ${v.netRate}% / ADR ${yen(v.adr)}`)
+    .join("\n  ");
+
+  // 月次推移サマリ
   const monthlySummaryStr = monthlySummary.length
     ? monthlySummary.map((m) => {
         const adr = m.total_nights ? Math.round(m.gross / m.total_nights) : 0;
         return `${m.month}: ${m.bookings}件 / ${m.total_nights}泊 / gross ${yen(m.gross)} / net ${yen(m.net)} / ADR ${yen(adr)}`;
       }).join("\n  ")
-    : "(過去データなし — 初回バックフィル未実行)";
+    : "(過去データなし)";
 
-  // 貼り付けレビューをチャネルラベル付きでまとめる。長文は 4000 字でカット (Gemini の入力枠節約)。
+  const cancelRate = cancelStats.total ? Math.round(cancelStats.cancelled / cancelStats.total * 1000) / 10 : 0;
+
+  // 対象月の予約 (compact、PII 抜き) を AI へ
+  const compact = targetMonth.map((b) => ({
+    arr: b.arrival, dep: b.departure, ch: b.channel, n: b.nights,
+    p: b.price, com: b.commission, net: b.net, lead: b.leadDays,
+    cc: b.country, a: b.adult, c: b.child,
+  }));
+
+  // 貼り付けレビュー
   const trim = (s, n) => String(s || "").slice(0, n);
   const reviewBlock = (() => {
     const parts = [];
@@ -1291,49 +1486,61 @@ app.post("/api/yado/strategy", async (req, res) => {
   })();
 
   const prompt = `あなたは満竹華庵 (江戸川区新小岩の一棟貸し古民家・インバウンド民泊) の経営アドバイザーです。
+データは DB に保持された実績ベース。憶測でなく数字を引いて語ってください。
 
 【施設プロフィール】
 ${MANCHIKAN_PROFILE}
 
-【今日】${today}
-【対象月】${month}
+【今日】${today} / 【対象月】${month} (月日数: ${daysInMonth})
+
+【対象月の実績】
+  - 予約: ${TM.total} 件 / 泊数: ${TM.nights} 泊 / 客延: ${TM.guests} 名
+  - gross ${yen(TM.gross)} / 手数料 ${yen(TM.commission)} / net ${yen(TM.net)} (手取り率 ${TM.netRate}%)
+  - ADR: gross ${yen(TM.adrGross)} / net ${yen(TM.adrNet)}
+  - 稼働率: ${occupancyPct}% (定員 1 室 × ${daysInMonth} 日)
+【前年同月比 (YoY)】
+  ${prevYearMonth} (前年): ${yoyLine}
+  → AI 自身が件数 / 売上 / ADR / 稼働率 の差分を計算して言及してください
+
 【過去 12 ヶ月の月次推移】
   ${monthlySummaryStr}
-【期間サマリ】
-  - 予約件数: ${M.total} 件
-  - 売上 (gross): ${yen(M.totalGross)}
-  - 手数料合計: ${yen(M.totalCommission)} (Booking commission + Airbnb host fee)
-  - 手取り (net): ${yen(M.totalNet)} (= 手取り率 ${M.netRate}%)
-  - 総泊数: ${M.totalNights} 泊 / 総泊客数: ${M.totalGuests} 名
-  - 稼働率: ${occupancyPct}%
-  - 平均: ${M.avgNights}泊/件、${M.avgGuests}名/件
-【ADR】
-  - gross ${yen(M.adrGross)} / net ${yen(M.adrNet)}
-  - 曜日別 (gross 平均): ${adrByDowStr}
-【チャネル別】${JSON.stringify(M.byChannel)}
-   (各チャネルの gross 売上 / commission / net 売上 / 件数 / 泊数)
-【リードタイム分布 (予約日 → 到着日)】
-  ${JSON.stringify(M.lead)} (平均 ${M.avgLeadDays}日)
-【国別構成】${JSON.stringify(M.countries)} (ISO 国コード、?? は不明)
-【予約一覧 (圧縮、${compact.length}件)】${JSON.stringify(compact)}
-${usingSample ? "\n※このデータはサンプル (本物のAPI未接続) です。分析はあくまで例示としてください。\n" : ""}${reviewBlock}
 
-以下を踏まえて宿泊数 (= 稼働率 × 単価 = 売上) を増やす戦略を立ててください。Google検索で最新情報も使って。
+【過去 12 ヶ月のチャネル別】
+  ${channelsStr}
+  (手取り率比較: Booking は commission ≈17-18%、Airbnb は host fee ≈15.5%、自社直販は手取り 100%)
 
-1. 季節要因 (対象月の日本観光トレンド、連休、気候、インバウンド動向)
-2. 周辺市場 (新小岩〜江戸川区下町エリアの一棟貸し/民泊の Airbnb・Booking.com 競合価格帯、近隣観光資源)
-3. 物価/為替/世情 (円相場、ターゲット国のアウトバウンド動向)
-4. このデータから読み取れる傾向 (具体的に):
-   - チャネル別の手取り率と件数バランス
-   - リードタイム分布 (早期予約多数 vs 直前予約多数 → 早割 / 直前割どっち効くか)
-   - 国別構成から見たマーケ優先国 (上位 1-2 国に絞ったら何ができる)
-   - 曜日別 ADR (金土プレミアム効いてるか、平日埋まりが弱くないか)
-${reviewBlock ? "5. 貼り付けられたゲストレビューから読み取れる強み・改善点 (どのレビューが根拠かも軽く触れる)\n6." : "5."} 具体アクション提案 (3-5個、優先度順)。各提案に必ず:
-   - **なぜ効くか** (このデータの何を根拠にしてるか 1 行)
-   - **概算インパクト** (¥/月 or 稼働率%pt で具体数値、ざっくりで OK)
-   - **着手難易度** (低/中/高)
+【過去 12 ヶ月の国別 (件数上位 10)】
+  ${countriesStr}
 
-回答は日本語、見出し+箇条書きで読みやすく。「一般論」じゃなく「このデータから言える」具体策に寄せて。`;
+【過去 12 ヶ月のリードタイム】
+  分布: ${JSON.stringify(lead.hist)} (中央値 ${lead.median ?? "—"} 日 / 平均 ${lead.avg ?? "—"} 日)
+
+【全期間 (24 ヶ月) の曜日別 ADR】
+  ${adrByDowStr}
+  → サンプル数が多いので「金土プレミアムが効いてるか」「水木が安すぎないか」をこっちで判断
+
+【キャンセル率 (過去 12 ヶ月)】 ${cancelStats.cancelled}/${cancelStats.total} (${cancelRate}%)
+
+【対象月の予約一覧 (${compact.length} 件、PII 抜き)】
+${JSON.stringify(compact)}${reviewBlock}
+
+以下の流れで戦略を立ててください。Google 検索で当月の最新情報も取り入れて:
+
+1. **対象月の現状診断** (YoY と過去推移を踏まえて、何が良くて何が悪いか)
+2. **季節要因** (対象月の日本観光トレンド・連休・気候・インバウンド動向)
+3. **周辺市場** (新小岩〜江戸川区下町の一棟貸し民泊の Airbnb / Booking.com 競合価格帯、近隣観光資源)
+4. **円相場・世情** (ターゲット国のアウトバウンド動向)
+5. **データから言えるパターン**:
+   - チャネル mix と手取り率
+   - リードタイム (中央値からの早割/直前割判断)
+   - 国別構成 (上位 1-2 国の特化策)
+   - 曜日別 ADR (週末プレミアム / 平日テコ入れ)
+${reviewBlock ? "6. **貼り付けレビューから読める強み・改善点** (どのレビューが根拠か触れる)\n7." : "6."} **具体アクション (3-5 個、優先度順)**。各提案には必ず:
+   - **なぜ効くか** (上の数字のどれを根拠にするか 1 行)
+   - **概算インパクト** (¥/月 or 稼働率 %pt で、ざっくり)
+   - **着手難易度** (低 / 中 / 高)
+
+数字は ${yen(0)} 表記。「一般論」禁止、必ず「上の数字のどれそれを見ると…」と引いて。`;
 
   try {
     const { result, modelUsed } = await callGeminiWithFallback(prompt, {

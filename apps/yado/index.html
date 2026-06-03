@@ -714,13 +714,9 @@ const App = {
           method: "POST",
           headers: { authorization: "Bearer " + token, "content-type": "application/json" },
           body: JSON.stringify({
+            // 集計はサーバが DB から直接引くので month と reviews だけ送る
             month: yyyymm.value,
-            bookings: bookings.value,
-            revenue: monthlyRevenue.value,
-            occupancyPct: occupancyPct.value,
-            revenueByChannel: revenueByChannel.value,
-            usingSample: usingSample.value,
-            reviews: reviews.value,    // 貼り付けたレビューを Gemini プロンプトに混ぜる
+            reviews: reviews.value,
           }),
         });
         if (!res.ok) {
