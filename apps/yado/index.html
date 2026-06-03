@@ -130,6 +130,14 @@ body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); 
 .strategy .result { margin-top: 18px; background: var(--bg); border-radius: 16px; padding: 16px; box-shadow: inset 3px 3px 8px var(--sd), inset -2px -2px 6px var(--sl); font-size: 13px; line-height: 1.8; color: var(--text); white-space: pre-wrap; }
 .strategy .meta { font-size: 11px; color: var(--text3); margin-top: 10px; font-weight: 600; }
 
+/* 生 JSON モーダル */
+.raw-controls { display: flex; gap: 8px; }
+.raw-meta { font-size: 11px; color: var(--text3); margin: 10px 4px 4px; font-family: ui-monospace, Menlo, monospace; }
+.raw-pre { background: var(--bg2); border-radius: 12px; padding: 12px; margin-top: 6px;
+  font-family: ui-monospace, Menlo, monospace; font-size: 11px; line-height: 1.5; color: var(--text);
+  white-space: pre-wrap; word-break: break-all; max-height: 60vh; overflow-y: auto;
+  box-shadow: inset 3px 3px 8px var(--sd), inset -2px -2px 6px var(--sl); }
+
 /* 空状態 / エラー */
 .empty { text-align: center; color: var(--text3); font-size: 13px; font-weight: 600; padding: 40px 18px; }
 .warn { margin: 0 18px 14px; padding: 12px 14px; border-radius: 14px; background: #fff3d6; color: #7a5b18; font-size: 12px; font-weight: 600; line-height: 1.6; box-shadow: 3px 3px 8px var(--sd); }
@@ -149,6 +157,7 @@ import { initializeApp } from "https://www.gstatic.com/firebasejs/10.14.1/fireba
 import {
   getAuth, onAuthStateChanged, setPersistence, browserLocalPersistence,
 } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
+import { BottomSheet } from "/bottom-sheet.js";
 
 const CHANNELS = ["airbnb", "booking", "direct", "other"];
 const CHANNEL_LABEL = { airbnb: "Airbnb", booking: "Booking.com", direct: "自社サイト", other: "その他" };
@@ -188,7 +197,10 @@ const TEMPLATE = `
   <div class="header-fix">
     <div class="top">
       <span class="title"><span class="icon">hotel</span> 宿</span>
-      <button class="pill" @click="back">← 戻る</button>
+      <div style="display:flex; gap:6px;">
+        <button class="pill" @click="showRaw = true" title="生 JSON"><span class="icon">code</span></button>
+        <button class="pill" @click="back">← 戻る</button>
+      </div>
     </div>
     <div class="tabs">
       <button class="tab" :class="{ on: tab === 'cal' }" @click="tab = 'cal'">カレンダー</button>
@@ -306,6 +318,21 @@ const TEMPLATE = `
     <div v-if="syncMsg" class="sync-msg">{{ syncMsg }}</div>
   </div>
 
+  <!-- ───── 生 JSON 取得モーダル (debug 用、サンプル取れたら削除) ───── -->
+  <bottom-sheet v-model="showRaw" title="beds24 生 JSON">
+    <div class="raw-controls">
+      <button class="pill" :disabled="rawLoading" @click="fetchRaw">
+        {{ rawLoading ? '取得中…' : (rawText ? '再取得' : 'この月を取得') }}
+      </button>
+      <button class="pill" :disabled="!rawText" @click="copyRaw">
+        {{ rawCopied ? 'コピーした' : 'コピー' }}
+      </button>
+    </div>
+    <div v-if="rawErr" class="err" style="margin:8px 0 0;">{{ rawErr }}</div>
+    <div v-if="rawText" class="raw-meta">{{ rawSize }} bytes / {{ rawCount }} bookings</div>
+    <pre v-if="rawText" class="raw-pre">{{ rawText }}</pre>
+  </bottom-sheet>
+
   <!-- ───── 戦略タブ ───── -->
   <div v-else-if="tab === 'str'" class="strategy">
     <div class="intro">
@@ -334,6 +361,20 @@ const App = {
     const strategyAt = ref("");
     const generating = ref(false);
     const user = ref(null);
+    // 生 JSON モーダル
+    const showRaw = ref(false);
+    const rawLoading = ref(false);
+    const rawText = ref("");
+    const rawErr = ref("");
+    const rawCopied = ref(false);
+    const rawSize = computed(() => rawText.value.length);
+    const rawCount = computed(() => {
+      try {
+        const j = JSON.parse(rawText.value);
+        const arr = Array.isArray(j) ? j : (j.data || j.bookings || []);
+        return Array.isArray(arr) ? arr.length : "?";
+      } catch (_) { return "?"; }
+    });
 
     const channels = CHANNELS;
     const chLabel = (c) => CHANNEL_LABEL[c] || c;
@@ -586,6 +627,37 @@ const App = {
       }
     }
 
+    async function fetchRaw() {
+      if (!user.value || rawLoading.value) return;
+      rawLoading.value = true; rawErr.value = ""; rawCopied.value = false;
+      try {
+        const d = cur.value;
+        const from = isoDate(new Date(d.getFullYear(), d.getMonth() - 1, 1));
+        const to   = isoDate(new Date(d.getFullYear(), d.getMonth() + 2, 0));
+        const token = await user.value.getIdToken();
+        const res = await fetch((window.API_BASE || "") + `/api/yado/raw?from=${from}&to=${to}`, {
+          headers: { authorization: "Bearer " + token },
+        });
+        const text = await res.text();
+        if (!res.ok) throw new Error(`${res.status}: ${text.slice(0, 200)}`);
+        // 整形して見やすく
+        try { rawText.value = JSON.stringify(JSON.parse(text), null, 2); }
+        catch (_) { rawText.value = text; }
+      } catch (e) {
+        rawErr.value = "取得失敗: " + (e.message || e);
+        rawText.value = "";
+      } finally {
+        rawLoading.value = false;
+      }
+    }
+    async function copyRaw() {
+      try {
+        await navigator.clipboard.writeText(rawText.value);
+        rawCopied.value = true;
+        setTimeout(() => { rawCopied.value = false; }, 1500);
+      } catch (e) { rawErr.value = "コピー失敗: " + (e.message || e); }
+    }
+
     function back() { location.href = "/"; }
 
     onMounted(async () => {
@@ -613,6 +685,7 @@ const App = {
     return {
       tab, cur, bookings, loading, err, usingSample, selectedDate, strategy, strategyAt, generating,
       syncing, syncMsg,
+      showRaw, rawLoading, rawText, rawErr, rawCopied, rawSize, rawCount, fetchRaw, copyRaw,
       channels, chLabel, monthLabel, yyyymm, calendarCells, selectedDayBookings,
       monthlyBookings, totalNights, monthlyRevenue, availableNights, occupancyPct,
       revenueByChannel, revenueBarPct, dailyRevenue, maxDayRevenue,
@@ -621,7 +694,7 @@ const App = {
   },
 };
 
-createApp(App).mount("#app");
+createApp(App).component("bottom-sheet", BottomSheet).mount("#app");
 </script>
 </body>
 </html>

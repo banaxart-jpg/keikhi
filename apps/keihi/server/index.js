@@ -63,44 +63,6 @@ app.get("/api/version", (req, res) => {
   res.json({ version: APP_VERSION, buildId: BUILD_ID, startedAt: SERVER_STARTED_AT });
 });
 
-// 🚧 一時 debug endpoint (サンプル取れたら削除): beds24 v2 の生 JSON を素通しで返す。
-// 認証 middleware の前に置いてあるので curl 直叩きで使える。
-// 認可は MANCHIKAN_BEDS_KEY を共有秘密として要求 (token に + / = が混ざってても
-// ヘッダなら URL エンコード不要)。受け取り口は以下のどれか1つ:
-//   - Authorization: Bearer <KEY>
-//   - X-Beds-Key: <KEY>
-//   - ?key=<KEY>
-// 使い方: curl -H 'Authorization: Bearer <TOKEN>' \
-//          'https://<RUN_URL>/api/yado/debug/bookings?from=2026-06-01&to=2026-07-31'
-app.get("/api/yado/debug/bookings", async (req, res) => {
-  const KEY = (process.env.MANCHIKAN_BEDS_KEY || "").trim();
-  const PROP = (process.env.MANCHIKAN_PROP_ID || "").trim();
-  if (!KEY) return res.status(503).json({ error: "MANCHIKAN_BEDS_KEY not set" });
-  const auth = req.headers.authorization || "";
-  const bearer = /^Bearer (.+)$/.exec(auth)?.[1] || "";
-  const provided = (bearer || req.headers["x-beds-key"] || req.query.key || "").trim();
-  if (provided !== KEY) {
-    return res.status(403).json({
-      error: "key mismatch",
-      hint: "send via Authorization: Bearer <KEY>, X-Beds-Key header, or ?key=<URL_ENCODED_KEY>",
-      providedLen: provided.length, expectedLen: KEY.length,
-    });
-  }
-  const from = String(req.query.from || "").slice(0, 10);
-  const to = String(req.query.to || "").slice(0, 10);
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to)) {
-    return res.status(400).json({ error: "from/to (YYYY-MM-DD) required" });
-  }
-  try {
-    const propParam = PROP ? `&propertyId=${encodeURIComponent(PROP)}` : "";
-    const url = `https://beds24.com/api/v2/bookings?arrivalFrom=${from}&arrivalTo=${to}&includeInvoiceItems=false${propParam}`;
-    const r = await fetch(url, { headers: { token: KEY, accept: "application/json" } });
-    const text = await r.text();
-    res.status(r.status).type(r.headers.get("content-type") || "application/json").send(text);
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
 
 // Gate /api/* with a Firebase ID token. The browser calls this service
 // same-origin via Firebase Hosting rewrite, so no CORS/OAuth token is
@@ -916,6 +878,26 @@ app.get("/api/yado/bookings", async (req, res) => {
       };
     });
     res.json({ bookings });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// 🚧 一時 raw endpoint (確認後に削除予定): beds24 v2 の生 JSON を素通し。
+// Firebase auth (= ALLOWED_EMAILS) でガード。フロントの「生 JSON 取得」ボタンから叩く。
+app.get("/api/yado/raw", async (req, res) => {
+  if (!BEDS24_API_TOKEN) return res.status(503).json({ error: "MANCHIKAN_BEDS_KEY not set" });
+  const from = String(req.query.from || "").slice(0, 10);
+  const to = String(req.query.to || "").slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to)) {
+    return res.status(400).json({ error: "from/to (YYYY-MM-DD) required" });
+  }
+  try {
+    const propParam = MANCHIKAN_PROP_ID ? `&propertyId=${encodeURIComponent(MANCHIKAN_PROP_ID)}` : "";
+    const url = `${BEDS24_BASE}/bookings?arrivalFrom=${from}&arrivalTo=${to}&includeInvoiceItems=false${propParam}`;
+    const r = await fetch(url, { headers: { token: BEDS24_API_TOKEN, accept: "application/json" } });
+    const text = await r.text();
+    res.status(r.status).type(r.headers.get("content-type") || "application/json").send(text);
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
