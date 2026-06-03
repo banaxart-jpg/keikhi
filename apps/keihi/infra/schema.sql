@@ -140,3 +140,40 @@ CREATE TABLE IF NOT EXISTS kotonoha_ui_demos (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- ──────────────────────────────────────────
+-- yado (満竹華庵): Beds24 予約のローカルキャッシュ。
+-- 毎日 Cloud Scheduler → /api/internal/yado/sync-bookings で modifiedTime 差分 upsert。
+-- フロントは Beds24 直叩きをやめて SQL から取る (レイテンシ短縮 + レート制限回避 +
+-- 過去全期間のクエリ可能 → AI 戦略の prompt にも YoY/月次推移を入れられる)。
+-- ──────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS yado_bookings (
+  id            BIGINT PRIMARY KEY,                  -- Beds24 の booking id
+  property_id   INT,
+  arrival       DATE NOT NULL,
+  departure     DATE NOT NULL,
+  nights        INT NOT NULL,
+  channel       TEXT NOT NULL DEFAULT 'other',       -- 'airbnb'/'booking'/'direct'/'other'
+  referer       TEXT,
+  status        TEXT,                                -- 'new'/'cancelled'/'request' 等
+  price         INT NOT NULL DEFAULT 0,
+  commission    INT NOT NULL DEFAULT 0,
+  num_adult     INT NOT NULL DEFAULT 0,
+  num_child     INT NOT NULL DEFAULT 0,
+  country       TEXT,                                -- ISO 2字 (country2 優先、なければ country)
+  guest_name    TEXT,
+  booking_time  TIMESTAMPTZ,                         -- 予約成立日時
+  modified_time TIMESTAMPTZ NOT NULL,                -- 差分同期キー
+  raw_json      JSONB,                               -- 生レス丸ごと (後追い解析用)
+  synced_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS yado_bookings_arrival_idx       ON yado_bookings (arrival);
+CREATE INDEX IF NOT EXISTS yado_bookings_modified_idx      ON yado_bookings (modified_time);
+CREATE INDEX IF NOT EXISTS yado_bookings_channel_idx       ON yado_bookings (channel);
+
+-- 同期メタ (キーバリュー)。`last_sync_modified` には最後に取り込んだ modifiedTime 上限を入れる。
+CREATE TABLE IF NOT EXISTS yado_meta (
+  key        TEXT PRIMARY KEY,
+  value      TEXT NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);

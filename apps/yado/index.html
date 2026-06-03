@@ -222,6 +222,14 @@ const TEMPLATE = `
     Beds24 の API トークンがまだ未設定です。下のはサンプル予約。Cloud Run の env var
     (MANCHIKAN_BEDS_KEY) に入れたら本物に切り替わります。
   </div>
+  <div v-if="needsBackfill && !err && !usingSample" class="warn">
+    <span class="icon">info</span>
+    ローカル DB がまだ空です。初回バックフィルで Beds24 から過去分を取り込みます。
+    <button class="pill" :disabled="backfilling" @click="runBackfill" style="margin-left:8px;">
+      {{ backfilling ? '取込中…' : 'バックフィル実行' }}
+    </button>
+    <div v-if="backfillMsg" style="margin-top:8px; font-size:11px;">{{ backfillMsg }}</div>
+  </div>
   <div v-if="err" class="err">{{ err }}</div>
 
   <!-- ───── カレンダータブ ───── -->
@@ -383,6 +391,9 @@ const App = {
     const loading = ref(false);
     const err = ref("");
     const usingSample = ref(false);
+    const needsBackfill = ref(false);
+    const backfilling = ref(false);
+    const backfillMsg = ref("");
     const selectedDate = ref(null);
     const strategy = ref("");
     const strategyAt = ref("");
@@ -575,6 +586,7 @@ const App = {
       loading.value = true;
       err.value = "";
       usingSample.value = false;
+      needsBackfill.value = false;
       try {
         const d = cur.value;
         const from = isoDate(new Date(d.getFullYear(), d.getMonth() - 1, 1));   // 前月から
@@ -591,6 +603,10 @@ const App = {
         if (j.sample) {
           // サーバーがトークン未設定でサンプルを返してきたパターン
           usingSample.value = true;
+          bookings.value = sampleBookings(yyyymm.value);
+        } else if (j.needsBackfill) {
+          // BEDS24 設定済だが SQL がまだ空。バックフィル誘導。表示はサンプルで埋める。
+          needsBackfill.value = true;
           bookings.value = sampleBookings(yyyymm.value);
         } else {
           bookings.value = (j.bookings || []).map((b) => ({
@@ -707,6 +723,34 @@ const App = {
       }
     }
 
+    // 初回バックフィル: 過去 5 年〜未来 5 年を Beds24 から全件取り込み (id 衝突は upsert)。
+    // 完了したら fetchBookings を再実行して画面に反映。
+    async function runBackfill() {
+      if (!user.value || backfilling.value) return;
+      backfilling.value = true;
+      backfillMsg.value = "Beds24 からページング取得中…";
+      try {
+        const token = await user.value.getIdToken();
+        const today = new Date();
+        const from = `${today.getFullYear() - 5}-01-01`;
+        const to   = `${today.getFullYear() + 5}-12-31`;
+        const res = await fetch((window.API_BASE || "") + "/api/yado/backfill", {
+          method: "POST",
+          headers: { authorization: "Bearer " + token, "content-type": "application/json" },
+          body: JSON.stringify({ from, to }),
+        });
+        const j = await res.json();
+        if (!res.ok) throw new Error(j.error || res.status);
+        backfillMsg.value = `完了: ${j.fetched} 件取得 / ${j.upserted} 件保存`;
+        // 画面を最新化
+        await fetchBookings();
+      } catch (e) {
+        backfillMsg.value = "失敗: " + (e.message || e);
+      } finally {
+        backfilling.value = false;
+      }
+    }
+
     function back() { location.href = "/"; }
 
     onMounted(async () => {
@@ -736,6 +780,7 @@ const App = {
     return {
       tab, cur, bookings, loading, err, usingSample, selectedDate, strategy, strategyAt, generating,
       syncing, syncMsg, reviews, reviewsSaved,
+      needsBackfill, backfilling, backfillMsg, runBackfill,
       channels, chLabel, monthLabel, yyyymm, calendarCells, selectedDayBookings,
       monthlyBookings, totalNights, monthlyRevenue, monthlyNet, monthlyCommission, netRate,
       adrGross, adrNet, avgLeadDays, countryDist, countryEmoji,

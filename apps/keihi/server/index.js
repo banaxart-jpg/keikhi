@@ -595,8 +595,41 @@ async function ensureSchema() {
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       )
     `);
+    // yado: Beds24 予約のローカルキャッシュ + 同期メタ
+    await p.query(`
+      CREATE TABLE IF NOT EXISTS yado_bookings (
+        id            BIGINT PRIMARY KEY,
+        property_id   INT,
+        arrival       DATE NOT NULL,
+        departure     DATE NOT NULL,
+        nights        INT NOT NULL,
+        channel       TEXT NOT NULL DEFAULT 'other',
+        referer       TEXT,
+        status        TEXT,
+        price         INT NOT NULL DEFAULT 0,
+        commission    INT NOT NULL DEFAULT 0,
+        num_adult     INT NOT NULL DEFAULT 0,
+        num_child     INT NOT NULL DEFAULT 0,
+        country       TEXT,
+        guest_name    TEXT,
+        booking_time  TIMESTAMPTZ,
+        modified_time TIMESTAMPTZ NOT NULL,
+        raw_json      JSONB,
+        synced_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+      )
+    `);
+    await p.query("CREATE INDEX IF NOT EXISTS yado_bookings_arrival_idx ON yado_bookings (arrival)");
+    await p.query("CREATE INDEX IF NOT EXISTS yado_bookings_modified_idx ON yado_bookings (modified_time)");
+    await p.query("CREATE INDEX IF NOT EXISTS yado_bookings_channel_idx ON yado_bookings (channel)");
+    await p.query(`
+      CREATE TABLE IF NOT EXISTS yado_meta (
+        key        TEXT PRIMARY KEY,
+        value      TEXT NOT NULL,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+      )
+    `);
     schemaMigrated = true;
-    console.log("[schema] migration ok: records.drive_url + tasks ensured");
+    console.log("[schema] migration ok: records.drive_url + tasks + yado_bookings ensured");
   } catch (e) {
     console.warn(`[schema] migration warning: ${e.message}`);
   }
@@ -934,57 +967,248 @@ function buildYadoMetrics(bookings) {
   };
 }
 
+// referer → 内部チャネルラベル (フロント側 normalizeChannel と同じ規則)。
+function normalizeYadoChannel(referer) {
+  const s = (referer || "").toLowerCase();
+  if (s.includes("airbnb")) return "airbnb";
+  if (s.includes("booking")) return "booking";
+  if (s.includes("direct") || s.includes("website") || s.includes("自社") || s.includes("manual")) return "direct";
+  return "other";
+}
+
+// Beds24 v2 の生 booking レコード → アプリ標準形 (DB 列名と整合)。
+function mapBeds24Booking(b) {
+  const arrival = (b.arrival || "").slice(0, 10);
+  const departure = (b.departure || "").slice(0, 10);
+  const nights = arrival && departure
+    ? Math.round((new Date(departure) - new Date(arrival)) / 86400000)
+    : 1;
+  const referer = b.referer || b.apiSourceReferer || b.bookingSource || "";
+  return {
+    id: Number(b.id || b.bookId || 0),
+    property_id: Number(b.propertyId) || null,
+    arrival, departure, nights,
+    channel: normalizeYadoChannel(referer),
+    referer,
+    status: b.status || "",
+    price: Math.round(Number(b.price) || 0),
+    commission: Math.round(Number(b.commission) || 0),
+    num_adult: Number(b.numAdult) || 0,
+    num_child: Number(b.numChild) || 0,
+    country: (b.country2 || b.country || "").toUpperCase() || null,
+    guest_name: [b.lastName, b.firstName].filter(Boolean).join(" ") || b.guestName || null,
+    booking_time: b.bookingTime || null,
+    modified_time: b.modifiedTime || b.bookingTime || new Date().toISOString(),
+  };
+}
+
+// Beds24 v2 ページング取得: nextPageLink を辿って全件回収。
+// modifiedFrom 指定なら「その時刻以降に変更されたもの」、arrivalFrom/arrivalTo 指定なら
+// 「到着日が範囲内のもの」。両方指定可。
+async function fetchBeds24All({ modifiedFrom, arrivalFrom, arrivalTo, maxPages = 50 } = {}) {
+  if (!BEDS24_API_TOKEN) throw new Error("BEDS24 token not set");
+  const params = new URLSearchParams({ includeInvoiceItems: "false" });
+  if (arrivalFrom) params.set("arrivalFrom", arrivalFrom);
+  if (arrivalTo) params.set("arrivalTo", arrivalTo);
+  if (modifiedFrom) params.set("modifiedFrom", modifiedFrom);
+  if (MANCHIKAN_PROP_ID) params.set("propertyId", MANCHIKAN_PROP_ID);
+  let url = `${BEDS24_BASE}/bookings?${params}`;
+  const all = [];
+  for (let i = 0; i < maxPages; i++) {
+    const r = await fetch(url, { headers: { token: BEDS24_API_TOKEN, accept: "application/json" } });
+    if (!r.ok) {
+      const t = await r.text();
+      throw new Error(`beds24 ${r.status}: ${t.slice(0, 300)}`);
+    }
+    const j = await r.json();
+    const data = Array.isArray(j) ? j : (j.data || j.bookings || []);
+    all.push(...data);
+    const next = j?.pages?.nextPageLink;
+    if (!next) break;
+    url = next;
+  }
+  return all;
+}
+
+// yado_bookings に upsert (id 衝突で UPDATE)。返り値: { upserted, latestModified }
+async function upsertYadoBookings(rawRows) {
+  const p = getPool();
+  if (!p) throw new Error("DB not configured");
+  await ensureSchema();
+  let upserted = 0;
+  let latestModified = null;
+  for (const raw of rawRows) {
+    const m = mapBeds24Booking(raw);
+    if (!m.id || !m.arrival || !m.departure) continue;  // 不完全データはスキップ
+    if (!latestModified || m.modified_time > latestModified) latestModified = m.modified_time;
+    await p.query(`
+      INSERT INTO yado_bookings (id, property_id, arrival, departure, nights, channel, referer,
+        status, price, commission, num_adult, num_child, country, guest_name, booking_time,
+        modified_time, raw_json, synced_at)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17, now())
+      ON CONFLICT (id) DO UPDATE SET
+        property_id = EXCLUDED.property_id, arrival = EXCLUDED.arrival,
+        departure = EXCLUDED.departure, nights = EXCLUDED.nights,
+        channel = EXCLUDED.channel, referer = EXCLUDED.referer, status = EXCLUDED.status,
+        price = EXCLUDED.price, commission = EXCLUDED.commission,
+        num_adult = EXCLUDED.num_adult, num_child = EXCLUDED.num_child,
+        country = EXCLUDED.country, guest_name = EXCLUDED.guest_name,
+        booking_time = EXCLUDED.booking_time, modified_time = EXCLUDED.modified_time,
+        raw_json = EXCLUDED.raw_json, synced_at = now()
+    `, [
+      m.id, m.property_id, m.arrival, m.departure, m.nights, m.channel, m.referer,
+      m.status, m.price, m.commission, m.num_adult, m.num_child, m.country, m.guest_name,
+      m.booking_time, m.modified_time, JSON.stringify(raw),
+    ]);
+    upserted++;
+  }
+  return { upserted, latestModified };
+}
+
+async function getYadoMeta(key) {
+  const p = getPool();
+  if (!p) return null;
+  await ensureSchema();
+  const r = await p.query("SELECT value FROM yado_meta WHERE key = $1", [key]);
+  return r.rows[0]?.value || null;
+}
+async function setYadoMeta(key, value) {
+  const p = getPool();
+  if (!p) return;
+  await ensureSchema();
+  await p.query(`
+    INSERT INTO yado_meta (key, value, updated_at) VALUES ($1, $2, now())
+    ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()
+  `, [key, value]);
+}
+
+// DB レコード → フロントが期待する形 (price/commission/net/leadDays/country/guestName)。
+function rowToFrontend(row) {
+  const price = row.price || 0;
+  const commission = row.commission || 0;
+  const bookedAt = row.booking_time ? new Date(row.booking_time).getTime() : null;
+  const arrivedAt = row.arrival ? new Date(row.arrival).getTime() : null;
+  const leadDays = (bookedAt && arrivedAt)
+    ? Math.max(0, Math.floor((arrivedAt - bookedAt) / 86400000))
+    : null;
+  return {
+    id: String(row.id),
+    arrival: row.arrival instanceof Date ? row.arrival.toISOString().slice(0, 10) : (row.arrival || "").slice(0, 10),
+    departure: row.departure instanceof Date ? row.departure.toISOString().slice(0, 10) : (row.departure || "").slice(0, 10),
+    nights: row.nights || 0,
+    referer: row.referer || "",
+    channel: row.channel || "other",
+    price, commission,
+    net: Math.max(0, price - commission),
+    leadDays,
+    country: row.country || "",
+    adult: row.num_adult || 0,
+    child: row.num_child || 0,
+    guestName: row.guest_name || "",
+    status: row.status || "",
+  };
+}
+
+// 指定範囲 (arrival 期間とオーバーラップする予約) を SQL から取得。
+async function queryYadoBookingsInRange(from, to) {
+  const p = getPool();
+  if (!p) return [];
+  await ensureSchema();
+  // 月跨ぎ予約も拾うので departure > from AND arrival < to の overlap 判定
+  const r = await p.query(`
+    SELECT * FROM yado_bookings
+    WHERE departure > $1::date AND arrival < $2::date
+      AND status != 'cancelled'
+    ORDER BY arrival ASC
+  `, [from, to]);
+  return r.rows.map(rowToFrontend);
+}
+
+// 過去 N ヶ月分の月次サマリ (戦略 prompt の YoY 比較等で使用)。
+async function getYadoMonthlySummary(monthsBack = 12) {
+  const p = getPool();
+  if (!p) return [];
+  await ensureSchema();
+  const r = await p.query(`
+    SELECT
+      to_char(arrival, 'YYYY-MM') AS month,
+      COUNT(*)::int               AS bookings,
+      SUM(nights)::int             AS total_nights,
+      SUM(price)::int              AS gross,
+      SUM(commission)::int         AS commission,
+      SUM(price - commission)::int AS net,
+      ROUND(AVG(price)::numeric, 0)::int AS avg_price
+    FROM yado_bookings
+    WHERE arrival >= (date_trunc('month', now()) - ($1::int || ' months')::interval)::date
+      AND status != 'cancelled'
+    GROUP BY month
+    ORDER BY month ASC
+  `, [monthsBack]);
+  return r.rows;
+}
+
+// /api/yado/bookings: SQL から取得 (Beds24 直叩きやめ、ローカルキャッシュ経由)
 app.get("/api/yado/bookings", async (req, res) => {
-  if (!BEDS24_API_TOKEN) return res.json({ sample: true, bookings: [] });
   const from = String(req.query.from || "").slice(0, 10);
   const to = String(req.query.to || "").slice(0, 10);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to)) {
     return res.status(400).json({ error: "from/to (YYYY-MM-DD) required" });
   }
   try {
-    // Beds24 v2: GET /bookings?arrivalFrom=...&arrivalTo=...
-    // 月跨ぎ予約を拾うため arrival は from の少し前、to は通常の to で良い。
-    const propParam = MANCHIKAN_PROP_ID ? `&propertyId=${encodeURIComponent(MANCHIKAN_PROP_ID)}` : "";
-    const url = `${BEDS24_BASE}/bookings?arrivalFrom=${from}&arrivalTo=${to}&includeInvoiceItems=false${propParam}`;
-    const r = await fetch(url, { headers: { token: BEDS24_API_TOKEN, accept: "application/json" } });
-    if (!r.ok) {
-      const t = await r.text();
-      return res.status(r.status).json({ error: `beds24 ${r.status}: ${t.slice(0, 300)}` });
+    const bookings = await queryYadoBookingsInRange(from, to);
+    // SQL 空 (まだバックフィル前) で Beds24 設定済なら、その旨を返す。
+    // 完全 sample モード (BEDS24 未設定) との区別を付ける。
+    if (bookings.length === 0) {
+      if (!BEDS24_API_TOKEN) return res.json({ sample: true, bookings: [] });
+      return res.json({ bookings: [], needsBackfill: true });
     }
-    const j = await r.json();
-    // Beds24 のレスポンスは { success: true, data: [...] } 形式
-    const data = Array.isArray(j) ? j : (j.data || j.bookings || []);
-    const bookings = data.map((b) => {
-      const arrival = (b.arrival || "").slice(0, 10);
-      const departure = (b.departure || "").slice(0, 10);
-      const nights = arrival && departure
-        ? Math.round((new Date(departure) - new Date(arrival)) / 86400000)
-        : 1;
-      const price = Number(b.price) || 0;
-      const commission = Number(b.commission) || 0;
-      // lead time (予約日 → 到着日の日数差)
-      const bookedAt = b.bookingTime ? new Date(b.bookingTime).getTime() : null;
-      const arrivedAt = arrival ? new Date(arrival).getTime() : null;
-      const leadDays = (bookedAt && arrivedAt)
-        ? Math.max(0, Math.floor((arrivedAt - bookedAt) / 86400000))
-        : null;
-      return {
-        id: String(b.id || b.bookId || crypto.randomUUID()),
-        arrival, departure, nights,
-        referer: b.referer || b.apiSourceReferer || b.bookingSource || "",
-        price,
-        commission,
-        net: Math.max(0, price - commission),
-        leadDays,
-        country: (b.country2 || b.country || "").toUpperCase(),
-        adult: Number(b.numAdult) || 0,
-        child: Number(b.numChild) || 0,
-        guestName: [b.lastName, b.firstName].filter(Boolean).join(" ") || b.guestName || "",
-        status: b.status || "",
-      };
-    });
     res.json({ bookings });
   } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// /api/yado/backfill: 指定範囲を Beds24 から全件取得して SQL に upsert (Firebase auth)。
+// 初回や、欠損があった時に手動で叩く想定。差分同期では拾えない範囲も埋める。
+app.post("/api/yado/backfill", async (req, res) => {
+  if (!BEDS24_API_TOKEN) return res.status(503).json({ error: "MANCHIKAN_BEDS_KEY not set" });
+  const from = String(req.body?.from || req.query.from || "2020-01-01").slice(0, 10);
+  const to = String(req.body?.to || req.query.to || "2035-12-31").slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to)) {
+    return res.status(400).json({ error: "from/to (YYYY-MM-DD) required" });
+  }
+  try {
+    const raw = await fetchBeds24All({ arrivalFrom: from, arrivalTo: to });
+    const { upserted, latestModified } = await upsertYadoBookings(raw);
+    if (latestModified) {
+      const cur = await getYadoMeta("last_sync_modified");
+      if (!cur || latestModified > cur) await setYadoMeta("last_sync_modified", latestModified);
+    }
+    res.json({ ok: true, fetched: raw.length, upserted, from, to, latestModified });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// /api/internal/yado/sync-bookings: 差分同期 (Cloud Scheduler が日次で叩く)。
+// 認証は INTERNAL_TICK_SECRET ヘッダ (kaigi と同方式、auth middleware の /internal 分岐で済む)。
+// last_sync_modified 以降に変更された予約 (= 新規 + 変更 + キャンセル) を全部拾う。
+app.post("/api/internal/yado/sync-bookings", async (req, res) => {
+  if (!BEDS24_API_TOKEN) return res.status(503).json({ error: "MANCHIKAN_BEDS_KEY not set" });
+  try {
+    let modifiedFrom = await getYadoMeta("last_sync_modified");
+    // 初回 (meta 無し) は 30 日前から。バックフィル併用想定。
+    if (!modifiedFrom) {
+      modifiedFrom = new Date(Date.now() - 30 * 86400000).toISOString();
+    }
+    const raw = await fetchBeds24All({ modifiedFrom });
+    const { upserted, latestModified } = await upsertYadoBookings(raw);
+    if (latestModified && latestModified > modifiedFrom) {
+      await setYadoMeta("last_sync_modified", latestModified);
+    }
+    res.json({ ok: true, fetched: raw.length, upserted, modifiedFrom, latestModified });
+  } catch (e) {
+    console.error("[yado-sync]", e);
     res.status(500).json({ error: e.message });
   }
 });
@@ -1006,6 +1230,16 @@ app.post("/api/yado/strategy", async (req, res) => {
   const today = new Date().toISOString().slice(0, 10);
   const yen = (n) => `¥${Math.round(n).toLocaleString("ja-JP")}`;
 
+  // 過去 12 ヶ月の月次推移 (SQL から)。AI が推移・前年同月比・季節性を把握できるように。
+  let monthlySummary = [];
+  try { monthlySummary = await getYadoMonthlySummary(12); } catch (_) {}
+  const monthlySummaryStr = monthlySummary.length
+    ? monthlySummary.map((m) => {
+        const adr = m.total_nights ? Math.round(m.gross / m.total_nights) : 0;
+        return `${m.month}: ${m.bookings}件 / ${m.total_nights}泊 / gross ${yen(m.gross)} / net ${yen(m.net)} / ADR ${yen(adr)}`;
+      }).join("\n  ")
+    : "(過去データなし — 初回バックフィル未実行)";
+
   // 貼り付けレビューをチャネルラベル付きでまとめる。長文は 4000 字でカット (Gemini の入力枠節約)。
   const trim = (s, n) => String(s || "").slice(0, n);
   const reviewBlock = (() => {
@@ -1023,6 +1257,8 @@ ${MANCHIKAN_PROFILE}
 
 【今日】${today}
 【対象月】${month}
+【過去 12 ヶ月の月次推移】
+  ${monthlySummaryStr}
 【期間サマリ】
   - 予約件数: ${M.total} 件
   - 売上 (gross): ${yen(M.totalGross)}
