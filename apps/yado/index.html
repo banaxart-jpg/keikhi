@@ -205,26 +205,6 @@ function normalizeChannel(referer) {
   return "other";
 }
 
-// 当月のサンプル予約 (トークン未設定時の表示用)。
-function sampleBookings(yyyymm) {
-  const [y, m] = yyyymm.split("-").map(Number);
-  const mk = (d, nights, ch, name, price) => {
-    const a = new Date(y, m - 1, d);
-    const dep = new Date(y, m - 1, d + nights);
-    const fmt = (dt) => dt.toISOString().slice(0, 10);
-    return { id: `sample-${d}-${ch}`, arrival: fmt(a), departure: fmt(dep), channel: ch, guestName: name, price, nights, adult: 2, child: 0 };
-  };
-  return [
-    mk(3, 2, "airbnb",  "佐藤様", 38000),
-    mk(7, 1, "booking", "Smith様", 21500),
-    mk(10, 3, "direct", "田中様", 72000),
-    mk(14, 2, "airbnb", "鈴木様", 41000),
-    mk(18, 1, "other",  "電話予約", 18000),
-    mk(22, 2, "booking", "Chen様", 39800),
-    mk(27, 3, "direct", "山田様", 78000),
-  ];
-}
-
 const TEMPLATE = `
 <div>
   <div class="header-fix">
@@ -246,8 +226,8 @@ const TEMPLATE = `
 
   <div v-if="usingSample && !err" class="warn">
     <span class="icon">info</span>
-    Beds24 の API トークンがまだ未設定です。下のはサンプル予約。Cloud Run の env var
-    (MANCHIKAN_BEDS_KEY) に入れたら本物に切り替わります。
+    Beds24 の API トークンがまだ未設定です。Cloud Run の env var
+    (MANCHIKAN_BEDS_KEY) を入れて再読込してください。
   </div>
   <div v-if="needsBackfill && !err && !usingSample" class="warn">
     <span class="icon">info</span>
@@ -680,13 +660,13 @@ const App = {
         }
         const j = await res.json();
         if (j.sample) {
-          // サーバーがトークン未設定でサンプルを返してきたパターン
+          // サーバーがトークン未設定でサンプルを返してきたパターン → 空のまま
           usingSample.value = true;
-          bookings.value = sampleBookings(yyyymm.value);
+          bookings.value = [];
         } else if (j.needsBackfill) {
-          // BEDS24 設定済だが SQL がまだ空。バックフィル誘導。表示はサンプルで埋める。
+          // BEDS24 設定済だが SQL がまだ空。バックフィル誘導。空のまま表示。
           needsBackfill.value = true;
-          bookings.value = sampleBookings(yyyymm.value);
+          bookings.value = [];
         } else {
           bookings.value = (j.bookings || []).map((b) => ({
             ...b,
@@ -694,10 +674,8 @@ const App = {
           }));
         }
       } catch (e) {
-        // 通信失敗時もサンプルで画面を埋める (試せるように)。ただし usingSample は
-        // 立てない (= サーバが明示的に sample 返した時だけ警告出す)。err と区別。
-        err.value = "取得失敗: " + (e.message || e) + " (サンプル表示中)";
-        bookings.value = sampleBookings(yyyymm.value);
+        err.value = "取得失敗: " + (e.message || e);
+        bookings.value = [];
       } finally {
         loading.value = false;
       }
@@ -849,8 +827,7 @@ const App = {
         });
       } catch (e) {
         err.value = "初期化失敗: " + (e.message || e);
-        usingSample.value = true;
-        bookings.value = sampleBookings(yyyymm.value);
+        bookings.value = [];
       }
     });
 
