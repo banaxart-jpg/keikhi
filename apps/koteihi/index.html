@@ -23,7 +23,7 @@
   --danger: #b04040;
 }
 html, body { height: 100%; }
-body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; overflow-x: hidden; padding-bottom: 120px; }
+body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; overflow-x: hidden; padding-bottom: calc(160px + env(safe-area-inset-bottom)); }
 .icon { font-family: 'Material Symbols Outlined'; font-size: 1.1em; display: inline-block; vertical-align: -0.18em; font-variation-settings: 'FILL' 0, 'wght' 500, 'GRAD' 0, 'opsz' 20; }
 
 /* sticky header */
