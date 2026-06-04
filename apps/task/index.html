@@ -92,7 +92,10 @@ body { font-family: 'Outfit', -apple-system, sans-serif; font-weight: 400; backg
   border: none;
   font-family: 'Outfit', sans-serif; font-weight: 800; font-size: 13px; color: white;
   cursor: pointer; flex-shrink: 0;
-  transition: all 200ms ease;
+  /* デフォルトは transition なし。コミット後に flipping クラスが外れる際に
+     transform が rotateY(180)→0° に逆回転するのを防ぐ (= 一瞬コインが
+     消えてまた現れるように見えるバグの修正)。 */
+  transition: none;
   box-shadow:
     2px 2px 4px rgba(0,0,0,0.30),
     -1px -1px 3px var(--sl),
@@ -102,6 +105,8 @@ body { font-family: 'Outfit', -apple-system, sans-serif; font-weight: 400; backg
 .role-btn.role-natori { background: var(--role-natori); }
 .role-btn.role-konishi { background: var(--role-konishi); }
 .role-btn.role-both { background: var(--role-both); }
+/* ピッカー open 時のタップ feedback (scale 0.92) は短い transition で滑らかに */
+.role-picker.open .role-btn { transition: transform 120ms ease; }
 .role-picker.open .role-btn:active { transform: scale(0.92); }
 
 /* flipping クラスが付いた瞬間、コインは edge + 2 面構造に切り替わる。
