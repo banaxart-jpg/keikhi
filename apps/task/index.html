@@ -189,12 +189,19 @@ body { font-family: 'Outfit', -apple-system, sans-serif; font-weight: 400; backg
 .linked-row { display: flex; flex-direction: column; gap: 4px; padding: 8px 14px 12px; border-top: 1px solid rgba(168,172,192,0.18); animation: slide-down 200ms ease-out; }
 .linked-head { font-size: 10px; font-weight: 800; color: var(--text2); display: flex; align-items: baseline; gap: 8px; margin-bottom: 2px; letter-spacing: 0.04em; }
 .linked-open { font-size: 10px; color: var(--accent); text-decoration: none; font-weight: 700; margin-left: auto; }
-.linked-item { display: flex; align-items: center; gap: 8px; padding: 3px 0; font-size: 12px; color: var(--text); }
+.linked-item-wrap { display: flex; flex-direction: column; gap: 4px; }
+.linked-item { display: flex; align-items: center; gap: 8px; padding: 4px 6px; font-size: 12px; color: var(--text); border-radius: 8px; cursor: pointer; }
+.linked-item.open { background: var(--bg2); }
 .linked-item.done { opacity: 0.5; text-decoration: line-through; }
 .linked-item .li-check { width: 14px; text-align: center; font-weight: 800; color: #3a9a6a; flex-shrink: 0; }
 .linked-item.done .li-check { color: var(--text3); }
 .linked-item .li-name { flex: 1; min-width: 0; word-break: break-word; }
 .linked-item .li-qty { color: var(--text3); font-size: 11px; flex-shrink: 0; }
+/* タップで展開した時に出るアクション (外す等) */
+.linked-item-actions { display: flex; gap: 6px; padding: 2px 0 6px 22px; animation: slide-down 200ms ease-out; }
+.li-action { padding: 6px 14px; font-size: 11px; font-weight: 700; color: var(--text2); background: var(--bg); border: none; border-radius: 10px; box-shadow: 2px 2px 5px var(--sd), -2px -2px 5px var(--sl); cursor: pointer; font-family: 'Outfit', sans-serif; }
+.li-action:active { box-shadow: inset 1px 1px 3px var(--sd); transform: scale(0.96); }
+.li-action.danger { color: #b04040; }
 /* 材料追加 select: 同現場に未紐付けの shopping_items があれば候補に並べる */
 .link-add-sel { padding: 7px 12px; border-radius: 12px; border: 1px dashed var(--text3); background: var(--bg); font-family: 'Outfit', sans-serif; font-size: 12px; font-weight: 700; color: var(--accent); cursor: pointer; appearance: none; -webkit-appearance: none; align-self: flex-start; margin-top: 4px; max-width: 100%; }
 /* 候補なしの時の CTA: kaimono にこのタスク id 込みで遷移して新規作成 */
@@ -353,10 +360,16 @@ const TEMPLATE = `
         <div v-if="expandedId === t.id && t.site" class="linked-row">
           <template v-if="linkedFor(t.id).length">
             <div class="linked-head">📦 手配リスト ({{ linkedFor(t.id).length }})</div>
-            <div v-for="it in linkedFor(t.id)" :key="it.id" class="linked-item" :class="{ done: it.checked }">
-              <span class="li-check">{{ it.checked ? '✓' : '○' }}</span>
-              <span class="li-name">{{ it.name }}</span>
-              <span v-if="it.qty" class="li-qty">× {{ it.qty }} {{ it.unit || '' }}</span>
+            <div v-for="it in linkedFor(t.id)" :key="it.id" class="linked-item-wrap">
+              <div class="linked-item" :class="{ done: it.checked, open: linkedItemOpenId === it.id }"
+                   @click="linkedItemOpenId = linkedItemOpenId === it.id ? null : it.id">
+                <span class="li-check">{{ it.checked ? '✓' : '○' }}</span>
+                <span class="li-name">{{ it.name }}</span>
+                <span v-if="it.qty" class="li-qty">× {{ it.qty }} {{ it.unit || '' }}</span>
+              </div>
+              <div v-if="linkedItemOpenId === it.id" class="linked-item-actions">
+                <button class="li-action danger" @click.stop="onDetachMaterial(t, it)">このタスクから外す</button>
+              </div>
             </div>
           </template>
           <!-- 追加 UI: 同現場に材料があれば select、無ければ kaimono へ。
@@ -462,6 +475,8 @@ const App = {
     // 手配リスト (shopping_items) で taskId が設定されているものを購読 → 各タスクに紐付け表示
     const linkedItems = ref([]);
     let unsubscribeLinked = null;
+    // どのリンクアイテムが開いてるか (= 「外す」ボタン表示中の item id)
+    const linkedItemOpenId = ref(null);
 
     // ───── helpers (純粋関数) ─────
     function nameOf(em) { return NAME_BY_EMAIL[(em || "").toLowerCase()] || em || "?"; }
@@ -576,6 +591,19 @@ const App = {
         });
       } catch (e) {
         alert("紐付け失敗: " + (e.message || e));
+      }
+    }
+    // 紐付き材料を外す (= taskId を null に戻す)
+    async function onDetachMaterial(t, it) {
+      if (!confirm(`「${it.name}」をこのタスクから外しますか？`)) return;
+      try {
+        await updateDoc(doc(fbDb, "shopping_items", it.id), {
+          taskId: null,
+          updatedAt: serverTimestamp(),
+        });
+        linkedItemOpenId.value = null;
+      } catch (e) {
+        alert("外し失敗: " + (e.message || e));
       }
     }
 
@@ -970,7 +998,8 @@ const App = {
       titleInput, swipe,
       meLabel, tabs, currentLabel, tabCount, sortedTasks,
       posOf, emailOfPos, roleLabel, colorKey,
-      fmtDate, deadlineClass, isUnread, linkedFor, availableFor, onAttachMaterial,
+      fmtDate, deadlineClass, isUnread, linkedFor, availableFor,
+      onAttachMaterial, onDetachMaterial, linkedItemOpenId,
       isFlipping, roleBtnClass, roleBtnStyle, cardStyleFor,
       onCardDown,
       onTabClick, onRoleClick, onToggleDone, onCyclePriority, onDelete,
