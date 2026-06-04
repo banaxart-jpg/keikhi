@@ -61,27 +61,86 @@ body { font-family: 'Outfit', -apple-system, sans-serif; font-weight: 400; backg
 .card.dragging { z-index: 100; background: var(--bg); border-radius: 16px; box-shadow: 12px 12px 28px var(--sd), -4px -4px 14px var(--sl); }
 .card-wrap.done .card-title { text-decoration: line-through; }
 
-/* 担当ピッカー (左端) */
-.role-picker { display: flex; gap: 4px; align-items: center; flex-shrink: 0; perspective: 600px; }
-.role-btn { width: 34px; height: 34px; border-radius: 50%; border: none; font-family: 'Outfit', sans-serif; font-weight: 800; font-size: 13px; color: white; cursor: pointer; flex-shrink: 0; transition: all 200ms ease; box-shadow: 3px 3px 8px var(--sd), -3px -3px 8px var(--sl); position: relative; }
+/* 担当ピッカー (左端)。
+   構造: .role-picker > .role-socket (穴) > .role-rim (穴の底) + .role-btn (コイン)
+   socket は inset シャドウで「板に空いた穴」感、rim はその穴の底のダーク disc。
+   coin が回転して edge-on (90°) になるとリムが見える。
+   コインは flipping 中、--flip-angle 変数で rotateY を動的に駆動 (スワイプ中に
+   リアルタイム回転)。中身は複数 .role-slice (厚みレイヤ) + .role-face.front/back。 */
+.role-picker { display: flex; gap: 6px; align-items: center; flex-shrink: 0; perspective: 700px; }
+.role-socket {
+  position: relative;
+  width: 38px; height: 38px;
+  border-radius: 50%;
+  background: var(--bg2);
+  box-shadow:
+    inset 3px 3px 7px var(--sd),
+    inset -2px -2px 5px var(--sl);
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+}
+.role-picker:not(.open) .role-socket { display: none; }
+.role-picker:not(.open) .role-socket.current-socket { display: flex; }
+.role-picker.open .role-socket:not(.current-socket) { opacity: 0.6; }
+
+/* 穴の底 (dark disc)。コインが立ってるときは隠れ、edge-on で露出する */
+.role-rim {
+  position: absolute;
+  inset: 3px;
+  border-radius: 50%;
+  background:
+    radial-gradient(circle at 32% 28%, #565666 0%, #2a2a36 60%, #1a1a22 100%);
+  box-shadow:
+    inset 1px 1px 2px rgba(255,255,255,0.10),
+    inset -1px -2px 3px rgba(0,0,0,0.5);
+  pointer-events: none;
+  z-index: 1;
+}
+
+.role-btn {
+  position: relative;
+  z-index: 2;
+  width: 32px; height: 32px;
+  border-radius: 50%;
+  border: none;
+  font-family: 'Outfit', sans-serif; font-weight: 800; font-size: 13px; color: white;
+  cursor: pointer; flex-shrink: 0;
+  transition: all 200ms ease;
+  box-shadow:
+    2px 2px 4px rgba(0,0,0,0.30),
+    -1px -1px 3px var(--sl),
+    inset 0 0 0 1.2px rgba(255,255,255,0.20),
+    inset 0 -2px 3px rgba(0,0,0,0.20);
+}
 .role-btn.role-natori { background: var(--role-natori); }
 .role-btn.role-konishi { background: var(--role-konishi); }
 .role-btn.role-both { background: var(--role-both); }
-.role-picker:not(.open) .role-btn { display: none; }
-.role-picker:not(.open) .role-btn.current { display: block; }
-.role-picker.open .role-btn:not(.current) { opacity: 0.5; }
 .role-picker.open .role-btn:active { transform: scale(0.92); }
 
-/* コインフリップアニメ用の 2 面構造。flipping クラスが付くと自前 bg を消して
-   role-face が前後の見た目を担当。flipped 中は親が rotateY(180) で裏面を見せる。
-   厚みは: 外シャドウ + リム + 下側に内シャドウ で立体感を出す。 */
+/* flipping クラスが付いた瞬間、コインは多層スライス + 2 面構造に切り替わる。
+   --flip-angle (deg) で rotateY を動的駆動。.swiping 中は transition off で
+   指の動きに即座に追従、release 後は transition 復活で滑らかにアニメ。 */
 .role-btn.flipping {
   transform-style: preserve-3d;
   background: transparent !important;
   box-shadow: none !important;
-  transition: transform 380ms cubic-bezier(.4, .2, .3, 1);
+  transform: rotateY(var(--flip-angle, 0deg));
+  transition: transform 220ms cubic-bezier(.4, .2, .3, 1);
 }
-.role-btn.flipping.flipped { transform: rotateY(180deg); }
+.role-btn.flipping.swiping { transition: none; }
+
+/* スライス: コインの「厚み」を構成する円盤の層。9 枚で約 5px の厚みを実現。
+   全てダーク色で、各種角度で側面のシルエットとして見える。 */
+.role-slice {
+  position: absolute; inset: 1px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #353545 0%, #4a4a5c 50%, #2a2a36 100%);
+  transform: translateZ(calc(var(--z) * 1px));
+  backface-visibility: hidden; -webkit-backface-visibility: hidden;
+  pointer-events: none;
+}
+
+/* 表裏の面: スライスより少し外側 (+/-2.7px) に置いてコインの「表面」になる */
 .role-face {
   position: absolute; inset: 0;
   display: flex; align-items: center; justify-content: center;
@@ -89,12 +148,12 @@ body { font-family: 'Outfit', -apple-system, sans-serif; font-weight: 400; backg
   font-family: 'Outfit', sans-serif; font-weight: 800; font-size: 13px; color: white;
   backface-visibility: hidden; -webkit-backface-visibility: hidden;
   box-shadow:
-    3px 3px 8px var(--sd),
-    -3px -3px 8px var(--sl),
-    inset 0 0 0 1.5px rgba(255,255,255,0.20),
-    inset 0 -2px 4px rgba(0,0,0,0.18);
+    2px 2px 4px rgba(0,0,0,0.25),
+    inset 0 0 0 1.2px rgba(255,255,255,0.22),
+    inset 0 -2px 3px rgba(0,0,0,0.22);
 }
-.role-face.back { transform: rotateY(180deg); }
+.role-face.front { transform: translateZ(2.7px); }
+.role-face.back  { transform: rotateY(180deg) translateZ(2.7px); }
 .role-face.role-natori { background: var(--role-natori); }
 .role-face.role-konishi { background: var(--role-konishi); }
 .role-face.role-both { background: var(--role-both); }
@@ -577,11 +636,16 @@ function renderRow(t, lastSeen) {
   card.className = "card";
   card.dataset.id = t.id;
 
-  // 担当ピッカー
+  // 担当ピッカー (各役割を socket でラップ。socket は穴、内側に rim と coin)
   const cur = posOf(t);
   const picker = document.createElement("div");
   picker.className = "role-picker" + (pickerOpenId === t.id ? " open" : "");
   for (const pos of ["left", "center", "right"]) {
+    const socket = document.createElement("div");
+    socket.className = "role-socket" + (pos === cur ? " current-socket" : "");
+    const rim = document.createElement("span");
+    rim.className = "role-rim";
+    socket.appendChild(rim);
     const btn = document.createElement("button");
     btn.className = "role-btn role-" + colorKey(pos) + (pos === cur ? " current" : "");
     btn.textContent = roleLabel(pos);
@@ -601,7 +665,8 @@ function renderRow(t, lastSeen) {
         render();
       }
     });
-    picker.appendChild(btn);
+    socket.appendChild(btn);
+    picker.appendChild(socket);
   }
   card.appendChild(picker);
 
@@ -678,11 +743,21 @@ function renderActions(t) {
   return bar;
 }
 
-// ───── 担当変更時のコインフリップアニメ ─────
-// 引数の card は .card 要素。その中の .role-picker > .role-btn.current を 2 面構造に
-// 差し替えて rotateY(0 → 180) でアニメ、その間に背後で patchTask を走らせる。
-// アニメ完了後 onSnapshot が再描画するが、新しい .role-btn.current は新役割で
-// 描かれるので視覚上ジャンプしない。
+// ───── 厚み付きコインを構築 (スライス + 2 面) ─────
+// 9 枚のスライスで約 5px の厚みを作る。スライスはダーク色の disc を translateZ で
+// 並べたもの。表裏面は更にその両端に貼る。引数 fromKey/toKey/fromLbl/toLbl で
+// 表 (現在) と裏 (next) の色 + 文字を決める。
+function buildCoinFaces(roleBtn, fromKey, fromLbl, toKey, toLbl) {
+  roleBtn.classList.add("flipping");
+  const slices = [-2.4, -1.8, -1.2, -0.6, 0, 0.6, 1.2, 1.8, 2.4]
+    .map((z) => `<span class="role-slice" style="--z:${z}"></span>`).join("");
+  roleBtn.innerHTML =
+    slices +
+    `<span class="role-face front role-${fromKey}">${fromLbl}</span>` +
+    `<span class="role-face back role-${toKey}">${toLbl}</span>`;
+}
+
+// スワイプ中はリアルタイム回転、ピッカータップ時はプログラム的に 180° 回す
 function animateRoleFlip(card, fromPos, toPos) {
   return new Promise((resolve) => {
     const picker = card.querySelector(".role-picker");
@@ -690,31 +765,41 @@ function animateRoleFlip(card, fromPos, toPos) {
     picker.classList.remove("open");
     const roleBtn = picker.querySelector(".role-btn.current");
     if (!roleBtn) { resolve(); return; }
-    const fromKey = colorKey(fromPos);
-    const toKey = colorKey(toPos);
-    const fromLbl = roleLabel(fromPos);
-    const toLbl = roleLabel(toPos);
-    roleBtn.classList.add("flipping");
-    roleBtn.innerHTML =
-      `<span class="role-face front role-${fromKey}">${fromLbl}</span>` +
-      `<span class="role-face back role-${toKey}">${toLbl}</span>`;
-    // 次フレームで flipped を toggle → CSS transition が走る
+    buildCoinFaces(
+      roleBtn,
+      colorKey(fromPos), roleLabel(fromPos),
+      colorKey(toPos), roleLabel(toPos)
+    );
+    roleBtn.style.setProperty("--flip-angle", "0deg");
     requestAnimationFrame(() => {
-      roleBtn.classList.add("flipped");
+      roleBtn.style.setProperty("--flip-angle", "180deg");
     });
-    setTimeout(resolve, 400);
+    setTimeout(resolve, 240);
   });
 }
 
 // ───── スワイプ (左右で担当を1段階シフト + タップで展開) ─────
 function makeSwipeable(card, t) {
   let startX = null, startY = null, deltaX = 0, dragging = false, moved = false;
+  let roleBtnEl = null;       // 現在の current コイン
+  let nextPos = null;          // スワイプ方向で確定する遷移先 (null = 未確定)
+  let curPos = null;           // スワイプ開始時の役割
   const DRAG_THRESHOLD = 6;
   const SHIFT_THRESHOLD = 50;
+
+  function setAngle(deg, instant) {
+    if (!roleBtnEl) return;
+    if (instant) roleBtnEl.classList.add("swiping");
+    else roleBtnEl.classList.remove("swiping");
+    roleBtnEl.style.setProperty("--flip-angle", deg + "deg");
+  }
 
   card.addEventListener("pointerdown", (e) => {
     if (e.target.closest(".role-picker") || e.target.closest(".act-btn")) return;
     startX = e.clientX; startY = e.clientY; deltaX = 0; dragging = false; moved = false;
+    curPos = posOf(t);
+    nextPos = null;
+    roleBtnEl = card.querySelector(".role-btn.current");
   });
   card.addEventListener("pointermove", (e) => {
     if (startX == null) return;
@@ -725,17 +810,35 @@ function makeSwipeable(card, t) {
         dragging = true;
         card.setPointerCapture(e.pointerId);
         card.classList.add("dragging");
+        // 方向確定 → 遷移先を決めてコイン 2 面構造を構築 (リアルタイム回転に備える)
+        const order = ["left", "center", "right"];
+        const idx = order.indexOf(curPos);
+        const dir = dx > 0 ? 1 : -1;
+        const nIdx = Math.max(0, Math.min(2, idx + dir));
+        if (nIdx !== idx && roleBtnEl) {
+          nextPos = order[nIdx];
+          buildCoinFaces(
+            roleBtnEl,
+            colorKey(curPos), roleLabel(curPos),
+            colorKey(nextPos), roleLabel(nextPos)
+          );
+        }
       } else if (Math.abs(dy) > DRAG_THRESHOLD) {
         startX = null;
         return;
       }
     }
     if (dragging) {
-      // 横スワイプ確定後はブラウザの縦スクロールをロック (斜め動作のジッタ防止)
-      e.preventDefault();
+      e.preventDefault();           // 縦スクロールをロック (斜めスワイプのジッタ防止)
       deltaX = dx;
       moved = true;
       card.style.transform = `translateX(${dx}px)`;
+      // リアルタイム回転: dx を [-180, 180]° に線形マップ (SHIFT_THRESHOLD で 90°、その 2 倍で完全裏返り)
+      if (nextPos && roleBtnEl) {
+        const sign = dx > 0 ? 1 : -1;
+        const ratio = Math.min(1, Math.abs(dx) / (2 * SHIFT_THRESHOLD));
+        setAngle(sign * ratio * 180, true);
+      }
     }
   }, { passive: false });
   card.addEventListener("pointerup", async () => {
@@ -751,26 +854,24 @@ function makeSwipeable(card, t) {
       render();
       return;
     }
-    const order = ["left", "center", "right"];
-    const cur = posOf(t);
-    let idx = order.indexOf(cur);
-    if (deltaX > SHIFT_THRESHOLD) idx += 1;
-    else if (deltaX < -SHIFT_THRESHOLD) idx -= 1;
-    if (idx < 0) idx = 0;
-    if (idx >= order.length) idx = order.length - 1;
-    const newPos = order[idx];
-    if (newPos !== cur) {
-      try {
-        // コインフリップ完了を待ってから patchTask → onSnapshot 再描画
-        await animateRoleFlip(card, cur, newPos);
-        await patchTask(t.id, { toEmail: emailOfPos(newPos) });
-      } catch (err) { alert("移動失敗: " + err.message); }
+    const shouldCommit = nextPos && Math.abs(deltaX) >= SHIFT_THRESHOLD;
+    if (shouldCommit) {
+      // 残り角度をなめらかに 180° (sign 付き) まで持っていく → DB 更新
+      const sign = deltaX > 0 ? 1 : -1;
+      setAngle(sign * 180, false);
+      await new Promise((r) => setTimeout(r, 200));
+      try { await patchTask(t.id, { toEmail: emailOfPos(nextPos) }); }
+      catch (err) { alert("移動失敗: " + err.message); }
+    } else if (nextPos && roleBtnEl) {
+      // スナップバック (0° 戻し)
+      setAngle(0, false);
     }
   });
   card.addEventListener("pointercancel", () => {
     card.classList.remove("dragging");
     card.style.transform = "";
     startX = null;
+    if (nextPos && roleBtnEl) setAngle(0, false);
   });
 }
 
