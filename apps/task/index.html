@@ -62,40 +62,21 @@ body { font-family: 'Outfit', -apple-system, sans-serif; font-weight: 400; backg
 .card-wrap.done .card-title { text-decoration: line-through; }
 
 /* 担当ピッカー (左端)。
-   構造: .role-picker > .role-socket (穴) > .role-rim (穴の底) + .role-btn (コイン)
-   socket は inset シャドウで「板に空いた穴」感、rim はその穴の底のダーク disc。
-   coin が回転して edge-on (90°) になるとリムが見える。
-   コインは flipping 中、--flip-angle 変数で rotateY を動的に駆動 (スワイプ中に
-   リアルタイム回転)。中身は複数 .role-slice (厚みレイヤ) + .role-face.front/back。 */
+   構造: .role-picker > .role-socket > .role-btn (コイン)
+   socket / rim は透明 (背景に黒いブロックを出さない)。コイン自身の
+   厚み (多層スライス) で立体感を出す。 */
 .role-picker { display: flex; gap: 6px; align-items: center; flex-shrink: 0; perspective: 700px; }
 .role-socket {
   position: relative;
-  width: 38px; height: 38px;
-  border-radius: 50%;
-  background: var(--bg2);
-  box-shadow:
-    inset 3px 3px 7px var(--sd),
-    inset -2px -2px 5px var(--sl);
+  width: 36px; height: 36px;
   display: flex; align-items: center; justify-content: center;
   flex-shrink: 0;
 }
 .role-picker:not(.open) .role-socket { display: none; }
 .role-picker:not(.open) .role-socket.current-socket { display: flex; }
 .role-picker.open .role-socket:not(.current-socket) { opacity: 0.6; }
-
-/* 穴の底 (dark disc)。コインが立ってるときは隠れ、edge-on で露出する */
-.role-rim {
-  position: absolute;
-  inset: 3px;
-  border-radius: 50%;
-  background:
-    radial-gradient(circle at 32% 28%, #565666 0%, #2a2a36 60%, #1a1a22 100%);
-  box-shadow:
-    inset 1px 1px 2px rgba(255,255,255,0.10),
-    inset -1px -2px 3px rgba(0,0,0,0.5);
-  pointer-events: none;
-  z-index: 1;
-}
+/* rim は廃止 (背景透明化のため非表示) */
+.role-rim { display: none; }
 
 .role-btn {
   position: relative;
@@ -130,15 +111,18 @@ body { font-family: 'Outfit', -apple-system, sans-serif; font-weight: 400; backg
 .role-btn.flipping.swiping { transition: none; }
 
 /* スライス: コインの「厚み」を構成する円盤の層。9 枚で約 5px の厚みを実現。
-   全てダーク色で、各種角度で側面のシルエットとして見える。 */
+   各役割の色を引き継ぐので、edge-on でもコインの色のシルエットとして見える。 */
 .role-slice {
-  position: absolute; inset: 1px;
+  position: absolute; inset: 2px;
   border-radius: 50%;
-  background: linear-gradient(135deg, #353545 0%, #4a4a5c 50%, #2a2a36 100%);
+  background: var(--coin-side, rgba(40,40,52,0.6));
   transform: translateZ(calc(var(--z) * 1px));
   backface-visibility: hidden; -webkit-backface-visibility: hidden;
   pointer-events: none;
 }
+.role-btn.role-natori   { --coin-side: #5a6498; }   /* 名取色をやや暗く */
+.role-btn.role-konishi  { --coin-side: #444444; }
+.role-btn.role-both     { --coin-side: #b35850; }
 
 /* 表裏の面: スライスより少し外側 (+/-2.7px) に置いてコインの「表面」になる */
 .role-face {
@@ -785,7 +769,18 @@ function makeSwipeable(card, t) {
   let nextPos = null;          // スワイプ方向で確定する遷移先 (null = 未確定)
   let curPos = null;           // スワイプ開始時の役割
   const DRAG_THRESHOLD = 6;
-  const SHIFT_THRESHOLD = 50;
+  const FULL_SWIPE = 50;       // 50px で 180° 完全反転 = コミット閾値
+  const RUBBER_CUSHION = 28;   // 50px 超過時のラバーバンド漸近上限 (= max 78px 表示)
+
+  // iOS 風ラバーバンド: ~50px は線形、超過は asymptote で 78px まで
+  // 自乗関数的: 引っ張るほど抵抗が増す感じ
+  function rubberBand(dx) {
+    const sign = dx >= 0 ? 1 : -1;
+    const abs = Math.abs(dx);
+    if (abs <= FULL_SWIPE) return dx;
+    const over = abs - FULL_SWIPE;
+    return sign * (FULL_SWIPE + RUBBER_CUSHION * (1 - RUBBER_CUSHION / (over + RUBBER_CUSHION)));
+  }
 
   function setAngle(deg, instant) {
     if (!roleBtnEl) return;
@@ -832,11 +827,13 @@ function makeSwipeable(card, t) {
       e.preventDefault();           // 縦スクロールをロック (斜めスワイプのジッタ防止)
       deltaX = dx;
       moved = true;
-      card.style.transform = `translateX(${dx}px)`;
-      // リアルタイム回転: dx を [-180, 180]° に線形マップ (SHIFT_THRESHOLD で 90°、その 2 倍で完全裏返り)
+      // 視覚移動: 50px までは線形、超過分は asymptote (~78px で頭打ち)
+      const visualDx = rubberBand(dx);
+      card.style.transform = `translateX(${visualDx}px)`;
+      // リアルタイム回転: 0〜50px を 0〜180° に線形マップ、50px 以上は 180° クランプ
       if (nextPos && roleBtnEl) {
         const sign = dx > 0 ? 1 : -1;
-        const ratio = Math.min(1, Math.abs(dx) / (2 * SHIFT_THRESHOLD));
+        const ratio = Math.min(1, Math.abs(dx) / FULL_SWIPE);
         setAngle(sign * ratio * 180, true);
       }
     }
@@ -854,7 +851,8 @@ function makeSwipeable(card, t) {
       render();
       return;
     }
-    const shouldCommit = nextPos && Math.abs(deltaX) >= SHIFT_THRESHOLD;
+    // 50% (= 25px = 90° edge-on) 過ぎたらコミット、未満ならスナップバック
+    const shouldCommit = nextPos && Math.abs(deltaX) >= FULL_SWIPE * 0.5;
     if (shouldCommit) {
       // 残り角度をなめらかに 180° (sign 付き) まで持っていく → DB 更新
       const sign = deltaX > 0 ? 1 : -1;
