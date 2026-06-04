@@ -866,6 +866,9 @@ const App = {
       if (urlSite) {
         currentSite.value = urlSite;
         setTimeout(() => openModal(null), 200);
+        // URL を素の /task/ に戻す (リロード / 戻り操作で毎回モーダル auto-open
+        // しないように + PWA 的に履歴を綺麗にする)
+        history.replaceState(null, "", "/task/");
       }
     }
 

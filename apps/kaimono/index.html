@@ -422,6 +422,11 @@ const App = {
     const urlSite = urlParams.get("site") || "";
     const urlTaskId = urlParams.get("task") || "";
     let urlTaskHandled = false;
+    // 値を取った時点で URL を素の /kaimono/ に戻す (リロード / 戻り操作で毎回
+    // モーダル auto-open するのを防ぐ + PWA 的に履歴を綺麗にする)
+    if (urlSite || urlTaskId) {
+      history.replaceState(null, "", "/kaimono/");
+    }
     const adding = ref(false);
     const seeding = ref(false);
     const showInput = ref(false);   // FAB トグル: 入力モーダルの開閉
