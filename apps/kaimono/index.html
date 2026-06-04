@@ -138,6 +138,9 @@ body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); 
 .task-sel { flex: 1; min-width: 0; padding: 4px 10px; border-radius: 12px; font-size: 11px; font-weight: 700; border: none; cursor: pointer; background: var(--bg); box-shadow: inset 2px 2px 5px var(--sd), inset -2px -2px 5px var(--sl); color: var(--text2); font-family: inherit; appearance: none; -webkit-appearance: none; text-align-last: center; }
 /* 編集パネル内の task select (詳細編集モード) */
 .detail-task-sel { width: 100%; padding: 9px 12px; border-radius: 10px; font-size: 12px; font-weight: 700; border: none; cursor: pointer; color: var(--text2); background: var(--bg); box-shadow: inset 3px 3px 8px var(--sd), inset -2px -2px 6px var(--sl); font-family: inherit; appearance: none; -webkit-appearance: none; text-align-last: center; }
+/* 該当現場にアクティブタスクが無い時の CTA: task アプリに遷移して作成 */
+.add-task-link { padding: 4px 10px; border-radius: 12px; font-size: 11px; font-weight: 700; color: var(--accent); text-decoration: none; border: 1px dashed var(--accent); text-align: center; flex: 1; min-width: 0; }
+.detail-task-link { display: block; padding: 9px 12px; border-radius: 10px; font-size: 12px; font-weight: 700; color: var(--accent); text-decoration: none; text-align: center; border: 1px dashed var(--accent); }
 .cat-pill.on.zairyo { background: #fef0c8; color: #8b6914; box-shadow: inset 2px 2px 5px rgba(0,0,0,0.08); }
 .cat-pill.on.kogu { background: #ffe0e0; color: #8b3030; box-shadow: inset 2px 2px 5px rgba(0,0,0,0.08); }
 .add {
@@ -280,6 +283,7 @@ const TEMPLATE = `
               <option value="">タスクなし</option>
               <option v-for="t in tasksForCurrentSite" :key="t.id" :value="t.id">{{ t.title }}</option>
             </select>
+            <a v-else-if="activeSite" :href="'/task/?site=' + encodeURIComponent(activeSite)" class="detail-task-link">+ この現場のタスクを作成</a>
             <label class="detail-filepick">
               <input type="file" accept="image/*" @change="onFilePick">
               <span v-if="!editFile"><span class="icon" style="vertical-align:-0.18em;">photo_camera</span> 画像を選ぶ</span>
@@ -358,6 +362,7 @@ const TEMPLATE = `
           <option value="">タスクなし</option>
           <option v-for="t in tasksForCurrentSite" :key="t.id" :value="t.id">{{ t.title }}</option>
         </select>
+        <a v-else-if="activeSite" :href="'/task/?site=' + encodeURIComponent(activeSite)" class="add-task-link">+ タスク作成</a>
         <button class="add" type="submit" :disabled="!newName.trim() || adding || !activeSite">{{ adding ? "追加中…" : "+ 追加" }}</button>
       </div>
     </form>
@@ -412,8 +417,11 @@ const App = {
     const newCategory = ref(null);   // "材料" | "工具" | null
     const newTaskId = ref("");
     const tasks = ref([]);           // /tasks 全件 (社内 ALLOWED_EMAILS のみ購読成功)
-    // URL ?site=... で初期タブ指定 (task アプリ等からの遷移)
-    const urlSite = new URLSearchParams(location.search).get("site") || "";
+    // URL ?site=... ?task=... で初期タブ + タスク pre-select (task アプリからの遷移)
+    const urlParams = new URLSearchParams(location.search);
+    const urlSite = urlParams.get("site") || "";
+    const urlTaskId = urlParams.get("task") || "";
+    let urlTaskHandled = false;
     const adding = ref(false);
     const seeding = ref(false);
     const showInput = ref(false);   // FAB トグル: 入力モーダルの開閉
@@ -870,6 +878,18 @@ const App = {
           try {
             unsubscribeTasks = onSnapshot(collection(db, "tasks"), (snap) => {
               tasks.value = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+              // URL ?task=<id> 受け取り: そのタスクで pre-select + 入力モーダル auto open (一度だけ)
+              if (urlTaskId && !urlTaskHandled) {
+                const task = tasks.value.find((t) => t.id === urlTaskId);
+                if (task) {
+                  urlTaskHandled = true;
+                  newTaskId.value = urlTaskId;
+                  if (task.site && sites.value.includes(task.site)) {
+                    activeSite.value = task.site;
+                  }
+                  showInput.value = true;
+                }
+              }
             }, (_e) => { tasks.value = []; });
           } catch (_) { tasks.value = []; }
         });

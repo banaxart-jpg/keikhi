@@ -195,6 +195,9 @@ body { font-family: 'Outfit', -apple-system, sans-serif; font-weight: 400; backg
 .linked-item.done .li-check { color: var(--text3); }
 .linked-item .li-name { flex: 1; min-width: 0; word-break: break-word; }
 .linked-item .li-qty { color: var(--text3); font-size: 11px; flex-shrink: 0; }
+/* 材料未登録時の CTA: kaimono にこのタスク id 込みで遷移 */
+.linked-empty-link { display: inline-block; padding: 8px 14px; font-size: 11px; color: var(--accent); font-weight: 700; text-decoration: none; border: 1px dashed var(--accent); border-radius: 12px; align-self: flex-start; transition: transform 120ms ease; }
+.linked-empty-link:active { transform: scale(0.97); }
 
 /* FAB */
 .fab { position: fixed; right: 22px; bottom: 28px; width: 60px; height: 60px; border-radius: 50%; background: linear-gradient(145deg, var(--accent2), var(--accent)); color: white; font-size: 32px; font-weight: 300; line-height: 1; border: none; cursor: pointer; box-shadow: 8px 8px 22px rgba(50,70,200,0.45), -3px -3px 10px var(--sl); z-index: 10; transition: transform 200ms ease, box-shadow 200ms ease; }
@@ -345,16 +348,21 @@ const TEMPLATE = `
           <button class="act-btn del" @click.stop="onDelete(t)">削除</button>
         </div>
         <!-- 紐付いた手配リスト (read-only) -->
-        <div v-if="expandedId === t.id && linkedFor(t.id).length" class="linked-row">
-          <div class="linked-head">
-            📦 手配リスト ({{ linkedFor(t.id).length }})
-            <a v-if="t.site" :href="'/kaimono/?site=' + encodeURIComponent(t.site)" class="linked-open">→ 開く</a>
-          </div>
-          <div v-for="it in linkedFor(t.id)" :key="it.id" class="linked-item" :class="{ done: it.checked }">
-            <span class="li-check">{{ it.checked ? '✓' : '○' }}</span>
-            <span class="li-name">{{ it.name }}</span>
-            <span v-if="it.qty" class="li-qty">× {{ it.qty }} {{ it.unit || '' }}</span>
-          </div>
+        <div v-if="expandedId === t.id && t.site" class="linked-row">
+          <template v-if="linkedFor(t.id).length">
+            <div class="linked-head">
+              📦 手配リスト ({{ linkedFor(t.id).length }})
+              <a :href="'/kaimono/?site=' + encodeURIComponent(t.site) + '&task=' + t.id" class="linked-open">→ 追加</a>
+            </div>
+            <div v-for="it in linkedFor(t.id)" :key="it.id" class="linked-item" :class="{ done: it.checked }">
+              <span class="li-check">{{ it.checked ? '✓' : '○' }}</span>
+              <span class="li-name">{{ it.name }}</span>
+              <span v-if="it.qty" class="li-qty">× {{ it.qty }} {{ it.unit || '' }}</span>
+            </div>
+          </template>
+          <a v-else :href="'/kaimono/?site=' + encodeURIComponent(t.site) + '&task=' + t.id" class="linked-empty-link">
+            📦 手配リストで材料を追加 →
+          </a>
         </div>
       </div>
     </div>
@@ -853,6 +861,12 @@ const App = {
       );
       signedIn.value = true;
       setTimeout(setLastSeen, 1500);
+      // URL ?site=X 受け取り (kaimono からの遷移): タブ切替 + 新規モーダル自動 open
+      const urlSite = new URLSearchParams(location.search).get("site") || "";
+      if (urlSite) {
+        currentSite.value = urlSite;
+        setTimeout(() => openModal(null), 200);
+      }
     }
 
     onMounted(async () => {
