@@ -26,9 +26,9 @@
 }
 body { font-family: 'Outfit', -apple-system, sans-serif; font-weight: 400; background: var(--bg); color: var(--text); min-height: 100vh; overflow-x: hidden; }
 
-#signinOverlay { display: none; position: fixed; inset: 0; z-index: 400; background: var(--bg); flex-direction: column; align-items: center; justify-content: center; padding: 32px; text-align: center; gap: 18px; }
+#signinOverlay { position: fixed; inset: 0; z-index: 400; background: var(--bg); display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 32px; text-align: center; gap: 18px; }
 #signinOverlay .pill { padding: 14px 28px; border-radius: 30px; background: var(--bg); box-shadow: 6px 6px 16px var(--sd), -6px -6px 16px var(--sl); font-weight: 700; }
-#signinErr { font-size: 11px; color: #b04040; max-width: 340px; white-space: pre-wrap; font-family: monospace; word-break: break-word; }
+.signin-err { font-size: 11px; color: #b04040; max-width: 340px; white-space: pre-wrap; font-family: monospace; word-break: break-word; }
 
 .top { padding: 54px 18px 12px; display: flex; justify-content: space-between; align-items: center; }
 .back, .signout { font-size: 13px; font-weight: 800; color: var(--text2); background: none; border: none; cursor: pointer; font-family: 'Outfit', sans-serif; padding: 6px 10px; }
@@ -62,17 +62,10 @@ body { font-family: 'Outfit', -apple-system, sans-serif; font-weight: 400; backg
 .card-wrap.done .card-title { text-decoration: line-through; }
 
 /* 担当ピッカー (左端)。
-   構造: .role-picker > .role-socket > .role-btn (コイン)
-   socket / rim は透明 (背景に黒いブロックを出さない)。コイン自身の
-   厚み (多層スライス) で立体感を出す。 */
-/* 担当ピッカー (左端)。
-   構造: .role-picker > .role-socket > .role-btn (コイン)
    socket: subtle inset shadow で「板に空いた穴」の凹みを表現 (background は無し、
    card の地色を透過、影だけで深さを出す)。
    コインは flipping 中、rotateY が --flip-angle で動的に回転、中身は:
-     - .role-edge: コインの「側面」を表す細長い縦バー。rotateY(-90deg) で予め
-       直交方向に向けてあるので、coin の rotateY が 90° になった瞬間に正面向き
-       になり「板に空いた穴の中で回転する厚みのあるコイン」が見える
+     - .role-edge: コインの「側面」を表す細長い縦バー (rotateY(-90deg))
      - .role-face.front / .back: 表裏の disc */
 .role-picker { display: flex; gap: 6px; align-items: center; flex-shrink: 0; }
 .role-socket {
@@ -90,7 +83,6 @@ body { font-family: 'Outfit', -apple-system, sans-serif; font-weight: 400; backg
 .role-picker:not(.open) .role-socket { display: none; }
 .role-picker:not(.open) .role-socket.current-socket { display: flex; }
 .role-picker.open .role-socket:not(.current-socket) { opacity: 0.6; }
-.role-rim { display: none; }
 
 .role-btn {
   position: relative;
@@ -112,7 +104,7 @@ body { font-family: 'Outfit', -apple-system, sans-serif; font-weight: 400; backg
 .role-btn.role-both { background: var(--role-both); }
 .role-picker.open .role-btn:active { transform: scale(0.92); }
 
-/* flipping クラスが付いた瞬間、コインは多層スライス + 2 面構造に切り替わる。
+/* flipping クラスが付いた瞬間、コインは edge + 2 面構造に切り替わる。
    --flip-angle (deg) で rotateY を動的駆動。.swiping 中は transition off で
    指の動きに即座に追従、release 後は transition 復活で滑らかにアニメ。 */
 .role-btn.flipping {
@@ -146,7 +138,6 @@ body { font-family: 'Outfit', -apple-system, sans-serif; font-weight: 400; backg
 .role-btn.role-konishi  { --coin-side: #444444; }
 .role-btn.role-both     { --coin-side: #b35850; }
 
-/* 表裏の面: スライスより少し外側 (+/-2.7px) に置いてコインの「表面」になる */
 .role-face {
   position: absolute; inset: 0;
   display: flex; align-items: center; justify-content: center;
@@ -178,16 +169,7 @@ body { font-family: 'Outfit', -apple-system, sans-serif; font-weight: 400; backg
 .deadline.over { color: var(--hi); }
 .unread-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--hi); box-shadow: 0 0 5px rgba(232,91,91,0.7); flex-shrink: 0; }
 
-/* スワイプ中の左右ヒント */
-.swipe-hint { position: absolute; top: 0; bottom: 0; display: flex; align-items: center; font-size: 11px; font-weight: 800; color: var(--text3); padding: 0 18px; pointer-events: none; opacity: 0; transition: opacity 200ms ease; }
-.swipe-hint.left { left: 0; }
-.swipe-hint.right { right: 0; }
-.card.swiping-left ~ .swipe-hint.left,
-.card.swiping-right ~ .swipe-hint.right { opacity: 1; }
-
 /* アクションバー (展開時) */
-/* 展開時に card-wrap 内部の下に追加される操作行。
-   card と wrap が同じ背景なので継ぎ目なく「カードが伸びた」風に見える。 */
 .actions { display: flex; flex-wrap: wrap; gap: 6px; padding: 4px 11px 12px; border-top: 1px solid rgba(168,172,192,0.18); margin-top: 2px; overflow: hidden; animation: slide-down 200ms ease-out; transform-origin: top; }
 @keyframes slide-down {
   from { opacity: 0; max-height: 0; padding-top: 0; padding-bottom: 0; border-top-color: transparent; }
@@ -202,9 +184,7 @@ body { font-family: 'Outfit', -apple-system, sans-serif; font-weight: 400; backg
 .fab { position: fixed; right: 22px; bottom: 28px; width: 60px; height: 60px; border-radius: 50%; background: linear-gradient(145deg, var(--accent2), var(--accent)); color: white; font-size: 32px; font-weight: 300; line-height: 1; border: none; cursor: pointer; box-shadow: 8px 8px 22px rgba(50,70,200,0.45), -3px -3px 10px var(--sl); z-index: 10; transition: transform 200ms ease, box-shadow 200ms ease; }
 .fab:active { transform: scale(0.93); }
 
-/* モーダル: 開閉とも transition 駆動。
-   display:none ではなく visibility/opacity で「居るけど触れない」状態にして、
-   .open を外したときも閉じるアニメ (sheet が下に滑る + 背景フェードアウト) が走るようにする。 */
+/* モーダル: 開閉とも transition 駆動 */
 .modal {
   position: fixed; inset: 0;
   display: flex; align-items: flex-end; justify-content: center;
@@ -245,65 +225,11 @@ body { font-family: 'Outfit', -apple-system, sans-serif; font-weight: 400; backg
 </head>
 <body>
 
-<div id="signinOverlay">
-  <div class="pill">サインインしてください</div>
-  <button class="pill" onclick="location.href='/?next=' + encodeURIComponent('/task/')">ランチャーへ戻る</button>
-  <div id="signinErr"></div>
-</div>
-
-<div id="app" style="display:none">
-  <div class="top">
-    <button class="back" onclick="location.href='/'">← 戻る</button>
-    <div class="title">タスク</div>
-    <button class="signout" onclick="window.doSignOut && window.doSignOut()">⏻</button>
-  </div>
-  <div class="me-pill"><span class="me-dot"></span><span id="meLabel">…</span></div>
-  <div class="tabs" id="tabs"></div>
-  <div class="list" id="list"></div>
-  <button class="migrate-btn" id="migrateBtn" style="display:none">📥 Cloud SQL から既存タスクを取り込み</button>
-  <button class="fab" id="fabAdd">＋</button>
-</div>
-
-<div class="modal" id="modal">
-  <div class="sheet">
-    <div class="handle"></div>
-    <h3 id="modalTitle">新規タスク</h3>
-    <div class="field">
-      <label>内容</label>
-      <input class="inp" id="iTitle" placeholder="やること（1行）" maxlength="120">
-    </div>
-    <div class="field">
-      <label>誰がやる</label>
-      <div class="choice">
-        <button data-who="left">相手</button>
-        <button data-who="center">共同</button>
-        <button data-who="right">自分</button>
-      </div>
-    </div>
-    <div class="field">
-      <label>優先度</label>
-      <div class="choice">
-        <button data-p="1">高</button>
-        <button data-p="2">中</button>
-        <button data-p="3">低</button>
-      </div>
-    </div>
-    <div class="field">
-      <label>期限（任意）</label>
-      <input class="inp" type="date" id="iDeadline">
-    </div>
-    <div class="field">
-      <label>現場（雑務 = 会社全般）</label>
-      <select class="inp" id="iSite">
-        <option value="">雑務</option>
-      </select>
-    </div>
-    <button class="save" id="saveBtn">保存</button>
-  </div>
-</div>
+<div id="app"></div>
 
 <script src="/config.js"></script>
 <script type="module">
+import { createApp, ref, reactive, computed, onMounted, onBeforeUnmount, nextTick } from "https://unpkg.com/vue@3.4.27/dist/vue.esm-browser.prod.js";
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js";
 import {
   getAuth, setPersistence, browserLocalPersistence,
@@ -316,51 +242,7 @@ import {
 import { gateInternal } from "/internal-gate.js";
 
 const API_BASE = (window.API_BASE || "").replace(/\/$/, "");
-let fbAuth = null;
-let db = null;            // Firestore (realtime 同期用)
-let unsubscribeTasks = null;
-async function idToken() {
-  const u = fbAuth?.currentUser;
-  return u ? await u.getIdToken() : null;
-}
-
-(async function initAuth() {
-  if (window.DEV_NO_AUTH) {
-    document.getElementById("signinOverlay").style.display = "none";
-    boot("dev@local");
-    return;
-  }
-  try {
-    const cfg = await fetch("/__/firebase/init.json").then((r) => r.json());
-    cfg.authDomain = location.hostname;
-    const app = initializeApp(cfg);
-    fbAuth = getAuth(app);
-    db = getFirestore(app);
-    await setPersistence(fbAuth, browserLocalPersistence);
-    gateInternal(fbAuth);
-    let entered = false;
-    onAuthStateChanged(fbAuth, async (user) => {
-      if (user) {
-        if (entered) return;
-        entered = true;
-        sessionStorage.removeItem("authBounce");
-        document.getElementById("signinOverlay").style.display = "none";
-        boot((user.email || "").toLowerCase());
-        return;
-      }
-      if (sessionStorage.getItem("authBounce")) {
-        document.getElementById("signinOverlay").style.display = "flex";
-        return;
-      }
-      sessionStorage.setItem("authBounce", "1");
-      location.replace("/?next=" + encodeURIComponent("/task/"));
-    });
-  } catch (e) {
-    document.getElementById("signinOverlay").style.display = "flex";
-    document.getElementById("signinErr").textContent = "init失敗: " + e.message;
-  }
-})();
-window.doSignOut = async () => { if (fbAuth) await signOut(fbAuth); location.reload(); };
+const LAST_SEEN_KEY = "task_last_seen";
 
 const NAME_BY_EMAIL = {
   "info@banax.tokyo": "名取",
@@ -377,601 +259,632 @@ const PERSON_KEY = {
   "banaxart@gmail.com": "natori",
   "konishi0221@gmail.com": "konishi",
 };
-function colorKey(pos) {
-  if (pos === "center") return "both";
-  const em = pos === "right" ? me : partner;
-  return PERSON_KEY[em] || "konishi";
-}
-let me = "";
-let partner = "";
-function nameOf(em) { return NAME_BY_EMAIL[(em || "").toLowerCase()] || em || "?"; }
-function shortOf(em) { return (nameOf(em) || "?").slice(0, 1); }
 
-async function api(method, path, body) {
-  const token = await idToken();
-  const r = await fetch(API_BASE + path, {
-    method,
-    headers: { "content-type": "application/json", ...(token ? { authorization: "Bearer " + token } : {}) },
-    body: body ? JSON.stringify(body) : undefined,
-  });
-  if (!r.ok) { const t = await r.text().catch(() => ""); throw new Error(`${r.status}: ${t}`); }
-  return r.status === 204 ? null : r.json();
-}
+const TEMPLATE = `
+<div>
+  <div v-if="!signedIn" id="signinOverlay">
+    <div class="pill">サインインしてください</div>
+    <button class="pill" @click="goLauncher">ランチャーへ戻る</button>
+    <div class="signin-err">{{ signinErr }}</div>
+  </div>
 
-let tasks = [];
-let sites = [];          // /api/sites から取得した現場名一覧
-let currentSite = "*";   // タブの現在選択。'*' = 全部 (現場問わず) / '' = 雑務 / それ以外 = 現場名
-let expandedId = null;
-let editingId = null;
-let modalWho = "left";
-let modalPriority = 2;
-let modalSite = "";
-let pickerOpenId = null;
+  <div v-else>
+    <div class="top">
+      <button class="back" @click="goLauncher">← 戻る</button>
+      <div class="title">タスク</div>
+      <button class="signout" @click="doSignOut">⏻</button>
+    </div>
+    <div class="me-pill"><span class="me-dot"></span><span>{{ meLabel }}</span></div>
 
-const LAST_SEEN_KEY = "task_last_seen";
-function getLastSeen() { return localStorage.getItem(LAST_SEEN_KEY) || "1970-01-01T00:00:00Z"; }
-function setLastSeen() { localStorage.setItem(LAST_SEEN_KEY, new Date().toISOString()); }
-function $(id) { return document.getElementById(id); }
+    <div class="tabs">
+      <button v-for="tab in tabs" :key="tab.key"
+              class="tab" :class="{ on: currentSite === tab.key }"
+              @click="onTabClick(tab.key)">
+        {{ tab.label }}<span v-if="tabCount(tab.key)" class="count">{{ tabCount(tab.key) }}</span>
+      </button>
+    </div>
 
-async function boot(email) {
-  me = (email || "").toLowerCase();
-  partner = PARTNER_OF[me] || "";
-  $("meLabel").textContent = nameOf(me) + (partner ? `（相手: ${nameOf(partner)}）` : "");
-  $("app").style.display = "block";
-  // 現場一覧を keihi 共通 API から取得 (kaimono と同ソース)
-  try {
-    const sj = await api("GET", "/api/sites");
-    sites = (Array.isArray(sj) ? sj : []).map((s) => s.name).filter(Boolean);
-  } catch (_) { sites = []; }
-  refreshSiteSelect();
-  setupModal();
-  setupMigrate();
-  // Firestore リアルタイム購読: tasks コレクション全件 → 自分関連のみクライアント側で絞る
-  unsubscribeTasks = onSnapshot(collection(db, "tasks"), (snap) => {
-    tasks = snap.docs.map((d) => ({ id: d.id, ...d.data() }))
-      .filter((t) => {
-        const fe = (t.fromEmail || "").toLowerCase();
-        const te = (t.toEmail || "").toLowerCase();
-        return fe === me || te === me || te === "both";
-      });
-    render();
-  }, (e) => { console.warn("[task] snapshot failed", e); });
-  renderTabs();
-  setTimeout(setLastSeen, 1500);
-}
+    <div class="list">
+      <div v-if="!sortedTasks.length" class="empty">「{{ currentLabel }}」のタスクはありません</div>
+      <div v-for="t in sortedTasks" :key="t.id"
+           class="card-wrap"
+           :class="{ done: t.status === 'done', expanded: expandedId === t.id }">
+        <div class="card"
+             :class="{ dragging: swipe.taskId === t.id && swipe.dragging }"
+             :style="cardStyleFor(t)"
+             :data-task-id="t.id"
+             @pointerdown="onCardDown($event, t)">
+          <div class="role-picker" :class="{ open: pickerOpenId === t.id }">
+            <div v-for="pos in ['left','center','right']" :key="pos"
+                 class="role-socket"
+                 :class="{ 'current-socket': pos === posOf(t) }">
+              <button class="role-btn"
+                      :class="roleBtnClass(t, pos)"
+                      :style="roleBtnStyle(t, pos)"
+                      @click.stop="onRoleClick(t, pos)">
+                <template v-if="isFlipping(t, pos)">
+                  <span class="role-edge"></span>
+                  <span class="role-face front" :class="'role-' + colorKey(swipe.fromPos)">{{ roleLabel(swipe.fromPos) }}</span>
+                  <span class="role-face back" :class="'role-' + colorKey(swipe.nextPos)">{{ roleLabel(swipe.nextPos) }}</span>
+                </template>
+                <template v-else>{{ roleLabel(pos) }}</template>
+              </button>
+            </div>
+          </div>
+          <div class="body">
+            <div class="row-top">
+              <div class="pip" :class="'p' + (Number(t.priority) || 2)"></div>
+              <div class="card-title">{{ t.title || '(無題)' }}</div>
+              <div v-if="isUnread(t)" class="unread-dot"></div>
+            </div>
+            <div v-if="t.deadline" class="card-meta">
+              <span class="deadline" :class="deadlineClass(t.deadline)">⏰ {{ fmtDate(t.deadline) }}</span>
+            </div>
+          </div>
+        </div>
+        <div v-if="expandedId === t.id" class="actions">
+          <button class="act-btn done" @click.stop="onToggleDone(t)">{{ t.status === 'done' ? '戻す' : '完了' }}</button>
+          <button class="act-btn" @click.stop="onCyclePriority(t)">優先度 {{ ['高','中','低'][((t.priority || 2) - 1)] }}</button>
+          <button class="act-btn" @click.stop="openModal(t)">編集</button>
+          <button class="act-btn del" @click.stop="onDelete(t)">削除</button>
+        </div>
+      </div>
+    </div>
 
-// 移行ボタンのセットアップ。タスクが 0 件なら表示、押されたら SQL → Firestore コピー。
-// クライアント側で実行: GET /api/tasks (SQL) → 各タスクを Firestore に setDoc。
-// この方法だと Cloud Run SA に Firestore 権限不要 (ユーザの Firebase auth + rules で通る)。
-function setupMigrate() {
-  const btn = $("migrateBtn");
-  btn.addEventListener("click", async () => {
-    if (btn.disabled) return;
-    if (!confirm("Cloud SQL に残っている既存タスクを Firestore に取り込みます。続けますか?")) return;
-    const orig = btn.textContent;
-    btn.disabled = true;
-    btn.textContent = "取り込み中…";
-    try {
-      const j = await api("GET", "/api/tasks");
-      const sqlTasks = j.tasks || [];
-      let migrated = 0;
-      for (const t of sqlTasks) {
-        const ref = doc(db, "tasks", t.id);
-        await setDoc(ref, {
-          title: t.title || "",
-          fromEmail: (t.fromEmail || "").toLowerCase(),
-          toEmail: (t.toEmail || "").toLowerCase(),
-          priority: Number(t.priority) || 2,
-          deadline: t.deadline ? String(t.deadline).slice(0, 10) : null,
-          status: t.status || "active",
-          site: "",                                    // 既存は雑務扱いで初期化
-          createdAt: t.createdAt ? new Date(t.createdAt) : new Date(),
-          updatedAt: t.updatedAt ? new Date(t.updatedAt) : new Date(),
-        }, { merge: true });
-        migrated++;
-      }
-      alert(`${migrated} 件を取り込みました`);
-      // onSnapshot が自動発火、ボタンは render() 内で非表示に
-    } catch (e) {
-      alert("失敗: " + (e.message || e));
-    } finally {
-      btn.disabled = false;
-      btn.textContent = orig;
-    }
-  });
-}
+    <button v-if="tasks.length === 0" class="migrate-btn" :disabled="migrating" @click="onMigrate">
+      {{ migrating ? '取り込み中…' : '📥 Cloud SQL から既存タスクを取り込み' }}
+    </button>
 
-function refreshSiteSelect() {
-  const sel = $("iSite");
-  sel.innerHTML = '<option value="">雑務</option>';
-  for (const s of sites) {
-    const o = document.createElement("option");
-    o.value = s;
-    o.textContent = s;
-    sel.appendChild(o);
-  }
-}
+    <button class="fab" @click="openModal(null)">＋</button>
 
-function posOf(t) {
-  const to = (t.toEmail || "").toLowerCase();
-  if (to === "both") return "center";
-  if (to === me) return "right";
-  return "left";
-}
-function emailOfPos(pos) {
-  if (pos === "center") return "both";
-  if (pos === "right") return me;
-  return partner;
-}
-function roleLabel(pos) {
-  if (pos === "center") return "共";
-  if (pos === "right") return shortOf(me);
-  return shortOf(partner);
-}
+    <div class="modal" :class="{ open: modalOpen }" @click.self="closeModal">
+      <div class="sheet">
+        <div class="handle"></div>
+        <h3>{{ editingId ? '編集' : '新規タスク' }}</h3>
+        <div class="field">
+          <label>内容</label>
+          <input class="inp" v-model="form.title" placeholder="やること（1行）" maxlength="120" ref="titleInput">
+        </div>
+        <div class="field">
+          <label>誰がやる</label>
+          <div class="choice">
+            <button :class="{ sel: form.who === 'left' }" @click="form.who = 'left'">相手</button>
+            <button :class="{ sel: form.who === 'center' }" @click="form.who = 'center'">共同</button>
+            <button :class="{ sel: form.who === 'right' }" @click="form.who = 'right'">自分</button>
+          </div>
+        </div>
+        <div class="field">
+          <label>優先度</label>
+          <div class="choice">
+            <button :class="['p1', { sel: form.priority === 1 }]" @click="form.priority = 1">高</button>
+            <button :class="['p2', { sel: form.priority === 2 }]" @click="form.priority = 2">中</button>
+            <button :class="['p3', { sel: form.priority === 3 }]" @click="form.priority = 3">低</button>
+          </div>
+        </div>
+        <div class="field">
+          <label>期限（任意）</label>
+          <input class="inp" type="date" v-model="form.deadline">
+        </div>
+        <div class="field">
+          <label>現場（雑務 = 会社全般）</label>
+          <select class="inp" v-model="form.site">
+            <option value="">雑務</option>
+            <option v-for="s in sites" :key="s" :value="s">{{ s }}</option>
+          </select>
+        </div>
+        <button class="save" :disabled="saving" @click="saveModal">{{ saving ? '保存中…' : '保存' }}</button>
+      </div>
+    </div>
+  </div>
+</div>
+`;
 
-function fmtDate(d) {
-  if (!d) return "";
-  return String(d).slice(0, 10).replace(/^\d{4}-/, "").replace("-", "/");
-}
-function deadlineClass(d) {
-  if (!d) return "";
-  const today = new Date(); today.setHours(0, 0, 0, 0);
-  const due = new Date(String(d).slice(0, 10) + "T00:00:00");
-  const days = (due - today) / 86400000;
-  if (days < 0) return "over";
-  if (days <= 3) return "soon";
-  return "";
-}
-
-// Firestore Timestamp / ISO 文字列 / null どれが来てもミリ秒に揃える
-function toMillis(ts) {
-  if (!ts) return 0;
-  if (typeof ts.toMillis === "function") return ts.toMillis();
-  return new Date(ts).getTime() || 0;
-}
-function toIso(ts) {
-  if (!ts) return "";
-  if (typeof ts.toDate === "function") return ts.toDate().toISOString();
-  return new Date(ts).toISOString();
-}
-function sortKey(t) {
-  return [
-    t.status === "active" ? 0 : 1,
-    Number(t.priority) || 2,
-    t.deadline || "9999-12-31",
-    -toMillis(t.createdAt),
-  ];
-}
-function cmp(a, b) {
-  const ka = sortKey(a), kb = sortKey(b);
-  for (let i = 0; i < ka.length; i++) {
-    if (ka[i] < kb[i]) return -1;
-    if (ka[i] > kb[i]) return 1;
-  }
-  return 0;
-}
-
-// 現場別件数 + 全タスク 0 件時の移行ボタン表示判定
-function countActiveBySite(site) {
-  if (site === "*") return tasks.filter((t) => t.status === "active").length;
-  return tasks.filter((t) => (t.site || "") === site && t.status === "active").length;
-}
-
-function renderTabs() {
-  const tabsEl = $("tabs");
-  tabsEl.innerHTML = "";
-  const all = [
-    { key: "*", label: "全部" },
-    { key: "", label: "雑務" },
-    ...sites.map((s) => ({ key: s, label: s })),
-  ];
-  for (const it of all) {
-    const btn = document.createElement("button");
-    btn.className = "tab" + (it.key === currentSite ? " on" : "");
-    btn.textContent = it.label;
-    const cnt = countActiveBySite(it.key);
-    if (cnt > 0) {
-      const c = document.createElement("span");
-      c.className = "count";
-      c.textContent = cnt;
-      btn.appendChild(c);
-    }
-    btn.addEventListener("click", () => {
-      currentSite = it.key;
-      expandedId = null;
-      pickerOpenId = null;
-      renderTabs();
-      render();
+const App = {
+  template: TEMPLATE,
+  setup() {
+    // ───── state ─────
+    const signedIn = ref(false);
+    const signinErr = ref("");
+    const me = ref("");
+    const partner = ref("");
+    const tasks = ref([]);
+    const sites = ref([]);
+    const currentSite = ref("*");  // '*' = 全部, '' = 雑務, else = 現場名
+    const pickerOpenId = ref(null);
+    const expandedId = ref(null);
+    const modalOpen = ref(false);
+    const editingId = ref(null);
+    const form = reactive({ title: "", who: "left", priority: 2, deadline: "", site: "" });
+    const saving = ref(false);
+    const migrating = ref(false);
+    const titleInput = ref(null);
+    // スワイプ + コインフリップ状態 (1 度に 1 つだけアクティブ)
+    const swipe = reactive({
+      taskId: null,
+      dragging: false,
+      startX: 0, startY: 0,
+      deltaX: 0,
+      angle: 0,
+      fromPos: null,
+      nextPos: null,
     });
-    tabsEl.appendChild(btn);
-  }
-}
 
-function render() {
-  const lastSeen = getLastSeen();
-  // 現在のタブにマッチするタスクだけ表示 ('*' = 全部、フィルタなし)
-  const filtered = currentSite === "*"
-    ? tasks
-    : tasks.filter((t) => (t.site || "") === currentSite);
-  const sorted = filtered.slice().sort(cmp);
-  const el = $("list");
-  el.innerHTML = "";
-  // 全タスク 0 件 → 初回想定 → 移行ボタン表示。それ以外は非表示
-  $("migrateBtn").style.display = tasks.length === 0 ? "block" : "none";
-  if (!sorted.length) {
-    const label = currentSite === "*" ? "全部" : (currentSite || "雑務");
-    el.innerHTML = `<div class="empty">「${label}」のタスクはありません</div>`;
-    renderTabs(); // count 更新
-    return;
-  }
-  for (const t of sorted) {
-    const wrap = renderRow(t, lastSeen);
-    el.appendChild(wrap);
-    if (expandedId === t.id) wrap.appendChild(renderActions(t));
-  }
-  renderTabs(); // count 更新
-}
+    let fbAuth = null;
+    let fbDb = null;
+    let unsubscribeTasks = null;
 
-// ───── Firestore 書き込みヘルパー ─────
-async function saveTask(id, fields) {
-  // id 指定で update、未指定で新規作成 (自動 id)
-  const ref = id ? doc(db, "tasks", id) : doc(collection(db, "tasks"));
-  await setDoc(ref, {
-    ...fields,
-    updatedAt: serverTimestamp(),
-    ...(id ? {} : {
-      fromEmail: me,
-      status: "active",
-      createdAt: serverTimestamp(),
-    }),
-  }, { merge: true });
-}
-async function patchTask(id, fields) {
-  await updateDoc(doc(db, "tasks", id), { ...fields, updatedAt: serverTimestamp() });
-}
-async function removeTask(id) {
-  await deleteDoc(doc(db, "tasks", id));
-}
+    // ───── helpers (純粋関数) ─────
+    function nameOf(em) { return NAME_BY_EMAIL[(em || "").toLowerCase()] || em || "?"; }
+    function shortOf(em) { return (nameOf(em) || "?").slice(0, 1); }
+    function posOf(t) {
+      const to = (t.toEmail || "").toLowerCase();
+      if (to === "both") return "center";
+      if (to === me.value) return "right";
+      return "left";
+    }
+    function emailOfPos(pos) {
+      if (pos === "center") return "both";
+      if (pos === "right") return me.value;
+      return partner.value;
+    }
+    function roleLabel(pos) {
+      if (pos === "center") return "共";
+      if (pos === "right") return shortOf(me.value);
+      return shortOf(partner.value);
+    }
+    function colorKey(pos) {
+      if (pos === "center") return "both";
+      const em = pos === "right" ? me.value : partner.value;
+      return PERSON_KEY[em] || "konishi";
+    }
+    function toMillis(ts) {
+      if (!ts) return 0;
+      if (typeof ts.toMillis === "function") return ts.toMillis();
+      return new Date(ts).getTime() || 0;
+    }
+    function toIso(ts) {
+      if (!ts) return "";
+      if (typeof ts.toDate === "function") return ts.toDate().toISOString();
+      return new Date(ts).toISOString();
+    }
+    function fmtDate(d) {
+      if (!d) return "";
+      return String(d).slice(0, 10).replace(/^\d{4}-/, "").replace("-", "/");
+    }
+    function deadlineClass(d) {
+      if (!d) return "";
+      const today = new Date(); today.setHours(0, 0, 0, 0);
+      const due = new Date(String(d).slice(0, 10) + "T00:00:00");
+      const days = (due - today) / 86400000;
+      if (days < 0) return "over";
+      if (days <= 3) return "soon";
+      return "";
+    }
+    function getLastSeen() { return localStorage.getItem(LAST_SEEN_KEY) || "1970-01-01T00:00:00Z"; }
+    function setLastSeen() { localStorage.setItem(LAST_SEEN_KEY, new Date().toISOString()); }
 
-function renderRow(t, lastSeen) {
-  const wrap = document.createElement("div");
-  wrap.className = "card-wrap" +
-    (t.status === "done" ? " done" : "") +
-    (expandedId === t.id ? " expanded" : "");
-  const card = document.createElement("div");
-  card.className = "card";
-  card.dataset.id = t.id;
+    // ───── computeds ─────
+    const meLabel = computed(() => nameOf(me.value) + (partner.value ? `（相手: ${nameOf(partner.value)}）` : ""));
+    const tabs = computed(() => [
+      { key: "*", label: "全部" },
+      { key: "", label: "雑務" },
+      ...sites.value.map((s) => ({ key: s, label: s })),
+    ]);
+    const currentLabel = computed(() =>
+      currentSite.value === "*" ? "全部" : (currentSite.value || "雑務")
+    );
+    function tabCount(key) {
+      if (key === "*") return tasks.value.filter((t) => t.status === "active").length;
+      return tasks.value.filter((t) => (t.site || "") === key && t.status === "active").length;
+    }
+    function sortKey(t) {
+      return [
+        t.status === "active" ? 0 : 1,
+        Number(t.priority) || 2,
+        t.deadline || "9999-12-31",
+        -toMillis(t.createdAt),
+      ];
+    }
+    function cmp(a, b) {
+      const ka = sortKey(a), kb = sortKey(b);
+      for (let i = 0; i < ka.length; i++) {
+        if (ka[i] < kb[i]) return -1;
+        if (ka[i] > kb[i]) return 1;
+      }
+      return 0;
+    }
+    const sortedTasks = computed(() => {
+      const filtered = currentSite.value === "*"
+        ? tasks.value
+        : tasks.value.filter((t) => (t.site || "") === currentSite.value);
+      return filtered.slice().sort(cmp);
+    });
+    function isUnread(t) {
+      const isMine = (t.toEmail || "").toLowerCase() === me.value || (t.toEmail || "").toLowerCase() === "both";
+      return isMine && t.status === "active"
+        && toIso(t.createdAt) > getLastSeen()
+        && (t.fromEmail || "").toLowerCase() !== me.value;
+    }
 
-  // 担当ピッカー (各役割を socket でラップ。socket は穴、内側に rim と coin)
-  const cur = posOf(t);
-  const picker = document.createElement("div");
-  picker.className = "role-picker" + (pickerOpenId === t.id ? " open" : "");
-  for (const pos of ["left", "center", "right"]) {
-    const socket = document.createElement("div");
-    socket.className = "role-socket" + (pos === cur ? " current-socket" : "");
-    const rim = document.createElement("span");
-    rim.className = "role-rim";
-    socket.appendChild(rim);
-    const btn = document.createElement("button");
-    btn.className = "role-btn role-" + colorKey(pos) + (pos === cur ? " current" : "");
-    btn.textContent = roleLabel(pos);
-    btn.addEventListener("click", async (e) => {
-      e.stopPropagation();
-      if (pickerOpenId !== t.id) {
-        pickerOpenId = t.id;
-        render();
+    // ───── role-btn 動的 class / style (スワイプ中だけコイン構造) ─────
+    function isFlipping(t, pos) {
+      // current の role-btn のみフリップ表示 (open でも current だけ)
+      return swipe.taskId === t.id
+        && swipe.nextPos
+        && pos === posOf(t);
+    }
+    function roleBtnClass(t, pos) {
+      const cls = ["role-" + colorKey(pos)];
+      if (pos === posOf(t)) cls.push("current");
+      if (isFlipping(t, pos)) {
+        cls.push("flipping");
+        if (swipe.dragging) cls.push("swiping");
+      }
+      return cls;
+    }
+    function roleBtnStyle(t, pos) {
+      if (isFlipping(t, pos)) {
+        return { "--flip-angle": swipe.angle + "deg" };
+      }
+      return {};
+    }
+    function cardStyleFor(t) {
+      if (swipe.taskId === t.id && (swipe.dragging || swipe.deltaX !== 0)) {
+        const visual = rubberBand(swipe.deltaX);
+        return { transform: `translateX(${visual}px)` };
+      }
+      return {};
+    }
+
+    // ───── スワイプ + コインフリップ ─────
+    const DRAG_THRESHOLD = 6;
+    const FULL_SWIPE = 50;
+    const RUBBER_CUSHION = 28;
+    function rubberBand(dx) {
+      const sign = dx >= 0 ? 1 : -1;
+      const abs = Math.abs(dx);
+      if (abs <= FULL_SWIPE) return dx;
+      const over = abs - FULL_SWIPE;
+      return sign * (FULL_SWIPE + RUBBER_CUSHION * (1 - RUBBER_CUSHION / (over + RUBBER_CUSHION)));
+    }
+
+    function clearSwipe() {
+      swipe.taskId = null;
+      swipe.dragging = false;
+      swipe.deltaX = 0;
+      swipe.angle = 0;
+      swipe.fromPos = null;
+      swipe.nextPos = null;
+    }
+
+    function onCardDown(e, t) {
+      // role-picker / act-btn 直接タップは別ハンドラ (= 何もしない、stop で吸う)
+      if (e.target.closest(".role-picker") || e.target.closest(".act-btn")) return;
+      swipe.taskId = t.id;
+      swipe.dragging = false;
+      swipe.startX = e.clientX;
+      swipe.startY = e.clientY;
+      swipe.deltaX = 0;
+      swipe.angle = 0;
+      swipe.fromPos = posOf(t);
+      swipe.nextPos = null;
+      // ドキュメント全体に move/up を貼って、指がカード外へ出ても継続できるようにする
+    }
+
+    function onPointerMove(e) {
+      if (!swipe.taskId) return;
+      const t = tasks.value.find((x) => x.id === swipe.taskId);
+      if (!t) { clearSwipe(); return; }
+      const dx = e.clientX - swipe.startX;
+      const dy = e.clientY - swipe.startY;
+      if (!swipe.dragging) {
+        if (Math.abs(dx) > DRAG_THRESHOLD && Math.abs(dx) > Math.abs(dy)) {
+          swipe.dragging = true;
+          // 方向確定: 遷移先決定
+          const order = ["left", "center", "right"];
+          const idx = order.indexOf(swipe.fromPos);
+          const dir = dx > 0 ? 1 : -1;
+          const nIdx = Math.max(0, Math.min(2, idx + dir));
+          if (nIdx !== idx) swipe.nextPos = order[nIdx];
+        } else if (Math.abs(dy) > DRAG_THRESHOLD) {
+          // 縦スクロール優先 → スワイプ放棄
+          clearSwipe();
+          return;
+        }
+      }
+      if (swipe.dragging) {
+        e.preventDefault();
+        swipe.deltaX = dx;
+        if (swipe.nextPos) {
+          const sign = dx > 0 ? 1 : -1;
+          const ratio = Math.min(1, Math.abs(dx) / FULL_SWIPE);
+          swipe.angle = sign * ratio * 180;
+        }
+      }
+    }
+
+    async function onPointerUp(e) {
+      if (!swipe.taskId) return;
+      const t = tasks.value.find((x) => x.id === swipe.taskId);
+      if (!t) { clearSwipe(); return; }
+      const wasDragging = swipe.dragging;
+      const dx = swipe.deltaX;
+      const nextPos = swipe.nextPos;
+      // タップ (未ドラッグ + 未移動) → 展開トグル
+      if (!wasDragging && Math.abs(dx) < DRAG_THRESHOLD) {
+        expandedId.value = expandedId.value === t.id ? null : t.id;
+        pickerOpenId.value = null;
+        clearSwipe();
         return;
       }
-      pickerOpenId = null;
+      const shouldCommit = nextPos && Math.abs(dx) >= FULL_SWIPE * 0.5;
+      // dragging オフでスナップ用 transition を効かせる
+      swipe.dragging = false;
+      if (shouldCommit) {
+        // 残り角度を ±180° まで補完
+        swipe.angle = (dx > 0 ? 1 : -1) * 180;
+        swipe.deltaX = 0;
+        await new Promise((r) => setTimeout(r, 200));
+        try { await patchTask(t.id, { toEmail: emailOfPos(nextPos) }); }
+        catch (err) { alert("移動失敗: " + err.message); }
+        // onSnapshot で tasks 更新 → 再描画。swipe 状態をクリア
+        clearSwipe();
+      } else if (nextPos) {
+        // スナップバック
+        swipe.angle = 0;
+        swipe.deltaX = 0;
+        setTimeout(clearSwipe, 220);
+      } else {
+        clearSwipe();
+      }
+    }
+
+    function onPointerCancel() {
+      if (!swipe.taskId) return;
+      swipe.dragging = false;
+      swipe.angle = 0;
+      swipe.deltaX = 0;
+      setTimeout(clearSwipe, 220);
+    }
+
+    // ───── Firestore CRUD ─────
+    async function saveTask(id, fields) {
+      const ref = id ? doc(fbDb, "tasks", id) : doc(collection(fbDb, "tasks"));
+      await setDoc(ref, {
+        ...fields,
+        updatedAt: serverTimestamp(),
+        ...(id ? {} : {
+          fromEmail: me.value,
+          status: "active",
+          createdAt: serverTimestamp(),
+        }),
+      }, { merge: true });
+    }
+    async function patchTask(id, fields) {
+      await updateDoc(doc(fbDb, "tasks", id), { ...fields, updatedAt: serverTimestamp() });
+    }
+    async function removeTask(id) {
+      await deleteDoc(doc(fbDb, "tasks", id));
+    }
+
+    // ───── アクション ─────
+    function onTabClick(key) {
+      currentSite.value = key;
+      expandedId.value = null;
+      pickerOpenId.value = null;
+    }
+    async function onRoleClick(t, pos) {
+      if (pickerOpenId.value !== t.id) {
+        pickerOpenId.value = t.id;
+        return;
+      }
+      pickerOpenId.value = null;
+      const cur = posOf(t);
       if (pos !== cur) {
         try { await patchTask(t.id, { toEmail: emailOfPos(pos) }); }
         catch (err) { alert("移動失敗: " + err.message); }
-        // onSnapshot が自動で再描画
-      } else {
-        render();
       }
-    });
-    socket.appendChild(btn);
-    picker.appendChild(socket);
-  }
-  card.appendChild(picker);
+    }
+    async function onToggleDone(t) {
+      try { await patchTask(t.id, { status: t.status === "done" ? "active" : "done" }); }
+      catch (err) { alert("更新失敗: " + err.message); }
+    }
+    async function onCyclePriority(t) {
+      const next = ((Number(t.priority) || 2) % 3) + 1;
+      try { await patchTask(t.id, { priority: next }); }
+      catch (err) { alert("更新失敗: " + err.message); }
+    }
+    async function onDelete(t) {
+      if (!confirm("削除しますか？")) return;
+      expandedId.value = null;
+      try { await removeTask(t.id); }
+      catch (err) { alert("削除失敗: " + err.message); }
+    }
 
-  // 本体
-  const body = document.createElement("div");
-  body.className = "body";
-  const rowTop = document.createElement("div");
-  rowTop.className = "row-top";
-  const pip = document.createElement("div");
-  pip.className = "pip p" + (Number(t.priority) || 2);
-  const ttl = document.createElement("div");
-  ttl.className = "card-title";
-  ttl.textContent = t.title || "(無題)";
-  rowTop.append(pip, ttl);
-  // 未読
-  const isMine = (t.toEmail || "").toLowerCase() === me || (t.toEmail || "").toLowerCase() === "both";
-  if (isMine && t.status === "active" && toIso(t.createdAt) > lastSeen && (t.fromEmail || "").toLowerCase() !== me) {
-    const u = document.createElement("div");
-    u.className = "unread-dot";
-    rowTop.appendChild(u);
-  }
-  body.appendChild(rowTop);
-  if (t.deadline) {
-    const meta = document.createElement("div");
-    meta.className = "card-meta";
-    const dl = document.createElement("span");
-    dl.className = "deadline " + deadlineClass(t.deadline);
-    dl.textContent = "⏰ " + fmtDate(t.deadline);
-    meta.appendChild(dl);
-    body.appendChild(meta);
-  }
-  card.appendChild(body);
+    // ───── モーダル ─────
+    function openModal(t) {
+      editingId.value = t ? t.id : null;
+      form.title = t ? (t.title || "") : "";
+      form.deadline = t && t.deadline ? String(t.deadline).slice(0, 10) : "";
+      form.who = t ? posOf(t) : "left";
+      form.priority = t ? (Number(t.priority) || 2) : 2;
+      form.site = t ? (t.site || "") : (currentSite.value === "*" ? "" : currentSite.value);
+      modalOpen.value = true;
+      nextTick(() => titleInput.value?.focus());
+    }
+    function closeModal() {
+      modalOpen.value = false;
+      editingId.value = null;
+    }
+    async function saveModal() {
+      const title = (form.title || "").trim();
+      if (!title) { titleInput.value?.focus(); return; }
+      saving.value = true;
+      try {
+        await saveTask(editingId.value, {
+          title,
+          toEmail: emailOfPos(form.who),
+          priority: Number(form.priority) || 2,
+          deadline: form.deadline || null,
+          site: form.site || "",
+        });
+        closeModal();
+      } catch (e) {
+        alert("保存に失敗: " + e.message);
+      } finally {
+        saving.value = false;
+      }
+    }
 
-  wrap.appendChild(card);
-  makeSwipeable(card, t);
-  return wrap;
-}
-
-function renderActions(t) {
-  const bar = document.createElement("div");
-  bar.className = "actions";
-  const doneBtn = document.createElement("button");
-  doneBtn.className = "act-btn done";
-  doneBtn.textContent = t.status === "done" ? "戻す" : "完了";
-  doneBtn.addEventListener("click", async (e) => {
-    e.stopPropagation();
-    try { await patchTask(t.id, { status: t.status === "done" ? "active" : "done" }); }
-    catch (err) { alert("更新失敗: " + err.message); }
-  });
-  const priBtn = document.createElement("button");
-  priBtn.className = "act-btn";
-  priBtn.textContent = "優先度 " + ["高","中","低"][((t.priority || 2) - 1)];
-  priBtn.addEventListener("click", async (e) => {
-    e.stopPropagation();
-    const next = ((t.priority || 2) % 3) + 1;
-    try { await patchTask(t.id, { priority: next }); }
-    catch (err) { alert("更新失敗: " + err.message); }
-  });
-  const editBtn = document.createElement("button");
-  editBtn.className = "act-btn";
-  editBtn.textContent = "編集";
-  editBtn.addEventListener("click", (e) => { e.stopPropagation(); openModal(t); });
-  const delBtn = document.createElement("button");
-  delBtn.className = "act-btn del";
-  delBtn.textContent = "削除";
-  delBtn.addEventListener("click", async (e) => {
-    e.stopPropagation();
-    if (!confirm("削除しますか？")) return;
-    expandedId = null;
-    try { await removeTask(t.id); }
-    catch (err) { alert("削除失敗: " + err.message); }
-  });
-  bar.append(doneBtn, priBtn, editBtn, delBtn);
-  return bar;
-}
-
-// ───── 厚み付きコインを構築 (1 枚 edge + 2 面) ─────
-// edge は face と直交させた縦バー (rotateY(-90deg) 済)。coin の rotateY が
-// 90° に達した瞬間 edge の法線が +Z に向くため、edge-on でコインの「側面」
-// として 7px 幅 × 30px 高の厚みが見える。
-function buildCoinFaces(roleBtn, fromKey, fromLbl, toKey, toLbl) {
-  roleBtn.classList.add("flipping");
-  roleBtn.innerHTML =
-    `<span class="role-edge"></span>` +
-    `<span class="role-face front role-${fromKey}">${fromLbl}</span>` +
-    `<span class="role-face back role-${toKey}">${toLbl}</span>`;
-}
-
-// スワイプ中はリアルタイム回転、ピッカータップ時はプログラム的に 180° 回す
-function animateRoleFlip(card, fromPos, toPos) {
-  return new Promise((resolve) => {
-    const picker = card.querySelector(".role-picker");
-    if (!picker) { resolve(); return; }
-    picker.classList.remove("open");
-    const roleBtn = picker.querySelector(".role-btn.current");
-    if (!roleBtn) { resolve(); return; }
-    buildCoinFaces(
-      roleBtn,
-      colorKey(fromPos), roleLabel(fromPos),
-      colorKey(toPos), roleLabel(toPos)
-    );
-    roleBtn.style.setProperty("--flip-angle", "0deg");
-    requestAnimationFrame(() => {
-      roleBtn.style.setProperty("--flip-angle", "180deg");
-    });
-    setTimeout(resolve, 240);
-  });
-}
-
-// ───── スワイプ (左右で担当を1段階シフト + タップで展開) ─────
-function makeSwipeable(card, t) {
-  let startX = null, startY = null, deltaX = 0, dragging = false, moved = false;
-  let roleBtnEl = null;       // 現在の current コイン
-  let nextPos = null;          // スワイプ方向で確定する遷移先 (null = 未確定)
-  let curPos = null;           // スワイプ開始時の役割
-  const DRAG_THRESHOLD = 6;
-  const FULL_SWIPE = 50;       // 50px で 180° 完全反転 = コミット閾値
-  const RUBBER_CUSHION = 28;   // 50px 超過時のラバーバンド漸近上限 (= max 78px 表示)
-
-  // iOS 風ラバーバンド: ~50px は線形、超過は asymptote で 78px まで
-  // 自乗関数的: 引っ張るほど抵抗が増す感じ
-  function rubberBand(dx) {
-    const sign = dx >= 0 ? 1 : -1;
-    const abs = Math.abs(dx);
-    if (abs <= FULL_SWIPE) return dx;
-    const over = abs - FULL_SWIPE;
-    return sign * (FULL_SWIPE + RUBBER_CUSHION * (1 - RUBBER_CUSHION / (over + RUBBER_CUSHION)));
-  }
-
-  function setAngle(deg, instant) {
-    if (!roleBtnEl) return;
-    if (instant) roleBtnEl.classList.add("swiping");
-    else roleBtnEl.classList.remove("swiping");
-    roleBtnEl.style.setProperty("--flip-angle", deg + "deg");
-  }
-
-  card.addEventListener("pointerdown", (e) => {
-    if (e.target.closest(".role-picker") || e.target.closest(".act-btn")) return;
-    startX = e.clientX; startY = e.clientY; deltaX = 0; dragging = false; moved = false;
-    curPos = posOf(t);
-    nextPos = null;
-    roleBtnEl = card.querySelector(".role-btn.current");
-  });
-  card.addEventListener("pointermove", (e) => {
-    if (startX == null) return;
-    const dx = e.clientX - startX;
-    const dy = e.clientY - startY;
-    if (!dragging) {
-      if (Math.abs(dx) > DRAG_THRESHOLD && Math.abs(dx) > Math.abs(dy)) {
-        dragging = true;
-        card.setPointerCapture(e.pointerId);
-        card.classList.add("dragging");
-        // 方向確定 → 遷移先を決めてコイン 2 面構造を構築 (リアルタイム回転に備える)
-        const order = ["left", "center", "right"];
-        const idx = order.indexOf(curPos);
-        const dir = dx > 0 ? 1 : -1;
-        const nIdx = Math.max(0, Math.min(2, idx + dir));
-        if (nIdx !== idx && roleBtnEl) {
-          nextPos = order[nIdx];
-          buildCoinFaces(
-            roleBtnEl,
-            colorKey(curPos), roleLabel(curPos),
-            colorKey(nextPos), roleLabel(nextPos)
-          );
+    // ───── 移行: SQL → Firestore ─────
+    async function onMigrate() {
+      if (migrating.value) return;
+      if (!confirm("Cloud SQL に残っている既存タスクを Firestore に取り込みます。続けますか?")) return;
+      migrating.value = true;
+      try {
+        const token = await fbAuth.currentUser.getIdToken();
+        const r = await fetch(API_BASE + "/api/tasks", {
+          headers: { authorization: "Bearer " + token },
+        });
+        if (!r.ok) throw new Error(r.status + ": " + await r.text());
+        const j = await r.json();
+        const sqlTasks = j.tasks || [];
+        let count = 0;
+        for (const t of sqlTasks) {
+          await setDoc(doc(fbDb, "tasks", t.id), {
+            title: t.title || "",
+            fromEmail: (t.fromEmail || "").toLowerCase(),
+            toEmail: (t.toEmail || "").toLowerCase(),
+            priority: Number(t.priority) || 2,
+            deadline: t.deadline ? String(t.deadline).slice(0, 10) : null,
+            status: t.status || "active",
+            site: "",
+            createdAt: t.createdAt ? new Date(t.createdAt) : new Date(),
+            updatedAt: t.updatedAt ? new Date(t.updatedAt) : new Date(),
+          }, { merge: true });
+          count++;
         }
-      } else if (Math.abs(dy) > DRAG_THRESHOLD) {
-        startX = null;
+        alert(`${count} 件を取り込みました`);
+      } catch (e) {
+        alert("失敗: " + (e.message || e));
+      } finally {
+        migrating.value = false;
+      }
+    }
+
+    // ───── auth + 初期化 ─────
+    function goLauncher() { location.href = "/?next=" + encodeURIComponent("/task/"); }
+    async function doSignOut() {
+      if (fbAuth) await signOut(fbAuth);
+      location.reload();
+    }
+
+    async function boot(email) {
+      me.value = (email || "").toLowerCase();
+      partner.value = PARTNER_OF[me.value] || "";
+      // 現場一覧
+      try {
+        const token = fbAuth?.currentUser ? await fbAuth.currentUser.getIdToken() : null;
+        const r = await fetch(API_BASE + "/api/sites", {
+          headers: token ? { authorization: "Bearer " + token } : {},
+        });
+        if (r.ok) {
+          const sj = await r.json();
+          sites.value = (Array.isArray(sj) ? sj : []).map((s) => s.name).filter(Boolean);
+        }
+      } catch (_) { sites.value = []; }
+      // Firestore リアルタイム購読 (自分関連だけクライアント側で絞る)
+      unsubscribeTasks = onSnapshot(
+        collection(fbDb, "tasks"),
+        (snap) => {
+          tasks.value = snap.docs.map((d) => ({ id: d.id, ...d.data() }))
+            .filter((t) => {
+              const fe = (t.fromEmail || "").toLowerCase();
+              const te = (t.toEmail || "").toLowerCase();
+              return fe === me.value || te === me.value || te === "both";
+            });
+        },
+        (e) => { console.warn("[task] snapshot failed", e); }
+      );
+      signedIn.value = true;
+      setTimeout(setLastSeen, 1500);
+    }
+
+    onMounted(async () => {
+      // 開発バイパス
+      if (window.DEV_NO_AUTH) {
+        const cfg = await fetch("/__/firebase/init.json").then((r) => r.json());
+        const app = initializeApp(cfg);
+        fbDb = getFirestore(app);
+        boot("dev@local");
         return;
       }
-    }
-    if (dragging) {
-      e.preventDefault();           // 縦スクロールをロック (斜めスワイプのジッタ防止)
-      deltaX = dx;
-      moved = true;
-      // 視覚移動: 50px までは線形、超過分は asymptote (~78px で頭打ち)
-      const visualDx = rubberBand(dx);
-      card.style.transform = `translateX(${visualDx}px)`;
-      // リアルタイム回転: 0〜50px を 0〜180° に線形マップ、50px 以上は 180° クランプ
-      if (nextPos && roleBtnEl) {
-        const sign = dx > 0 ? 1 : -1;
-        const ratio = Math.min(1, Math.abs(dx) / FULL_SWIPE);
-        setAngle(sign * ratio * 180, true);
+      try {
+        const cfg = await fetch("/__/firebase/init.json").then((r) => r.json());
+        cfg.authDomain = location.hostname;
+        const app = initializeApp(cfg);
+        fbAuth = getAuth(app);
+        fbDb = getFirestore(app);
+        await setPersistence(fbAuth, browserLocalPersistence);
+        gateInternal(fbAuth);
+        let entered = false;
+        onAuthStateChanged(fbAuth, async (user) => {
+          if (user) {
+            if (entered) return;
+            entered = true;
+            sessionStorage.removeItem("authBounce");
+            await boot((user.email || "").toLowerCase());
+            return;
+          }
+          if (sessionStorage.getItem("authBounce")) {
+            signedIn.value = false;
+            return;
+          }
+          sessionStorage.setItem("authBounce", "1");
+          location.replace("/?next=" + encodeURIComponent("/task/"));
+        });
+      } catch (e) {
+        signedIn.value = false;
+        signinErr.value = "init失敗: " + (e.message || e);
       }
-    }
-  }, { passive: false });
-  card.addEventListener("pointerup", async () => {
-    if (startX == null) return;
-    const wasDragging = dragging;
-    card.classList.remove("dragging");
-    card.style.transform = "";
-    startX = null;
-    if (!wasDragging && !moved) {
-      // タップ → 展開
-      expandedId = expandedId === t.id ? null : t.id;
-      pickerOpenId = null;
-      render();
-      return;
-    }
-    // 50% (= 25px = 90° edge-on) 過ぎたらコミット、未満ならスナップバック
-    const shouldCommit = nextPos && Math.abs(deltaX) >= FULL_SWIPE * 0.5;
-    if (shouldCommit) {
-      // 残り角度をなめらかに 180° (sign 付き) まで持っていく → DB 更新
-      const sign = deltaX > 0 ? 1 : -1;
-      setAngle(sign * 180, false);
-      await new Promise((r) => setTimeout(r, 200));
-      try { await patchTask(t.id, { toEmail: emailOfPos(nextPos) }); }
-      catch (err) { alert("移動失敗: " + err.message); }
-    } else if (nextPos && roleBtnEl) {
-      // スナップバック (0° 戻し)
-      setAngle(0, false);
-    }
-  });
-  card.addEventListener("pointercancel", () => {
-    card.classList.remove("dragging");
-    card.style.transform = "";
-    startX = null;
-    if (nextPos && roleBtnEl) setAngle(0, false);
-  });
-}
 
-// ───── modal ─────
-function setupModal() {
-  document.querySelectorAll('[data-who]').forEach((b) => {
-    b.addEventListener("click", () => {
-      modalWho = b.dataset.who;
-      document.querySelectorAll('[data-who]').forEach((x) => x.classList.toggle("sel", x === b));
-    });
-  });
-  document.querySelectorAll('[data-p]').forEach((b) => {
-    b.addEventListener("click", () => {
-      modalPriority = Number(b.dataset.p);
-      document.querySelectorAll('[data-p]').forEach((x) => {
-        const isSel = x === b;
-        x.classList.toggle("sel", isSel);
-        x.classList.toggle("p1", isSel && modalPriority === 1);
-        x.classList.toggle("p2", isSel && modalPriority === 2);
-        x.classList.toggle("p3", isSel && modalPriority === 3);
+      // グローバル pointer リスナ (passive:false で preventDefault 可)
+      document.addEventListener("pointermove", onPointerMove, { passive: false });
+      document.addEventListener("pointerup", onPointerUp);
+      document.addEventListener("pointercancel", onPointerCancel);
+      // ピッカー外タップで閉じる
+      document.addEventListener("click", (e) => {
+        if (pickerOpenId.value && !e.target.closest(".role-picker")) {
+          pickerOpenId.value = null;
+        }
       });
     });
-  });
-  $("fabAdd").addEventListener("click", () => openModal(null));
-  $("modal").addEventListener("click", (e) => { if (e.target.id === "modal") closeModal(); });
-  // 現場 select の変更を modalSite に反映
-  $("iSite").addEventListener("change", (e) => { modalSite = e.target.value || ""; });
-  $("saveBtn").addEventListener("click", async () => {
-    const btn = $("saveBtn");
-    if (btn.disabled) return;            // 多重発火ガード (連打対策)
-    const title = $("iTitle").value.trim();
-    if (!title) { $("iTitle").focus(); return; }
-    const deadline = $("iDeadline").value || null;
-    const toEmail = emailOfPos(modalWho);
-    const site = modalSite || "";
-    const origText = btn.textContent;
-    btn.disabled = true;
-    btn.textContent = "保存中…";
-    try {
-      await saveTask(editingId, { title, toEmail, priority: modalPriority, deadline, site });
-      closeModal();
-    } catch (e) {
-      alert("保存に失敗: " + e.message);
-    } finally {
-      btn.disabled = false;
-      btn.textContent = origText;
-    }
-  });
-}
-function openModal(t) {
-  editingId = t ? t.id : null;
-  $("modalTitle").textContent = t ? "編集" : "新規タスク";
-  $("iTitle").value = t ? (t.title || "") : "";
-  $("iDeadline").value = t && t.deadline ? String(t.deadline).slice(0, 10) : "";
-  modalWho = t ? posOf(t) : "left";
-  modalPriority = t ? (t.priority || 2) : 2;
-  // 編集 → そのタスクの site、新規 → 表示中タブの現場 (全部タブのときは雑務='') を初期値に
-  modalSite = t ? (t.site || "") : (currentSite === "*" ? "" : currentSite);
-  $("iSite").value = modalSite;
-  document.querySelectorAll('[data-who]').forEach((x) => x.classList.toggle("sel", x.dataset.who === modalWho));
-  document.querySelectorAll('[data-p]').forEach((x) => {
-    const isSel = Number(x.dataset.p) === modalPriority;
-    x.classList.toggle("sel", isSel);
-    x.classList.toggle("p1", isSel && modalPriority === 1);
-    x.classList.toggle("p2", isSel && modalPriority === 2);
-    x.classList.toggle("p3", isSel && modalPriority === 3);
-  });
-  $("modal").classList.add("open");
-  setTimeout(() => $("iTitle").focus(), 50);
-}
-function closeModal() {
-  $("modal").classList.remove("open");
-  editingId = null;
-}
 
-// ピッカー以外をタップしたら閉じる
-document.addEventListener("click", (e) => {
-  if (pickerOpenId && !e.target.closest(".role-picker")) {
-    pickerOpenId = null;
-    render();
-  }
-});
+    onBeforeUnmount(() => {
+      if (unsubscribeTasks) unsubscribeTasks();
+      document.removeEventListener("pointermove", onPointerMove);
+      document.removeEventListener("pointerup", onPointerUp);
+      document.removeEventListener("pointercancel", onPointerCancel);
+    });
+
+    return {
+      signedIn, signinErr, me, partner, tasks, sites, currentSite,
+      pickerOpenId, expandedId, modalOpen, editingId, form, saving, migrating,
+      titleInput, swipe,
+      meLabel, tabs, currentLabel, tabCount, sortedTasks,
+      posOf, emailOfPos, roleLabel, colorKey,
+      fmtDate, deadlineClass, isUnread,
+      isFlipping, roleBtnClass, roleBtnStyle, cardStyleFor,
+      onCardDown,
+      onTabClick, onRoleClick, onToggleDone, onCyclePriority, onDelete,
+      openModal, closeModal, saveModal,
+      onMigrate,
+      goLauncher, doSignOut,
+    };
+  },
+};
+
+createApp(App).mount("#app");
 </script>
 </body>
 </html>
