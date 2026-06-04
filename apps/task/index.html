@@ -53,12 +53,13 @@ body { font-family: 'Outfit', -apple-system, sans-serif; font-weight: 400; backg
 
 /* カード本体: 外側 .card-wrap がシャドウ + 背景を持ち、展開時はそのまま下に
    actions を内包して縦に伸びる。.card 自体は透明な inner row。 */
-.card-wrap { position: relative; background: var(--bg); border-radius: 16px; box-shadow: 6px 6px 14px var(--sd), -5px -5px 12px var(--sl); transition: box-shadow 200ms ease; overflow: hidden; }
+.card-wrap { position: relative; background: var(--bg); border-radius: 16px; box-shadow: 6px 6px 14px var(--sd), -5px -5px 12px var(--sl); transition: box-shadow 200ms ease, transform 200ms ease; overflow: hidden; }
 .card-wrap.expanded { box-shadow: 9px 9px 20px var(--sd), -6px -6px 14px var(--sl); }
 .card-wrap.done { opacity: 0.55; }
-.card { background: transparent; padding: 11px 14px 11px 11px; display: flex; align-items: center; gap: 11px; touch-action: pan-y; user-select: none; transition: transform 200ms ease, opacity 200ms ease, box-shadow 200ms ease; position: relative; }
-/* 横スワイプ中の card は wrap から浮き上がって見せる */
-.card.dragging { z-index: 100; background: var(--bg); border-radius: 16px; box-shadow: 12px 12px 28px var(--sd), -4px -4px 14px var(--sl); }
+/* 横スワイプ中は wrap ごと translate (card だけ動かすと wrap の overflow:hidden で
+   中身が見切れる)。dragging クラスで transition を切って指の動きに即追従。 */
+.card-wrap.dragging { z-index: 100; box-shadow: 12px 12px 28px var(--sd), -4px -4px 14px var(--sl); transition: box-shadow 200ms ease; }
+.card { background: transparent; padding: 11px 14px 11px 11px; display: flex; align-items: center; gap: 11px; touch-action: pan-y; user-select: none; position: relative; }
 .card-wrap.done .card-title { text-decoration: line-through; }
 
 /* 担当ピッカー (左端)。
@@ -316,11 +317,10 @@ const TEMPLATE = `
       <div v-if="!sortedTasks.length" class="empty">「{{ currentLabel }}」のタスクはありません</div>
       <div v-for="t in sortedTasks" :key="t.id"
            class="card-wrap"
-           :class="{ done: t.status === 'done', expanded: expandedId === t.id }">
+           :class="{ done: t.status === 'done', expanded: expandedId === t.id, dragging: swipe.taskId === t.id && swipe.dragging }"
+           :style="cardStyleFor(t)"
+           :data-task-id="t.id">
         <div class="card"
-             :class="{ dragging: swipe.taskId === t.id && swipe.dragging }"
-             :style="cardStyleFor(t)"
-             :data-task-id="t.id"
              @pointerdown="onCardDown($event, t)">
           <div class="role-picker" :class="{ open: pickerOpenId === t.id }">
             <div v-for="pos in ['left','center','right']" :key="pos"
