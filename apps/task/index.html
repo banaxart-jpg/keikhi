@@ -62,8 +62,8 @@ body { font-family: 'Outfit', -apple-system, sans-serif; font-weight: 400; backg
 .card-wrap.done .card-title { text-decoration: line-through; }
 
 /* 担当ピッカー (左端) */
-.role-picker { display: flex; gap: 4px; align-items: center; flex-shrink: 0; }
-.role-btn { width: 34px; height: 34px; border-radius: 50%; border: none; font-family: 'Outfit', sans-serif; font-weight: 800; font-size: 13px; color: white; cursor: pointer; flex-shrink: 0; transition: all 200ms ease; box-shadow: 3px 3px 8px var(--sd), -3px -3px 8px var(--sl); }
+.role-picker { display: flex; gap: 4px; align-items: center; flex-shrink: 0; perspective: 600px; }
+.role-btn { width: 34px; height: 34px; border-radius: 50%; border: none; font-family: 'Outfit', sans-serif; font-weight: 800; font-size: 13px; color: white; cursor: pointer; flex-shrink: 0; transition: all 200ms ease; box-shadow: 3px 3px 8px var(--sd), -3px -3px 8px var(--sl); position: relative; }
 .role-btn.role-natori { background: var(--role-natori); }
 .role-btn.role-konishi { background: var(--role-konishi); }
 .role-btn.role-both { background: var(--role-both); }
@@ -71,6 +71,33 @@ body { font-family: 'Outfit', -apple-system, sans-serif; font-weight: 400; backg
 .role-picker:not(.open) .role-btn.current { display: block; }
 .role-picker.open .role-btn:not(.current) { opacity: 0.5; }
 .role-picker.open .role-btn:active { transform: scale(0.92); }
+
+/* コインフリップアニメ用の 2 面構造。flipping クラスが付くと自前 bg を消して
+   role-face が前後の見た目を担当。flipped 中は親が rotateY(180) で裏面を見せる。
+   厚みは: 外シャドウ + リム + 下側に内シャドウ で立体感を出す。 */
+.role-btn.flipping {
+  transform-style: preserve-3d;
+  background: transparent !important;
+  box-shadow: none !important;
+  transition: transform 380ms cubic-bezier(.4, .2, .3, 1);
+}
+.role-btn.flipping.flipped { transform: rotateY(180deg); }
+.role-face {
+  position: absolute; inset: 0;
+  display: flex; align-items: center; justify-content: center;
+  border-radius: 50%;
+  font-family: 'Outfit', sans-serif; font-weight: 800; font-size: 13px; color: white;
+  backface-visibility: hidden; -webkit-backface-visibility: hidden;
+  box-shadow:
+    3px 3px 8px var(--sd),
+    -3px -3px 8px var(--sl),
+    inset 0 0 0 1.5px rgba(255,255,255,0.20),
+    inset 0 -2px 4px rgba(0,0,0,0.18);
+}
+.role-face.back { transform: rotateY(180deg); }
+.role-face.role-natori { background: var(--role-natori); }
+.role-face.role-konishi { background: var(--role-konishi); }
+.role-face.role-both { background: var(--role-both); }
 
 /* タイトル + メタ */
 .pip { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
@@ -651,6 +678,34 @@ function renderActions(t) {
   return bar;
 }
 
+// ───── 担当変更時のコインフリップアニメ ─────
+// 引数の card は .card 要素。その中の .role-picker > .role-btn.current を 2 面構造に
+// 差し替えて rotateY(0 → 180) でアニメ、その間に背後で patchTask を走らせる。
+// アニメ完了後 onSnapshot が再描画するが、新しい .role-btn.current は新役割で
+// 描かれるので視覚上ジャンプしない。
+function animateRoleFlip(card, fromPos, toPos) {
+  return new Promise((resolve) => {
+    const picker = card.querySelector(".role-picker");
+    if (!picker) { resolve(); return; }
+    picker.classList.remove("open");
+    const roleBtn = picker.querySelector(".role-btn.current");
+    if (!roleBtn) { resolve(); return; }
+    const fromKey = colorKey(fromPos);
+    const toKey = colorKey(toPos);
+    const fromLbl = roleLabel(fromPos);
+    const toLbl = roleLabel(toPos);
+    roleBtn.classList.add("flipping");
+    roleBtn.innerHTML =
+      `<span class="role-face front role-${fromKey}">${fromLbl}</span>` +
+      `<span class="role-face back role-${toKey}">${toLbl}</span>`;
+    // 次フレームで flipped を toggle → CSS transition が走る
+    requestAnimationFrame(() => {
+      roleBtn.classList.add("flipped");
+    });
+    setTimeout(resolve, 400);
+  });
+}
+
 // ───── スワイプ (左右で担当を1段階シフト + タップで展開) ─────
 function makeSwipeable(card, t) {
   let startX = null, startY = null, deltaX = 0, dragging = false, moved = false;
@@ -676,11 +731,13 @@ function makeSwipeable(card, t) {
       }
     }
     if (dragging) {
+      // 横スワイプ確定後はブラウザの縦スクロールをロック (斜め動作のジッタ防止)
+      e.preventDefault();
       deltaX = dx;
       moved = true;
       card.style.transform = `translateX(${dx}px)`;
     }
-  });
+  }, { passive: false });
   card.addEventListener("pointerup", async () => {
     if (startX == null) return;
     const wasDragging = dragging;
@@ -703,8 +760,11 @@ function makeSwipeable(card, t) {
     if (idx >= order.length) idx = order.length - 1;
     const newPos = order[idx];
     if (newPos !== cur) {
-      try { await patchTask(t.id, { toEmail: emailOfPos(newPos) }); }
-      catch (err) { alert("移動失敗: " + err.message); }
+      try {
+        // コインフリップ完了を待ってから patchTask → onSnapshot 再描画
+        await animateRoleFlip(card, cur, newPos);
+        await patchTask(t.id, { toEmail: emailOfPos(newPos) });
+      } catch (err) { alert("移動失敗: " + err.message); }
     }
   });
   card.addEventListener("pointercancel", () => {
