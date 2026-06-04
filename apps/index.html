@@ -254,13 +254,7 @@ function renderGrid() {
       `<div class="app-desc">${a.desc}</div>` +
       (a.soon ? `<div class="app-badge">SOON</div>` : "") +
       (badge ? `<div class="warn-badge">${badge}</div>` : "");
-    if (!a.soon) {
-      card.onclick = (e) => {
-        if (editMode) return; // 編集モード中はナビ無効
-        location.href = a.path;
-      };
-    }
-    attachDragHandlers(card, a.id);
+    attachCardHandlers(card, a);
     g.appendChild(card);
   }
 }
@@ -305,39 +299,90 @@ function refreshSortBar() {
   });
 }
 
-// ───── ドラッグ並び替え (pointer events, mobile/desktop 両対応) ─────
+// ───── 長押し → 編集モード + ドラッグ並び替え (iPhone 風) ─────
+// 通常モードでは:
+//   - 短いタップ → アプリ起動
+//   - 長押し (450ms 静止) → 編集モード突入 + そのカードのドラッグ開始
+// 編集モード中は:
+//   - pointerdown 即ドラッグ開始 (= 「編集」ボタン経由でも従来通り使える)
+//   - 完了ボタンで終了
+const LONGPRESS_MS = 450;
+const TAP_MAX_MOVE = 8;
 let dragId = null;
 let dragEl = null;
-function attachDragHandlers(card, id) {
+
+function attachCardHandlers(card, app) {
+  const id = app.id;
+  let pressTimer = null;
+  let pressX = 0, pressY = 0;
+  let moved = false;
+
   card.addEventListener("pointerdown", (e) => {
-    if (!editMode || card.classList.contains("soon")) return;
-    // hide-btn 直接タップはドラッグ開始しない
+    if (app.soon) return;
     if (e.target.closest(".hide-btn")) return;
-    dragId = id;
-    dragEl = card;
-    card.classList.add("is-dragging");
-    card.setPointerCapture?.(e.pointerId);
+    pressX = e.clientX; pressY = e.clientY;
+    moved = false;
+    if (editMode) {
+      // 既に編集モード中 → 即ドラッグ開始
+      startDrag(card, id, e.pointerId);
+    } else {
+      // 通常モード → タイマー開始、長押し継続なら編集+ドラッグへ
+      pressTimer = setTimeout(() => {
+        pressTimer = null;
+        if (!editMode) toggleEditMode();
+        startDrag(card, id, e.pointerId);
+        if (navigator.vibrate) navigator.vibrate(20);  // 触覚 (Android のみ反応)
+      }, LONGPRESS_MS);
+    }
   });
+
   card.addEventListener("pointermove", (e) => {
-    if (!dragId || !dragEl) return;
-    e.preventDefault();
-    // 指の下にある別のカードを探して順序入れ替え
-    const under = document.elementFromPoint(e.clientX, e.clientY)?.closest(".app-card");
-    if (under && under.dataset.appId && under.dataset.appId !== dragId) {
-      swapOrder(dragId, under.dataset.appId);
-      renderGrid();
-      // 再 render 後の自分の card を再 grab (dragEl はもう DOM から消えてる)
-      const grid = document.getElementById("grid");
-      const next = grid.querySelector(`[data-app-id="${dragId}"]`);
-      if (next) {
-        next.classList.add("is-dragging");
-        try { next.setPointerCapture?.(e.pointerId); } catch (_) {}
-        dragEl = next;
+    const dx = Math.abs(e.clientX - pressX);
+    const dy = Math.abs(e.clientY - pressY);
+    if (dx > TAP_MAX_MOVE || dy > TAP_MAX_MOVE) moved = true;
+    // 長押し中にスクロール開始 → 長押しキャンセル (= アプリ起動でもなく drag でもなく、スクロール)
+    if (pressTimer && moved) { clearTimeout(pressTimer); pressTimer = null; }
+    // ドラッグ中なら指の下のカードと入れ替え (既存ロジック)
+    if (dragId) {
+      e.preventDefault();
+      const under = document.elementFromPoint(e.clientX, e.clientY)?.closest(".app-card");
+      if (under && under.dataset.appId && under.dataset.appId !== dragId) {
+        swapOrder(dragId, under.dataset.appId);
+        renderGrid();
+        // 再 render 後の自分の card を再 grab (dragEl はもう DOM から消えてる)
+        const grid = document.getElementById("grid");
+        const next = grid.querySelector(`[data-app-id="${dragId}"]`);
+        if (next) {
+          next.classList.add("is-dragging");
+          try { next.setPointerCapture?.(e.pointerId); } catch (_) {}
+          dragEl = next;
+        }
       }
     }
   });
-  card.addEventListener("pointerup", () => endDrag());
-  card.addEventListener("pointercancel", () => endDrag());
+
+  card.addEventListener("pointerup", () => {
+    if (pressTimer) {
+      clearTimeout(pressTimer);
+      pressTimer = null;
+      // 短いタップ → 通常モードならアプリ起動
+      if (!editMode && !moved && app.path) location.href = app.path;
+    }
+    endDrag();
+  });
+
+  card.addEventListener("pointercancel", () => {
+    if (pressTimer) { clearTimeout(pressTimer); pressTimer = null; }
+    endDrag();
+  });
+}
+
+function startDrag(card, id, pointerId) {
+  if (card.classList.contains("soon")) return;
+  dragId = id;
+  dragEl = card;
+  card.classList.add("is-dragging");
+  try { card.setPointerCapture?.(pointerId); } catch (_) {}
 }
 function endDrag() {
   if (!dragId) return;
