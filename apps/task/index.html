@@ -359,12 +359,13 @@ const TEMPLATE = `
               <span v-if="it.qty" class="li-qty">× {{ it.qty }} {{ it.unit || '' }}</span>
             </div>
           </template>
-          <!-- 追加 UI: 同現場に未紐付けの材料があれば select、無ければ kaimono へ -->
+          <!-- 追加 UI: 同現場に材料があれば select、無ければ kaimono へ。
+               既に別タスクに紐付け済みのものは表示はするが disabled で選択不可。 -->
           <select v-if="availableFor(t).length" class="link-add-sel"
                   @change="onAttachMaterial(t, $event.target.value); $event.target.value = ''">
             <option value="">+ 既存の材料を追加</option>
-            <option v-for="it in availableFor(t)" :key="it.id" :value="it.id">
-              {{ it.name }}{{ it.qty ? ' ×' + it.qty + (it.unit || '') : '' }}{{ it.taskId ? '(他タスクから)' : '' }}
+            <option v-for="it in availableFor(t)" :key="it.id" :value="it.id" :disabled="!!it.taskId">
+              {{ it.name }}{{ it.qty ? ' ×' + it.qty + (it.unit || '') : '' }}{{ it.taskId ? ' (別タスクで使用中)' : '' }}
             </option>
           </select>
           <a v-else :href="'/kaimono/?site=' + encodeURIComponent(t.site) + '&task=' + t.id" class="linked-empty-link">
