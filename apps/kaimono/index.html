@@ -136,6 +136,8 @@ body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); 
 .cat-pill { padding: 4px 12px; border-radius: 12px; font-size: 11px; font-weight: 700; border: none; cursor: pointer; background: var(--bg); box-shadow: 2px 2px 5px var(--sd), -2px -2px 5px var(--sl); color: var(--text2); font-family: inherit; }
 /* タスク select: 任意で「現場ごとのアクティブタスク」に紐付け可能 */
 .task-sel { flex: 1; min-width: 0; padding: 4px 10px; border-radius: 12px; font-size: 11px; font-weight: 700; border: none; cursor: pointer; background: var(--bg); box-shadow: inset 2px 2px 5px var(--sd), inset -2px -2px 5px var(--sl); color: var(--text2); font-family: inherit; appearance: none; -webkit-appearance: none; text-align-last: center; }
+/* 編集パネル内の task select (詳細編集モード) */
+.detail-task-sel { width: 100%; padding: 9px 12px; border-radius: 10px; font-size: 12px; font-weight: 700; border: none; cursor: pointer; color: var(--text2); background: var(--bg); box-shadow: inset 3px 3px 8px var(--sd), inset -2px -2px 6px var(--sl); font-family: inherit; appearance: none; -webkit-appearance: none; text-align-last: center; }
 .cat-pill.on.zairyo { background: #fef0c8; color: #8b6914; box-shadow: inset 2px 2px 5px rgba(0,0,0,0.08); }
 .cat-pill.on.kogu { background: #ffe0e0; color: #8b3030; box-shadow: inset 2px 2px 5px rgba(0,0,0,0.08); }
 .add {
@@ -274,6 +276,10 @@ const TEMPLATE = `
           <!-- 編集モード -->
           <template v-if="editingDetailId === item.id">
             <textarea class="detail-textarea" v-model="editNote" placeholder="説明・メモ (型番・サイズ・備考など)"></textarea>
+            <select v-if="tasksForCurrentSite.length" v-model="editTaskId" class="detail-task-sel" :disabled="savingDetail">
+              <option value="">タスクなし</option>
+              <option v-for="t in tasksForCurrentSite" :key="t.id" :value="t.id">{{ t.title }}</option>
+            </select>
             <label class="detail-filepick">
               <input type="file" accept="image/*" @change="onFilePick">
               <span v-if="!editFile"><span class="icon" style="vertical-align:-0.18em;">photo_camera</span> 画像を選ぶ</span>
@@ -420,6 +426,7 @@ const App = {
     const editNote = ref("");
     const editFile = ref(null);
     const editPreview = ref("");     // 画像プレビュー (dataURL or existing imageUrl)
+    const editTaskId = ref("");      // 編集中アイテムに紐付けるタスク id
     const savingDetail = ref(false);
     const showArchive = ref(false);   // アーカイブモーダル開閉
     const archExpandedId = ref(null); // アーカイブで展開中の item id
@@ -691,12 +698,14 @@ const App = {
       editNote.value = item.note || "";
       editFile.value = null;
       editPreview.value = item.imageUrl || "";
+      editTaskId.value = item.taskId || "";
     }
     function cancelDetailEdit() {
       editingDetailId.value = null;
       editFile.value = null;
       editPreview.value = "";
       editNote.value = "";
+      editTaskId.value = "";
     }
     function onFilePick(e) {
       const f = e.target.files?.[0];
@@ -710,7 +719,10 @@ const App = {
       if (savingDetail.value) return;
       savingDetail.value = true;
       try {
-        const updates = { note: editNote.value.trim() || null };
+        const updates = {
+          note: editNote.value.trim() || null,
+          taskId: editTaskId.value || null,
+        };
         if (editFile.value) {
           // Firebase Storage に kaimono/<itemId>/<ts>_<filename> でアップ
           // バケットを明示。init.json の storageBucket が古い形式の可能性に備える。
@@ -878,7 +890,7 @@ const App = {
       newName, newQty, newUnit, newCategory, newTaskId, tasks, tasksForCurrentSite, taskTitle,
       adding, seeding, showInput,
       inputExpanded, newNote, newFile, newPreview, onNewFilePick,
-      expandedId, editingDetailId, editNote, editFile, editPreview, savingDetail,
+      expandedId, editingDetailId, editNote, editFile, editPreview, editTaskId, savingDetail,
       showArchive, archExpandedId, archivedByDay, restore,
       isOwner, canSeedKomagome,
       filteredItems, countBySite, hasChecked, checkedCount, inputPlaceholder,
