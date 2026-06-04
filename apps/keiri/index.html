@@ -97,6 +97,11 @@ body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); 
 .sources { display: flex; gap: 6px; flex-wrap: wrap; }
 .src-chip { background: var(--bg); padding: 6px 10px; border-radius: 12px; font-size: 11px; font-weight: 700; color: var(--text2); box-shadow: 3px 3px 8px var(--sd), -2px -2px 6px var(--sl); display: inline-flex; align-items: center; gap: 4px; }
 .src-chip b { color: var(--text); font-weight: 800; }
+.src-chip.deletable { padding-right: 4px; }
+.del-btn { width: 18px; height: 18px; border-radius: 9px; border: none; background: var(--bg2); color: var(--out); cursor: pointer; display: inline-flex; align-items: center; justify-content: center; padding: 0; font-family: inherit; margin-left: 2px; }
+.del-btn:active { box-shadow: inset 1px 1px 3px var(--sd); transform: scale(0.92); }
+.del-btn:disabled { opacity: 0.5; cursor: wait; }
+.del-btn .icon { font-size: 12px; font-variation-settings: 'FILL' 0, 'wght' 700; }
 
 /* 空状態 / ローディング */
 .loading { text-align: center; color: var(--text2); font-size: 13px; padding: 60px 0; }
@@ -258,11 +263,17 @@ const TEMPLATE = `
     <div class="section" v-if="data.bySource.length">
       <div class="section-h">
         <span class="h">ソース別</span>
-        <span class="sub">どのアプリ経由</span>
+        <span class="sub">どのアプリ経由 / 銀行系は削除可</span>
       </div>
       <div class="sources">
-        <span v-for="s in data.bySource" :key="s.source" class="src-chip">
+        <span v-for="s in data.bySource" :key="s.source" class="src-chip" :class="{ deletable: isDeletableSource(s.source) }">
           <b>{{ s.source }}</b> · {{ s.count }}件
+          <button v-if="isDeletableSource(s.source)" class="del-btn"
+                  :disabled="deleting === s.source"
+                  @click.stop="deleteSource(s)"
+                  :title="'ソース「' + s.source + '」のデータを全削除'">
+            <span class="icon">{{ deleting === s.source ? 'hourglass_empty' : 'close' }}</span>
+          </button>
         </span>
       </div>
     </div>
@@ -307,6 +318,12 @@ const App = {
     const drillLoading = ref(false);
     const drillRows = ref([]);
     const drillTitle = ref("");
+    const deleting = ref("");  // 削除中のソース名 (UIロック用)
+
+    // どのソースを削除ボタン付きで表示するか。誤削除事故を避けるため銀行系のみ。
+    function isDeletableSource(src) {
+      return /^(銀行\(|test|手動|ginko)/.test(src || "");
+    }
 
     const yyyymm = computed(() => {
       const d = cur.value;
@@ -382,6 +399,35 @@ const App = {
     }
     function refresh() { fetchSummary(true); }
 
+    // ソース指定で取引タブから一括削除 (銀行系のみ許可、サーバ側でも whitelist チェック)
+    async function deleteSource(s) {
+      if (!user.value || deleting.value) return;
+      const ok = confirm(
+        `ソース「${s.source}」の取引 ${s.count}件 を取引タブから削除します。\n` +
+        `(入金 ¥${formatYen(s.in)} / 出金 ¥${formatYen(s.out)})\n\n` +
+        `この操作は取り消せません。続けますか？`
+      );
+      if (!ok) return;
+      deleting.value = s.source;
+      err.value = "";
+      try {
+        const token = await user.value.getIdToken();
+        const res = await fetch((window.API_BASE || "") + "/api/tx/delete-by-source", {
+          method: "POST",
+          headers: { authorization: "Bearer " + token, "content-type": "application/json" },
+          body: JSON.stringify({ source: s.source }),
+        });
+        const j = await res.json();
+        if (!res.ok) throw new Error(j.error || res.status);
+        err.value = "";   // success
+        await fetchSummary(true);   // force refresh to reflect deletion
+      } catch (e) {
+        err.value = "削除失敗: " + (e.message || e);
+      } finally {
+        deleting.value = "";
+      }
+    }
+
     async function fetchDrill(qs, title) {
       drillLoading.value = true;
       drillRows.value = [];
@@ -426,11 +472,11 @@ const App = {
     });
 
     return {
-      cur, data, loading, err, drillOpen, drillLoading, drillRows, drillTitle,
+      cur, data, loading, err, drillOpen, drillLoading, drillRows, drillTitle, deleting,
       yyyymm, monthLabel, currentYm, topCategoryAmount,
       formatYen, back, goToday, jumpToMonth, shiftMonth, refresh,
       deltaText, deltaClass, siteBarPct, barPct,
-      drillSite, drillCategory,
+      drillSite, drillCategory, deleteSource, isDeletableSource,
     };
   },
 };

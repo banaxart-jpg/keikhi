@@ -1061,6 +1061,58 @@ app.get("/api/keiri/transactions", async (req, res) => {
     res.status(500).json({ error: e.message });
   }
 });
+
+// ソース指定で「取引」タブから行を一括削除。誤削除防止のためソースは whitelist のみ受付。
+// 実装は「全行 fetch → 対象行を除外 → タブをクリア → 残りを書き戻す」のシンプルな
+// rebuild 方式 (deleteDimension を 1 行ずつ呼ぶより速い・原子的)。
+app.post("/api/tx/delete-by-source", async (req, res) => {
+  const source = String((req.body || {}).source || "").trim();
+  // 誤削除事故が一番怖いソース (=領収書/請求書/宿/固定費アプリ自身の入力) を弾く。
+  // 銀行系 / 手動 / 試験投入 (test) のみ削除可能。
+  const ALLOWED_PREFIXES = ["銀行(", "test", "手動", "ginko"];
+  const allowed = ALLOWED_PREFIXES.some((p) => source.startsWith(p));
+  if (!allowed) {
+    return res.status(400).json({ error: `削除不可のソース: "${source}" (銀行系のみ削除可能、その他は手で消してください)` });
+  }
+  try {
+    const sheets = await getSheetsApi();
+    const r = await sheets.spreadsheets.values.get({
+      spreadsheetId: TX_SHEET_ID,
+      range: `${TX_TAB}!A2:M`,
+      valueRenderOption: "UNFORMATTED_VALUE",
+      dateTimeRenderOption: "FORMATTED_STRING",
+    });
+    const allRows = r.data.values || [];
+    // ソース列 = L = index 11
+    const keep = allRows.filter((row) => String(row[11] || "") !== source);
+    const deleted = allRows.length - keep.length;
+    if (deleted === 0) return res.json({ deleted: 0, kept: keep.length, source });
+
+    // データ範囲を一旦クリア → 残行を書き戻し (絶対範囲指定で SUMIFS / QUERY は不変)
+    await sheets.spreadsheets.values.clear({
+      spreadsheetId: TX_SHEET_ID,
+      range: `${TX_TAB}!A2:M`,
+    });
+    if (keep.length) {
+      await sheets.spreadsheets.values.update({
+        spreadsheetId: TX_SHEET_ID,
+        range: `${TX_TAB}!A2:M`,
+        valueInputOption: "USER_ENTERED",
+        requestBody: { values: keep },
+      });
+    }
+    // keiri のキャッシュを無効化 (次の summary 呼び出しで再取得)
+    keiriCache.fetchedAt = 0;
+    keiriCache.rows = [];
+    // tx 二重投入防止キャッシュもクリア (削除した refId を再投入可能にするため)
+    txSeenRefIds.clear();
+    console.log(`[tx] deleted ${deleted} rows for source="${source}", ${keep.length} kept`);
+    res.json({ deleted, kept: keep.length, source });
+  } catch (e) {
+    console.error("[tx] delete-by-source error:", e);
+    res.status(500).json({ error: e.message });
+  }
+});
 // 写真リンクをアプリ内表示するために使う。認証経由のみ。
 app.get("/api/image-signed", async (req, res) => {
   if (!storage) return res.status(503).json({ error: "storage not configured" });
