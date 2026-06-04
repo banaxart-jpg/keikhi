@@ -70,6 +70,7 @@ body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); 
 .meta-line { font-size: 11px; color: var(--text3); display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .meta-line .by { display: inline-flex; align-items: center; gap: 4px; }
 .meta-line .by .dot { width: 7px; height: 7px; border-radius: 50%; }
+.task-tag { display: inline-block; padding: 2px 8px; border-radius: 8px; font-size: 10px; font-weight: 700; background: var(--bg2); color: var(--text2); box-shadow: inset 1.5px 1.5px 3px var(--sd), inset -1px -1px 2px var(--sl); }
 .detail-note { font-size: 13px; color: var(--text); line-height: 1.6; white-space: pre-wrap; word-break: break-word; padding: 8px 10px; border-radius: 8px; background: var(--bg2); box-shadow: inset 3px 3px 6px var(--sd), inset -2px -2px 5px var(--sl); }
 .detail-img { max-width: 100%; max-height: 240px; border-radius: 10px; object-fit: contain; align-self: center; cursor: zoom-in; }
 .detail-textarea { width: 100%; padding: 10px 12px; border: none; border-radius: 10px; font-size: 13px; font-family: inherit; color: var(--text); background: var(--bg2); box-shadow: inset 3px 3px 8px var(--sd), inset -2px -2px 6px var(--sl); outline: none; min-height: 70px; resize: vertical; box-sizing: border-box; }
@@ -133,6 +134,8 @@ body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); 
 .input-row input::placeholder { color: var(--text3); }
 .cat-row { display: flex; gap: 6px; align-items: center; padding-left: 4px; }
 .cat-pill { padding: 4px 12px; border-radius: 12px; font-size: 11px; font-weight: 700; border: none; cursor: pointer; background: var(--bg); box-shadow: 2px 2px 5px var(--sd), -2px -2px 5px var(--sl); color: var(--text2); font-family: inherit; }
+/* タスク select: 任意で「現場ごとのアクティブタスク」に紐付け可能 */
+.task-sel { flex: 1; min-width: 0; padding: 4px 10px; border-radius: 12px; font-size: 11px; font-weight: 700; border: none; cursor: pointer; background: var(--bg); box-shadow: inset 2px 2px 5px var(--sd), inset -2px -2px 5px var(--sl); color: var(--text2); font-family: inherit; appearance: none; -webkit-appearance: none; text-align-last: center; }
 .cat-pill.on.zairyo { background: #fef0c8; color: #8b6914; box-shadow: inset 2px 2px 5px rgba(0,0,0,0.08); }
 .cat-pill.on.kogu { background: #ffe0e0; color: #8b3030; box-shadow: inset 2px 2px 5px rgba(0,0,0,0.08); }
 .add {
@@ -258,6 +261,7 @@ const TEMPLATE = `
           <!-- メタ: カテゴリ + 追加者 + 完了者 -->
           <div class="meta-line">
             <span v-if="item.category" class="tag-pill" :class="catClass(item.category)">{{ item.category }}</span>
+            <span v-if="taskTitle(item.taskId)" class="task-tag">📋 {{ taskTitle(item.taskId) }}</span>
             <span class="by"><span class="dot" :style="{ background: colorForEmail(item.addedBy) }"></span>{{ displayNameOf(item.addedBy) }}</span>
             <span v-if="item.createdAt">が {{ formatTimeShort(item.createdAt) }} に追加</span>
             <template v-if="item.checked">
@@ -344,6 +348,10 @@ const TEMPLATE = `
       <div class="cat-row">
         <button type="button" class="cat-pill zairyo" :class="{ on: newCategory === '材料' }" @click="newCategory = newCategory === '材料' ? null : '材料'">材料</button>
         <button type="button" class="cat-pill kogu" :class="{ on: newCategory === '工具' }" @click="newCategory = newCategory === '工具' ? null : '工具'">工具</button>
+        <select v-if="tasksForCurrentSite.length" class="task-sel" v-model="newTaskId" :disabled="adding">
+          <option value="">タスクなし</option>
+          <option v-for="t in tasksForCurrentSite" :key="t.id" :value="t.id">{{ t.title }}</option>
+        </select>
         <button class="add" type="submit" :disabled="!newName.trim() || adding || !activeSite">{{ adding ? "追加中…" : "+ 追加" }}</button>
       </div>
     </form>
@@ -396,6 +404,10 @@ const App = {
     const newQty = ref("1");           // デフォルト 1
     const newUnit = ref("個");         // デフォルト 個
     const newCategory = ref(null);   // "材料" | "工具" | null
+    const newTaskId = ref("");
+    const tasks = ref([]);           // /tasks 全件 (社内 ALLOWED_EMAILS のみ購読成功)
+    // URL ?site=... で初期タブ指定 (task アプリ等からの遷移)
+    const urlSite = new URLSearchParams(location.search).get("site") || "";
     const adding = ref(false);
     const seeding = ref(false);
     const showInput = ref(false);   // FAB トグル: 入力モーダルの開閉
@@ -419,6 +431,7 @@ const App = {
     let fbApp = null;   // Storage で使うので setup スコープに保持
     const user = ref(null);    // ref にして Vue 側で reactive に
     let unsubscribe = null;
+    let unsubscribeTasks = null;
 
     // 各サイトの最終アクティビティ時刻 (createdAt or checkedAt の max)。
     // 値が無いサイトは 0 → アルファベット順で末尾。
@@ -527,6 +540,14 @@ const App = {
     function displayNameOf(email) {
       return (email || "").split("@")[0] || "?";
     }
+    // タスク関連: 現在の現場 + アクティブ状態のものだけ select に並べる
+    const tasksForCurrentSite = computed(() =>
+      tasks.value.filter((t) => (t.site || "") === activeSite.value && t.status === "active")
+    );
+    function taskTitle(taskId) {
+      if (!taskId) return "";
+      return tasks.value.find((t) => t.id === taskId)?.title || "";
+    }
     function formatTimeShort(ts) {
       const d = ts?.toDate?.();
       if (!d) return "";
@@ -571,6 +592,7 @@ const App = {
           createdAt: serverTimestamp(),
           addedBy: (user.value.email || "").toLowerCase(),
           note,
+          taskId: newTaskId.value || null,
         }, { merge: true });
         // 2) 画像があれば Storage にアップして imageUrl を update
         if (newFile.value) {
@@ -582,7 +604,7 @@ const App = {
           const imageUrl = await getDownloadURL(r);
           await updateDoc(docRef, { imageUrl });
         }
-        // 3) フォーム reset (category は保持 = 連続入力で楽)
+        // 3) フォーム reset (category は保持 = 連続入力で楽、taskId も保持)
         newName.value = "";
         newQty.value = "1";
         newUnit.value = "個";
@@ -813,19 +835,31 @@ const App = {
               sites.value = (Array.isArray(rows) ? rows : []).map((r) => r.name).filter(Boolean);
             }
           } catch (e) { /* タブ取得失敗は致命じゃない、Firestore は購読続行 */ }
-          // 2) Firestore リアルタイム購読
+          // 2) Firestore リアルタイム購読 (shopping_items)
           const q = query(collection(db, SHOPPING), orderBy("createdAt", "desc"));
           unsubscribe = onSnapshot(q, (snap) => {
             items.value = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-            // 初回購読完了時、まだ activeSite 未選択なら最もアクティブな site を選ぶ
-            if (!activeSite.value && sortedSites.value.length) {
-              activeSite.value = sortedSites.value[0];
+            // 初回購読完了時、まだ activeSite 未選択なら URL ?site= を優先、
+            // 無ければ最もアクティブな site を選ぶ
+            if (!activeSite.value) {
+              if (urlSite && sites.value.includes(urlSite)) {
+                activeSite.value = urlSite;
+              } else if (sortedSites.value.length) {
+                activeSite.value = sortedSites.value[0];
+              }
             }
             ready.value = true;
           }, (e) => {
             err.value = "購読失敗: " + e.message;
             ready.value = true;
           });
+          // 3) tasks (社内 ALLOWED_EMAILS だけ通る。社外ユーザーはエラーで OK)。
+          //    現場ごとの「関連タスク」select を構築するために購読。
+          try {
+            unsubscribeTasks = onSnapshot(collection(db, "tasks"), (snap) => {
+              tasks.value = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+            }, (_e) => { tasks.value = []; });
+          } catch (_) { tasks.value = []; }
         });
       } catch (e) {
         err.value = "初期化失敗: " + (e.message || e);
@@ -835,12 +869,14 @@ const App = {
 
     onBeforeUnmount(() => {
       if (unsubscribe) unsubscribe();
+      if (unsubscribeTasks) unsubscribeTasks();
       if (nowTimer) clearInterval(nowTimer);
     });
 
     return {
       sites, sortedSites, activeSite, items, ready, err,
-      newName, newQty, newUnit, newCategory, adding, seeding, showInput,
+      newName, newQty, newUnit, newCategory, newTaskId, tasks, tasksForCurrentSite, taskTitle,
+      adding, seeding, showInput,
       inputExpanded, newNote, newFile, newPreview, onNewFilePick,
       expandedId, editingDetailId, editNote, editFile, editPreview, savingDetail,
       showArchive, archExpandedId, archivedByDay, restore,

@@ -185,6 +185,17 @@ body { font-family: 'Outfit', -apple-system, sans-serif; font-weight: 400; backg
 .act-btn.del { color: #b04040; }
 .act-btn.done { color: #3a9a6a; }
 
+/* 紐付いた手配リスト (kaimono.shopping_items を taskId で寄せて表示、read-only) */
+.linked-row { display: flex; flex-direction: column; gap: 4px; padding: 8px 14px 12px; border-top: 1px solid rgba(168,172,192,0.18); animation: slide-down 200ms ease-out; }
+.linked-head { font-size: 10px; font-weight: 800; color: var(--text2); display: flex; align-items: baseline; gap: 8px; margin-bottom: 2px; letter-spacing: 0.04em; }
+.linked-open { font-size: 10px; color: var(--accent); text-decoration: none; font-weight: 700; margin-left: auto; }
+.linked-item { display: flex; align-items: center; gap: 8px; padding: 3px 0; font-size: 12px; color: var(--text); }
+.linked-item.done { opacity: 0.5; text-decoration: line-through; }
+.linked-item .li-check { width: 14px; text-align: center; font-weight: 800; color: #3a9a6a; flex-shrink: 0; }
+.linked-item.done .li-check { color: var(--text3); }
+.linked-item .li-name { flex: 1; min-width: 0; word-break: break-word; }
+.linked-item .li-qty { color: var(--text3); font-size: 11px; flex-shrink: 0; }
+
 /* FAB */
 .fab { position: fixed; right: 22px; bottom: 28px; width: 60px; height: 60px; border-radius: 50%; background: linear-gradient(145deg, var(--accent2), var(--accent)); color: white; font-size: 32px; font-weight: 300; line-height: 1; border: none; cursor: pointer; box-shadow: 8px 8px 22px rgba(50,70,200,0.45), -3px -3px 10px var(--sl); z-index: 10; transition: transform 200ms ease, box-shadow 200ms ease; }
 .fab:active { transform: scale(0.93); }
@@ -333,6 +344,18 @@ const TEMPLATE = `
           <button class="act-btn" @click.stop="openModal(t)">編集</button>
           <button class="act-btn del" @click.stop="onDelete(t)">削除</button>
         </div>
+        <!-- 紐付いた手配リスト (read-only) -->
+        <div v-if="expandedId === t.id && linkedFor(t.id).length" class="linked-row">
+          <div class="linked-head">
+            📦 手配リスト ({{ linkedFor(t.id).length }})
+            <a v-if="t.site" :href="'/kaimono/?site=' + encodeURIComponent(t.site)" class="linked-open">→ 開く</a>
+          </div>
+          <div v-for="it in linkedFor(t.id)" :key="it.id" class="linked-item" :class="{ done: it.checked }">
+            <span class="li-check">{{ it.checked ? '✓' : '○' }}</span>
+            <span class="li-name">{{ it.name }}</span>
+            <span v-if="it.qty" class="li-qty">× {{ it.qty }} {{ it.unit || '' }}</span>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -417,6 +440,9 @@ const App = {
     let fbAuth = null;
     let fbDb = null;
     let unsubscribeTasks = null;
+    // 手配リスト (shopping_items) で taskId が設定されているものを購読 → 各タスクに紐付け表示
+    const linkedItems = ref([]);
+    let unsubscribeLinked = null;
 
     // ───── helpers (純粋関数) ─────
     function nameOf(em) { return NAME_BY_EMAIL[(em || "").toLowerCase()] || em || "?"; }
@@ -509,6 +535,10 @@ const App = {
       return isMine && t.status === "active"
         && toIso(t.createdAt) > getLastSeen()
         && (t.fromEmail || "").toLowerCase() !== me.value;
+    }
+    // 各タスクに紐付いた shopping_items (taskId == task.id のもの)
+    function linkedFor(taskId) {
+      return linkedItems.value.filter((it) => it.taskId === taskId);
     }
 
     // ───── role-btn 動的 class / style (スワイプ中だけコイン構造) ─────
@@ -811,6 +841,16 @@ const App = {
         },
         (e) => { console.warn("[task] snapshot failed", e); }
       );
+      // 手配リスト購読 (taskId が付いてるものだけ表示用に保持)
+      unsubscribeLinked = onSnapshot(
+        collection(fbDb, "shopping_items"),
+        (snap) => {
+          linkedItems.value = snap.docs
+            .map((d) => ({ id: d.id, ...d.data() }))
+            .filter((it) => it.taskId);
+        },
+        (e) => { console.warn("[task] shopping_items snapshot failed", e); }
+      );
       signedIn.value = true;
       setTimeout(setLastSeen, 1500);
     }
@@ -867,6 +907,7 @@ const App = {
 
     onBeforeUnmount(() => {
       if (unsubscribeTasks) unsubscribeTasks();
+      if (unsubscribeLinked) unsubscribeLinked();
       document.removeEventListener("pointermove", onPointerMove);
       document.removeEventListener("pointerup", onPointerUp);
       document.removeEventListener("pointercancel", onPointerCancel);
@@ -878,7 +919,7 @@ const App = {
       titleInput, swipe,
       meLabel, tabs, currentLabel, tabCount, sortedTasks,
       posOf, emailOfPos, roleLabel, colorKey,
-      fmtDate, deadlineClass, isUnread,
+      fmtDate, deadlineClass, isUnread, linkedFor,
       isFlipping, roleBtnClass, roleBtnStyle, cardStyleFor,
       onCardDown,
       onTabClick, onRoleClick, onToggleDone, onCyclePriority, onDelete,
