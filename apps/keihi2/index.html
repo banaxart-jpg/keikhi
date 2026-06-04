@@ -174,7 +174,7 @@ select.edit-input { background: var(--bg2) url("data:image/svg+xml,%3Csvg xmlns=
 
 <div id="signinOverlay" style="display:none;position:fixed;inset:0;z-index:400;background:var(--bg);flex-direction:column;align-items:center;justify-content:center;padding:32px;text-align:center;gap:18px;">
   <div style="font-size:24px;font-weight:800;">経費2</div>
-  <button class="submit-btn" style="max-width:280px;" onclick="location.href='/'">トップに戻る</button>
+  <a class="submit-btn" href="/" style="max-width:280px; text-decoration:none; display:inline-block; text-align:center;">トップに戻る</a>
   <div id="signinErr" style="font-size:11px;color:#b04040;font-family:monospace;"></div>
 </div>
 
@@ -222,7 +222,7 @@ select.edit-input { background: var(--bg2) url("data:image/svg+xml,%3Csvg xmlns=
 <!-- 名前選択 -->
 <div id="buyerScreen">
   <div class="top-bar">
-    <button class="pill-btn" type="button" onclick="location.href='/'">← トップ</button>
+    <a class="pill-btn" href="/" style="text-decoration:none; display:inline-block;">← トップ</a>
     <button class="pill-btn accent" id="sortBtn" type="button">SORT <span id="unsortedCount">0</span> →</button>
   </div>
   <div class="buyers-row">

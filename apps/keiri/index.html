@@ -148,7 +148,7 @@ const TEMPLATE = `
         <button class="pill" :disabled="loading" @click="refresh" title="キャッシュ無視で再取得">
           <span class="icon" :class="{ spin: loading }">{{ loading ? 'progress_activity' : 'refresh' }}</span>
         </button>
-        <button class="pill" @click="back">← 戻る</button>
+        <a class="pill" href="/" style="text-decoration:none; display:inline-block;">← 戻る</a>
       </div>
     </div>
     <div class="month-bar">

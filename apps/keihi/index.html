@@ -143,7 +143,7 @@ select.nm-field option { background: #e4e6ee; color: #42455e; }
 <div id="signinOverlay" style="display:none;position:fixed;inset:0;z-index:400;background:var(--bg);flex-direction:column;align-items:center;justify-content:center;padding:32px;text-align:center;gap:18px;">
   <div style="font-size:24px;font-weight:800;">経費</div>
   <div id="signinSub" style="font-size:13px;color:var(--text2);line-height:1.7;">トップでログインしてください</div>
-  <button class="submit-btn" id="signinBtn" type="button" style="max-width:280px;" onclick="location.href='/'">トップに戻る</button>
+  <a class="submit-btn" id="signinBtn" href="/" style="max-width:280px; text-decoration:none; display:inline-block; text-align:center;">トップに戻る</a>
   <div id="signinStatus" style="font-size:11px;color:var(--text3);font-family:monospace;min-height:14px;"></div>
   <div id="signinErr" style="font-size:11px;color:#b04040;word-break:break-word;max-width:340px;white-space:pre-wrap;text-align:left;font-family:monospace;"></div>
 </div>
@@ -156,7 +156,7 @@ select.nm-field option { background: #e4e6ee; color: #42455e; }
 <!-- 名前選択 -->
 <div id="buyerScreen">
   <div class="top-bar">
-    <button class="pill-btn" id="homeBtn" type="button" onclick="location.href='/'">← トップ</button>
+    <a class="pill-btn" id="homeBtn" href="/" style="text-decoration:none; display:inline-block;">← トップ</a>
     <button class="pill-btn" id="recordBtn" type="button">記録 <span id="recordCount">0</span>件 →</button>
   </div>
   <p class="hint-text">名前タップで撮影開始（1枚ずつ撮影→まとめて読取）</p>

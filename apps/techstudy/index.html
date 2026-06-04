@@ -329,7 +329,7 @@ body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); 
 <div class="bar">
   <span class="hint" id="appHint">techstudy</span>
   <div style="display:flex; gap:8px;">
-    <button class="pill" id="backBtn" style="display:none;" onclick="location.href='/'">← 戻る</button>
+    <a class="pill" id="backBtn" href="/" style="display:none; text-decoration:none;">← 戻る</a>
     <button class="pill" id="signoutPill" onclick="doSignOut()">サインアウト</button>
   </div>
 </div>
@@ -774,7 +774,7 @@ async function loadHome() {
 function renderMe(me, peers) {
   // 他ミニアプリにもアクセス権ある社内ユーザーだけ「← 戻る」を出す
   const backBtn = $("backBtn");
-  if (backBtn) backBtn.style.display = me.hasLauncherAccess ? "" : "none";
+  if (backBtn) backBtn.style.display = me.hasLauncherAccess ? "inline-block" : "none";
   // owner だけ管理操作 (wipe / gen) を出す
   const adminRow = $("ownerAdminRow");
   if (adminRow) adminRow.style.display = me.isOwner ? "flex" : "none";
