@@ -203,7 +203,7 @@ import {
   getAuth, onAuthStateChanged, setPersistence, browserLocalPersistence,
 } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
 import {
-  getFirestore, collection, addDoc, deleteDoc, doc, updateDoc,
+  getFirestore, collection, addDoc, deleteDoc, doc, setDoc, updateDoc,
   onSnapshot, query, orderBy, serverTimestamp, where, writeBatch,
 } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
 import {
@@ -555,8 +555,11 @@ const App = {
       try {
         const qty = Number(newQty.value);
         const note = newNote.value.trim() || null;
-        // 1) 基本情報で addDoc → 生成された id を画像 path に使う
-        const docRef = await addDoc(collection(db, SHOPPING), {
+        // 1) id を先に生成 → setDoc(merge:true) で書き込み (addDoc だと SDK が
+        //   暗黙的に「create only」前提を付けるため、ネットワーク再送で既存 doc に
+        //   当たると "Document already exists" を吐く。setDoc + merge なら冪等)
+        const docRef = doc(collection(db, SHOPPING));
+        await setDoc(docRef, {
           name,
           qty: qty > 0 ? qty : null,
           unit: newUnit.value.trim() || null,
@@ -566,7 +569,7 @@ const App = {
           createdAt: serverTimestamp(),
           addedBy: (user.value.email || "").toLowerCase(),
           note,
-        });
+        }, { merge: true });
         // 2) 画像があれば Storage にアップして imageUrl を update
         if (newFile.value) {
           const storage = getStorage(fbApp, "gs://static-epigram-496002-v8.firebasestorage.app");
@@ -755,6 +758,7 @@ const App = {
         const addedBy = (user.value.email || "").toLowerCase();
         for (const it of KOMAGOME_SEED) {
           const ref = doc(col); // auto id
+          // merge:true で再送時の "already exists" を回避
           batch.set(ref, {
             name: it.name,
             qty: it.qty,
@@ -765,7 +769,7 @@ const App = {
             createdAt: serverTimestamp(),
             addedBy,
             seedTag: "komagome_v1",
-          });
+          }, { merge: true });
         }
         await batch.commit();
         activeSite.value = "駒込";
