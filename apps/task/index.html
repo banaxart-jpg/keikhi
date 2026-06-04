@@ -195,7 +195,9 @@ body { font-family: 'Outfit', -apple-system, sans-serif; font-weight: 400; backg
 .linked-item.done .li-check { color: var(--text3); }
 .linked-item .li-name { flex: 1; min-width: 0; word-break: break-word; }
 .linked-item .li-qty { color: var(--text3); font-size: 11px; flex-shrink: 0; }
-/* 材料未登録時の CTA: kaimono にこのタスク id 込みで遷移 */
+/* 材料追加 select: 同現場に未紐付けの shopping_items があれば候補に並べる */
+.link-add-sel { padding: 7px 12px; border-radius: 12px; border: 1px dashed var(--text3); background: var(--bg); font-family: 'Outfit', sans-serif; font-size: 12px; font-weight: 700; color: var(--accent); cursor: pointer; appearance: none; -webkit-appearance: none; align-self: flex-start; margin-top: 4px; max-width: 100%; }
+/* 候補なしの時の CTA: kaimono にこのタスク id 込みで遷移して新規作成 */
 .linked-empty-link { display: inline-block; padding: 8px 14px; font-size: 11px; color: var(--accent); font-weight: 700; text-decoration: none; border: 1px dashed var(--accent); border-radius: 12px; align-self: flex-start; transition: transform 120ms ease; }
 .linked-empty-link:active { transform: scale(0.97); }
 
@@ -281,13 +283,13 @@ const PERSON_KEY = {
 
 const TEMPLATE = `
 <div>
-  <div v-if="!signedIn" id="signinOverlay">
+  <div v-if="authChecked && !signedIn" id="signinOverlay">
     <div class="pill">サインインしてください</div>
     <button class="pill" @click="goLauncher">ランチャーへ戻る</button>
     <div class="signin-err">{{ signinErr }}</div>
   </div>
 
-  <div v-else>
+  <div v-else-if="signedIn">
     <div class="top">
       <a class="back" href="/" style="text-decoration:none;">← 戻る</a>
       <div class="title">タスク</div>
@@ -347,21 +349,26 @@ const TEMPLATE = `
           <button class="act-btn" @click.stop="openModal(t)">編集</button>
           <button class="act-btn del" @click.stop="onDelete(t)">削除</button>
         </div>
-        <!-- 紐付いた手配リスト (read-only) -->
+        <!-- 紐付いた手配リスト: 一覧 + 追加 (既存 select または kaimono リンク) -->
         <div v-if="expandedId === t.id && t.site" class="linked-row">
           <template v-if="linkedFor(t.id).length">
-            <div class="linked-head">
-              📦 手配リスト ({{ linkedFor(t.id).length }})
-              <a :href="'/kaimono/?site=' + encodeURIComponent(t.site) + '&task=' + t.id" class="linked-open">→ 追加</a>
-            </div>
+            <div class="linked-head">📦 手配リスト ({{ linkedFor(t.id).length }})</div>
             <div v-for="it in linkedFor(t.id)" :key="it.id" class="linked-item" :class="{ done: it.checked }">
               <span class="li-check">{{ it.checked ? '✓' : '○' }}</span>
               <span class="li-name">{{ it.name }}</span>
               <span v-if="it.qty" class="li-qty">× {{ it.qty }} {{ it.unit || '' }}</span>
             </div>
           </template>
+          <!-- 追加 UI: 同現場に未紐付けの材料があれば select、無ければ kaimono へ -->
+          <select v-if="availableFor(t).length" class="link-add-sel"
+                  @change="onAttachMaterial(t, $event.target.value); $event.target.value = ''">
+            <option value="">+ 既存の材料を追加</option>
+            <option v-for="it in availableFor(t)" :key="it.id" :value="it.id">
+              {{ it.name }}{{ it.qty ? ' ×' + it.qty + (it.unit || '') : '' }}{{ it.taskId ? '(他タスクから)' : '' }}
+            </option>
+          </select>
           <a v-else :href="'/kaimono/?site=' + encodeURIComponent(t.site) + '&task=' + t.id" class="linked-empty-link">
-            📦 手配リストで材料を追加 →
+            📦 手配リストで材料を作成 →
           </a>
         </div>
       </div>
@@ -420,6 +427,9 @@ const App = {
   setup() {
     // ───── state ─────
     const signedIn = ref(false);
+    // authChecked: Firebase Auth が persisted state を解決し終わるまでは
+    // サインインオーバーレイも本体も出さない (= 一瞬の auth フラッシュ防止)
+    const authChecked = ref(false);
     const signinErr = ref("");
     const me = ref("");
     const partner = ref("");
@@ -547,6 +557,25 @@ const App = {
     // 各タスクに紐付いた shopping_items (taskId == task.id のもの)
     function linkedFor(taskId) {
       return linkedItems.value.filter((it) => it.taskId === taskId);
+    }
+    // 同じ現場で、まだこのタスクに紐付いてない手配アイテム (= 追加可能候補)
+    function availableFor(t) {
+      if (!t.site) return [];
+      return linkedItems.value.filter((it) =>
+        (it.site || "") === t.site && it.taskId !== t.id
+      );
+    }
+    // select でアイテム選択 → そのアイテムの taskId をこのタスクに更新
+    async function onAttachMaterial(t, itemId) {
+      if (!itemId) return;
+      try {
+        await updateDoc(doc(fbDb, "shopping_items", itemId), {
+          taskId: t.id,
+          updatedAt: serverTimestamp(),
+        });
+      } catch (e) {
+        alert("紐付け失敗: " + (e.message || e));
+      }
     }
 
     // ───── role-btn 動的 class / style (スワイプ中だけコイン構造) ─────
@@ -853,9 +882,9 @@ const App = {
       unsubscribeLinked = onSnapshot(
         collection(fbDb, "shopping_items"),
         (snap) => {
-          linkedItems.value = snap.docs
-            .map((d) => ({ id: d.id, ...d.data() }))
-            .filter((it) => it.taskId);
+          // 全アイテム保持。linkedFor は taskId 一致、availableFor は同現場で
+          // このタスクに未紐付け (taskId 無 or 別タスク) をフィルタする
+          linkedItems.value = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
         },
         (e) => { console.warn("[task] shopping_items snapshot failed", e); }
       );
@@ -878,7 +907,8 @@ const App = {
         const cfg = await fetch("/__/firebase/init.json").then((r) => r.json());
         const app = initializeApp(cfg);
         fbDb = getFirestore(app);
-        boot("dev@local");
+        await boot("dev@local");
+        authChecked.value = true;
         return;
       }
       try {
@@ -896,10 +926,12 @@ const App = {
             entered = true;
             sessionStorage.removeItem("authBounce");
             await boot((user.email || "").toLowerCase());
+            authChecked.value = true;  // boot 完了後に表示解禁
             return;
           }
           if (sessionStorage.getItem("authBounce")) {
             signedIn.value = false;
+            authChecked.value = true;  // 解決済み → サインインオーバーレイ表示
             return;
           }
           sessionStorage.setItem("authBounce", "1");
@@ -907,6 +939,7 @@ const App = {
         });
       } catch (e) {
         signedIn.value = false;
+        authChecked.value = true;
         signinErr.value = "init失敗: " + (e.message || e);
       }
 
@@ -931,12 +964,12 @@ const App = {
     });
 
     return {
-      signedIn, signinErr, me, partner, tasks, sites, currentSite,
+      signedIn, authChecked, signinErr, me, partner, tasks, sites, currentSite,
       pickerOpenId, expandedId, modalOpen, editingId, form, saving, migrating,
       titleInput, swipe,
       meLabel, tabs, currentLabel, tabCount, sortedTasks,
       posOf, emailOfPos, roleLabel, colorKey,
-      fmtDate, deadlineClass, isUnread, linkedFor,
+      fmtDate, deadlineClass, isUnread, linkedFor, availableFor, onAttachMaterial,
       isFlipping, roleBtnClass, roleBtnStyle, cardStyleFor,
       onCardDown,
       onTabClick, onRoleClick, onToggleDone, onCyclePriority, onDelete,
