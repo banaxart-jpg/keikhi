@@ -136,6 +136,10 @@ body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); 
 .cat-pill { padding: 4px 12px; border-radius: 12px; font-size: 11px; font-weight: 700; border: none; cursor: pointer; background: var(--bg); box-shadow: 2px 2px 5px var(--sd), -2px -2px 5px var(--sl); color: var(--text2); font-family: inherit; }
 /* タスク select: 任意で「現場ごとのアクティブタスク」に紐付け可能 */
 .task-sel { flex: 1; min-width: 0; padding: 4px 10px; border-radius: 12px; font-size: 11px; font-weight: 700; border: none; cursor: pointer; background: var(--bg); box-shadow: inset 2px 2px 5px var(--sd), inset -2px -2px 5px var(--sl); color: var(--text2); font-family: inherit; appearance: none; -webkit-appearance: none; text-align-last: center; }
+/* 全てタブ中の入力フォーム上に出る現場 select */
+.site-sel { width: 100%; padding: 10px 14px; border-radius: 14px; font-size: 13px; font-weight: 700; border: none; cursor: pointer; background: var(--bg); box-shadow: inset 3px 3px 8px var(--sd), inset -2px -2px 6px var(--sl); color: var(--text2); font-family: inherit; appearance: none; -webkit-appearance: none; text-align-last: center; }
+/* 全てタブで item-name の左に出る小さい現場 chip */
+.site-chip-mini { display: inline-block; padding: 1px 7px; border-radius: 6px; font-size: 9px; font-weight: 800; color: var(--text2); background: var(--bg2); margin-right: 5px; vertical-align: 2px; letter-spacing: 0.04em; }
 /* 編集パネル内の task select (詳細編集モード) */
 .detail-task-sel { width: 100%; padding: 9px 12px; border-radius: 10px; font-size: 12px; font-weight: 700; border: none; cursor: pointer; color: var(--text2); background: var(--bg); box-shadow: inset 3px 3px 8px var(--sd), inset -2px -2px 6px var(--sl); font-family: inherit; appearance: none; -webkit-appearance: none; text-align-last: center; }
 /* 該当現場にアクティブタスクが無い時の CTA: task アプリに遷移して作成 */
@@ -236,6 +240,12 @@ const TEMPLATE = `
 
     <div class="tabs">
       <button
+        class="tab" :class="{ on: activeSite === '*' }"
+        @click="activeSite = '*'"
+      >
+        全て<span class="count" v-if="countBySite['*']">{{ countBySite['*'] }}</span>
+      </button>
+      <button
         v-for="s in sortedSites" :key="s"
         class="tab" :class="{ on: activeSite === s }"
         @click="activeSite = s"
@@ -250,12 +260,13 @@ const TEMPLATE = `
   <template v-else>
     <div class="list">
       <div v-if="sortedSites.length === 0" class="empty">現場が登録されてません。経費2 で追加してください。</div>
-      <div v-else-if="filteredItems.length === 0" class="empty">「{{ activeSite }}」に追加するものはまだ無し</div>
+      <div v-else-if="filteredItems.length === 0" class="empty">「{{ activeSite === '*' ? '全て' : activeSite }}」に追加するものはまだ無し</div>
       <div v-for="item in filteredItems" :key="item.id" class="item-card" :class="{ checked: item.checked, open: expandedId === item.id }">
         <!-- collapsed row: 最小限の情報だけ -->
         <div class="item-row" @click="toggleDetail(item)">
           <button class="check" @click.stop="toggle(item)" :style="item.checked ? { background: colorForEmail(item.checkedBy), color: 'white', boxShadow: '3px 3px 8px ' + colorForEmail(item.checkedBy) + '55' } : null">{{ item.checked ? 'check' : '' }}</button>
           <div class="item-name">
+            <span v-if="activeSite === '*' && item.site" class="site-chip-mini">{{ item.site }}</span>
             {{ displayName(item) }}<span v-if="item.qty" class="qty">× {{ item.qty }} {{ item.unit || '' }}</span>
           </div>
           <span class="chev">expand_more</span>
@@ -330,10 +341,15 @@ const TEMPLATE = `
   <!-- 入力モーダル: 共通 BottomSheet (drag-to-close + 上ドラッグで詳細展開) -->
   <bottom-sheet v-model="showInput" expandable v-model:expanded="inputExpanded">
     <form @submit.prevent="add" class="input-form">
+      <!-- 全てタブ中だけ現場 select が必須で出る (特定タブ中は activeSite 直接使うので不要) -->
+      <select v-if="activeSite === '*'" class="site-sel" v-model="newSite" :disabled="adding">
+        <option value="">現場を選んでください</option>
+        <option v-for="s in sortedSites" :key="s" :value="s">{{ s }}</option>
+      </select>
       <div class="input-row">
-        <input class="name" v-model="newName" :placeholder="inputPlaceholder" :disabled="adding || !activeSite" autocomplete="off" ref="nameInput">
-        <input class="qty" v-model="newQty" type="number" min="1" placeholder="数" :disabled="adding || !activeSite">
-        <select class="unit" v-model="newUnit" :disabled="adding || !activeSite">
+        <input class="name" v-model="newName" :placeholder="inputPlaceholder" :disabled="adding || !formSite" autocomplete="off" ref="nameInput">
+        <input class="qty" v-model="newQty" type="number" min="1" placeholder="数" :disabled="adding || !formSite">
+        <select class="unit" v-model="newUnit" :disabled="adding || !formSite">
           <option>個</option>
           <option>箱</option>
           <option>セット</option>
@@ -362,8 +378,8 @@ const TEMPLATE = `
           <option value="">タスクなし</option>
           <option v-for="t in tasksForCurrentSite" :key="t.id" :value="t.id">{{ t.title }}</option>
         </select>
-        <a v-else-if="activeSite" :href="'/task/?site=' + encodeURIComponent(activeSite)" class="add-task-link">+ タスク作成</a>
-        <button class="add" type="submit" :disabled="!newName.trim() || adding || !activeSite">{{ adding ? "追加中…" : "+ 追加" }}</button>
+        <a v-else-if="formSite" :href="'/task/?site=' + encodeURIComponent(formSite)" class="add-task-link">+ タスク作成</a>
+        <button class="add" type="submit" :disabled="!newName.trim() || adding || !formSite">{{ adding ? "追加中…" : "+ 追加" }}</button>
       </div>
     </form>
   </bottom-sheet>
@@ -416,6 +432,7 @@ const App = {
     const newUnit = ref("個");         // デフォルト 個
     const newCategory = ref(null);   // "材料" | "工具" | null
     const newTaskId = ref("");
+    const newSite = ref("");          // 全てタブ中の追加先現場 (specific タブ中は activeSite を使う)
     const tasks = ref([]);           // /tasks 全件 (社内 ALLOWED_EMAILS のみ購読成功)
     // URL ?site=... ?task=... で初期タブ + タスク pre-select (task アプリからの遷移)
     const urlParams = new URLSearchParams(location.search);
@@ -491,7 +508,10 @@ const App = {
 
     const filteredItems = computed(() =>
       items.value
-        .filter((i) => i.site === activeSite.value && !isArchived(i))
+        .filter((i) => {
+          if (isArchived(i)) return false;
+          return activeSite.value === "*" || i.site === activeSite.value;
+        })
         // 未チェック先、済みを下に。同じ状態内は createdAt desc (新しい順)。
         .sort((a, b) => {
           if (a.checked !== b.checked) return a.checked ? 1 : -1;
@@ -503,26 +523,41 @@ const App = {
 
     const countBySite = computed(() => {
       const m = {};
+      let total = 0;
       for (const s of sites.value) m[s] = 0;
       for (const it of items.value) {
         if (it.checked) continue;
         if (isArchived(it)) continue;
-        // master list に無い site (= keihi2 で削除済み等) もタブには出さないが、
-        // items は残ってる可能性があるので両方ケアする (孤児 items は計上しない)
         if (it.site in m) m[it.site]++;
+        total++;
       }
+      m["*"] = total;
       return m;
     });
 
-    const inputPlaceholder = computed(() =>
-      activeSite.value ? "「" + activeSite.value + "」に追加…" : "現場なし"
+    // フォーム用の effective site: 全てタブ中は newSite (ユーザが select で選ぶ)、
+    // 特定現場タブ中は activeSite (今まで通り、自動)
+    const formSite = computed(() =>
+      activeSite.value === "*" ? newSite.value : activeSite.value
     );
+    const inputPlaceholder = computed(() => {
+      if (activeSite.value === "*") {
+        return newSite.value ? `「${newSite.value}」に追加…` : "現場を選んで追加…";
+      }
+      return activeSite.value ? `「${activeSite.value}」に追加…` : "現場なし";
+    });
     // hasChecked / checkedCount は「まだアーカイブされてない済み」のみ対象
     const hasChecked = computed(() =>
-      items.value.some((i) => i.site === activeSite.value && i.checked && !isArchived(i))
+      items.value.some((i) => {
+        if (!i.checked || isArchived(i)) return false;
+        return activeSite.value === "*" || i.site === activeSite.value;
+      })
     );
     const checkedCount = computed(() =>
-      items.value.filter((i) => i.site === activeSite.value && i.checked && !isArchived(i)).length
+      items.value.filter((i) => {
+        if (!i.checked || isArchived(i)) return false;
+        return activeSite.value === "*" || i.site === activeSite.value;
+      }).length
     );
 
     // アーカイブ一覧: 全現場・全 archived item を日付 (Asia/Tokyo) でグルーピング
@@ -560,9 +595,10 @@ const App = {
     function displayNameOf(email) {
       return (email || "").split("@")[0] || "?";
     }
-    // タスク関連: 現在の現場 + アクティブ状態のものだけ select に並べる
+    // タスク関連: フォーム対象現場 (formSite) + アクティブ状態のものだけ select に並べる
+    // 全てタブ中は newSite が選ばれてから候補が出る (空ならゼロ件)
     const tasksForCurrentSite = computed(() =>
-      tasks.value.filter((t) => (t.site || "") === activeSite.value && t.status === "active")
+      tasks.value.filter((t) => (t.site || "") === formSite.value && t.status === "active")
     );
     function taskTitle(taskId) {
       if (!taskId) return "";
@@ -594,6 +630,12 @@ const App = {
       if (!db || !user.value) return;
       const name = newName.value.trim();
       if (!name || adding.value) return;
+      // 全てタブ中は newSite (= formSite) が必須。未選択なら現場 select にフォーカス促す
+      const targetSite = formSite.value;
+      if (!targetSite) {
+        err.value = "現場を選んでください";
+        return;
+      }
       adding.value = true;
       try {
         const qty = Number(newQty.value);
@@ -607,7 +649,7 @@ const App = {
           qty: qty > 0 ? qty : null,
           unit: newUnit.value.trim() || null,
           category: newCategory.value || null,
-          site: activeSite.value,
+          site: targetSite,
           checked: false,
           createdAt: serverTimestamp(),
           addedBy: (user.value.email || "").toLowerCase(),
@@ -912,7 +954,8 @@ const App = {
 
     return {
       sites, sortedSites, activeSite, items, ready, err,
-      newName, newQty, newUnit, newCategory, newTaskId, tasks, tasksForCurrentSite, taskTitle,
+      newName, newQty, newUnit, newCategory, newTaskId, newSite, formSite,
+      tasks, tasksForCurrentSite, taskTitle,
       adding, seeding, showInput,
       inputExpanded, newNote, newFile, newPreview, onNewFilePick,
       expandedId, editingDetailId, editNote, editFile, editPreview, editTaskId, savingDetail,
