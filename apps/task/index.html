@@ -349,6 +349,8 @@ async function boot(email) {
 }
 
 // 移行ボタンのセットアップ。タスクが 0 件なら表示、押されたら SQL → Firestore コピー。
+// クライアント側で実行: GET /api/tasks (SQL) → 各タスクを Firestore に setDoc。
+// この方法だと Cloud Run SA に Firestore 権限不要 (ユーザの Firebase auth + rules で通る)。
 function setupMigrate() {
   const btn = $("migrateBtn");
   btn.addEventListener("click", async () => {
@@ -358,11 +360,28 @@ function setupMigrate() {
     btn.disabled = true;
     btn.textContent = "取り込み中…";
     try {
-      const j = await api("POST", "/api/tasks/migrate-to-firestore", {});
-      alert(`${j.migrated} 件を取り込みました`);
-      // onSnapshot が自動で発火、ボタンは render() 内で再判定
+      const j = await api("GET", "/api/tasks");
+      const sqlTasks = j.tasks || [];
+      let migrated = 0;
+      for (const t of sqlTasks) {
+        const ref = doc(db, "tasks", t.id);
+        await setDoc(ref, {
+          title: t.title || "",
+          fromEmail: (t.fromEmail || "").toLowerCase(),
+          toEmail: (t.toEmail || "").toLowerCase(),
+          priority: Number(t.priority) || 2,
+          deadline: t.deadline ? String(t.deadline).slice(0, 10) : null,
+          status: t.status || "active",
+          site: "",                                    // 既存は雑務扱いで初期化
+          createdAt: t.createdAt ? new Date(t.createdAt) : new Date(),
+          updatedAt: t.updatedAt ? new Date(t.updatedAt) : new Date(),
+        }, { merge: true });
+        migrated++;
+      }
+      alert(`${migrated} 件を取り込みました`);
+      // onSnapshot が自動発火、ボタンは render() 内で非表示に
     } catch (e) {
-      alert("失敗: " + e.message);
+      alert("失敗: " + (e.message || e));
     } finally {
       btn.disabled = false;
       btn.textContent = orig;
