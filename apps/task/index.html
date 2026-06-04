@@ -308,7 +308,7 @@ async function api(method, path, body) {
 
 let tasks = [];
 let sites = [];          // /api/sites から取得した現場名一覧
-let currentSite = "";    // タブの現在選択。'' = 雑務
+let currentSite = "*";   // タブの現在選択。'*' = 全部 (現場問わず) / '' = 雑務 / それ以外 = 現場名
 let expandedId = null;
 let editingId = null;
 let modalWho = "left";
@@ -461,13 +461,18 @@ function cmp(a, b) {
 
 // 現場別件数 + 全タスク 0 件時の移行ボタン表示判定
 function countActiveBySite(site) {
+  if (site === "*") return tasks.filter((t) => t.status === "active").length;
   return tasks.filter((t) => (t.site || "") === site && t.status === "active").length;
 }
 
 function renderTabs() {
   const tabsEl = $("tabs");
   tabsEl.innerHTML = "";
-  const all = [{ key: "", label: "雑務" }, ...sites.map((s) => ({ key: s, label: s }))];
+  const all = [
+    { key: "*", label: "全部" },
+    { key: "", label: "雑務" },
+    ...sites.map((s) => ({ key: s, label: s })),
+  ];
   for (const it of all) {
     const btn = document.createElement("button");
     btn.className = "tab" + (it.key === currentSite ? " on" : "");
@@ -492,15 +497,17 @@ function renderTabs() {
 
 function render() {
   const lastSeen = getLastSeen();
-  // 現在のタブにマッチするタスクだけ表示
-  const filtered = tasks.filter((t) => (t.site || "") === currentSite);
+  // 現在のタブにマッチするタスクだけ表示 ('*' = 全部、フィルタなし)
+  const filtered = currentSite === "*"
+    ? tasks
+    : tasks.filter((t) => (t.site || "") === currentSite);
   const sorted = filtered.slice().sort(cmp);
   const el = $("list");
   el.innerHTML = "";
   // 全タスク 0 件 → 初回想定 → 移行ボタン表示。それ以外は非表示
   $("migrateBtn").style.display = tasks.length === 0 ? "block" : "none";
   if (!sorted.length) {
-    const label = currentSite || "雑務";
+    const label = currentSite === "*" ? "全部" : (currentSite || "雑務");
     el.innerHTML = `<div class="empty">「${label}」のタスクはありません</div>`;
     renderTabs(); // count 更新
     return;
@@ -760,8 +767,8 @@ function openModal(t) {
   $("iDeadline").value = t && t.deadline ? String(t.deadline).slice(0, 10) : "";
   modalWho = t ? posOf(t) : "left";
   modalPriority = t ? (t.priority || 2) : 2;
-  // 編集 → そのタスクの site、新規 → いま開いてるタブの現場を初期値に
-  modalSite = t ? (t.site || "") : currentSite;
+  // 編集 → そのタスクの site、新規 → 表示中タブの現場 (全部タブのときは雑務='') を初期値に
+  modalSite = t ? (t.site || "") : (currentSite === "*" ? "" : currentSite);
   $("iSite").value = modalSite;
   document.querySelectorAll('[data-who]').forEach((x) => x.classList.toggle("sel", x.dataset.who === modalWho));
   document.querySelectorAll('[data-p]').forEach((x) => {
