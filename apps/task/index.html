@@ -65,12 +65,16 @@ body { font-family: 'Outfit', -apple-system, sans-serif; font-weight: 400; backg
    構造: .role-picker > .role-socket > .role-btn (コイン)
    socket / rim は透明 (背景に黒いブロックを出さない)。コイン自身の
    厚み (多層スライス) で立体感を出す。 */
-.role-picker { display: flex; gap: 6px; align-items: center; flex-shrink: 0; perspective: 700px; }
+.role-picker { display: flex; gap: 6px; align-items: center; flex-shrink: 0; }
 .role-socket {
   position: relative;
   width: 36px; height: 36px;
   display: flex; align-items: center; justify-content: center;
   flex-shrink: 0;
+  /* perspective を socket レベルに置く + preserve-3d で coin の rotateY が
+     ちゃんと 3D 空間で見えるように (picker レベルだと socket で flatten される) */
+  perspective: 700px;
+  transform-style: preserve-3d;
 }
 .role-picker:not(.open) .role-socket { display: none; }
 .role-picker:not(.open) .role-socket.current-socket { display: flex; }
