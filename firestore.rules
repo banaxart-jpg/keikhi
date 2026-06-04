@@ -41,6 +41,17 @@ service cloud.firestore {
       allow read, write: if request.auth != null;
     }
 
+    // タスク: 社内 3 アカウント限定 (小西・名取・banaxart)。
+    // Cloud SQL の tasks テーブルから Firestore へ移行 (realtime 同期 + 現場分け対応)。
+    match /tasks/{taskId} {
+      allow read, write: if request.auth != null
+        && request.auth.token.email in [
+          'info@banax.tokyo',
+          'konishi0221@gmail.com',
+          'banaxart@gmail.com'
+        ];
+    }
+
     // それ以外は禁止 (明示)
     match /{document=**} {
       allow read, write: if false;

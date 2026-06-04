@@ -1223,6 +1223,40 @@ app.delete("/api/tasks/:id", async (req, res) => {
   }
 });
 
+// 既存の Cloud SQL タスクを Firestore に 1 回限り移行 (idempotent: 同じ id で
+// merge:true 書き込みなので何回叩いても上書きされるだけ)。フロントが Firestore 化
+// 後に「📥 移行」ボタンから呼ぶ。SQL 側は当面残す (バックアップ用、後で削除可)。
+app.post("/api/tasks/migrate-to-firestore", async (req, res) => {
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "db not configured" });
+  await ensureSchema();
+  try {
+    const { rows } = await p.query("SELECT * FROM tasks ORDER BY created_at ASC");
+    const fs = admin.firestore();
+    let migrated = 0;
+    for (const row of rows) {
+      const deadline = row.deadline
+        ? (row.deadline instanceof Date ? row.deadline.toISOString().slice(0, 10) : String(row.deadline).slice(0, 10))
+        : null;
+      await fs.collection("tasks").doc(row.id).set({
+        title: row.title || "",
+        fromEmail: (row.from_email || "").toLowerCase(),
+        toEmail: (row.to_email || "").toLowerCase(),
+        priority: Number(row.priority) || 2,
+        deadline,
+        status: row.status || "active",
+        site: "",                                 // 既存は雑務扱いで初期化、後でユーザーが移動
+        createdAt: row.created_at || new Date(),
+        updatedAt: row.updated_at || new Date(),
+      }, { merge: true });
+      migrated++;
+    }
+    res.json({ ok: true, migrated, totalInSql: rows.length });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // ───── 宿 (yado): 満竹華庵の Beds24 予約 + AI戦略 ─────
 // Beds24 v2 API は token をヘッダで渡すだけのシンプル設計。トークン未設定なら
 // sample 表示用のフラグを返してフロントが自前のサンプルを描く。

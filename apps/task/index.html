@@ -36,6 +36,18 @@ body { font-family: 'Outfit', -apple-system, sans-serif; font-weight: 400; backg
 .me-pill { display: inline-flex; align-items: center; gap: 7px; padding: 6px 13px; border-radius: 30px; background: var(--bg); box-shadow: inset 3px 3px 8px var(--sd), inset -3px -3px 8px var(--sl); font-size: 11px; font-weight: 700; color: var(--text2); margin: 0 18px 14px; }
 .me-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 6px var(--accent-glow); }
 
+/* 現場タブ (kaimono と同パターン)。雑務 + /api/sites の各現場 */
+.tabs { display: flex; gap: 8px; padding: 4px 18px 14px; overflow-x: auto; scrollbar-width: none; }
+.tabs::-webkit-scrollbar { display: none; }
+.tab { padding: 9px 16px; border-radius: 18px; font-size: 13px; font-weight: 700; border: none; color: var(--text2); background: var(--bg); box-shadow: 4px 4px 10px var(--sd), -4px -4px 10px var(--sl); cursor: pointer; flex-shrink: 0; font-family: 'Outfit', sans-serif; transition: all 200ms ease; position: relative; }
+.tab.on { color: white; background: linear-gradient(145deg, var(--accent2), var(--accent)); box-shadow: 6px 6px 14px rgba(50,70,200,0.35), -3px -3px 10px var(--sl); }
+.tab .count { font-size: 10px; font-weight: 800; margin-left: 6px; opacity: 0.7; }
+
+/* SQL 移行ボタン (初回だけ表示、移行済んだら非表示) */
+.migrate-btn { display: block; margin: 30px auto; padding: 10px 18px; border-radius: 14px; border: 1px dashed var(--text3); background: none; cursor: pointer; font-family: 'Outfit', sans-serif; font-size: 11px; font-weight: 700; color: var(--text3); }
+.migrate-btn:hover { color: var(--accent); border-color: var(--accent); }
+.migrate-btn:disabled { opacity: 0.5; cursor: wait; }
+
 .list { padding: 0 16px 130px; display: flex; flex-direction: column; gap: 9px; }
 .empty { text-align: center; padding: 40px 20px; color: var(--text3); font-size: 13px; font-weight: 600; }
 
@@ -154,7 +166,9 @@ body { font-family: 'Outfit', -apple-system, sans-serif; font-weight: 400; backg
     <button class="signout" onclick="window.doSignOut && window.doSignOut()">⏻</button>
   </div>
   <div class="me-pill"><span class="me-dot"></span><span id="meLabel">…</span></div>
+  <div class="tabs" id="tabs"></div>
   <div class="list" id="list"></div>
+  <button class="migrate-btn" id="migrateBtn" style="display:none">📥 Cloud SQL から既存タスクを取り込み</button>
   <button class="fab" id="fabAdd">＋</button>
 </div>
 
@@ -186,6 +200,12 @@ body { font-family: 'Outfit', -apple-system, sans-serif; font-weight: 400; backg
       <label>期限（任意）</label>
       <input class="inp" type="date" id="iDeadline">
     </div>
+    <div class="field">
+      <label>現場（雑務 = 会社全般）</label>
+      <select class="inp" id="iSite">
+        <option value="">雑務</option>
+      </select>
+    </div>
     <button class="save" id="saveBtn">保存</button>
   </div>
 </div>
@@ -197,10 +217,16 @@ import {
   getAuth, setPersistence, browserLocalPersistence,
   onAuthStateChanged, signOut,
 } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
+import {
+  getFirestore, collection, doc, setDoc, updateDoc, deleteDoc, onSnapshot,
+  serverTimestamp,
+} from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
 import { gateInternal } from "/internal-gate.js";
 
 const API_BASE = (window.API_BASE || "").replace(/\/$/, "");
 let fbAuth = null;
+let db = null;            // Firestore (realtime 同期用)
+let unsubscribeTasks = null;
 async function idToken() {
   const u = fbAuth?.currentUser;
   return u ? await u.getIdToken() : null;
@@ -215,7 +241,9 @@ async function idToken() {
   try {
     const cfg = await fetch("/__/firebase/init.json").then((r) => r.json());
     cfg.authDomain = location.hostname;
-    fbAuth = getAuth(initializeApp(cfg));
+    const app = initializeApp(cfg);
+    fbAuth = getAuth(app);
+    db = getFirestore(app);
     await setPersistence(fbAuth, browserLocalPersistence);
     gateInternal(fbAuth);
     let entered = false;
@@ -279,10 +307,13 @@ async function api(method, path, body) {
 }
 
 let tasks = [];
+let sites = [];          // /api/sites から取得した現場名一覧
+let currentSite = "";    // タブの現在選択。'' = 雑務
 let expandedId = null;
 let editingId = null;
 let modalWho = "left";
 let modalPriority = 2;
+let modalSite = "";
 let pickerOpenId = null;
 
 const LAST_SEEN_KEY = "task_last_seen";
@@ -295,17 +326,59 @@ async function boot(email) {
   partner = PARTNER_OF[me] || "";
   $("meLabel").textContent = nameOf(me) + (partner ? `（相手: ${nameOf(partner)}）` : "");
   $("app").style.display = "block";
+  // 現場一覧を keihi 共通 API から取得 (kaimono と同ソース)
+  try {
+    const sj = await api("GET", "/api/sites");
+    sites = (Array.isArray(sj) ? sj : []).map((s) => s.name).filter(Boolean);
+  } catch (_) { sites = []; }
+  refreshSiteSelect();
   setupModal();
-  await reload();
+  setupMigrate();
+  // Firestore リアルタイム購読: tasks コレクション全件 → 自分関連のみクライアント側で絞る
+  unsubscribeTasks = onSnapshot(collection(db, "tasks"), (snap) => {
+    tasks = snap.docs.map((d) => ({ id: d.id, ...d.data() }))
+      .filter((t) => {
+        const fe = (t.fromEmail || "").toLowerCase();
+        const te = (t.toEmail || "").toLowerCase();
+        return fe === me || te === me || te === "both";
+      });
+    render();
+  }, (e) => { console.warn("[task] snapshot failed", e); });
+  renderTabs();
   setTimeout(setLastSeen, 1500);
 }
 
-async function reload() {
-  try {
-    const j = await api("GET", "/api/tasks");
-    tasks = j.tasks || [];
-    render();
-  } catch (e) { console.warn("[task] reload failed", e); }
+// 移行ボタンのセットアップ。タスクが 0 件なら表示、押されたら SQL → Firestore コピー。
+function setupMigrate() {
+  const btn = $("migrateBtn");
+  btn.addEventListener("click", async () => {
+    if (btn.disabled) return;
+    if (!confirm("Cloud SQL に残っている既存タスクを Firestore に取り込みます。続けますか?")) return;
+    const orig = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = "取り込み中…";
+    try {
+      const j = await api("POST", "/api/tasks/migrate-to-firestore", {});
+      alert(`${j.migrated} 件を取り込みました`);
+      // onSnapshot が自動で発火、ボタンは render() 内で再判定
+    } catch (e) {
+      alert("失敗: " + e.message);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = orig;
+    }
+  });
+}
+
+function refreshSiteSelect() {
+  const sel = $("iSite");
+  sel.innerHTML = '<option value="">雑務</option>';
+  for (const s of sites) {
+    const o = document.createElement("option");
+    o.value = s;
+    o.textContent = s;
+    sel.appendChild(o);
+  }
 }
 
 function posOf(t) {
@@ -339,12 +412,23 @@ function deadlineClass(d) {
   return "";
 }
 
+// Firestore Timestamp / ISO 文字列 / null どれが来てもミリ秒に揃える
+function toMillis(ts) {
+  if (!ts) return 0;
+  if (typeof ts.toMillis === "function") return ts.toMillis();
+  return new Date(ts).getTime() || 0;
+}
+function toIso(ts) {
+  if (!ts) return "";
+  if (typeof ts.toDate === "function") return ts.toDate().toISOString();
+  return new Date(ts).toISOString();
+}
 function sortKey(t) {
   return [
     t.status === "active" ? 0 : 1,
     Number(t.priority) || 2,
     t.deadline || "9999-12-31",
-    -(new Date(t.createdAt || 0).getTime()),
+    -toMillis(t.createdAt),
   ];
 }
 function cmp(a, b) {
@@ -356,13 +440,50 @@ function cmp(a, b) {
   return 0;
 }
 
+// 現場別件数 + 全タスク 0 件時の移行ボタン表示判定
+function countActiveBySite(site) {
+  return tasks.filter((t) => (t.site || "") === site && t.status === "active").length;
+}
+
+function renderTabs() {
+  const tabsEl = $("tabs");
+  tabsEl.innerHTML = "";
+  const all = [{ key: "", label: "雑務" }, ...sites.map((s) => ({ key: s, label: s }))];
+  for (const it of all) {
+    const btn = document.createElement("button");
+    btn.className = "tab" + (it.key === currentSite ? " on" : "");
+    btn.textContent = it.label;
+    const cnt = countActiveBySite(it.key);
+    if (cnt > 0) {
+      const c = document.createElement("span");
+      c.className = "count";
+      c.textContent = cnt;
+      btn.appendChild(c);
+    }
+    btn.addEventListener("click", () => {
+      currentSite = it.key;
+      expandedId = null;
+      pickerOpenId = null;
+      renderTabs();
+      render();
+    });
+    tabsEl.appendChild(btn);
+  }
+}
+
 function render() {
   const lastSeen = getLastSeen();
-  const sorted = tasks.slice().sort(cmp);
+  // 現在のタブにマッチするタスクだけ表示
+  const filtered = tasks.filter((t) => (t.site || "") === currentSite);
+  const sorted = filtered.slice().sort(cmp);
   const el = $("list");
   el.innerHTML = "";
+  // 全タスク 0 件 → 初回想定 → 移行ボタン表示。それ以外は非表示
+  $("migrateBtn").style.display = tasks.length === 0 ? "block" : "none";
   if (!sorted.length) {
-    el.innerHTML = `<div class="empty">タスクはまだありません</div>`;
+    const label = currentSite || "雑務";
+    el.innerHTML = `<div class="empty">「${label}」のタスクはありません</div>`;
+    renderTabs(); // count 更新
     return;
   }
   for (const t of sorted) {
@@ -370,6 +491,28 @@ function render() {
     el.appendChild(wrap);
     if (expandedId === t.id) wrap.appendChild(renderActions(t));
   }
+  renderTabs(); // count 更新
+}
+
+// ───── Firestore 書き込みヘルパー ─────
+async function saveTask(id, fields) {
+  // id 指定で update、未指定で新規作成 (自動 id)
+  const ref = id ? doc(db, "tasks", id) : doc(collection(db, "tasks"));
+  await setDoc(ref, {
+    ...fields,
+    updatedAt: serverTimestamp(),
+    ...(id ? {} : {
+      fromEmail: me,
+      status: "active",
+      createdAt: serverTimestamp(),
+    }),
+  }, { merge: true });
+}
+async function patchTask(id, fields) {
+  await updateDoc(doc(db, "tasks", id), { ...fields, updatedAt: serverTimestamp() });
+}
+async function removeTask(id) {
+  await deleteDoc(doc(db, "tasks", id));
 }
 
 function renderRow(t, lastSeen) {
@@ -398,8 +541,9 @@ function renderRow(t, lastSeen) {
       }
       pickerOpenId = null;
       if (pos !== cur) {
-        await api("PUT", "/api/tasks/" + t.id, { toEmail: emailOfPos(pos) });
-        await reload();
+        try { await patchTask(t.id, { toEmail: emailOfPos(pos) }); }
+        catch (err) { alert("移動失敗: " + err.message); }
+        // onSnapshot が自動で再描画
       } else {
         render();
       }
@@ -421,7 +565,7 @@ function renderRow(t, lastSeen) {
   rowTop.append(pip, ttl);
   // 未読
   const isMine = (t.toEmail || "").toLowerCase() === me || (t.toEmail || "").toLowerCase() === "both";
-  if (isMine && t.status === "active" && t.createdAt > lastSeen && (t.fromEmail || "").toLowerCase() !== me) {
+  if (isMine && t.status === "active" && toIso(t.createdAt) > lastSeen && (t.fromEmail || "").toLowerCase() !== me) {
     const u = document.createElement("div");
     u.className = "unread-dot";
     rowTop.appendChild(u);
@@ -451,8 +595,8 @@ function renderActions(t) {
   doneBtn.textContent = t.status === "done" ? "戻す" : "完了";
   doneBtn.addEventListener("click", async (e) => {
     e.stopPropagation();
-    await api("PUT", "/api/tasks/" + t.id, { status: t.status === "done" ? "active" : "done" });
-    await reload();
+    try { await patchTask(t.id, { status: t.status === "done" ? "active" : "done" }); }
+    catch (err) { alert("更新失敗: " + err.message); }
   });
   const priBtn = document.createElement("button");
   priBtn.className = "act-btn";
@@ -460,8 +604,8 @@ function renderActions(t) {
   priBtn.addEventListener("click", async (e) => {
     e.stopPropagation();
     const next = ((t.priority || 2) % 3) + 1;
-    await api("PUT", "/api/tasks/" + t.id, { priority: next });
-    await reload();
+    try { await patchTask(t.id, { priority: next }); }
+    catch (err) { alert("更新失敗: " + err.message); }
   });
   const editBtn = document.createElement("button");
   editBtn.className = "act-btn";
@@ -473,9 +617,9 @@ function renderActions(t) {
   delBtn.addEventListener("click", async (e) => {
     e.stopPropagation();
     if (!confirm("削除しますか？")) return;
-    await api("DELETE", "/api/tasks/" + t.id);
     expandedId = null;
-    await reload();
+    try { await removeTask(t.id); }
+    catch (err) { alert("削除失敗: " + err.message); }
   });
   bar.append(doneBtn, priBtn, editBtn, delBtn);
   return bar;
@@ -533,10 +677,8 @@ function makeSwipeable(card, t) {
     if (idx >= order.length) idx = order.length - 1;
     const newPos = order[idx];
     if (newPos !== cur) {
-      try {
-        await api("PUT", "/api/tasks/" + t.id, { toEmail: emailOfPos(newPos) });
-        await reload();
-      } catch (err) { alert("移動失敗: " + err.message); }
+      try { await patchTask(t.id, { toEmail: emailOfPos(newPos) }); }
+      catch (err) { alert("移動失敗: " + err.message); }
     }
   });
   card.addEventListener("pointercancel", () => {
@@ -568,6 +710,8 @@ function setupModal() {
   });
   $("fabAdd").addEventListener("click", () => openModal(null));
   $("modal").addEventListener("click", (e) => { if (e.target.id === "modal") closeModal(); });
+  // 現場 select の変更を modalSite に反映
+  $("iSite").addEventListener("change", (e) => { modalSite = e.target.value || ""; });
   $("saveBtn").addEventListener("click", async () => {
     const btn = $("saveBtn");
     if (btn.disabled) return;            // 多重発火ガード (連打対策)
@@ -575,17 +719,13 @@ function setupModal() {
     if (!title) { $("iTitle").focus(); return; }
     const deadline = $("iDeadline").value || null;
     const toEmail = emailOfPos(modalWho);
+    const site = modalSite || "";
     const origText = btn.textContent;
     btn.disabled = true;
     btn.textContent = "保存中…";
     try {
-      if (editingId) {
-        await api("PUT", "/api/tasks/" + editingId, { title, toEmail, priority: modalPriority, deadline });
-      } else {
-        await api("POST", "/api/tasks", { title, toEmail, priority: modalPriority, deadline });
-      }
+      await saveTask(editingId, { title, toEmail, priority: modalPriority, deadline, site });
       closeModal();
-      await reload();
     } catch (e) {
       alert("保存に失敗: " + e.message);
     } finally {
@@ -601,6 +741,9 @@ function openModal(t) {
   $("iDeadline").value = t && t.deadline ? String(t.deadline).slice(0, 10) : "";
   modalWho = t ? posOf(t) : "left";
   modalPriority = t ? (t.priority || 2) : 2;
+  // 編集 → そのタスクの site、新規 → いま開いてるタブの現場を初期値に
+  modalSite = t ? (t.site || "") : currentSite;
+  $("iSite").value = modalSite;
   document.querySelectorAll('[data-who]').forEach((x) => x.classList.toggle("sel", x.dataset.who === modalWho));
   document.querySelectorAll('[data-p]').forEach((x) => {
     const isSel = Number(x.dataset.p) === modalPriority;
