@@ -423,22 +423,23 @@ $("backToBuyerBtn").addEventListener("click", () => show("buyerScreen"));
 $("shootBtn").addEventListener("click", () => $("cameraInput").click());
 $("photoBtn").addEventListener("click", () => $("photoInput").click());
 $("fileBtn").addEventListener("click", () => $("fileInput").click());
-const handleShotChange = (ev) => {
+const makeHandler = (source) => (ev) => {
   const file = ev.target.files?.[0];
   if (!file) return;
   ev.target.value = "";
-  enqueueShot(file);
+  enqueueShot(file, source);
 };
-$("cameraInput").addEventListener("change", handleShotChange);
-$("photoInput").addEventListener("change", handleShotChange);
-$("fileInput").addEventListener("change", handleShotChange);
+$("cameraInput").addEventListener("change", makeHandler("camera"));
+$("photoInput").addEventListener("change", makeHandler("library"));
+$("fileInput").addEventListener("change", makeHandler("file"));
 
-function enqueueShot(file) {
+function enqueueShot(file, source = "camera") {
   const item = {
     tempId: crypto.randomUUID(),
     file,
+    source,                     // "camera" | "library" | "file" → サーバの Drive 保存判定
     blobUrl: URL.createObjectURL(file),
-    status: "uploading", // uploading -> scanning -> done | failed
+    status: "uploading",       // uploading -> scanning -> done | failed
     error: "",
   };
   queue.unshift(item); // 新しいのを先頭に
@@ -459,6 +460,7 @@ async function processQueue() {
       const resp = await api("POST", "/api/scan", {
         image: b64, mimeType: "image/jpeg", kind: "receipt",
         sites: sites.map((s) => s.name),
+        source: next.source || "camera",   // カメラ撮影は Drive バックアップしない (紙で郵送)
       });
       const parsed = resp?.receipts?.[0] || {};
       const today = new Date().toISOString().slice(0, 10);

@@ -138,14 +138,57 @@ async function getDriveApi() {
   return driveApi;
 }
 
-// 画像/PDF を Drive の指定フォルダにアップロードして「リンクを知ってる人は閲覧可」に。
-// 失敗しても本体処理は止めない (null を返す)。
-async function uploadToDrive(buffer, filename, mimeType) {
-  if (!DRIVE_FOLDER_ID) return null;
+// 月別サブフォルダ (YYYY-MM 形式) の Drive folder ID を取得 or 作成。
+// 探索 → 無ければ作成 で 1 ヶ月あたり 2 API call、結果は instance ライフタイム中キャッシュ。
+const driveMonthFolderCache = new Map();   // "YYYY-MM" -> folderId
+async function getOrCreateDriveMonthFolder(yyyymm) {
+  if (!DRIVE_FOLDER_ID || !yyyymm) return DRIVE_FOLDER_ID;
+  if (!/^\d{4}-\d{2}$/.test(yyyymm)) return DRIVE_FOLDER_ID;
+  if (driveMonthFolderCache.has(yyyymm)) return driveMonthFolderCache.get(yyyymm);
   try {
     const drive = await getDriveApi();
+    // 既存検索 (parent 指定 + name 完全一致 + フォルダ MIME + 未ゴミ箱)
+    const q = `name = '${yyyymm}' and '${DRIVE_FOLDER_ID}' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed = false`;
+    const res = await drive.files.list({
+      q,
+      fields: "files(id,name)",
+      supportsAllDrives: true,
+      includeItemsFromAllDrives: true,
+      corpora: "allDrives",
+    });
+    let folderId;
+    if (res.data.files && res.data.files.length) {
+      folderId = res.data.files[0].id;
+    } else {
+      const created = await drive.files.create({
+        requestBody: {
+          name: yyyymm,
+          mimeType: "application/vnd.google-apps.folder",
+          parents: [DRIVE_FOLDER_ID],
+        },
+        fields: "id",
+        supportsAllDrives: true,
+      });
+      folderId = created.data.id;
+      console.log(`[drive] created month folder ${yyyymm} id=${folderId}`);
+    }
+    driveMonthFolderCache.set(yyyymm, folderId);
+    return folderId;
+  } catch (e) {
+    console.warn(`[drive] month folder ensure failed for ${yyyymm}: ${e.message}`);
+    return DRIVE_FOLDER_ID;   // fallback: ルート
+  }
+}
+
+// 画像/PDF を Drive の指定フォルダにアップロードして「リンクを知ってる人は閲覧可」に。
+// yyyymm を指定すると月別サブフォルダ配下にアップ。失敗しても本体処理は止めない (null を返す)。
+async function uploadToDrive(buffer, filename, mimeType, yyyymm = null) {
+  if (!DRIVE_FOLDER_ID) return null;
+  try {
+    const parentId = yyyymm ? await getOrCreateDriveMonthFolder(yyyymm) : DRIVE_FOLDER_ID;
+    const drive = await getDriveApi();
     const created = await drive.files.create({
-      requestBody: { name: filename, parents: [DRIVE_FOLDER_ID], mimeType },
+      requestBody: { name: filename, parents: [parentId], mimeType },
       media: { mimeType, body: Readable.from(buffer) },
       fields: "id, webViewLink",
       supportsAllDrives: true,
@@ -156,7 +199,7 @@ async function uploadToDrive(buffer, filename, mimeType) {
       supportsAllDrives: true,
     });
     const url = created.data.webViewLink || `https://drive.google.com/file/d/${created.data.id}/view`;
-    console.log(`[drive] uploaded id=${created.data.id} name=${filename}`);
+    console.log(`[drive] uploaded id=${created.data.id} name=${filename} folder=${yyyymm || "root"}`);
     return { id: created.data.id, url };
   } catch (e) {
     console.warn(`[drive] upload FAILED ${filename}: ${e.message}`);
@@ -2068,14 +2111,22 @@ app.post("/api/yado/sync", async (req, res) => {
 app.post("/api/scan", async (req, res) => {
   try {
     if (!genAI) return res.status(503).json({ error: "GEMINI_API_KEY not configured" });
-    const { image, mimeType = "image/jpeg", sites = [], kind = "receipt", direction = "in" } = req.body || {};
+    // source="camera" の領収書は紙でそのまま税理士に郵送するため Drive 保存しない。
+    // source="library"/"file" (デジタル保管しか無いやつ) のみ Drive にバックアップ。
+    const {
+      image, mimeType = "image/jpeg", sites = [], kind = "receipt", direction = "in",
+      source = "camera",     // "camera" | "library" | "file"
+    } = req.body || {};
     if (!image) return res.status(400).json({ error: "image (base64) is required" });
+    const skipDrive = source === "camera";
 
     let imageUrl = null;
     let driveUrl = null;
     const buf = Buffer.from(image, "base64");
     const ext = mimeType === "application/pdf" ? "pdf" : "jpg";
-    const key = `${new Date().toISOString().slice(0, 10)}/${crypto.randomUUID()}.${ext}`;
+    const today = new Date().toISOString().slice(0, 10);
+    const currentYm = today.slice(0, 7);
+    const key = `${today}/${crypto.randomUUID()}.${ext}`;
     // GCS にアップロード (本体ストレージ。失敗しても AI 読取は続行)
     if (storage && RECEIPTS_BUCKET) {
       try {
@@ -2084,20 +2135,20 @@ app.post("/api/scan", async (req, res) => {
           .file(key)
           .save(buf, { contentType: mimeType, resumable: false });
         imageUrl = `gs://${RECEIPTS_BUCKET}/${key}`;
-        console.log(`[scan] uploaded ${imageUrl} (${buf.length} bytes, ${mimeType})`);
+        console.log(`[scan] uploaded ${imageUrl} (${buf.length} bytes, ${mimeType}, source=${source})`);
       } catch (e) {
         console.warn(`[scan] GCS upload FAILED (bucket=${RECEIPTS_BUCKET}, key=${key}): ${e.code || ""} ${e.message}`);
       }
     } else {
       console.warn(`[scan] image not saved (storage=${!!storage}, bucket=${RECEIPTS_BUCKET || "(empty)"})`);
     }
-    // Drive にもアップロード (税理士共有用。リンクを知ってる人は閲覧可)
-    if (DRIVE_FOLDER_ID) {
-      const dr = await uploadToDrive(buf, key.replace(/\//g, "_"), mimeType);
+    // Drive にアップロード (税理士共有用、月別フォルダに整理)。カメラ撮影は skip。
+    if (DRIVE_FOLDER_ID && !skipDrive) {
+      const dr = await uploadToDrive(buf, key.replace(/\//g, "_"), mimeType, currentYm);
       if (dr) driveUrl = dr.url;
     }
 
-    const today = new Date().toISOString().slice(0, 10);
+    // today / currentYm は冒頭で既に算出済 (Drive 月別フォルダ用)
     // kind="invoice" は請求書 / 払込票 / 通知書 のスキャン。
     //   direction="in" : 自社が受け取った請求書 → issuer = 発行元（取引先）
     //   direction="out": 自社が発行した請求書 → issuer = 宛先（取引先）
