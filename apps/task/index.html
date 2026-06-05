@@ -250,6 +250,24 @@ body { font-family: 'Outfit', -apple-system, sans-serif; font-weight: 400; backg
 .save { width: 100%; padding: 16px; border: none; border-radius: 20px; cursor: pointer; font-size: 16px; font-weight: 800; color: white; font-family: 'Outfit', sans-serif; background: linear-gradient(145deg, var(--accent2), var(--accent)); box-shadow: 6px 6px 18px rgba(50,70,200,0.45), -3px -3px 10px var(--sl); margin-top: 10px; transition: opacity 200ms ease; }
 .save:active { transform: scale(0.97); }
 .save:disabled { opacity: 0.6; cursor: wait; }
+
+/* アーカイブ: 完了から ARCHIVE_AFTER_MS 経過したタスクを日付グループで表示
+   (kaimono の手配リストと同じ仕組み) */
+.arch-subtitle { font-size: 11px; color: var(--text3); font-weight: 600; margin: 0 4px 14px; }
+.arch-empty { text-align: center; color: var(--text3); font-size: 12px; padding: 40px 0; }
+.arch-day { margin-bottom: 18px; }
+.arch-day-head { font-size: 12px; font-weight: 800; color: var(--text2); padding: 8px 12px; background: var(--bg2); border-radius: 10px; margin-bottom: 6px; display: flex; justify-content: space-between; }
+.arch-row { padding: 9px 12px; border-radius: 10px; transition: background 200ms ease; }
+.arch-row.open { background: var(--bg2); }
+.arch-row-top { display: flex; align-items: center; gap: 10px; cursor: pointer; }
+.arch-row .body { flex: 1; min-width: 0; font-size: 13px; }
+.arch-row .body b { font-weight: 700; }
+.arch-row .body .meta { font-size: 10px; color: var(--text3); margin-top: 2px; }
+.arch-row .chev { color: var(--text3); font-size: 14px; flex-shrink: 0; transition: transform 200ms ease; }
+.arch-row.open .chev { transform: rotate(180deg); }
+.arch-detail { margin-top: 8px; padding-top: 8px; border-top: 1px solid rgba(168,172,192,0.18); display: flex; flex-direction: column; gap: 8px; }
+.arch-detail .restore-btn { align-self: flex-end; padding: 7px 14px; border: none; border-radius: 10px; font-family: 'Outfit', sans-serif; font-size: 12px; font-weight: 700; cursor: pointer; color: var(--accent); background: var(--bg); box-shadow: 3px 3px 8px var(--sd), -2px -2px 6px var(--sl); }
+.arch-detail .restore-btn:active { box-shadow: inset 2px 2px 6px var(--sd); }
 </style>
 </head>
 <body>
@@ -269,6 +287,7 @@ import {
   serverTimestamp,
 } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
 import { gateInternal } from "/internal-gate.js";
+import { BottomSheet } from "/bottom-sheet.js";
 
 const API_BASE = (window.API_BASE || "").replace(/\/$/, "");
 const LAST_SEEN_KEY = "task_last_seen";
@@ -301,7 +320,10 @@ const TEMPLATE = `
     <div class="top">
       <a class="back" href="/" style="text-decoration:none;">← 戻る</a>
       <div class="title">タスク</div>
-      <button class="signout" @click="doSignOut">⏻</button>
+      <div style="display:flex; gap:2px;">
+        <button class="signout" @click="showArchive = true" title="アーカイブ">📥</button>
+        <button class="signout" @click="doSignOut">⏻</button>
+      </div>
     </div>
     <div class="me-pill"><span class="me-dot"></span><span>{{ meLabel }}</span></div>
 
@@ -432,6 +454,27 @@ const TEMPLATE = `
         <button class="save" :disabled="saving" @click="saveModal">{{ saving ? '保存中…' : '保存' }}</button>
       </div>
     </div>
+
+    <!-- アーカイブ: 完了 → 1日後にここへ。kaimono と同パターン -->
+    <bottom-sheet v-model="showArchive" title="アーカイブ">
+      <div class="arch-subtitle">(完了 → 1日後にここに)</div>
+      <div v-if="archivedByDay.length === 0" class="arch-empty">アーカイブされたタスクはまだ無し</div>
+      <div v-for="[day, list] in archivedByDay" :key="day" class="arch-day">
+        <div class="arch-day-head"><span>{{ day }}</span><span>{{ list.length }} 件</span></div>
+        <div v-for="t in list" :key="t.id" class="arch-row" :class="{ open: archExpandedId === t.id }">
+          <div class="arch-row-top" @click="archExpandedId = archExpandedId === t.id ? null : t.id">
+            <div class="body">
+              <div><b>{{ t.title || '(無題)' }}</b></div>
+              <div class="meta">{{ t.site || '雑務' }} · {{ fmtTime(t.doneAt || t.updatedAt) }}</div>
+            </div>
+            <span class="chev">▾</span>
+          </div>
+          <div v-if="archExpandedId === t.id" class="arch-detail">
+            <button class="restore-btn" @click="onRestoreTask(t)">未完了に戻す</button>
+          </div>
+        </div>
+      </div>
+    </bottom-sheet>
   </div>
 </div>
 `;
@@ -478,6 +521,23 @@ const App = {
     // どのリンクアイテムが開いてるか (= 「外す」ボタン表示中の item id)
     const linkedItemOpenId = ref(null);
 
+    // ───── アーカイブ (完了 → 1日後にリストから消えて archive シートへ) ─────
+    // kaimono と同じ「now を 30 秒ごとに更新 → computed が反応」方式
+    const ARCHIVE_AFTER_MS = 24 * 60 * 60 * 1000;
+    const now = ref(Date.now());
+    let nowTimer = null;
+    const showArchive = ref(false);
+    const archExpandedId = ref(null);
+    function archivedAtMs(t) {
+      return (t.doneAt?.toMillis?.()) || (t.updatedAt?.toMillis?.()) || 0;
+    }
+    function isArchived(t) {
+      if (t.status !== "done") return false;
+      const ts = archivedAtMs(t);
+      if (!ts) return false;
+      return (now.value - ts) > ARCHIVE_AFTER_MS;
+    }
+
     // ───── helpers (純粋関数) ─────
     function nameOf(em) { return NAME_BY_EMAIL[(em || "").toLowerCase()] || em || "?"; }
     function shortOf(em) { return (nameOf(em) || "?").slice(0, 1); }
@@ -515,6 +575,12 @@ const App = {
     function fmtDate(d) {
       if (!d) return "";
       return String(d).slice(0, 10).replace(/^\d{4}-/, "").replace("-", "/");
+    }
+    function fmtTime(ts) {
+      if (!ts) return "";
+      const d = ts.toDate ? ts.toDate() : new Date(ts);
+      if (isNaN(d.getTime())) return "";
+      return d.toLocaleString("ja-JP", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
     }
     function deadlineClass(d) {
       if (!d) return "";
@@ -559,10 +625,27 @@ const App = {
       return 0;
     }
     const sortedTasks = computed(() => {
+      const visible = tasks.value.filter((t) => !isArchived(t));
       const filtered = currentSite.value === "*"
-        ? tasks.value
-        : tasks.value.filter((t) => (t.site || "") === currentSite.value);
+        ? visible
+        : visible.filter((t) => (t.site || "") === currentSite.value);
       return filtered.slice().sort(cmp);
+    });
+    // アーカイブ一覧: archived task を JST 日付でグルーピング (kaimono と同形)
+    const archivedByDay = computed(() => {
+      const groups = new Map();
+      for (const t of tasks.value) {
+        if (!isArchived(t)) continue;
+        const d = (t.doneAt?.toDate?.()) || (t.updatedAt?.toDate?.()) || null;
+        if (!d) continue;
+        const key = d.toLocaleDateString("ja-JP", { year: "numeric", month: "2-digit", day: "2-digit" });
+        if (!groups.has(key)) groups.set(key, []);
+        groups.get(key).push(t);
+      }
+      for (const arr of groups.values()) {
+        arr.sort((a, b) => archivedAtMs(b) - archivedAtMs(a));
+      }
+      return [...groups.entries()].sort((a, b) => (a[0] < b[0] ? 1 : -1));
     });
     function isUnread(t) {
       const isMine = (t.toEmail || "").toLowerCase() === me.value || (t.toEmail || "").toLowerCase() === "both";
@@ -787,8 +870,21 @@ const App = {
       }
     }
     async function onToggleDone(t) {
-      try { await patchTask(t.id, { status: t.status === "done" ? "active" : "done" }); }
-      catch (err) { alert("更新失敗: " + err.message); }
+      try {
+        const goingDone = t.status !== "done";
+        await patchTask(t.id, {
+          status: goingDone ? "done" : "active",
+          // doneAt を打刻して archive 計算の起点にする。戻すときは null。
+          doneAt: goingDone ? serverTimestamp() : null,
+        });
+      } catch (err) { alert("更新失敗: " + err.message); }
+    }
+    async function onRestoreTask(t) {
+      if (!confirm(`「${t.title || "(無題)"}」を未完了に戻しますか?`)) return;
+      try {
+        await patchTask(t.id, { status: "active", doneAt: null });
+        archExpandedId.value = null;
+      } catch (err) { alert("戻し失敗: " + (err.message || err)); }
     }
     async function onCyclePriority(t) {
       const next = ((Number(t.priority) || 2) % 3) + 1;
@@ -972,6 +1068,9 @@ const App = {
         signinErr.value = "init失敗: " + (e.message || e);
       }
 
+      // アーカイブ判定用 now を 30 秒ごとに更新 → isArchived/archivedByDay が反応
+      nowTimer = setInterval(() => { now.value = Date.now(); }, 30_000);
+
       // グローバル pointer リスナ (passive:false で preventDefault 可)
       document.addEventListener("pointermove", onPointerMove, { passive: false });
       document.addEventListener("pointerup", onPointerUp);
@@ -987,6 +1086,7 @@ const App = {
     onBeforeUnmount(() => {
       if (unsubscribeTasks) unsubscribeTasks();
       if (unsubscribeLinked) unsubscribeLinked();
+      if (nowTimer) clearInterval(nowTimer);
       document.removeEventListener("pointermove", onPointerMove);
       document.removeEventListener("pointerup", onPointerUp);
       document.removeEventListener("pointercancel", onPointerCancel);
@@ -998,19 +1098,20 @@ const App = {
       titleInput, swipe,
       meLabel, tabs, currentLabel, tabCount, sortedTasks,
       posOf, emailOfPos, roleLabel, colorKey,
-      fmtDate, deadlineClass, isUnread, linkedFor, availableFor,
+      fmtDate, fmtTime, deadlineClass, isUnread, linkedFor, availableFor,
       onAttachMaterial, onDetachMaterial, linkedItemOpenId,
       isFlipping, roleBtnClass, roleBtnStyle, cardStyleFor,
       onCardDown,
       onTabClick, onRoleClick, onToggleDone, onCyclePriority, onDelete,
       openModal, closeModal, saveModal,
       onMigrate,
+      showArchive, archExpandedId, archivedByDay, onRestoreTask,
       goLauncher, doSignOut,
     };
   },
 };
 
-createApp(App).mount("#app");
+createApp(App).component("bottom-sheet", BottomSheet).mount("#app");
 </script>
 </body>
 </html>
