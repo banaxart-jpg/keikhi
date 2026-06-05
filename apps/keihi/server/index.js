@@ -1019,6 +1019,148 @@ function aggregateMonth(allRows, ym) {
   return { count: monthRows.length, revenue, expense, profit: revenue - expense, rows: monthRows };
 }
 
+// (大分類, 小分類, 摘要) → 経理の「会計カテゴリ」(税理士提出ベースの分類) を返す。
+// 支出のみ。収入は null。
+const ACCOUNTING_CATEGORIES = [
+  "給料", "家賃", "車両費", "保険料", "ネット系", "接待交際費",
+  "材料費", "外注費", "雑費", "未分類",
+];
+function accountingCategoryOf(tx) {
+  if (tx.type !== "支出") return null;
+  const sub = String(tx.subcategory || "").trim();
+  const cat = String(tx.category || "").trim();
+  const memo = String(tx.memo || "") + " " + String(tx.counterparty || "");
+  if (sub === "未分類" || cat === "未分類") return "未分類";
+  if (sub === "給料") return "給料";
+  if (sub === "家賃") return "家賃";
+  if (sub === "車両費") return "車両費";
+  if (sub === "保険") return "保険料";
+  if (sub === "web" || sub === "通信費" || /chatgpt|adobe|google|indeed|lolipop|ロリポップ|googleworkspace/i.test(memo)) return "ネット系";
+  if (/接待|交際|会食|親睦/.test(sub) || /接待|交際|会食/.test(memo)) return "接待交際費";
+  if (sub === "材料") return "材料費";
+  if (sub === "外注費" || sub === "外注") return "外注費";
+  return "雑費";  // 税金・固定費の家賃以外・経費系の残りは全て雑費
+}
+
+// 「現場」フィールドの正規化: 空 → "YYYY-MM 共通" (固定費/経費等の非現場アロケート用)。
+// その他は値そのまま。
+function normalizeSiteForKeiri(site, dateIso) {
+  if (site && String(site).trim()) return String(site).trim();
+  const ym = (dateIso || "").slice(0, 7);
+  return ym ? `${ym} 共通` : "(現場なし)";
+}
+
+// 年単位の集計 (経理ダッシュボード Phase 1 用)。
+// 返り値: { year, yearTotal, months[12], sites[] }
+//   months[i] = { month, revenue (工事+旅館), revenueConstruction, revenueRyokan,
+//                 expense, profit, categories: { 給料: amount, 家賃: amount, ... } }
+//   sites[]   = { site, revenue, expense, profit, categories: { 売上: amount, 外注費: amount, ... } }
+app.get("/api/keiri/year", async (req, res) => {
+  const year = String(req.query.year || "").trim();
+  if (!/^\d{4}$/.test(year)) return res.status(400).json({ error: "year (YYYY) required" });
+  try {
+    const all = await fetchAllTransactions();
+    const yearStart = `${year}-01-01`;
+    const yearEnd = `${Number(year) + 1}-01-01`;
+    const yearRows = all.filter((r) => r.date >= yearStart && r.date < yearEnd);
+
+    // 年トータル
+    let yRev = 0, yExp = 0;
+    for (const r of yearRows) {
+      if (r.type === "収入") yRev += r.amount;
+      else if (r.type === "支出") yExp += r.amount;
+    }
+
+    // 月別 (1-12 月、全部初期化 → データなしの月は 0 になる)
+    const months = Array.from({ length: 12 }, (_, i) => {
+      const m = String(i + 1).padStart(2, "0");
+      const empty = {};
+      for (const c of ACCOUNTING_CATEGORIES) empty[c] = { amount: 0, count: 0 };
+      return {
+        month: `${year}-${m}`,
+        revenue: 0, revenueConstruction: 0, revenueRyokan: 0,
+        expense: 0, profit: 0, count: 0,
+        categories: empty,
+      };
+    });
+    for (const r of yearRows) {
+      const mi = parseInt(r.date.slice(5, 7), 10) - 1;
+      const mo = months[mi];
+      mo.count++;
+      if (r.type === "収入") {
+        mo.revenue += r.amount;
+        if (r.category === "工事") mo.revenueConstruction += r.amount;
+        else if (r.category === "旅館") mo.revenueRyokan += r.amount;
+      } else if (r.type === "支出") {
+        mo.expense += r.amount;
+        const ac = accountingCategoryOf(r);
+        if (ac) {
+          mo.categories[ac].amount += r.amount;
+          mo.categories[ac].count++;
+        }
+      }
+    }
+    for (const m of months) m.profit = m.revenue - m.expense;
+
+    // 現場別 (空現場は "YYYY-MM 共通" に正規化、年間でユニーク集約)
+    const siteAgg = {};   // site -> { revenue, expense, sub categories }
+    const SITE_CATEGORIES = ["売上", "外注費", "材料費", "車両費", "雑費"];
+    for (const r of yearRows) {
+      const site = normalizeSiteForKeiri(r.site, r.date);
+      if (!siteAgg[site]) {
+        const sc = {};
+        for (const c of SITE_CATEGORIES) sc[c] = { amount: 0, count: 0 };
+        siteAgg[site] = { site, revenue: 0, expense: 0, count: 0, categories: sc };
+      }
+      const s = siteAgg[site];
+      s.count++;
+      if (r.type === "収入") {
+        s.revenue += r.amount;
+        s.categories["売上"].amount += r.amount;
+        s.categories["売上"].count++;
+      } else if (r.type === "支出") {
+        s.expense += r.amount;
+        const sub = String(r.subcategory || "").trim();
+        if (sub === "外注費" || sub === "外注") {
+          s.categories["外注費"].amount += r.amount;
+          s.categories["外注費"].count++;
+        } else if (sub === "材料") {
+          s.categories["材料費"].amount += r.amount;
+          s.categories["材料費"].count++;
+        } else if (sub === "車両費") {
+          s.categories["車両費"].amount += r.amount;
+          s.categories["車両費"].count++;
+        } else {
+          s.categories["雑費"].amount += r.amount;
+          s.categories["雑費"].count++;
+        }
+      }
+    }
+    const sites = Object.values(siteAgg).map((s) => ({ ...s, profit: s.revenue - s.expense }))
+      .sort((a, b) => (b.revenue + b.expense) - (a.revenue + a.expense));
+
+    res.json({
+      year,
+      yearTotal: { revenue: yRev, expense: yExp, profit: yRev - yExp, count: yearRows.length },
+      months,
+      sites,
+      accountingCategories: ACCOUNTING_CATEGORIES,
+      siteCategories: SITE_CATEGORIES,
+      cachedAt: new Date(keiriCache.fetchedAt).toISOString(),
+    });
+  } catch (e) {
+    console.error("[keiri] year error:", e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// 月詳細用の取引一覧: 会計カテゴリ指定で絞れるよう accountingCategory パラメータを追加。
+// 既存の category/subcategory フィルタは残しつつ accountingCategory が優先。
+function filterByAccountingCategory(rows, accountingCategory) {
+  if (!accountingCategory) return rows;
+  return rows.filter((r) => accountingCategoryOf(r) === accountingCategory);
+}
+
 app.get("/api/keiri/summary", async (req, res) => {
   const month = String(req.query.month || "").trim();
   if (!/^\d{4}-\d{2}$/.test(month)) return res.status(400).json({ error: "month (YYYY-MM) required" });
@@ -1085,20 +1227,38 @@ app.get("/api/keiri/summary", async (req, res) => {
 
 app.get("/api/keiri/transactions", async (req, res) => {
   const month = String(req.query.month || "").trim();
-  if (!/^\d{4}-\d{2}$/.test(month)) return res.status(400).json({ error: "month (YYYY-MM) required" });
+  const year = String(req.query.year || "").trim();
+  if (!/^\d{4}-\d{2}$/.test(month) && !/^\d{4}$/.test(year)) {
+    return res.status(400).json({ error: "month=YYYY-MM か year=YYYY のどちらか必須" });
+  }
   const site = String(req.query.site || "");
   const category = String(req.query.category || "");
   const subcategory = String(req.query.subcategory || "");
+  const accountingCategory = String(req.query.accountingCategory || "");
   const type = String(req.query.type || "");
   try {
     const all = await fetchAllTransactions();
-    const { start, end } = ymToDateBounds(month);
-    const rows = all.filter((r) => r.date >= start && r.date < end)
-      .filter((r) => !site || (r.site || "(現場なし)") === site)
+    let dateStart, dateEnd;
+    if (month) {
+      const b = ymToDateBounds(month);
+      dateStart = b.start; dateEnd = b.end;
+    } else {
+      dateStart = `${year}-01-01`;
+      dateEnd = `${Number(year) + 1}-01-01`;
+    }
+    let rows = all.filter((r) => r.date >= dateStart && r.date < dateEnd)
       .filter((r) => !category || r.category === category)
       .filter((r) => !subcategory || r.subcategory === subcategory)
-      .filter((r) => !type || r.type === type)
-      .sort((a, b) => b.date.localeCompare(a.date));
+      .filter((r) => !type || r.type === type);
+    // 現場フィルタ: "YYYY-MM 共通" は空現場として扱う
+    if (site) {
+      rows = rows.filter((r) => normalizeSiteForKeiri(r.site, r.date) === site);
+    }
+    // 会計カテゴリ (給料/家賃/...) フィルタ
+    if (accountingCategory) {
+      rows = rows.filter((r) => accountingCategoryOf(r) === accountingCategory);
+    }
+    rows.sort((a, b) => b.date.localeCompare(a.date));
     res.json({ rows, count: rows.length });
   } catch (e) {
     res.status(500).json({ error: e.message });
