@@ -799,6 +799,53 @@ app.post("/api/tx/append", async (req, res) => {
   else res.status(500).json(result);
 });
 
+// 「取引」タブの既存行を更新 (経理 Phase 2 編集機能から)。
+// refId + source で行を特定し、指定された fields だけを書き換える。
+// 列マッピング: A=日付 B=種別 C=大分類 D=小分類 E=金額 F=対象 G=現場 H=状態 I=支払方法 J=メモ K=写真 L=ソース M=元ID
+app.post("/api/tx/update", async (req, res) => {
+  const { refId, source, fields = {} } = req.body || {};
+  if (!refId || !source) return res.status(400).json({ error: "refId と source は必須" });
+  if (!fields || typeof fields !== "object") return res.status(400).json({ error: "fields は object" });
+  try {
+    const sheets = await getSheetsApi();
+    const r = await sheets.spreadsheets.values.get({
+      spreadsheetId: TX_SHEET_ID,
+      range: `${TX_TAB}!A2:M`,
+      valueRenderOption: "UNFORMATTED_VALUE",
+      dateTimeRenderOption: "FORMATTED_STRING",
+    });
+    const allRows = r.data.values || [];
+    const idx = allRows.findIndex((row) =>
+      String(row[12] || "") === String(refId) && String(row[11] || "") === String(source));
+    if (idx < 0) return res.status(404).json({ error: `行が見つかりません (refId=${refId}, source=${source})` });
+    const sheetRow = idx + 2;  // ヘッダー1行 + 0-indexed → 1-indexed
+    const updated = [...(allRows[idx] || [])];
+    while (updated.length < 13) updated.push("");
+    const FIELD_TO_IDX = {
+      date: 0, type: 1, category: 2, subcategory: 3, amount: 4,
+      counterparty: 5, site: 6, status: 7, paymentMethod: 8, memo: 9,
+    };
+    for (const [k, v] of Object.entries(fields)) {
+      const i = FIELD_TO_IDX[k];
+      if (i == null) continue;
+      updated[i] = k === "amount" ? (Number(v) || 0) : (v == null ? "" : String(v));
+    }
+    await sheets.spreadsheets.values.update({
+      spreadsheetId: TX_SHEET_ID,
+      range: `${TX_TAB}!A${sheetRow}:M${sheetRow}`,
+      valueInputOption: "USER_ENTERED",
+      requestBody: { values: [updated] },
+    });
+    keiriCache.fetchedAt = 0;
+    keiriCache.rows = [];
+    console.log(`[tx] updated row ${sheetRow} refId=${refId} source=${source} fields=${Object.keys(fields).join(",")}`);
+    res.json({ ok: true, row: sheetRow });
+  } catch (e) {
+    console.error("[tx] update error:", e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // ───── 銀行 CSV 取り込み (ginko ミニアプリから) ─────
 // 現状は PayPay 銀行のフォーマットだけ対応。base64 で受信した CSV をデコードして
 // 行配列に正規化、摘要文の正規表現で自動分類。フロントが per-row 編集 + 送信。
@@ -1033,16 +1080,25 @@ function accountingCategoryOf(tx) {
   const sub = String(tx.subcategory || "").trim();
   const cat = String(tx.category || "").trim();
   const memo = String(tx.memo || "") + " " + String(tx.counterparty || "");
-  if (sub === "未分類" || cat === "未分類") return "未分類";
-  if (sub === "給料") return "給料";
-  if (sub === "家賃") return "家賃";
-  if (sub === "車両費") return "車両費";
-  if (sub === "保険") return "保険料";
-  if (sub === "web" || sub === "通信費" || /chatgpt|adobe|google|indeed|lolipop|ロリポップ|googleworkspace/i.test(memo)) return "ネット系";
-  if (/接待|交際|会食|親睦/.test(sub) || /接待|交際|会食/.test(memo)) return "接待交際費";
-  if (sub === "材料") return "材料費";
-  if (sub === "外注費" || sub === "外注") return "外注費";
-  return "雑費";  // 税金・固定費の家賃以外・経費系の残りは全て雑費
+  if (sub === "未分類" || cat === "未分類" || !sub) return "未分類";
+  // 給料・人件費
+  if (/^(給料|給与|人件費|報酬)$/.test(sub)) return "給料";
+  // 家賃・地代
+  if (/^(家賃|地代|賃料|テナント料)$/.test(sub)) return "家賃";
+  // 車両費・ガソリン・燃料
+  if (/^(車両費|ガソリン|燃料|車両|車検|自動車税|車ローン|駐車場)$/.test(sub)) return "車両費";
+  // 保険料
+  if (/^(保険|保険料|社会保険|労災)$/.test(sub)) return "保険料";
+  // ネット系・通信費・サブスク
+  if (/^(web|通信費|通信|ネット|サブスク|サブスクリプション|月額サービス)$/.test(sub)
+      || /chatgpt|adobe|google|indeed|lolipop|ロリポップ|googleworkspace|netflix|amazon prime/i.test(memo)) return "ネット系";
+  // 接待交際費
+  if (/接待|交際|会食|親睦|懇親/.test(sub) || /接待|交際|会食/.test(memo)) return "接待交際費";
+  // 材料費
+  if (/^(材料|材料費|建材|資材)$/.test(sub)) return "材料費";
+  // 外注費
+  if (/^(外注費|外注|業務委託)$/.test(sub)) return "外注費";
+  return "雑費";  // 税金・光熱費・その他全部
 }
 
 // 「現場」フィールドの正規化: 空 → "YYYY-MM 共通" (固定費/経費等の非現場アロケート用)。

@@ -115,7 +115,22 @@ body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); 
 .sheet-h .count { font-size: 11px; color: var(--text2); font-weight: 700; }
 .sheet-list { overflow-y: auto; display: flex; flex-direction: column; gap: 5px; padding-bottom: 8px; }
 .empty-msg { text-align: center; color: var(--text3); font-size: 12px; font-weight: 700; padding: 30px; }
-.tx-row { background: var(--bg); border-radius: 12px; padding: 9px 12px; box-shadow: 3px 3px 8px var(--sd), -2px -2px 6px var(--sl); display: flex; gap: 10px; align-items: center; }
+.tx-row { background: var(--bg); border-radius: 12px; padding: 9px 12px; box-shadow: 3px 3px 8px var(--sd), -2px -2px 6px var(--sl); display: flex; gap: 10px; align-items: center; cursor: pointer; transition: transform 100ms ease; }
+.tx-row:active { transform: scale(0.98); }
+.tx-row .edit-icon { font-size: 14px; color: var(--text3); flex-shrink: 0; font-variation-settings: 'FILL' 0, 'wght' 500; }
+
+/* 編集フォーム */
+.edit-form { display: flex; flex-direction: column; gap: 8px; padding: 8px 0; }
+.ef-line { display: flex; align-items: center; gap: 10px; }
+.ef-lbl { font-size: 11px; font-weight: 800; color: var(--text2); width: 56px; flex-shrink: 0; letter-spacing: 0.04em; }
+.ef-line input, .ef-line select { flex: 1; padding: 10px 12px; border: none; border-radius: 12px; font-size: 13px; font-family: inherit; color: var(--text); background: var(--bg); box-shadow: inset 3px 3px 7px var(--sd), inset -2px -2px 6px var(--sl); outline: none; min-width: 0; }
+.ef-line input:focus, .ef-line select:focus { box-shadow: inset 3px 3px 7px var(--sd), inset -2px -2px 6px var(--sl), 0 0 0 2px var(--accent2); }
+.ef-static { flex: 1; font-size: 13px; color: var(--text); font-family: ui-monospace, Menlo, monospace; font-weight: 700; padding: 10px 4px; }
+.ef-actions { display: flex; gap: 8px; margin-top: 10px; }
+.ef-actions button { flex: 1; padding: 12px; border-radius: 14px; border: none; font-family: inherit; font-size: 13px; font-weight: 800; cursor: pointer; background: var(--bg); box-shadow: 4px 4px 10px var(--sd), -3px -3px 8px var(--sl); color: var(--text2); }
+.ef-actions button.primary { background: linear-gradient(145deg, var(--accent2), var(--accent)); color: white; box-shadow: 5px 5px 14px rgba(67,56,202,0.35); }
+.ef-actions button:active:not(:disabled) { transform: scale(0.97); }
+.ef-actions button:disabled { opacity: 0.55; }
 .tx-date { font-size: 10px; color: var(--text2); font-weight: 700; font-family: ui-monospace, Menlo, monospace; flex-shrink: 0; min-width: 38px; }
 .tx-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
 .tx-name { font-size: 12px; font-weight: 700; color: var(--text); word-break: break-word; }
@@ -267,16 +282,53 @@ const TEMPLATE = `
       <div class="sheet-list">
         <div v-if="drillLoading" class="loading">読み込み中…</div>
         <div v-else-if="!drillRows.length" class="empty-msg">該当なし</div>
-        <div v-for="(r, i) in drillRows" :key="i" class="tx-row">
+        <div v-for="(r, i) in drillRows" :key="i" class="tx-row" @click="openEdit(r)">
           <span class="tx-date">{{ r.date.slice(5) }}</span>
           <div class="tx-body">
             <div class="tx-name">{{ r.counterparty || '(対象なし)' }}</div>
-            <div class="tx-meta">{{ r.category }} · {{ r.subcategory }}<span v-if="r.site"> · {{ r.site }}</span><span v-if="r.source"> · {{ r.source }}</span></div>
+            <div class="tx-meta">{{ r.category }} · {{ r.subcategory || '未分類' }}<span v-if="r.site"> · {{ r.site }}</span><span v-if="r.source"> · {{ r.source }}</span></div>
           </div>
           <div class="tx-amount" :class="r.type === '収入' ? 'in' : 'out'">
             {{ r.type === '収入' ? '+' : '-' }}¥{{ formatYen(r.amount) }}
           </div>
+          <span class="icon edit-icon">edit</span>
         </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 編集モーダル -->
+  <div class="modal" :class="{ open: editOpen }" @click="editOpen = false">
+    <div class="sheet" @click.stop>
+      <div class="handle" @click="editOpen = false"></div>
+      <div class="sheet-h"><span>取引を編集</span></div>
+      <div v-if="editRow" class="edit-form">
+        <div class="ef-line"><span class="ef-lbl">日付</span><span class="ef-static">{{ editRow.date }}</span></div>
+        <div class="ef-line"><span class="ef-lbl">対象</span><input type="text" v-model="editForm.counterparty" placeholder="店舗 / 振込先"></div>
+        <div class="ef-line"><span class="ef-lbl">金額</span><input type="number" inputmode="numeric" v-model.number="editForm.amount"></div>
+        <div class="ef-line"><span class="ef-lbl">大分類</span>
+          <select v-model="editForm.category">
+            <option v-for="c in BIG_CATEGORIES" :key="c" :value="c">{{ c }}</option>
+          </select>
+        </div>
+        <div class="ef-line"><span class="ef-lbl">小分類</span>
+          <input type="text" v-model="editForm.subcategory" list="subcatList" placeholder="材料費 / 外注費 / 給料 等">
+          <datalist id="subcatList">
+            <option v-for="s in SUB_CATEGORIES" :key="s" :value="s"></option>
+          </datalist>
+        </div>
+        <div class="ef-line"><span class="ef-lbl">現場</span>
+          <input type="text" v-model="editForm.site" list="siteList" placeholder="鳥研シート / 武蔵新城 等 (空でも可)">
+          <datalist id="siteList">
+            <option v-for="s in knownSites" :key="s" :value="s"></option>
+          </datalist>
+        </div>
+        <div class="ef-line"><span class="ef-lbl">メモ</span><input type="text" v-model="editForm.memo" placeholder="任意"></div>
+        <div class="ef-actions">
+          <button @click="editOpen = false">キャンセル</button>
+          <button class="primary" :disabled="saving" @click="saveEdit">{{ saving ? '保存中…' : '保存' }}</button>
+        </div>
+        <div v-if="editErr" class="err" style="margin-top:8px;">{{ editErr }}</div>
       </div>
     </div>
   </div>
@@ -298,6 +350,18 @@ const App = {
     const drillLoading = ref(false);
     const drillRows = ref([]);
     const drillTitle = ref("");
+    // 編集モーダル
+    const editOpen = ref(false);
+    const editRow = ref(null);
+    const editForm = ref({ counterparty: "", amount: 0, category: "", subcategory: "", site: "", memo: "" });
+    const saving = ref(false);
+    const editErr = ref("");
+    const BIG_CATEGORIES = ["工事", "旅館", "固定費", "光熱費", "経費", "その他", "未分類"];
+    const SUB_CATEGORIES = ["材料費", "外注費", "給料", "家賃", "車両費", "保険", "通信費", "web", "接待交際費", "雑費", "未分類"];
+    const knownSites = computed(() => {
+      if (!data.value) return [];
+      return data.value.sites.map((s) => s.site).filter((s) => s && !/^\d{4}-\d{2} 共通$/.test(s));
+    });
 
     function formatYen(n) { return Math.round(Number(n) || 0).toLocaleString("ja-JP"); }
     function formatYenShort(n) {
@@ -358,6 +422,57 @@ const App = {
       fetchDrill(qs, `${site} · ${category}`);
     }
 
+    // 取引行タップで編集モーダル表示。refId 必須 (無いと取引タブから特定できない)
+    function openEdit(r) {
+      if (!r.refId) {
+        editErr.value = "この行は refId が無いため編集できません (古いデータ)";
+        return;
+      }
+      editRow.value = { ...r };
+      editForm.value = {
+        counterparty: r.counterparty || "",
+        amount: r.amount || 0,
+        category: r.category || "",
+        subcategory: r.subcategory || "",
+        site: r.site || "",
+        memo: r.memo || "",
+      };
+      editErr.value = "";
+      editOpen.value = true;
+    }
+    async function saveEdit() {
+      if (!editRow.value || saving.value) return;
+      saving.value = true;
+      editErr.value = "";
+      try {
+        const token = await user.value.getIdToken();
+        const res = await fetch((window.API_BASE || "") + "/api/tx/update", {
+          method: "POST",
+          headers: { authorization: "Bearer " + token, "content-type": "application/json" },
+          body: JSON.stringify({
+            refId: editRow.value.refId,
+            source: editRow.value.source,
+            fields: { ...editForm.value },
+          }),
+        });
+        const j = await res.json();
+        if (!res.ok) throw new Error(j.error || res.status);
+        editOpen.value = false;
+        // ドリルダウン中なら再取得して即反映
+        if (drillOpen.value) {
+          // 編集した行のフィールドを直接書き換え (再 fetch せずに表示更新)
+          const i = drillRows.value.findIndex((r) => r.refId === editRow.value.refId && r.source === editRow.value.source);
+          if (i >= 0) drillRows.value[i] = { ...drillRows.value[i], ...editForm.value };
+        }
+        // 年データもキャッシュ無効 → 次の操作で再取得
+        await fetchYear(true);
+      } catch (e) {
+        editErr.value = "保存失敗: " + (e.message || e);
+      } finally {
+        saving.value = false;
+      }
+    }
+
     onMounted(async () => {
       try {
         const cfg = await fetch("/__/firebase/init.json").then((r) => r.json());
@@ -376,9 +491,11 @@ const App = {
     return {
       year, tab, data, loading, err, openMonth, openSite,
       drillOpen, drillLoading, drillRows, drillTitle,
+      editOpen, editRow, editForm, saving, editErr,
+      BIG_CATEGORIES, SUB_CATEGORIES, knownSites,
       formatYen, formatYenShort, monthLabel, icon, otherRev,
       shiftYear, toggleMonth, toggleSite, refresh,
-      drillCategory, drillSiteCategory,
+      drillCategory, drillSiteCategory, openEdit, saveEdit,
     };
   },
 };
