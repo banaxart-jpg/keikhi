@@ -38,7 +38,9 @@ body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); 
 .month-bar .nav { width: 36px; height: 36px; border-radius: 18px; border: none; background: var(--bg); box-shadow: 4px 4px 10px var(--sd), -4px -4px 10px var(--sl); font-size: 18px; color: var(--text2); cursor: pointer; font-family: inherit; flex-shrink: 0; }
 .month-bar .nav:active { box-shadow: inset 3px 3px 8px var(--sd), inset -3px -3px 8px var(--sl); }
 .month-bar .label { font-size: 17px; font-weight: 800; letter-spacing: 0.02em; flex: 1; text-align: center; }
-.sent-badge { font-size: 10px; font-weight: 700; color: var(--accent); padding: 4px 9px; border-radius: 10px; background: var(--accent-soft); margin-left: 6px; flex-shrink: 0; letter-spacing: 0.04em; }
+.sent-badge { font-size: 10px; font-weight: 700; color: var(--accent); padding: 4px 9px; border-radius: 10px; background: var(--accent-soft); margin-left: 6px; flex-shrink: 0; letter-spacing: 0.04em; border: none; cursor: pointer; font-family: inherit; display: inline-flex; align-items: center; gap: 3px; }
+.sent-badge:active { transform: scale(0.95); }
+.sent-badge:disabled { opacity: 0.6; cursor: wait; }
 .sent-badge .icon { font-size: 12px; }
 
 /* リスト */
@@ -204,7 +206,12 @@ const TEMPLATE = `
     <div class="month-bar">
       <button class="nav" @click="shiftMonth(-1)">‹</button>
       <div class="label">{{ monthLabel }}</div>
-      <span v-if="sentRecord" class="sent-badge"><span class="icon">check</span> 送信済</span>
+      <button v-if="sentRecord" class="sent-badge" :disabled="undoing"
+              @click="undoSend"
+              :title="'タップで送信取消'">
+        <span class="icon">{{ undoing ? 'hourglass_empty' : 'check' }}</span>
+        {{ undoing ? '取消中…' : '送信済' }}
+      </button>
       <button class="nav" @click="shiftMonth(1)">›</button>
     </div>
     <div v-if="items.length" class="total-bar">
@@ -340,6 +347,7 @@ const App = {
     const err = ref("");
     const sending = ref(false);
     const saving = ref(false);          // デフォルト金額のマスタ保存中フラグ
+    const undoing = ref(false);         // 送信取消中フラグ
     const toast = ref("");
     const sentRecord = ref(null);       // 当月の送信履歴 (あれば送信済バッジ)
     const formOpen = ref(false);
@@ -543,6 +551,41 @@ const App = {
       } catch (e) { /* silent */ }
     }
 
+    // 「送信済」バッジタップで当月の固定費を取引タブから一括削除 (誤送信の取消用)。
+    // サーバの /api/tx/delete-by-source に source="固定費" + month=YYYY-MM を投げる。
+    // 成功したら koteihi_sent ドキュメントも削除して「送信済」表示を解除。
+    async function undoSend() {
+      if (!user.value || undoing.value || !sentRecord.value) return;
+      const itemCount = sentRecord.value.itemCount || "?";
+      const totalAmount = sentRecord.value.totalAmount || 0;
+      const ok = confirm(
+        `${monthLabel.value} の固定費 ${itemCount}件 (¥${formatYen(totalAmount)}) を取引タブから削除します。\n\n` +
+        `この操作は取り消せません。続けますか？`
+      );
+      if (!ok) return;
+      undoing.value = true;
+      err.value = "";
+      try {
+        const token = await user.value.getIdToken();
+        const res = await fetch((window.API_BASE || "") + "/api/tx/delete-by-source", {
+          method: "POST",
+          headers: { authorization: "Bearer " + token, "content-type": "application/json" },
+          body: JSON.stringify({ source: "固定費", month: yyyymm.value }),
+        });
+        const j = await res.json();
+        if (!res.ok) throw new Error(j.error || res.status);
+        // 送信履歴ドキュメントも削除 → 「送信済」バッジが消えて再送信できるように
+        try { await deleteDoc(doc(db, SENT_COL, yyyymm.value)); } catch (_) {}
+        await loadSentRecord();
+        toast.value = `${j.deleted}件を取消しました`;
+        setTimeout(() => { toast.value = ""; }, 2500);
+      } catch (e) {
+        err.value = "取消失敗: " + (e.message || e);
+      } finally {
+        undoing.value = false;
+      }
+    }
+
     async function confirmSend() {
       const targets = items.value.filter((i) => active.value[i.id]);
       if (!targets.length) return;
@@ -675,10 +718,10 @@ const App = {
     onBeforeUnmount(() => { if (unsubItems) unsubItems(); });
 
     return {
-      cur, items, amounts, active, expanded, ready, err, sending, saving, toast, sentRecord, formOpen, editingId, form,
+      cur, items, amounts, active, expanded, ready, err, sending, saving, undoing, toast, sentRecord, formOpen, editingId, form,
       subcategories, paymentMethods,
       yyyymm, monthLabel, activeCount, totalAmount, sendingAmount, changeCount,
-      formatYen, back, shiftMonth, toggleActive, toggleExpand, toggleSkipSend, openAdd, openEdit, saveForm, del, confirmSend, saveDefaults,
+      formatYen, back, shiftMonth, toggleActive, toggleExpand, toggleSkipSend, openAdd, openEdit, saveForm, del, confirmSend, saveDefaults, undoSend,
     };
   },
 };

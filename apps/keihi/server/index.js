@@ -1066,13 +1066,24 @@ app.get("/api/keiri/transactions", async (req, res) => {
 // 実装は「全行 fetch → 対象行を除外 → タブをクリア → 残りを書き戻す」のシンプルな
 // rebuild 方式 (deleteDimension を 1 行ずつ呼ぶより速い・原子的)。
 app.post("/api/tx/delete-by-source", async (req, res) => {
-  const source = String((req.body || {}).source || "").trim();
-  // 誤削除事故が一番怖いソース (=領収書/請求書/宿/固定費アプリ自身の入力) を弾く。
-  // 銀行系 / 手動 / 試験投入 (test) のみ削除可能。
-  const ALLOWED_PREFIXES = ["銀行(", "test", "手動", "ginko"];
+  const body = req.body || {};
+  const source = String(body.source || "").trim();
+  const month = String(body.month || "").trim();  // optional "YYYY-MM"
+  // 削除可能なソース。誤削除事故を避けるため明示的 whitelist。
+  // - 銀行系 / test / 手動 / ginko: 月指定不要 (全削除可)
+  // - 固定費: 月指定必須 (毎月送信するので、月を絞らないと全部消えて事故る)
+  const ALLOWED_PREFIXES = ["銀行(", "test", "手動", "ginko", "固定費"];
+  const NEEDS_MONTH = ["固定費"];   // 全削除を許可しないソース
   const allowed = ALLOWED_PREFIXES.some((p) => source.startsWith(p));
   if (!allowed) {
-    return res.status(400).json({ error: `削除不可のソース: "${source}" (銀行系のみ削除可能、その他は手で消してください)` });
+    return res.status(400).json({ error: `削除不可のソース: "${source}" (whitelist 外)` });
+  }
+  const needsMonth = NEEDS_MONTH.some((p) => source.startsWith(p));
+  if (needsMonth && !/^\d{4}-\d{2}$/.test(month)) {
+    return res.status(400).json({ error: `source="${source}" は month=YYYY-MM の指定が必要` });
+  }
+  if (month && !/^\d{4}-\d{2}$/.test(month)) {
+    return res.status(400).json({ error: `month は YYYY-MM 形式` });
   }
   try {
     const sheets = await getSheetsApi();
@@ -1083,10 +1094,15 @@ app.post("/api/tx/delete-by-source", async (req, res) => {
       dateTimeRenderOption: "FORMATTED_STRING",
     });
     const allRows = r.data.values || [];
-    // ソース列 = L = index 11
-    const keep = allRows.filter((row) => String(row[11] || "") !== source);
+    // 日付列 = A = index 0, ソース列 = L = index 11
+    const matches = (row) => {
+      if (String(row[11] || "") !== source) return false;
+      if (month && !String(row[0] || "").startsWith(month)) return false;
+      return true;
+    };
+    const keep = allRows.filter((row) => !matches(row));
     const deleted = allRows.length - keep.length;
-    if (deleted === 0) return res.json({ deleted: 0, kept: keep.length, source });
+    if (deleted === 0) return res.json({ deleted: 0, kept: keep.length, source, month: month || null });
 
     // データ範囲を一旦クリア → 残行を書き戻し (絶対範囲指定で SUMIFS / QUERY は不変)
     await sheets.spreadsheets.values.clear({
@@ -1106,8 +1122,8 @@ app.post("/api/tx/delete-by-source", async (req, res) => {
     keiriCache.rows = [];
     // tx 二重投入防止キャッシュもクリア (削除した refId を再投入可能にするため)
     txSeenRefIds.clear();
-    console.log(`[tx] deleted ${deleted} rows for source="${source}", ${keep.length} kept`);
-    res.json({ deleted, kept: keep.length, source });
+    console.log(`[tx] deleted ${deleted} rows for source="${source}"${month ? " month=" + month : ""}, ${keep.length} kept`);
+    res.json({ deleted, kept: keep.length, source, month: month || null });
   } catch (e) {
     console.error("[tx] delete-by-source error:", e);
     res.status(500).json({ error: e.message });
