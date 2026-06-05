@@ -318,7 +318,7 @@ const App = {
       loading.value = true; err.value = "";
       try {
         const token = await user.value.getIdToken();
-        const url = (window.API_BASE || "") + `/api/keiri/year?year=${year.value}${force ? "&_t=" + Date.now() : ""}`;
+        const url = (window.API_BASE || "") + `/api/keiri/year?year=${year.value}${force ? "&force=1" : ""}`;
         const res = await fetch(url, { headers: { authorization: "Bearer " + token } });
         const j = await res.json();
         if (!res.ok) throw new Error(j.error || res.status);

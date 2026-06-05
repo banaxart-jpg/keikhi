@@ -459,6 +459,9 @@ async function appendTx(r) {
       },
     });
     if (r.refId) txSeenRefIds.add(`${r.source}:${r.refId}`);
+    // keiri ダッシュボードのキャッシュを無効化 (次の summary/year 呼び出しで再取得)
+    keiriCache.fetchedAt = 0;
+    keiriCache.rows = [];
     console.log(`[tx] appended source=${r.source} type=${r.type} amount=${r.amount} site=${r.site || "-"}`);
     return { ok: true };
   } catch (e) {
@@ -964,8 +967,8 @@ app.post("/api/ginko/parse", async (req, res) => {
 const keiriCache = { fetchedAt: 0, rows: [] };
 const KEIRI_TTL = 5 * 60 * 1000;
 
-async function fetchAllTransactions() {
-  if (Date.now() - keiriCache.fetchedAt < KEIRI_TTL && keiriCache.rows.length) {
+async function fetchAllTransactions(force = false) {
+  if (!force && Date.now() - keiriCache.fetchedAt < KEIRI_TTL && keiriCache.rows.length) {
     return keiriCache.rows;
   }
   const sheets = await getSheetsApi();
@@ -1059,7 +1062,7 @@ app.get("/api/keiri/year", async (req, res) => {
   const year = String(req.query.year || "").trim();
   if (!/^\d{4}$/.test(year)) return res.status(400).json({ error: "year (YYYY) required" });
   try {
-    const all = await fetchAllTransactions();
+    const all = await fetchAllTransactions(req.query.force === "1");
     const yearStart = `${year}-01-01`;
     const yearEnd = `${Number(year) + 1}-01-01`;
     const yearRows = all.filter((r) => r.date >= yearStart && r.date < yearEnd);
@@ -1165,7 +1168,7 @@ app.get("/api/keiri/summary", async (req, res) => {
   const month = String(req.query.month || "").trim();
   if (!/^\d{4}-\d{2}$/.test(month)) return res.status(400).json({ error: "month (YYYY-MM) required" });
   try {
-    const all = await fetchAllTransactions();
+    const all = await fetchAllTransactions(req.query.force === "1");
     const cur = aggregateMonth(all, month);
     const prev = aggregateMonth(all, subMonths(month, 1));
 
@@ -1237,7 +1240,7 @@ app.get("/api/keiri/transactions", async (req, res) => {
   const accountingCategory = String(req.query.accountingCategory || "");
   const type = String(req.query.type || "");
   try {
-    const all = await fetchAllTransactions();
+    const all = await fetchAllTransactions(req.query.force === "1");
     let dateStart, dateEnd;
     if (month) {
       const b = ymToDateBounds(month);
