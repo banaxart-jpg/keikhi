@@ -741,7 +741,39 @@ app.delete("/api/sites/:id", async (req, res) => {
 // 503/UNAVAILABLE 等の過渡的エラーで指数バックオフ→別モデルへフォールバック。
 // Gemini Flash は時々スパイクで詰まるので、ユーザーが「Retry」を押す前に
 // サーバ側で吸収する。
-async function callGeminiWithFallback(content, { primaryModel, maxOutputTokens, useGoogleSearch } = {}) {
+// Gemini が返した文字列を JSON として parse する。多少壊れていても repair を試みる。
+// 失敗時は null。logErr=true なら parse 失敗時に詳細をログ出力。
+function parseLooseJson(text, { logErr = true } = {}) {
+  if (!text) return null;
+  let t = String(text).trim();
+  // ```json ... ``` フェンスを剥がす
+  t = t.replace(/^```(?:json|JSON)?\s*/i, "").replace(/```\s*$/i, "").trim();
+  // 最初の { から最後の } まで切り出し
+  const s = t.indexOf("{");
+  const e = t.lastIndexOf("}");
+  if (s < 0 || e <= s) {
+    if (logErr) console.warn("[json-parse] no JSON braces in response");
+    return null;
+  }
+  let body = t.slice(s, e + 1);
+  // 1回目: そのまま
+  try { return JSON.parse(body); } catch (_) {}
+  // 2回目: 末尾カンマ除去 ("key":"v",}/] → }/])
+  try { return JSON.parse(body.replace(/,(\s*[}\]])/g, "$1")); } catch (_) {}
+  // 3回目: スマートクオートを通常クオートに置換
+  try {
+    const fixed = body
+      .replace(/[“”]/g, '"')
+      .replace(/[‘’]/g, "'")
+      .replace(/,(\s*[}\]])/g, "$1");
+    return JSON.parse(fixed);
+  } catch (e3) {
+    if (logErr) console.warn(`[json-parse] all repair attempts failed: ${e3.message}\n--- body (first 400) ---\n${body.slice(0, 400)}\n--- body (last 200) ---\n${body.slice(-200)}`);
+  }
+  return null;
+}
+
+async function callGeminiWithFallback(content, { primaryModel, maxOutputTokens, useGoogleSearch, jsonMode } = {}) {
   const fallbackChain = [
     ...new Set([primaryModel || GEMINI_MODEL, "gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-flash-latest"]),
   ];
@@ -749,9 +781,12 @@ async function callGeminiWithFallback(content, { primaryModel, maxOutputTokens, 
   for (const name of fallbackChain) {
     for (let attempt = 1; attempt <= 3; attempt++) {
       try {
+        const generationConfig = {};
+        if (maxOutputTokens) generationConfig.maxOutputTokens = maxOutputTokens;
+        if (jsonMode) generationConfig.responseMimeType = "application/json";
         const m = genAI.getGenerativeModel({
           model: name,
-          ...(maxOutputTokens ? { generationConfig: { maxOutputTokens } } : {}),
+          ...(Object.keys(generationConfig).length ? { generationConfig } : {}),
           ...(useGoogleSearch ? { tools: [{ googleSearch: {} }] } : {}),
         });
         const r = await m.generateContent(content);
@@ -2390,12 +2425,12 @@ app.post("/api/scan", async (req, res) => {
     const { result, modelUsed } = await callGeminiWithFallback([
       prompt,
       { inlineData: { data: image, mimeType } },
-    ]);
+    ], { jsonMode: true, maxOutputTokens: 4096 });
     const text = result.response.text();
-    const s = text.indexOf("{");
-    const e = text.lastIndexOf("}");
-    if (s < 0 || e <= s) throw new Error("AI response did not contain JSON");
-    const raw = JSON.parse(text.slice(s, e + 1));
+    // JSON mode でも稀に余計な空白や trailing comma が残るので repair → parse の2段構え。
+    // それでも壊れていたら parse position 周辺をログに出して原因を見える化。
+    const raw = parseLooseJson(text);
+    if (!raw) throw new Error("AI のJSON 出力を解析できませんでした (画像が不鮮明 / 文字認識失敗の可能性)");
     // 後方互換: Gemini が単一オブジェクトを返した場合も配列に正規化
     const receipts = Array.isArray(raw?.receipts)
       ? raw.receipts
