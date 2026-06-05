@@ -990,16 +990,14 @@ const App = {
           sites.value = (Array.isArray(sj) ? sj : []).map((s) => s.name).filter(Boolean);
         }
       } catch (_) { sites.value = []; }
-      // Firestore リアルタイム購読 (自分関連だけクライアント側で絞る)
+      // Firestore リアルタイム購読。tasks コレクションは Firestore ルール側で
+      // 社内 3 アカウントに既に絞ってあるので、ここでは追加フィルタは行わない。
+      // (前は fe/te が自分か "both" のものだけ残していたが、別デバイスで role を
+      //  自分以外側 → 自分側に切替えると元のデバイスから消える事故が起きた)
       unsubscribeTasks = onSnapshot(
         collection(fbDb, "tasks"),
         (snap) => {
-          tasks.value = snap.docs.map((d) => ({ id: d.id, ...d.data() }))
-            .filter((t) => {
-              const fe = (t.fromEmail || "").toLowerCase();
-              const te = (t.toEmail || "").toLowerCase();
-              return fe === me.value || te === me.value || te === "both";
-            });
+          tasks.value = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
         },
         (e) => { console.warn("[task] snapshot failed", e); }
       );
