@@ -55,6 +55,39 @@ body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); 
 .tabs > button.on { color: white; background: linear-gradient(145deg, var(--accent2), var(--accent)); box-shadow: 5px 5px 14px rgba(67,56,202,0.35); }
 
 .wrap { padding: 14px 14px 30px; display: flex; flex-direction: column; gap: 10px; }
+
+/* 月次推移トレンドチャート (年間タブの上、12ヶ月) */
+.trend-card { background: var(--bg); border-radius: 16px; padding: 12px 14px 14px; box-shadow: 5px 5px 14px var(--sd), -3px -3px 10px var(--sl); position: relative; }
+.trend-h { display: flex; justify-content: space-between; align-items: baseline; font-size: 13px; font-weight: 800; color: var(--text); margin-bottom: 8px; }
+.trend-legend { display: inline-flex; align-items: center; gap: 6px; font-size: 10px; color: var(--text2); font-weight: 700; }
+.lg-dot { width: 8px; height: 8px; border-radius: 2px; display: inline-block; margin-left: 6px; }
+.lg-dot.in { background: var(--in); } .lg-dot.out { background: var(--out); } .lg-dot.profit { background: var(--accent); border-radius: 50%; }
+.trend-grid { display: grid; grid-template-columns: repeat(12, 1fr); gap: 3px; height: 90px; align-items: flex-end; position: relative; padding-bottom: 16px; border-bottom: 1px solid rgba(168,172,192,0.25); }
+.trend-col { display: flex; flex-direction: column; align-items: center; gap: 0; cursor: pointer; height: 100%; justify-content: flex-end; position: relative; transition: transform 120ms ease; }
+.trend-col:active { transform: scale(0.94); }
+.trend-col.on .trend-lbl { color: var(--accent); font-weight: 900; }
+.trend-bars { display: flex; align-items: flex-end; gap: 2px; height: 100%; width: 100%; justify-content: center; padding-top: 4px; }
+.tb { width: 100%; max-width: 8px; min-height: 1px; border-radius: 2px 2px 0 0; transition: opacity 200ms ease; }
+.tb.in { background: linear-gradient(180deg, color-mix(in srgb, var(--in) 80%, white), var(--in)); }
+.tb.out { background: linear-gradient(180deg, color-mix(in srgb, var(--out) 80%, white), var(--out)); }
+.trend-col.on .tb { box-shadow: 0 0 0 1.5px var(--accent); }
+.trend-lbl { position: absolute; bottom: 0; font-size: 9px; font-weight: 700; color: var(--text2); font-family: ui-monospace, Menlo, monospace; }
+.trend-line { position: absolute; top: 32px; left: 14px; right: 14px; height: 64px; pointer-events: none; }
+
+/* ドーナツチャート (月詳細の支出内訳) */
+.donut-card { display: flex; justify-content: center; padding: 4px 0 8px; }
+.donut-wrap { width: 160px; height: 160px; position: relative; }
+.donut-svg { width: 100%; height: 100%; filter: drop-shadow(2px 2px 6px var(--sd)); }
+.donut-seg { transition: stroke-dasharray 400ms cubic-bezier(.4,.0,.2,1); }
+.cat-row { gap: 8px; }
+.cat-color { width: 8px; height: 8px; border-radius: 2px; flex-shrink: 0; }
+.cat-row.zero .cat-color { opacity: 0.3; }
+
+/* 現場別の横棒可視化 */
+.site-bars { display: flex; flex-direction: column; gap: 2px; height: 9px; }
+.site-bar { height: 4px; border-radius: 2px; min-width: 2px; }
+.site-bar.in { background: linear-gradient(90deg, var(--in), color-mix(in srgb, var(--in) 60%, white)); }
+.site-bar.out { background: linear-gradient(90deg, var(--out), color-mix(in srgb, var(--out) 60%, white)); }
 .loading { text-align: center; color: var(--text2); font-size: 13px; padding: 60px 0; }
 .err { padding: 12px 14px; border-radius: 14px; background: #fde0e0; color: #8a2727; font-size: 12px; font-weight: 600; }
 
@@ -158,6 +191,19 @@ const CAT_ICONS = {
   "ネット系": "language", "接待交際費": "restaurant", "材料費": "construction",
   "外注費": "engineering", "雑費": "category", "未分類": "help",
 };
+// ドーナツ/凡例用のカテゴリカラー (10色、視覚的に区別しやすい順)
+const CAT_COLORS = {
+  "給料":     "#4338ca",   // indigo
+  "家賃":     "#0891b2",   // cyan
+  "車両費":   "#0d9488",   // teal
+  "保険料":   "#16a34a",   // green
+  "ネット系": "#65a30d",   // lime
+  "接待交際費": "#ca8a04", // yellow
+  "材料費":   "#d97706",   // amber
+  "外注費":   "#dc2626",   // red
+  "雑費":     "#9333ea",   // purple
+  "未分類":   "#71717a",   // gray
+};
 
 const TEMPLATE = `
 <div>
@@ -200,6 +246,26 @@ const TEMPLATE = `
   <div v-if="data && !loading" class="wrap">
     <!-- ───── 月間タブ ───── -->
     <template v-if="tab === 'month'">
+      <!-- 月次推移チャート (12ヶ月の売上/支出バー + 利益ライン) -->
+      <div class="trend-card">
+        <div class="trend-h"><span>月次推移</span><span class="trend-legend"><span class="lg-dot in"></span>売上<span class="lg-dot out"></span>支出<span class="lg-dot profit"></span>利益</span></div>
+        <div class="trend-grid">
+          <div v-for="(t, i) in data.months" :key="t.month" class="trend-col" @click="toggleMonth(t.month)" :class="{ on: openMonth === t.month }">
+            <div class="trend-bars">
+              <div class="tb in" :style="{ height: trendBarH(t.revenue) + '%' }"></div>
+              <div class="tb out" :style="{ height: trendBarH(t.expense) + '%' }"></div>
+            </div>
+            <div class="trend-lbl">{{ i + 1 }}</div>
+          </div>
+        </div>
+        <!-- 利益ライン (SVG オーバーレイ) -->
+        <svg class="trend-line" viewBox="0 0 240 100" preserveAspectRatio="none">
+          <polyline :points="profitLinePoints" fill="none" stroke="var(--accent)" stroke-width="1.4" stroke-linejoin="round" />
+          <circle v-for="(p, i) in profitLinePoints.split(' ').filter(Boolean)" :key="i"
+                  :cx="p.split(',')[0]" :cy="p.split(',')[1]" r="1.6" fill="var(--accent)" />
+        </svg>
+      </div>
+
       <div v-for="m in data.months" :key="m.month" class="row"
            :class="{ open: openMonth === m.month, empty: m.count === 0 }">
         <div class="row-head" @click="toggleMonth(m.month)">
@@ -224,11 +290,26 @@ const TEMPLATE = `
             <div class="rev-line"><span class="l">満竹華庵</span><span class="v">¥{{ formatYen(m.revenueRyokan) }}</span></div>
             <div v-if="otherRev(m) > 0" class="rev-line"><span class="l">その他</span><span class="v">¥{{ formatYen(otherRev(m)) }}</span></div>
           </div>
+          <!-- 支出ドーナツチャート (SVG、月詳細時のみ) -->
+          <div v-if="m.expense > 0" class="donut-card">
+            <div class="donut-wrap">
+              <svg viewBox="0 0 100 100" class="donut-svg">
+                <circle cx="50" cy="50" r="38" fill="none" stroke="var(--bg2)" stroke-width="14" />
+                <circle v-for="seg in donutSegments(m)" :key="seg.cat"
+                  cx="50" cy="50" r="38" fill="none" :stroke="seg.color" stroke-width="14"
+                  :stroke-dasharray="seg.dash" :stroke-dashoffset="seg.offset"
+                  stroke-linecap="butt" transform="rotate(-90 50 50)" class="donut-seg" />
+                <text x="50" y="47" text-anchor="middle" font-size="6" font-weight="700" fill="var(--text2)">支出</text>
+                <text x="50" y="58" text-anchor="middle" font-size="9" font-weight="800" fill="var(--text)" font-family="ui-monospace, Menlo, monospace">¥{{ formatYenShort(m.expense) }}</text>
+              </svg>
+            </div>
+          </div>
           <div class="cat-list">
             <div class="split-h">支出の内訳</div>
             <div v-for="c in data.accountingCategories" :key="c" class="cat-row"
                  :class="{ zero: m.categories[c].count === 0, unknown: c === '未分類' && m.categories[c].count > 0 }"
                  @click="m.categories[c].count > 0 && drillCategory(m.month, c)">
+              <span class="cat-color" :style="{ background: catColor(c) }"></span>
               <span class="cat-name"><span class="icon">{{ icon(c) }}</span>{{ c }}</span>
               <span class="cat-count" v-if="m.categories[c].count">{{ m.categories[c].count }}件</span>
               <span class="cat-amount out">¥{{ formatYen(m.categories[c].amount) }}</span>
@@ -244,7 +325,14 @@ const TEMPLATE = `
       <div v-for="s in data.sites" :key="s.site" class="row" :class="{ open: openSite === s.site }">
         <div class="row-head" @click="toggleSite(s.site)">
           <span class="chev">chevron_right</span>
-          <span class="row-name">{{ s.site }}</span>
+          <div style="flex:1; min-width:0; display:flex; flex-direction:column; gap:5px;">
+            <span class="row-name">{{ s.site }}</span>
+            <!-- 売上 vs 支出 の横棒可視化 -->
+            <div class="site-bars">
+              <div class="site-bar in" :style="{ width: siteBarWidth(s.revenue) + '%' }" :title="'売上 ¥' + formatYen(s.revenue)"></div>
+              <div class="site-bar out" :style="{ width: siteBarWidth(s.expense) + '%' }" :title="'支出 ¥' + formatYen(s.expense)"></div>
+            </div>
+          </div>
           <div class="row-kpi">
             <div class="k in"><span class="k-lbl">売</span><span class="k-val">¥{{ formatYenShort(s.revenue) }}</span></div>
             <div class="k out"><span class="k-lbl">支</span><span class="k-val">¥{{ formatYenShort(s.expense) }}</span></div>
@@ -373,6 +461,75 @@ const App = {
     function monthLabel(ym) { return `${parseInt(ym.slice(5, 7), 10)}月`; }
     function icon(c) { return CAT_ICONS[c] || "category"; }
     function otherRev(m) { return Math.max(0, m.revenue - m.revenueConstruction - m.revenueRyokan); }
+    function catColor(c) { return CAT_COLORS[c] || "#9ca3af"; }
+
+    // 12ヶ月トレンドバーの高さ (各月の rev/exp を、年内最大値で正規化)
+    const trendMax = computed(() => {
+      if (!data.value) return 1;
+      let mx = 1;
+      for (const m of data.value.months) {
+        if (m.revenue > mx) mx = m.revenue;
+        if (m.expense > mx) mx = m.expense;
+      }
+      return mx;
+    });
+    function trendBarH(v) {
+      return Math.max(1, (Number(v) || 0) / trendMax.value * 100);
+    }
+
+    // 利益ライン用の polyline points (12点、SVG viewBox 240x100)
+    const profitLinePoints = computed(() => {
+      if (!data.value) return "";
+      const months = data.value.months;
+      // y軸: profit 0 がチャート底 + 線範囲 0..max → 線範囲を 80..10 にマップ
+      let mx = 1;
+      for (const m of months) { if (Math.abs(m.profit) > mx) mx = Math.abs(m.profit); }
+      const cellW = 240 / 12;
+      return months.map((m, i) => {
+        const x = (i + 0.5) * cellW;
+        const y = 50 - (m.profit / mx) * 35;   // +profit は上, -profit は下
+        return `${x.toFixed(1)},${y.toFixed(1)}`;
+      }).join(" ");
+    });
+
+    // 月詳細のドーナツチャート用 segment 生成
+    // 各セグメントは circumference 全周 = 2π*38 ≈ 238.76 の上で 「seg長 余白」で stroke-dasharray
+    // 全周を 0% から順に埋めるので offset = -(これまでの合計%) * circumference / 100
+    function donutSegments(m) {
+      const circ = 2 * Math.PI * 38;   // r=38 の円周
+      const total = m.expense || 0;
+      if (!total) return [];
+      const segs = [];
+      let acc = 0;
+      for (const cat of (data.value?.accountingCategories || [])) {
+        const amt = m.categories[cat]?.amount || 0;
+        if (amt <= 0) continue;
+        const pct = amt / total;
+        const len = circ * pct;
+        segs.push({
+          cat,
+          color: catColor(cat),
+          dash: `${len.toFixed(2)} ${(circ - len).toFixed(2)}`,
+          offset: (-acc * circ).toFixed(2),
+        });
+        acc += pct;
+      }
+      return segs;
+    }
+
+    // 現場別バーの幅 (全現場の rev+exp 最大値で正規化)
+    const siteMax = computed(() => {
+      if (!data.value) return 1;
+      let mx = 1;
+      for (const s of data.value.sites) {
+        if (s.revenue > mx) mx = s.revenue;
+        if (s.expense > mx) mx = s.expense;
+      }
+      return mx;
+    });
+    function siteBarWidth(v) {
+      return Math.max(0, Math.min(100, (Number(v) || 0) / siteMax.value * 100));
+    }
     function shiftYear(d) { year.value += d; fetchYear(); }
     function toggleMonth(m) { openMonth.value = openMonth.value === m ? null : m; }
     function toggleSite(s) { openSite.value = openSite.value === s ? null : s; }
@@ -493,7 +650,9 @@ const App = {
       drillOpen, drillLoading, drillRows, drillTitle,
       editOpen, editRow, editForm, saving, editErr,
       BIG_CATEGORIES, SUB_CATEGORIES, knownSites,
-      formatYen, formatYenShort, monthLabel, icon, otherRev,
+      profitLinePoints,
+      formatYen, formatYenShort, monthLabel, icon, otherRev, catColor,
+      trendBarH, donutSegments, siteBarWidth,
       shiftYear, toggleMonth, toggleSite, refresh,
       drillCategory, drillSiteCategory, openEdit, saveEdit,
     };
