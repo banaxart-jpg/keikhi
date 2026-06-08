@@ -414,23 +414,37 @@ async function setupFirestoreSync() {
   if (db) return;   // 二重初期化防止
   try {
     db = getFirestore(fbAuth.app);
+    // local だけにある請求書を Firestore へ追加するため、購読開始前に snapshot を取っておく。
+    // (snap が来ると bills が remote で上書きされるので、local データを保護)
+    const pendingLocalBills = [...bills];
+    let firstSnapshotProcessed = false;
     const q = query(collection(db, SEIKYU_COL));
     unsubscribeBills = onSnapshot(q, async (snap) => {
-      const remote = snap.docs.map((d) => d.data());
       const remoteIds = snap.docs.map((d) => d.id);
-      // 初回 snapshot で remote 空 & local に旧データあるなら、localStorage → Firestore 移行
-      if (remote.length === 0 && bills.length > 0 && localStorage.getItem(STORAGE_KEY + "_migrated") !== "1") {
-        console.log(`[seikyu] migrating ${bills.length} bills from localStorage to Firestore`);
-        try {
-          const batch = writeBatch(db);
-          for (const b of bills) batch.set(doc(db, SEIKYU_COL, b.id), b);
-          await batch.commit();
+      const remoteBills = snap.docs.map((d) => d.data());
+
+      // 初回 snapshot だけ: local にあって remote に無い分を追加 (PC と スマホ両方が
+      // ローカルに持ってた場合でも、双方の差分が確実に Firestore に上がる)
+      if (!firstSnapshotProcessed) {
+        firstSnapshotProcessed = true;
+        const remoteSet = new Set(remoteIds);
+        const localOnly = pendingLocalBills.filter((b) => b?.id && !remoteSet.has(b.id));
+        if (localOnly.length > 0) {
+          console.log(`[seikyu] uploading ${localOnly.length} local-only bills to Firestore`);
+          try {
+            const batch = writeBatch(db);
+            for (const b of localOnly) batch.set(doc(db, SEIKYU_COL, b.id), b);
+            await batch.commit();
+            localStorage.setItem(STORAGE_KEY + "_migrated", "1");
+            return;   // 次の snapshot で完全な状態が降ってくる
+          } catch (e) { console.warn("[seikyu] migration failed:", e?.message || e); }
+        } else {
           localStorage.setItem(STORAGE_KEY + "_migrated", "1");
-        } catch (e) { console.warn("[seikyu] migration failed:", e.message); }
-        return;   // 次の snapshot で remote が埋まるのを待つ
+        }
       }
+
       lastSnapshotIds = remoteIds;
-      bills = remote;
+      bills = remoteBills;
       // 開いてる画面を再描画 (リスト / メイン / 確認)
       try { renderList(); } catch (_) {}
       try { renderMain?.(); } catch (_) {}
