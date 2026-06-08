@@ -433,6 +433,34 @@ $("cameraInput").addEventListener("change", makeHandler("camera"));
 $("photoInput").addEventListener("change", makeHandler("library"));
 $("fileInput").addEventListener("change", makeHandler("file"));
 
+// PDF.js を CDN から動的 import (PDFアップ時のみロード、初期表示は重くしない)。
+// iOS Safari の <embed type="application/pdf"> が真っ黒 / 空欄でしか描画されない問題対策で、
+// PDF を JPEG 画像化してから blob URL に差し替える。
+let pdfjsLib = null;
+async function ensurePdfJs() {
+  if (pdfjsLib) return pdfjsLib;
+  pdfjsLib = await import("https://cdn.jsdelivr.net/npm/pdfjs-dist@4.4.168/build/pdf.min.mjs");
+  pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdn.jsdelivr.net/npm/pdfjs-dist@4.4.168/build/pdf.worker.min.mjs";
+  return pdfjsLib;
+}
+async function pdfFirstPageToJpegBlob(file, maxW = 1400) {
+  const lib = await ensurePdfJs();
+  const buf = await file.arrayBuffer();
+  const doc = await lib.getDocument({ data: buf, useSystemFonts: true }).promise;
+  const page = await doc.getPage(1);
+  const viewport0 = page.getViewport({ scale: 1 });
+  const scale = Math.min(2.5, maxW / viewport0.width);
+  const viewport = page.getViewport({ scale });
+  const canvas = document.createElement("canvas");
+  canvas.width = viewport.width;
+  canvas.height = viewport.height;
+  const ctx = canvas.getContext("2d");
+  ctx.fillStyle = "#ffffff";   // PDF が透明背景でも白地に描く (黒抜け防止)
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  await page.render({ canvasContext: ctx, viewport }).promise;
+  return await new Promise((r) => canvas.toBlob((b) => r(b), "image/jpeg", 0.85));
+}
+
 function enqueueShot(file, source = "camera") {
   const item = {
     tempId: crypto.randomUUID(),
@@ -445,6 +473,16 @@ function enqueueShot(file, source = "camera") {
   queue.unshift(item); // 新しいのを先頭に
   renderQueue();
   processQueue();
+  // PDF なら裏でプレビュー画像化、できたら blobUrl を JPEG 版に差し替え
+  if (file.type === "application/pdf") {
+    pdfFirstPageToJpegBlob(file).then((jpegBlob) => {
+      if (!jpegBlob) return;
+      try { URL.revokeObjectURL(item.blobUrl); } catch (_) {}
+      item.blobUrl = URL.createObjectURL(jpegBlob);
+      item.previewJpegBlob = jpegBlob;
+      renderQueue();
+    }).catch((e) => console.warn("[pdf-preview] failed:", e?.message || e));
+  }
 }
 
 async function processQueue() {
