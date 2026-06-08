@@ -294,23 +294,26 @@ async function appendRecordToSheet(r) {
   const photoCell = photoLinkUrl ? `=HYPERLINK("${String(photoLinkUrl).replace(/"/g, '""')}","🧾")` : "";
 
   // 新「取引」シートに append (1 行 1 取引の統一フォーマット)。
-  // 領収書アプリ (keihi/keihi2) は買い物 = 支出。現場が「満竹華庵」なら 大分類=旅館、
-  // それ以外で現場アリなら 工事、現場無しなら経費。fire-and-forget。
-  appendTx({
-    date: r.date || "",
-    type: "支出",
-    category: !r.site ? "経費" : (r.site === "満竹華庵" ? "旅館" : "工事"),
-    subcategory: r.category || "",
-    amount: Number(r.total) || 0,
-    counterparty: r.store || "",
-    site: r.site || "",
-    status: "確定",
-    paymentMethod: r.payment || "",
-    memo: [r.buyer, r.workType, r.memo].filter(Boolean).join(" / "),
-    photoCell,
-    source: "領収書",
-    refId: r.id || "",
-  }).catch(() => {});
+  // ★ 現場が決まってから書き込む。経費2 のソート前 (site="") は書かない。
+  // ソート完了時 PUT /api/records → 再度この関数が呼ばれ、site 入りで初めて記載される。
+  // (refId による二重投入防止キャッシュがあるので、PUT で何度書き換えても 1 行のみ)
+  if (r.site) {
+    appendTx({
+      date: r.date || "",
+      type: "支出",
+      category: r.site === "満竹華庵" ? "旅館" : "工事",
+      subcategory: r.category || "",
+      amount: Number(r.total) || 0,
+      counterparty: r.store || "",
+      site: r.site,
+      status: "確定",
+      paymentMethod: r.payment || "",
+      memo: [r.buyer, r.workType, r.memo].filter(Boolean).join(" / "),
+      photoCell,
+      source: "領収書",
+      refId: r.id || "",
+    }).catch(() => {});
+  }
 
   // 旧フォーマットの月別タブにも引き続き書き込む (バックアップ・互換)
   if (!SHEET_ID) return;
