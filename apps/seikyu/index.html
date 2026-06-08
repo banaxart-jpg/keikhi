@@ -303,6 +303,9 @@ import {
   getAuth, setPersistence, browserLocalPersistence,
   onAuthStateChanged, signOut,
 } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
+import {
+  getFirestore, collection, doc, setDoc, deleteDoc, onSnapshot, query, writeBatch,
+} from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
 import { gateInternal } from "/internal-gate.js";
 
 // ───────── Config / Auth ─────────
@@ -353,6 +356,10 @@ window.doSignOut = async () => { if (fbAuth) await signOut(fbAuth); location.rel
 
 // ───────── State ─────────
 const STORAGE_KEY = "seikyu_records";
+const SEIKYU_COL = "seikyu_invoices";   // Firestore コレクション (社内 3 アカウント共有)
+let db = null;                          // Firestore instance、setupFirestoreSync で初期化
+let lastSnapshotIds = [];               // 直近 snapshot の id 集合 (saveBills の差分削除用)
+let unsubscribeBills = null;            // onSnapshot 解除関数
 let bills = []; // {id, direction, issuer, total, dueDate, issueDate, category, site, account:{bank,branch,type,number,holder}, memo, status, paidAt, imageUrl, thumb, mimeType}
 let sites = []; // 経費アプリと共有の現場リスト [{id,name}]
 let selectedSites = new Set();    // 確認シートで選択中の現場 (複数可。カンマ区切りで保存)
@@ -375,12 +382,62 @@ const LABELS = {
 
 const $ = (id) => document.getElementById(id);
 
+// localStorage は Firestore が繋がるまでの一時キャッシュ + オフラインフォールバック。
+// Firestore が動き始めたら onSnapshot が bills を上書きするので、サブだけど残しておく。
 function loadBills() {
   try { bills = JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]"); }
   catch { bills = []; }
 }
 function saveBills() {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(bills));
+  // Firestore に差分同期 (現在の bills を setDoc、消えた id は deleteDoc)
+  syncBillsToFirestore().catch((e) => console.warn("[seikyu] firestore sync failed:", e?.message || e));
+}
+
+async function syncBillsToFirestore() {
+  if (!db) return;
+  const currentIds = new Set(bills.map((b) => b.id));
+  const removedIds = lastSnapshotIds.filter((id) => !currentIds.has(id));
+  const batch = writeBatch(db);
+  for (const b of bills) {
+    batch.set(doc(db, SEIKYU_COL, b.id), b);
+  }
+  for (const id of removedIds) {
+    batch.delete(doc(db, SEIKYU_COL, id));
+  }
+  await batch.commit();
+}
+
+// 認証完了後に呼ぶ。Firestore 接続 → 旧 localStorage の1回限り移行 → 購読開始。
+async function setupFirestoreSync() {
+  if (!fbAuth?.currentUser) return;
+  if (db) return;   // 二重初期化防止
+  try {
+    db = getFirestore(fbAuth.app);
+    const q = query(collection(db, SEIKYU_COL));
+    unsubscribeBills = onSnapshot(q, async (snap) => {
+      const remote = snap.docs.map((d) => d.data());
+      const remoteIds = snap.docs.map((d) => d.id);
+      // 初回 snapshot で remote 空 & local に旧データあるなら、localStorage → Firestore 移行
+      if (remote.length === 0 && bills.length > 0 && localStorage.getItem(STORAGE_KEY + "_migrated") !== "1") {
+        console.log(`[seikyu] migrating ${bills.length} bills from localStorage to Firestore`);
+        try {
+          const batch = writeBatch(db);
+          for (const b of bills) batch.set(doc(db, SEIKYU_COL, b.id), b);
+          await batch.commit();
+          localStorage.setItem(STORAGE_KEY + "_migrated", "1");
+        } catch (e) { console.warn("[seikyu] migration failed:", e.message); }
+        return;   // 次の snapshot で remote が埋まるのを待つ
+      }
+      lastSnapshotIds = remoteIds;
+      bills = remote;
+      // 開いてる画面を再描画 (リスト / メイン / 確認)
+      try { renderList(); } catch (_) {}
+      try { renderMain?.(); } catch (_) {}
+    }, (err) => {
+      console.warn("[seikyu] firestore subscription error:", err?.message || err);
+    });
+  } catch (e) { console.warn("[seikyu] setupFirestoreSync failed:", e?.message || e); }
 }
 
 // ───────── Screens ─────────
@@ -1044,7 +1101,8 @@ $("imgOverlayClose").addEventListener("click", () => {
 
 // ───────── Boot ─────────
 async function boot() {
-  loadBills();
+  loadBills();    // まずは localStorage キャッシュをロード (オフライン初期描画用)
+  setupFirestoreSync();   // 認証済みなら裏で Firestore 購読開始 (PC ↔ スマホ ↔ 他ユーザー間で即同期)
   refreshSheetState();
   // ?view=<gs://...> でシートから飛んできたら画像/PDF オーバーレイ表示
   const viewParam = new URLSearchParams(location.search).get("view");
