@@ -631,6 +631,9 @@ async function ensureSchema() {
   if (!p) return;
   try {
     await p.query("ALTER TABLE records ADD COLUMN IF NOT EXISTS drive_url TEXT");
+    // sites: /genba/ アプリ用に住所 + キーボックスメモを保持
+    await p.query("ALTER TABLE sites ADD COLUMN IF NOT EXISTS address TEXT");
+    await p.query("ALTER TABLE sites ADD COLUMN IF NOT EXISTS key_box TEXT");
     await p.query(`
       CREATE TABLE IF NOT EXISTS tasks (
         id TEXT PRIMARY KEY,
@@ -697,11 +700,16 @@ app.get("/health", (req, res) => {
 // ─────────────────────────────
 // Sites
 // ─────────────────────────────
+// sites の CRUD はランチャー「現場」アプリ (/genba/) からのみ利用される想定。
+// 他ミニアプリ (keihi/keihi2/seikyu/kaimono/task) は GET のみ。
 app.get("/api/sites", async (req, res) => {
   const p = getPool();
   if (!p) return res.status(503).json({ error: "DB not configured" });
   try {
-    const { rows } = await p.query("SELECT id, name FROM sites ORDER BY id ASC");
+    await ensureSchema();
+    const { rows } = await p.query(
+      'SELECT id, name, address, key_box AS "keyBox" FROM sites ORDER BY id ASC'
+    );
     res.json(rows);
   } catch (err) {
     console.error("sites list", err);
@@ -714,14 +722,41 @@ app.post("/api/sites", async (req, res) => {
   if (!p) return res.status(503).json({ error: "DB not configured" });
   const name = (req.body?.name || "").trim();
   if (!name) return res.status(400).json({ error: "name required" });
+  const address = (req.body?.address || "").trim() || null;
+  const keyBox = (req.body?.keyBox || "").trim() || null;
   try {
+    await ensureSchema();
     const { rows } = await p.query(
-      "INSERT INTO sites (name) VALUES ($1) ON CONFLICT (name) DO UPDATE SET name=EXCLUDED.name RETURNING id, name",
-      [name]
+      `INSERT INTO sites (name, address, key_box) VALUES ($1, $2, $3)
+       ON CONFLICT (name) DO UPDATE SET address=EXCLUDED.address, key_box=EXCLUDED.key_box
+       RETURNING id, name, address, key_box AS "keyBox"`,
+      [name, address, keyBox]
     );
     res.status(201).json(rows[0]);
   } catch (err) {
     console.error("sites insert", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.put("/api/sites/:id", async (req, res) => {
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  const name = (req.body?.name || "").trim();
+  if (!name) return res.status(400).json({ error: "name required" });
+  const address = (req.body?.address || "").trim() || null;
+  const keyBox = (req.body?.keyBox || "").trim() || null;
+  try {
+    await ensureSchema();
+    const { rows } = await p.query(
+      `UPDATE sites SET name=$1, address=$2, key_box=$3 WHERE id=$4
+       RETURNING id, name, address, key_box AS "keyBox"`,
+      [name, address, keyBox, req.params.id]
+    );
+    if (!rows.length) return res.status(404).json({ error: "not found" });
+    res.json(rows[0]);
+  } catch (err) {
+    console.error("sites update", err);
     res.status(500).json({ error: err.message });
   }
 });

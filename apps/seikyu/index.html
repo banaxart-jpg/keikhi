@@ -234,9 +234,6 @@ select.nm-field { background: var(--bg2) url("data:image/svg+xml,%3Csvg xmlns='h
     <div class="card">
       <div class="card-title">現場</div>
       <div class="site-grid" id="siteGrid"></div>
-      <div id="newSiteField" style="display:none;margin-top:10px;">
-        <input type="text" id="fNewSite" class="nm-field" placeholder="新しい現場名を入力">
-      </div>
     </div>
     <div class="card">
       <div class="card-title">振込先口座</div>
@@ -684,7 +681,6 @@ function showConfirm(parsed, errMsg) {
     (parsed.site && sites.some((s) => s.name === parsed.site)) ? [parsed.site] : []
   );
   renderSiteGrid();
-  $("fNewSite").value = "";
   // 振込先口座
   const acc = parsed.account || {};
   $("fAccBank").value = acc.bank || "";
@@ -718,7 +714,6 @@ function openEdit(b) {
     (b.site || "").split(",").map((s) => s.trim()).filter(Boolean)
   );
   renderSiteGrid();
-  $("fNewSite").value = "";
   const acc = b.account || {};
   $("fAccBank").value = acc.bank || "";
   $("fAccBranch").value = acc.branch || "";
@@ -754,14 +749,12 @@ function renderSiteGrid() {
     });
     grid.appendChild(btn);
   }
-  const add = document.createElement("button");
-  add.type = "button";
+  // 新規追加は /genba/ アプリ独占。誘導リンクのみ。
+  const add = document.createElement("a");
+  add.href = "/genba/?return=/seikyu/&newSite=true";
   add.className = "site-add-btn";
-  add.textContent = "＋ 追加";
-  add.addEventListener("click", () => {
-    $("newSiteField").style.display = "block";
-    $("fNewSite").focus();
-  });
+  add.textContent = "＋ 現場マスタで追加";
+  add.style.textDecoration = "none";
   grid.appendChild(add);
 }
 async function loadSites() {
@@ -794,18 +787,6 @@ $("submitBtn").addEventListener("click", async () => {
   try {
     const total = Number($("fTotal").value) || 0;
     if (!total) { toast("金額を入れてください", true); return; }
-    // 新規現場を入力していたら経費アプリと共有の DB に登録 + 選択中に追加
-    const newSiteName = $("fNewSite").value.trim();
-    if (newSiteName) {
-      try {
-        const created = await api("POST", "/api/sites", { name: newSiteName });
-        if (!sites.find((s) => s.name === created.name)) sites.push(created);
-        selectedSites.add(created.name);
-      } catch (e) {
-        console.warn("site create failed", e);
-        selectedSites.add(newSiteName); // 失敗してもローカル選択に入れる
-      }
-    }
     const siteStr = Array.from(selectedSites).join(", ");
     const rec = {
       direction: editingDirection,

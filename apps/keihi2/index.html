@@ -270,10 +270,7 @@ select.edit-input { background: var(--bg2) url("data:image/svg+xml,%3Csvg xmlns=
   </div>
   <p class="site-mgmt-intro"><b id="siteMgmtBuyer">名取</b> 用の現場を選んでください。チェック ON の現場だけが SORT 画面に出ます。</p>
   <div class="site-list" id="siteMgmtList"></div>
-  <div class="site-add">
-    <input type="text" id="newSiteInput" placeholder="新しい現場名を入力" autocomplete="off">
-    <button id="newSiteBtn" type="button">+ 追加</button>
-  </div>
+  <a href="/genba/?return=/keihi2/" style="display:block; text-align:center; margin:18px 22px 0; padding:14px; font-size:13px; font-weight:700; color:var(--accent); text-decoration:none; border:1px dashed var(--accent); border-radius:14px;">+ 現場マスタで追加・編集 →</a>
 </div>
 
 <!-- スワイプ仕分け画面 (メイン) -->
@@ -770,24 +767,13 @@ function createSwipeCard(r, isBack) {
     });
     sitesRow.appendChild(b);
   }
-  // 「+ 新規」ボタン: その場で現場を追加して即適用
-  const addBtn = document.createElement("button");
-  addBtn.type = "button"; addBtn.className = "sw-site new"; addBtn.textContent = "+ 新規";
-  addBtn.addEventListener("click", async (e) => {
-    e.stopPropagation();
-    const name = (prompt("新しい現場名:") || "").trim();
-    if (!name) return;
-    try {
-      const created = await api("POST", "/api/sites", { name });
-      if (!sites.find((s) => s.name === created.name)) sites.push(created);
-      // 自分用リストにも追加 (空 = 全表示モード のときは何もしない)
-      const my = getMySites();
-      if (my.length) saveMySites([...my, created.name]);
-      await assignSite(r, created.name, currentPay);
-      swipeOutNext(card);
-    } catch (err) { toast("追加失敗: " + err.message, true); }
-  });
-  sitesRow.appendChild(addBtn);
+  // 新規追加は /genba/ アプリ独占。誘導リンクのみ出す。
+  const addLink = document.createElement("a");
+  addLink.href = "/genba/?return=/keihi2/&newSite=true";
+  addLink.className = "sw-site new";
+  addLink.textContent = "+ 現場マスタで追加";
+  addLink.style.textDecoration = "none";
+  sitesRow.appendChild(addLink);
   // 削除
   const del = document.createElement("button");
   del.type = "button"; del.className = "sw-site danger"; del.textContent = "🗑 削除";
@@ -1056,8 +1042,6 @@ $("imgOverlayClose").addEventListener("click", () => { $("imgOverlay").style.dis
 // ───────── 現場の管理画面 ─────────
 $("openSiteMgmtBtn").addEventListener("click", showSiteMgmt);
 $("siteBackBtn").addEventListener("click", () => show("shootScreen"));
-$("newSiteBtn").addEventListener("click", addNewSite);
-$("newSiteInput").addEventListener("keydown", (e) => { if (e.key === "Enter") addNewSite(); });
 
 async function showSiteMgmt() {
   await loadData(); // sites を最新に
@@ -1094,22 +1078,8 @@ function renderSiteMgmt() {
     const name = document.createElement("span");
     name.textContent = s.name;
     name.style.flex = "1";
-    const del = document.createElement("button");
-    del.type = "button"; del.className = "del-x"; del.textContent = "×";
-    del.title = "全員の現場リストから削除";
-    del.addEventListener("click", async (e) => {
-      e.preventDefault();
-      if (!confirm(`「${s.name}」を全員の現場リストから削除しますか？\n(過去のレコードはそのまま残ります)`)) return;
-      try {
-        await api("DELETE", `/api/sites/${s.id}`);
-        sites = sites.filter((x) => x.id !== s.id);
-        // 自分用リストからも除く
-        const cur = getMySites().filter((n) => n !== s.name);
-        saveMySites(cur);
-        renderSiteMgmt();
-      } catch (err) { toast("削除失敗: " + err.message, true); }
-    });
-    row.append(cb, name, del);
+    // 削除も /genba/ アプリ独占。ここからは編集 UI を出さない (チェックボックスのみ)。
+    row.append(cb, name);
     list.appendChild(row);
   }
 }
@@ -1206,23 +1176,6 @@ $("editSaveBtn").addEventListener("click", async () => {
     refreshUnsortedCount();
   } catch (e) { toast("保存失敗: " + e.message, true); }
 });
-
-async function addNewSite() {
-  const name = $("newSiteInput").value.trim();
-  if (!name) return;
-  try {
-    const created = await api("POST", "/api/sites", { name });
-    if (!sites.find((s) => s.name === created.name)) sites.push(created);
-    // 新規追加は自動で自分用に入れる
-    let cur = getMySites();
-    if (cur.length === 0) cur = sites.map((x) => x.name); // 全 ON 状態を展開
-    if (!cur.includes(created.name)) cur.push(created.name);
-    saveMySites(cur.length === sites.length ? [] : cur);
-    $("newSiteInput").value = "";
-    renderSiteMgmt();
-    toast(`「${created.name}」追加`);
-  } catch (e) { toast("追加失敗: " + e.message, true); }
-}
 
 // ───────── Data ─────────
 async function loadData() {

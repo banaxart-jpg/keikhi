@@ -259,7 +259,7 @@ const TEMPLATE = `
 
   <template v-else>
     <div class="list">
-      <div v-if="sortedSites.length === 0" class="empty">現場が登録されてません。経費2 で追加してください。</div>
+      <div v-if="sortedSites.length === 0" class="empty">現場がまだ登録されていません。<a href="/genba/?return=/kaimono/" style="color:var(--accent); font-weight:700;">現場マスタで追加 →</a></div>
       <div v-else-if="filteredItems.length === 0" class="empty">「{{ activeSite === '*' ? '全て' : activeSite }}」に追加するものはまだ無し</div>
       <div v-for="item in filteredItems" :key="item.id" class="item-card" :class="{ checked: item.checked, open: expandedId === item.id }">
         <!-- collapsed row: 最小限の情報だけ -->
@@ -826,21 +826,21 @@ const App = {
       if (!confirm("駒込に材料 15件を投入します。1回限りの操作です。続けますか?")) return;
       seeding.value = true;
       try {
-        // 1) サイト「駒込」を Cloud SQL に確保 (既存ならサーバ側で UNIQUE 制約により無視 or 409)
+        // 1) サイト一覧を取得。「駒込」が登録済みでなければ /genba/ で先に作ってもらう。
+        //    (現場の追加は /genba/ アプリ独占ポリシー)
         try {
           const token = await user.value.getIdToken();
-          await fetch((window.API_BASE || "") + "/api/sites", {
-            method: "POST",
-            headers: { authorization: "Bearer " + token, "content-type": "application/json" },
-            body: JSON.stringify({ name: "駒込" }),
-          });
-          // 失敗してもサイトはすでに存在してる可能性。サイト一覧再取得
           const r = await fetch((window.API_BASE || "") + "/api/sites", {
             headers: { authorization: "Bearer " + token },
           });
           if (r.ok) {
             const rows = await r.json();
             sites.value = (Array.isArray(rows) ? rows : []).map((x) => x.name).filter(Boolean);
+            if (!sites.value.includes("駒込")) {
+              alert("『駒込』が現場マスタに登録されていません。先に /genba/ で作成してください。");
+              seeding.value = false;
+              return;
+            }
           }
         } catch (_) {}
         // 2) Firestore へ 15件を batch write

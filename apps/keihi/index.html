@@ -211,9 +211,6 @@ select.nm-field option { background: #e4e6ee; color: #42455e; }
     <div class="card">
       <div class="card-title">現場</div>
       <div class="site-grid" id="siteGrid"></div>
-      <div id="newSiteField" style="display:none;margin-top:10px;">
-        <input type="text" id="fNewSite" class="nm-field" placeholder="新しい現場名を入力">
-      </div>
     </div>
     <div class="card">
       <div class="card-title">基本情報</div>
@@ -265,12 +262,9 @@ select.nm-field option { background: #e4e6ee; color: #42455e; }
     </div>
     <select class="filter-select" id="filterSite"><option value="all">全現場</option></select>
     <select class="filter-select" id="filterMonth"><option value="all">全期間</option></select>
-    <div class="sites-manage-card">
-      <button class="sites-toggle" id="sitesToggleBtn" type="button">
-        <span>現場を管理・削除</span><span id="sitesArrow">▼</span>
-      </button>
-      <div id="sitesList" style="display:none"></div>
-    </div>
+    <a class="sites-manage-card" href="/genba/?return=/keihi/" style="display:block; padding:13px 18px; text-decoration:none; color:inherit; font-size:13px; font-weight:700;">
+      <span>現場の追加・編集・削除は</span> <span style="color:var(--accent,#2a8c3a)">現場マスタ →</span>
+    </a>
     <div class="sites-manage-card">
       <button class="sites-toggle" id="sheetToggleBtn" type="button">
         <span>スプレッドシート連携 <span id="sheetState" style="font-size:9px;color:var(--bulb2);text-shadow:0 0 6px var(--bulb-glow2);"></span></span><span id="sheetArrow">▼</span>
@@ -387,7 +381,6 @@ let payment = "現金";
 let selectedSite = "";
 let currentImgUrl = "";
 let scanResult = null;
-let sitesOpen = false;
 let editingId = null; // record id when editing an existing record (null = new)
 // 1枚の写真に複数の領収書が写っていたら、Gemini に全部抽出させて順送り確認。
 // 撮影トレイ: 1枚ずつ撮ってためる。「まとめて読取」で並列スキャン → 確認シートを順送り。
@@ -867,16 +860,13 @@ function renderSiteGrid() {
     });
     grid.appendChild(btn);
   }
-  const add = document.createElement("button");
-  add.type = "button";
+  // 新規追加は /genba/ アプリに集約。経費からは選ぶだけ。
+  const add = document.createElement("a");
+  add.href = "/genba/?return=/keihi/&newSite=true";
   add.className = "site-add-btn";
-  add.textContent = "＋ 追加";
-  add.addEventListener("click", () => {
-    $("newSiteField").style.display = "block";
-    $("fNewSite").focus();
-  });
+  add.textContent = "＋ 現場マスタで追加";
+  add.style.textDecoration = "none";
   grid.appendChild(add);
-  $("newSiteField").style.display = "none";
 }
 
 // ───────── Submit ─────────
@@ -885,12 +875,6 @@ $("submitBtn").addEventListener("click", async () => {
   btn.disabled = true;
   try {
     let site = selectedSite;
-    const newName = $("fNewSite").value.trim();
-    if (!site && newName) {
-      const created = await api("POST", "/api/sites", { name: newName });
-      sites.push(created);
-      site = created.name;
-    }
     if (!site) {
       toast("現場を選んでください", true);
       return;
@@ -950,12 +934,6 @@ $("submitBtn").addEventListener("click", async () => {
 $("backBtn").addEventListener("click", showBuyer);
 $("listAddBtn").addEventListener("click", showBuyer);
 $("csvBtn").addEventListener("click", downloadCSV);
-$("sitesToggleBtn").addEventListener("click", () => {
-  sitesOpen = !sitesOpen;
-  $("sitesList").style.display = sitesOpen ? "block" : "none";
-  $("sitesArrow").textContent = sitesOpen ? "▲" : "▼";
-});
-
 let sheetOpen = false;
 function refreshSheetState() {
   const u = getSheetUrl();
@@ -1068,31 +1046,6 @@ function renderList() {
     msel.appendChild(o);
   }
   msel.value = months.includes(mcur) || mcur === "all" ? mcur : "all";
-
-  // Sites manage
-  const sitesList = $("sitesList");
-  sitesList.textContent = "";
-  for (const s of sites) {
-    const row = document.createElement("div");
-    row.className = "site-manage-row";
-    const name = document.createElement("span");
-    name.className = "site-manage-name";
-    name.textContent = s.name;
-    const del = document.createElement("button");
-    del.className = "site-del-btn";
-    del.textContent = "削除";
-    del.addEventListener("click", async () => {
-      if (!confirm(`「${s.name}」を削除しますか？`)) return;
-      try {
-        await api("DELETE", `/api/sites/${s.id}`);
-        sites = sites.filter((x) => x.id !== s.id);
-        renderList();
-      } catch (e) { toast(e.message, true); }
-    });
-    row.appendChild(name);
-    row.appendChild(del);
-    sitesList.appendChild(row);
-  }
 
   // Records
   const list = $("recordList");

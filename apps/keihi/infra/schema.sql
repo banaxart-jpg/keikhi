@@ -7,6 +7,11 @@ CREATE TABLE IF NOT EXISTS sites (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- /genba/ アプリ (現場マスタ) 用に住所 + キーボックスを保持。
+-- 既存環境にも ensureSchema() が起動時に同 ALTER を実行 → 冪等。
+ALTER TABLE sites ADD COLUMN IF NOT EXISTS address TEXT;
+ALTER TABLE sites ADD COLUMN IF NOT EXISTS key_box TEXT;
+
 CREATE TABLE IF NOT EXISTS records (
   id         BIGSERIAL PRIMARY KEY,
   date       DATE NOT NULL,
