@@ -270,7 +270,7 @@ select.edit-input { background: var(--bg2) url("data:image/svg+xml,%3Csvg xmlns=
   </div>
   <p class="site-mgmt-intro"><b id="siteMgmtBuyer">名取</b> 用の現場を選んでください。チェック ON の現場だけが SORT 画面に出ます。</p>
   <div class="site-list" id="siteMgmtList"></div>
-  <a href="/genba/?return=/keihi2/" style="display:block; text-align:center; margin:18px 22px 0; padding:14px; font-size:13px; font-weight:700; color:var(--accent); text-decoration:none; border:1px dashed var(--accent); border-radius:14px;">+ 現場マスタで追加・編集 →</a>
+  <a href="/genba/?return=/keihi2/" style="display:block; text-align:center; margin:18px 22px 0; padding:14px; font-size:13px; font-weight:700; color:var(--accent); text-decoration:none; border:1px dashed var(--accent); border-radius:14px;">+ 現場アプリで追加・編集 →</a>
 </div>
 
 <!-- スワイプ仕分け画面 (メイン) -->
@@ -771,7 +771,7 @@ function createSwipeCard(r, isBack) {
   const addLink = document.createElement("a");
   addLink.href = "/genba/?return=/keihi2/&newSite=true";
   addLink.className = "sw-site new";
-  addLink.textContent = "+ 現場マスタで追加";
+  addLink.textContent = "+ 現場アプリで追加";
   addLink.style.textDecoration = "none";
   sitesRow.appendChild(addLink);
   // 削除

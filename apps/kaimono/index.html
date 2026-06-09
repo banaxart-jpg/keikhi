@@ -253,7 +253,7 @@ const TEMPLATE = `
 
   <template v-else>
     <div class="list">
-      <div v-if="sortedSites.length === 0" class="empty">現場がまだ登録されていません。<a href="/genba/?return=/kaimono/" style="color:var(--accent); font-weight:700;">現場マスタで追加 →</a></div>
+      <div v-if="sortedSites.length === 0" class="empty">現場がまだ登録されていません。<a href="/genba/?return=/kaimono/" style="color:var(--accent); font-weight:700;">現場アプリで追加 →</a></div>
       <div v-else-if="filteredItems.length === 0" class="empty">「{{ activeSite }}」に追加するものはまだ無し</div>
       <div v-for="item in filteredItems" :key="item.id" class="item-card" :class="{ checked: item.checked, open: expandedId === item.id }">
         <!-- collapsed row: 最小限の情報だけ -->
@@ -805,7 +805,7 @@ const App = {
             const rows = await r.json();
             sites.value = (Array.isArray(rows) ? rows : []).map((x) => x.name).filter(Boolean);
             if (!sites.value.includes("駒込")) {
-              alert("『駒込』が現場マスタに登録されていません。先に /genba/ で作成してください。");
+              alert("『駒込』が現場アプリに登録されていません。先に /genba/ で作成してください。");
               seeding.value = false;
               return;
             }
