@@ -586,7 +586,9 @@ const App = {
     // 取引行タップで編集モーダル表示。refId 必須 (無いと取引タブから特定できない)
     function openEdit(r) {
       if (!r.refId) {
-        editErr.value = "この行は refId が無いため編集できません (古いデータ)";
+        // 編集モーダル開かないと editErr の文言が見えないので page-level err で表示
+        err.value = "この行は refId が無いため編集できません (古いデータ)。新規入力の取引だけ編集可能";
+        setTimeout(() => { if (err.value.startsWith("この行は refId")) err.value = ""; }, 4000);
         return;
       }
       editRow.value = { ...r };
