@@ -496,7 +496,7 @@ const App = {
     const partner = ref("");
     const tasks = ref([]);
     const sites = ref([]);
-    const currentSite = ref("*");  // '*' = 全部, '' = 雑務, else = 現場名
+    const currentSite = ref("");  // '' = 雑務, else = 現場名
     const pickerOpenId = ref(null);
     const expandedId = ref(null);
     const modalOpen = ref(false);
@@ -600,16 +600,36 @@ const App = {
 
     // ───── computeds ─────
     const meLabel = computed(() => nameOf(me.value) + (partner.value ? `（相手: ${nameOf(partner.value)}）` : ""));
-    const tabs = computed(() => [
-      { key: "*", label: "全部" },
-      { key: "", label: "雑務" },
-      ...sites.value.map((s) => ({ key: s, label: s })),
-    ]);
-    const currentLabel = computed(() =>
-      currentSite.value === "*" ? "全部" : (currentSite.value || "雑務")
-    );
+
+    // 現場タブの MRU (Most Recently Used) を localStorage で persist。
+    // ユーザー単位なので me が確定してから読み書きする。「雑務」 ("") もタブとして
+    // 並び替え対象。一度も開いてない現場は元の sites 順で末尾に。
+    const mruKey = computed(() => `task_site_mru_${(me.value || "anon").toLowerCase()}`);
+    const mru = ref({});
+    function loadMru() {
+      try { mru.value = JSON.parse(localStorage.getItem(mruKey.value) || "{}") || {}; }
+      catch (_) { mru.value = {}; }
+    }
+    function bumpMru(key) {
+      mru.value = { ...mru.value, [key]: Date.now() };
+      try { localStorage.setItem(mruKey.value, JSON.stringify(mru.value)); } catch (_) {}
+    }
+
+    const tabs = computed(() => {
+      const idx = new Map();
+      idx.set("", 0);   // 雑務 を「現場」リストの先頭扱い
+      sites.value.forEach((s, i) => idx.set(s, i + 1));
+      const all = ["", ...sites.value];
+      // MRU 降順、未開封は元順で末尾。
+      all.sort((a, b) => {
+        const ra = mru.value[a] || 0, rb = mru.value[b] || 0;
+        if (ra !== rb) return rb - ra;
+        return (idx.get(a) ?? 1e9) - (idx.get(b) ?? 1e9);
+      });
+      return all.map((k) => ({ key: k, label: k || "雑務" }));
+    });
+    const currentLabel = computed(() => currentSite.value || "雑務");
     function tabCount(key) {
-      if (key === "*") return tasks.value.filter((t) => t.status === "active").length;
       return tasks.value.filter((t) => (t.site || "") === key && t.status === "active").length;
     }
     function sortKey(t) {
@@ -630,9 +650,7 @@ const App = {
     }
     const sortedTasks = computed(() => {
       const visible = tasks.value.filter((t) => !isArchived(t));
-      const filtered = currentSite.value === "*"
-        ? visible
-        : visible.filter((t) => (t.site || "") === currentSite.value);
+      const filtered = visible.filter((t) => (t.site || "") === currentSite.value);
       return filtered.slice().sort(cmp);
     });
     // アーカイブ一覧: archived task を JST 日付でグルーピング (kaimono と同形)
@@ -858,6 +876,7 @@ const App = {
     // ───── アクション ─────
     function onTabClick(key) {
       currentSite.value = key;
+      bumpMru(key);
       expandedId.value = null;
       pickerOpenId.value = null;
     }
@@ -909,7 +928,7 @@ const App = {
       form.deadline = t && t.deadline ? String(t.deadline).slice(0, 10) : "";
       form.who = t ? posOf(t) : "left";
       form.priority = t ? (Number(t.priority) || 2) : 2;
-      form.site = t ? (t.site || "") : (currentSite.value === "*" ? "" : currentSite.value);
+      form.site = t ? (t.site || "") : currentSite.value;
       modalOpen.value = true;
       nextTick(() => titleInput.value?.focus());
     }
@@ -983,6 +1002,7 @@ const App = {
     async function boot(email) {
       me.value = (email || "").toLowerCase();
       partner.value = PARTNER_OF[me.value] || "";
+      loadMru();  // me 確定後に MRU を localStorage から復元 → tabs computed に反映
       // 現場一覧
       try {
         const token = fbAuth?.currentUser ? await fbAuth.currentUser.getIdToken() : null;
@@ -994,6 +1014,9 @@ const App = {
           sites.value = (Array.isArray(sj) ? sj : []).map((s) => s.name).filter(Boolean);
         }
       } catch (_) { sites.value = []; }
+      // 初期 currentSite: MRU 最上位 (= 最後に開いた現場)。無ければ "" (雑務)。
+      const top = tabs.value[0];
+      if (top) currentSite.value = top.key;
       // Firestore リアルタイム購読。tasks コレクションは Firestore ルール側で
       // 社内 3 アカウントに既に絞ってあるので、ここでは追加フィルタは行わない。
       // (前は fe/te が自分か "both" のものだけ残していたが、別デバイスで role を
@@ -1021,6 +1044,7 @@ const App = {
       const urlSite = new URLSearchParams(location.search).get("site") || "";
       if (urlSite) {
         currentSite.value = urlSite;
+        bumpMru(urlSite);  // 遷移してきた現場も MRU に積む
         setTimeout(() => openModal(null), 200);
         // URL を素の /task/ に戻す (リロード / 戻り操作で毎回モーダル auto-open
         // しないように + PWA 的に履歴を綺麗にする)

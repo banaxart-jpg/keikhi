@@ -634,6 +634,8 @@ async function ensureSchema() {
     // sites: /genba/ アプリ用に住所 + キーボックスメモを保持
     await p.query("ALTER TABLE sites ADD COLUMN IF NOT EXISTS address TEXT");
     await p.query("ALTER TABLE sites ADD COLUMN IF NOT EXISTS key_box TEXT");
+    // 「会社」サイト (オフィス・会社全般の手配/タスク用) を常時用意
+    await p.query("INSERT INTO sites (name) VALUES ('会社') ON CONFLICT (name) DO NOTHING");
     await p.query(`
       CREATE TABLE IF NOT EXISTS tasks (
         id TEXT PRIMARY KEY,

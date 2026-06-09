@@ -240,15 +240,9 @@ const TEMPLATE = `
 
     <div class="tabs">
       <button
-        class="tab" :class="{ on: activeSite === '*' }"
-        @click="activeSite = '*'"
-      >
-        全て<span class="count" v-if="countBySite['*']">{{ countBySite['*'] }}</span>
-      </button>
-      <button
         v-for="s in sortedSites" :key="s"
         class="tab" :class="{ on: activeSite === s }"
-        @click="activeSite = s"
+        @click="selectSite(s)"
       >
         {{ s }}<span class="count" v-if="countBySite[s]">{{ countBySite[s] }}</span>
       </button>
@@ -260,13 +254,12 @@ const TEMPLATE = `
   <template v-else>
     <div class="list">
       <div v-if="sortedSites.length === 0" class="empty">現場がまだ登録されていません。<a href="/genba/?return=/kaimono/" style="color:var(--accent); font-weight:700;">現場マスタで追加 →</a></div>
-      <div v-else-if="filteredItems.length === 0" class="empty">「{{ activeSite === '*' ? '全て' : activeSite }}」に追加するものはまだ無し</div>
+      <div v-else-if="filteredItems.length === 0" class="empty">「{{ activeSite }}」に追加するものはまだ無し</div>
       <div v-for="item in filteredItems" :key="item.id" class="item-card" :class="{ checked: item.checked, open: expandedId === item.id }">
         <!-- collapsed row: 最小限の情報だけ -->
         <div class="item-row" @click="toggleDetail(item)">
           <button class="check" @click.stop="toggle(item)" :style="item.checked ? { background: colorForEmail(item.checkedBy), color: 'white', boxShadow: '3px 3px 8px ' + colorForEmail(item.checkedBy) + '55' } : null">{{ item.checked ? 'check' : '' }}</button>
           <div class="item-name">
-            <span v-if="activeSite === '*' && item.site" class="site-chip-mini">{{ item.site }}</span>
             {{ displayName(item) }}<span v-if="item.qty" class="qty">× {{ item.qty }} {{ item.unit || '' }}</span>
           </div>
           <span class="chev">expand_more</span>
@@ -341,15 +334,10 @@ const TEMPLATE = `
   <!-- 入力モーダル: 共通 BottomSheet (drag-to-close + 上ドラッグで詳細展開) -->
   <bottom-sheet v-model="showInput" expandable v-model:expanded="inputExpanded">
     <form @submit.prevent="add" class="input-form">
-      <!-- 全てタブ中だけ現場 select が必須で出る (特定タブ中は activeSite 直接使うので不要) -->
-      <select v-if="activeSite === '*'" class="site-sel" v-model="newSite" :disabled="adding">
-        <option value="">現場を選んでください</option>
-        <option v-for="s in sortedSites" :key="s" :value="s">{{ s }}</option>
-      </select>
       <div class="input-row">
-        <input class="name" v-model="newName" :placeholder="inputPlaceholder" :disabled="adding || !formSite" autocomplete="off" ref="nameInput">
-        <input class="qty" v-model="newQty" type="number" min="1" placeholder="数" :disabled="adding || !formSite">
-        <select class="unit" v-model="newUnit" :disabled="adding || !formSite">
+        <input class="name" v-model="newName" :placeholder="inputPlaceholder" :disabled="adding || !activeSite" autocomplete="off" ref="nameInput">
+        <input class="qty" v-model="newQty" type="number" min="1" placeholder="数" :disabled="adding || !activeSite">
+        <select class="unit" v-model="newUnit" :disabled="adding || !activeSite">
           <option>個</option>
           <option>箱</option>
           <option>セット</option>
@@ -378,8 +366,8 @@ const TEMPLATE = `
           <option value="">タスクなし</option>
           <option v-for="t in tasksForCurrentSite" :key="t.id" :value="t.id">{{ t.title }}</option>
         </select>
-        <a v-else-if="formSite" :href="'/task/?site=' + encodeURIComponent(formSite)" class="add-task-link">+ タスク作成</a>
-        <button class="add" type="submit" :disabled="!newName.trim() || adding || !formSite">{{ adding ? "追加中…" : "+ 追加" }}</button>
+        <a v-else-if="activeSite" :href="'/task/?site=' + encodeURIComponent(activeSite)" class="add-task-link">+ タスク作成</a>
+        <button class="add" type="submit" :disabled="!newName.trim() || adding || !activeSite">{{ adding ? "追加中…" : "+ 追加" }}</button>
       </div>
     </form>
   </bottom-sheet>
@@ -432,7 +420,6 @@ const App = {
     const newUnit = ref("個");         // デフォルト 個
     const newCategory = ref(null);   // "材料" | "工具" | null
     const newTaskId = ref("");
-    const newSite = ref("");          // 全てタブ中の追加先現場 (specific タブ中は activeSite を使う)
     const tasks = ref([]);           // /tasks 全件 (社内 ALLOWED_EMAILS のみ購読成功)
     // URL ?site=... ?task=... で初期タブ + タスク pre-select (task アプリからの遷移)
     const urlParams = new URLSearchParams(location.search);
@@ -470,24 +457,24 @@ const App = {
     let unsubscribe = null;
     let unsubscribeTasks = null;
 
-    // 各サイトの最終アクティビティ時刻 (createdAt or checkedAt の max)。
-    // 値が無いサイトは 0 → アルファベット順で末尾。
-    function activityScore(siteName) {
-      let mx = 0;
-      for (const it of items.value) {
-        if (it.site !== siteName) continue;
-        const c = it.createdAt?.toMillis?.() || 0;
-        const k = it.checkedAt?.toMillis?.() || 0;
-        const m = Math.max(c, k);
-        if (m > mx) mx = m;
-      }
-      return mx;
+    // 現場タブの並び順: 「最後に開いた現場」が一番前 (MRU)。
+    // ユーザーがタブをタップした時刻を localStorage に保存 → 降順ソート。
+    // 一度も開いたことが無いサイトは元の DB 順で末尾に並ぶ。
+    const mruKey = computed(() => `kaimono_site_mru_${(user.value?.email || "anon").toLowerCase()}`);
+    const mru = ref({});  // { siteName: lastOpenedMs }
+    function loadMru() {
+      try { mru.value = JSON.parse(localStorage.getItem(mruKey.value) || "{}") || {}; }
+      catch (_) { mru.value = {}; }
     }
-    // サイト並び替え: activity desc → 元の DB 順 (= keihi2 の表示順 維持)
+    function selectSite(s) {
+      activeSite.value = s;
+      mru.value = { ...mru.value, [s]: Date.now() };
+      try { localStorage.setItem(mruKey.value, JSON.stringify(mru.value)); } catch (_) {}
+    }
     const sortedSites = computed(() => {
       const idx = new Map(sites.value.map((s, i) => [s, i]));
       return sites.value.slice().sort((a, b) => {
-        const ra = activityScore(a), rb = activityScore(b);
+        const ra = mru.value[a] || 0, rb = mru.value[b] || 0;
         if (ra !== rb) return rb - ra;
         return idx.get(a) - idx.get(b);
       });
@@ -510,7 +497,7 @@ const App = {
       items.value
         .filter((i) => {
           if (isArchived(i)) return false;
-          return activeSite.value === "*" || i.site === activeSite.value;
+          return i.site === activeSite.value;
         })
         // 未チェック先、済みを下に。同じ状態内は createdAt desc (新しい順)。
         .sort((a, b) => {
@@ -523,41 +510,24 @@ const App = {
 
     const countBySite = computed(() => {
       const m = {};
-      let total = 0;
       for (const s of sites.value) m[s] = 0;
       for (const it of items.value) {
         if (it.checked) continue;
         if (isArchived(it)) continue;
         if (it.site in m) m[it.site]++;
-        total++;
       }
-      m["*"] = total;
       return m;
     });
 
-    // フォーム用の effective site: 全てタブ中は newSite (ユーザが select で選ぶ)、
-    // 特定現場タブ中は activeSite (今まで通り、自動)
-    const formSite = computed(() =>
-      activeSite.value === "*" ? newSite.value : activeSite.value
+    const inputPlaceholder = computed(() =>
+      activeSite.value ? `「${activeSite.value}」に追加…` : "現場なし"
     );
-    const inputPlaceholder = computed(() => {
-      if (activeSite.value === "*") {
-        return newSite.value ? `「${newSite.value}」に追加…` : "現場を選んで追加…";
-      }
-      return activeSite.value ? `「${activeSite.value}」に追加…` : "現場なし";
-    });
     // hasChecked / checkedCount は「まだアーカイブされてない済み」のみ対象
     const hasChecked = computed(() =>
-      items.value.some((i) => {
-        if (!i.checked || isArchived(i)) return false;
-        return activeSite.value === "*" || i.site === activeSite.value;
-      })
+      items.value.some((i) => !isArchived(i) && i.checked && i.site === activeSite.value)
     );
     const checkedCount = computed(() =>
-      items.value.filter((i) => {
-        if (!i.checked || isArchived(i)) return false;
-        return activeSite.value === "*" || i.site === activeSite.value;
-      }).length
+      items.value.filter((i) => !isArchived(i) && i.checked && i.site === activeSite.value).length
     );
 
     // アーカイブ一覧: 全現場・全 archived item を日付 (Asia/Tokyo) でグルーピング
@@ -595,10 +565,9 @@ const App = {
     function displayNameOf(email) {
       return (email || "").split("@")[0] || "?";
     }
-    // タスク関連: フォーム対象現場 (formSite) + アクティブ状態のものだけ select に並べる
-    // 全てタブ中は newSite が選ばれてから候補が出る (空ならゼロ件)
+    // タスク関連: 現在の現場 + アクティブ状態のタスクだけ select に並べる
     const tasksForCurrentSite = computed(() =>
-      tasks.value.filter((t) => (t.site || "") === formSite.value && t.status === "active")
+      tasks.value.filter((t) => (t.site || "") === activeSite.value && t.status === "active")
     );
     function taskTitle(taskId) {
       if (!taskId) return "";
@@ -630,8 +599,7 @@ const App = {
       if (!db || !user.value) return;
       const name = newName.value.trim();
       if (!name || adding.value) return;
-      // 全てタブ中は newSite (= formSite) が必須。未選択なら現場 select にフォーカス促す
-      const targetSite = formSite.value;
+      const targetSite = activeSite.value;
       if (!targetSite) {
         err.value = "現場を選んでください";
         return;
@@ -890,6 +858,7 @@ const App = {
             return;
           }
           user.value = u;
+          loadMru();   // ユーザー単位の現場 MRU を読み込み (sortedSites 並び順に反映)
           // 1) /api/sites (Cloud SQL) から現場一覧。keihi2 と同じソース。
           try {
             const token = await u.getIdToken();
@@ -907,10 +876,10 @@ const App = {
           unsubscribe = onSnapshot(q, (snap) => {
             items.value = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
             // 初回購読完了時、まだ activeSite 未選択なら URL ?site= を優先、
-            // 無ければ最もアクティブな site を選ぶ
+            // 無ければ MRU 最上位 (= 最後に開いた現場) を選ぶ
             if (!activeSite.value) {
               if (urlSite && sites.value.includes(urlSite)) {
-                activeSite.value = urlSite;
+                selectSite(urlSite);  // URL からの遷移も MRU に積む
               } else if (sortedSites.value.length) {
                 activeSite.value = sortedSites.value[0];
               }
@@ -932,7 +901,7 @@ const App = {
                   urlTaskHandled = true;
                   newTaskId.value = urlTaskId;
                   if (task.site && sites.value.includes(task.site)) {
-                    activeSite.value = task.site;
+                    selectSite(task.site);
                   }
                   showInput.value = true;
                 }
@@ -954,7 +923,8 @@ const App = {
 
     return {
       sites, sortedSites, activeSite, items, ready, err,
-      newName, newQty, newUnit, newCategory, newTaskId, newSite, formSite,
+      newName, newQty, newUnit, newCategory, newTaskId,
+      selectSite,
       tasks, tasksForCurrentSite, taskTitle,
       adding, seeding, showInput,
       inputExpanded, newNote, newFile, newPreview, onNewFilePick,

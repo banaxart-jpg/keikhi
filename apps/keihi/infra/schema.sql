@@ -32,7 +32,7 @@ CREATE INDEX IF NOT EXISTS records_date_idx ON records (date DESC);
 CREATE INDEX IF NOT EXISTS records_site_idx ON records (site);
 
 INSERT INTO sites (name) VALUES
-  ('西新井焼肉屋'), ('宇佐美別荘'), ('倉庫改装'), ('共通')
+  ('西新井焼肉屋'), ('宇佐美別荘'), ('倉庫改装'), ('共通'), ('会社')
 ON CONFLICT (name) DO NOTHING;
 
 -- ──────────────────────────────────────────
