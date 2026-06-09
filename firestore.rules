@@ -63,6 +63,17 @@ service cloud.firestore {
         ];
     }
 
+    // 現場メモ: 社内 3 アカウント限定。現場 × 日付 ごとに 1 ドキュメント。
+    // doc id = `${siteName}__${YYYY-MM-DD}`。realtime 同期で名取↔小西の共同編集。
+    match /genba_memos/{memoId} {
+      allow read, write: if request.auth != null
+        && request.auth.token.email in [
+          'info@banax.tokyo',
+          'konishi0221@gmail.com',
+          'banaxart@gmail.com'
+        ];
+    }
+
     // それ以外は禁止 (明示)
     match /{document=**} {
       allow read, write: if false;
