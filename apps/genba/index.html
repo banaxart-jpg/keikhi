@@ -197,11 +197,15 @@ function render() {
   }
   list.innerHTML = "";
   for (const s of sites) {
+    // 注意: id は PostgreSQL BIGSERIAL → pg ライブラリが文字列で返す。
+    // 数値化すると行展開 / 編集 / 削除ボタンの id 比較が一致しなくなるので
+    // 全て String(...) で揃える。
+    const sid = String(s.id);
     const card = document.createElement("div");
-    card.className = "card" + (openId === s.id ? " open" : "");
-    const isOpen = openId === s.id;
+    card.className = "card" + (openId === sid ? " open" : "");
+    const isOpen = openId === sid;
     card.innerHTML = `
-      <div class="row" data-id="${s.id}">
+      <div class="row" data-id="${sid}">
         <span class="icon icon-lead">domain</span>
         <div class="name">${escapeHtml(s.name)}</div>
         <span class="icon chev">expand_more</span>
@@ -217,8 +221,8 @@ function render() {
             <span class="val ${s.keyBox ? "" : "empty-val"}">${s.keyBox ? escapeHtml(s.keyBox) : "未入力"}</span>
           </div>
           <div class="actions">
-            <button class="act-btn edit" data-act="edit" data-id="${s.id}">編集</button>
-            <button class="act-btn del" data-act="del" data-id="${s.id}">削除</button>
+            <button class="act-btn edit" data-act="edit" data-id="${sid}">編集</button>
+            <button class="act-btn del" data-act="del" data-id="${sid}">削除</button>
           </div>
         </div>
       ` : ""}
@@ -230,8 +234,8 @@ function render() {
 $("list").addEventListener("click", (e) => {
   const actBtn = e.target.closest("[data-act]");
   if (actBtn) {
-    const id = Number(actBtn.dataset.id);
-    const s = sites.find((x) => x.id === id);
+    const id = actBtn.dataset.id;   // 文字列のまま
+    const s = sites.find((x) => String(x.id) === id);
     if (!s) return;
     if (actBtn.dataset.act === "edit") openEditModal(s);
     if (actBtn.dataset.act === "del") onDelete(s);
@@ -239,7 +243,7 @@ $("list").addEventListener("click", (e) => {
   }
   const row = e.target.closest(".row");
   if (!row) return;
-  const id = Number(row.dataset.id);
+  const id = row.dataset.id;
   openId = openId === id ? null : id;
   render();
 });
