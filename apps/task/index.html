@@ -1002,8 +1002,13 @@ const App = {
     async function boot(email) {
       me.value = (email || "").toLowerCase();
       partner.value = PARTNER_OF[me.value] || "";
-      loadMru();  // me 確定後に MRU を localStorage から復元 → tabs computed に反映
-      // 現場一覧
+      try { loadMru(); } catch (_) { /* localStorage 不可でも続行 */ }
+      // ★ 認証は通っているので signedIn は即時 true にして main UI を出す。
+      //    残りはバックグラウンドでデータ取得 → reactive に埋まる。
+      //    こうしておかないと、サイト fetch やサブスク登録途中で何か throw した時に
+      //    両 v-if が外れて画面が真っ白になる事故が起きる。
+      signedIn.value = true;
+      // 現場一覧 (失敗しても tabs は雑務だけ出る)
       try {
         const token = fbAuth?.currentUser ? await fbAuth.currentUser.getIdToken() : null;
         const r = await fetch(API_BASE + "/api/sites", {
@@ -1013,41 +1018,32 @@ const App = {
           const sj = await r.json();
           sites.value = (Array.isArray(sj) ? sj : []).map((s) => s.name).filter(Boolean);
         }
-      } catch (_) { sites.value = []; }
+      } catch (e) { console.warn("[task] sites fetch failed", e); sites.value = []; }
       // 初期 currentSite: MRU 最上位 (= 最後に開いた現場)。無ければ "" (雑務)。
-      const top = tabs.value[0];
-      if (top) currentSite.value = top.key;
-      // Firestore リアルタイム購読。tasks コレクションは Firestore ルール側で
-      // 社内 3 アカウントに既に絞ってあるので、ここでは追加フィルタは行わない。
-      // (前は fe/te が自分か "both" のものだけ残していたが、別デバイスで role を
-      //  自分以外側 → 自分側に切替えると元のデバイスから消える事故が起きた)
-      unsubscribeTasks = onSnapshot(
-        collection(fbDb, "tasks"),
-        (snap) => {
-          tasks.value = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-        },
-        (e) => { console.warn("[task] snapshot failed", e); }
-      );
-      // 手配リスト購読 (taskId が付いてるものだけ表示用に保持)
-      unsubscribeLinked = onSnapshot(
-        collection(fbDb, "shopping_items"),
-        (snap) => {
-          // 全アイテム保持。linkedFor は taskId 一致、availableFor は同現場で
-          // このタスクに未紐付け (taskId 無 or 別タスク) をフィルタする
-          linkedItems.value = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-        },
-        (e) => { console.warn("[task] shopping_items snapshot failed", e); }
-      );
-      signedIn.value = true;
+      try {
+        const top = tabs.value[0];
+        if (top && !currentSite.value) currentSite.value = top.key;
+      } catch (e) { console.warn("[task] tabs init failed", e); }
+      // Firestore リアルタイム購読 (失敗しても UI は維持)
+      try {
+        unsubscribeTasks = onSnapshot(
+          collection(fbDb, "tasks"),
+          (snap) => { tasks.value = snap.docs.map((d) => ({ id: d.id, ...d.data() })); },
+          (e) => { console.warn("[task] tasks snapshot failed", e); }
+        );
+        unsubscribeLinked = onSnapshot(
+          collection(fbDb, "shopping_items"),
+          (snap) => { linkedItems.value = snap.docs.map((d) => ({ id: d.id, ...d.data() })); },
+          (e) => { console.warn("[task] shopping_items snapshot failed", e); }
+        );
+      } catch (e) { console.warn("[task] subscribe failed", e); }
       setTimeout(setLastSeen, 1500);
       // URL ?site=X 受け取り (kaimono からの遷移): タブ切替 + 新規モーダル自動 open
       const urlSite = new URLSearchParams(location.search).get("site") || "";
       if (urlSite) {
         currentSite.value = urlSite;
-        bumpMru(urlSite);  // 遷移してきた現場も MRU に積む
+        try { bumpMru(urlSite); } catch (_) {}
         setTimeout(() => openModal(null), 200);
-        // URL を素の /task/ に戻す (リロード / 戻り操作で毎回モーダル auto-open
-        // しないように + PWA 的に履歴を綺麗にする)
         history.replaceState(null, "", "/task/");
       }
     }
@@ -1076,8 +1072,15 @@ const App = {
             if (entered) return;
             entered = true;
             sessionStorage.removeItem("authBounce");
-            await boot((user.email || "").toLowerCase());
-            authChecked.value = true;  // boot 完了後に表示解禁
+            // boot が throw すると authChecked = true が呼ばれず両 v-if が外れて
+            // ページが完全に真っ白になる (見たことある事故)。必ず authChecked を立てる。
+            try {
+              await boot((user.email || "").toLowerCase());
+            } catch (e) {
+              console.error("[task] boot failed:", e);
+              signinErr.value = "起動失敗: " + (e?.message || e);
+            }
+            authChecked.value = true;
             return;
           }
           if (sessionStorage.getItem("authBounce")) {
