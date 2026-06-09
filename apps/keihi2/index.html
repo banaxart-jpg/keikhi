@@ -1191,6 +1191,11 @@ async function loadData() {
 async function boot() {
   await loadData();
   refreshUnsortedCount();
+  // /genba/ から戻ってきたら ?site= が付くが、経費2 は撮影フローなので
+  // ここではプリセレクトせず、URL だけ綺麗にする
+  if (new URLSearchParams(location.search).get("site")) {
+    history.replaceState({}, "", location.pathname);
+  }
   if (buyer) { $("buyerTag").textContent = buyer; show("shootScreen"); }
   else show("buyerScreen");
 }

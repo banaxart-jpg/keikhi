@@ -1182,7 +1182,14 @@ async function boot() {
   }
   showMain();
   // 経費アプリと共有の現場リストは非同期で取得（取れなくても起動はする）
-  loadSites();
+  await loadSites();
+  // ?site=<name>: /genba/ で新規追加して戻ってきた → 入力フォームで pre-select
+  const urlSite = new URLSearchParams(location.search).get("site");
+  if (urlSite && sites.some((s) => s.name === urlSite)) {
+    selectedSites = new Set([urlSite]);
+    if (typeof renderSiteGrid === "function") renderSiteGrid();
+    history.replaceState({}, "", location.pathname);
+  }
 }
 </script>
 </body>

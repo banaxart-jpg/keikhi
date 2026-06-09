@@ -348,6 +348,12 @@ async function idToken() {
           return;
         } catch (e) { console.warn("view param failed", e); }
       }
+      // ?site=<name>: /genba/ で新規追加して戻ってきた → 入力フォームで pre-select
+      const urlSite = new URLSearchParams(location.search).get("site");
+      if (urlSite && sites.some((s) => s.name === urlSite)) {
+        selectedSite = urlSite;
+        history.replaceState({}, "", location.pathname); // URL 綺麗に
+      }
       showBuyer();
     }
 
