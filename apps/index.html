@@ -194,6 +194,17 @@ async function loadPrefs(user) {
         hidden: Array.isArray(p.hidden) ? p.hidden : [],
         sort: typeof p.sort === "string" ? p.sort : "default",
       };
+      // 新しく追加したアプリ (= 保存済み order に含まれてない id) は先頭に挿入。
+      // genba みたいに「ユーザーが一番使う場所に出したい」新参を確実に上に出すため。
+      // すでに APPS 配列で先頭順なら APPS 内の順序で。
+      if (prefs.order.length) {
+        const have = new Set(prefs.order);
+        const missing = APPS.map((a) => a.id).filter((id) => !have.has(id));
+        if (missing.length) {
+          prefs.order = [...missing, ...prefs.order];
+          savePrefs();
+        }
+      }
       renderGrid();
     }
   } catch (e) { console.warn("loadPrefs:", e?.message || e); }
