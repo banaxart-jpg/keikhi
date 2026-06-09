@@ -27,6 +27,13 @@ body { font-family: 'Outfit', -apple-system, sans-serif; font-weight: 400; backg
 .top-bar { position: absolute; top: 0; left: 0; right: 0; display: flex; justify-content: space-between; align-items: center; padding: 54px 20px 0; }
 .pill-btn { padding: 9px 18px; border-radius: 30px; font-size: 12px; font-weight: 700; cursor: pointer; border: none; color: var(--text2); font-family: 'Outfit', sans-serif; background: var(--bg); box-shadow: 5px 5px 12px var(--sd), -5px -5px 12px var(--sl), 2px 2px 4px var(--sd2); transition: all 0.12s; }
 .pill-btn:active { box-shadow: inset 3px 3px 8px var(--sd), inset -3px -3px 8px var(--sl); transform: scale(0.96); }
+.sync-btn { display: inline-flex; align-items: center; gap: 6px; padding: 9px 14px; }
+.sync-btn:disabled { opacity: 0.6; cursor: wait; }
+.sync-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #9ca3af; transition: background 200ms ease; flex-shrink: 0; }
+.sync-dot.synced { background: #7c9d75; box-shadow: 0 0 6px rgba(124,157,117,0.5); }
+.sync-dot.syncing { background: #b89366; animation: pulse 1s ease-in-out infinite; }
+.sync-dot.error { background: #b5766a; }
+@keyframes pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.5; transform: scale(0.7); } }
 .hint-text { font-size: 11px; letter-spacing: 0.24em; color: var(--text3); text-transform: uppercase; font-weight: 700; }
 
 /* メイン画面 */
@@ -165,6 +172,9 @@ select.nm-field { background: var(--bg2) url("data:image/svg+xml,%3Csvg xmlns='h
 <div id="mainScreen">
   <div class="top-bar">
     <a class="pill-btn" href="/" style="text-decoration:none; display:inline-block;">← トップ</a>
+    <button class="pill-btn sync-btn" id="syncBtn" type="button" title="クラウド同期">
+      <span class="sync-dot" id="syncDot"></span> <span id="syncLabel">同期</span>
+    </button>
     <button class="pill-btn" id="listBtn" type="button">一覧 <span id="mainCount">0</span>件 →</button>
   </div>
   <div class="dir-row">
@@ -408,10 +418,52 @@ async function syncBillsToFirestore() {
   await batch.commit();
 }
 
+// 同期ステータス UI 更新 (色付きドット + ラベル)
+function setSyncStatus(state, label) {
+  const dot = $("syncDot");
+  const lbl = $("syncLabel");
+  const btn = $("syncBtn");
+  if (!dot || !lbl) return;
+  dot.classList.remove("synced", "syncing", "error");
+  if (state) dot.classList.add(state);
+  if (label) lbl.textContent = label;
+  if (btn) btn.disabled = (state === "syncing");
+}
+
+// 手動同期: 強制的に localStorage → Firestore (差分のみ) 再送信 + 最新 snapshot 取り直し。
+async function manualSync() {
+  if (!db) {
+    setSyncStatus("error", "未接続");
+    return;
+  }
+  try {
+    setSyncStatus("syncing", "同期中…");
+    // 念のため migration 済みフラグを一旦剥がして再送信できるように
+    localStorage.removeItem(STORAGE_KEY + "_migrated");
+    // 現在の bills (Firestore からの最新) と localStorage を再比較して差分を送信
+    const localBillsRaw = JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]");
+    if (localBillsRaw.length > 0) {
+      const remoteIds = new Set(lastSnapshotIds);
+      const localOnly = localBillsRaw.filter((b) => b?.id && !remoteIds.has(b.id));
+      if (localOnly.length > 0) {
+        const batch = writeBatch(db);
+        for (const b of localOnly) batch.set(doc(db, SEIKYU_COL, b.id), b);
+        await batch.commit();
+      }
+    }
+    // bills は onSnapshot で更新されるが、即時に setSyncStatus("synced") を出すため少し待つ
+    setTimeout(() => setSyncStatus("synced", "同期済"), 600);
+  } catch (e) {
+    console.warn("[seikyu] manual sync failed:", e?.message || e);
+    setSyncStatus("error", "失敗");
+  }
+}
+
 // 認証完了後に呼ぶ。Firestore 接続 → 旧 localStorage の1回限り移行 → 購読開始。
 async function setupFirestoreSync() {
   if (!fbAuth?.currentUser) return;
   if (db) return;   // 二重初期化防止
+  setSyncStatus("syncing", "接続中");
   try {
     db = getFirestore(fbAuth.app);
     // local だけにある請求書を Firestore へ追加するため、購読開始前に snapshot を取っておく。
@@ -445,13 +497,18 @@ async function setupFirestoreSync() {
 
       lastSnapshotIds = remoteIds;
       bills = remoteBills;
+      setSyncStatus("synced", `同期済 ${bills.length}件`);
       // 開いてる画面を再描画 (リスト / メイン / 確認)
       try { renderList(); } catch (_) {}
       try { renderMain?.(); } catch (_) {}
     }, (err) => {
       console.warn("[seikyu] firestore subscription error:", err?.message || err);
+      setSyncStatus("error", "失敗");
     });
-  } catch (e) { console.warn("[seikyu] setupFirestoreSync failed:", e?.message || e); }
+  } catch (e) {
+    console.warn("[seikyu] setupFirestoreSync failed:", e?.message || e);
+    setSyncStatus("error", "失敗");
+  }
 }
 
 // ───────── Screens ─────────
@@ -554,6 +611,7 @@ $("srcFileBtn").addEventListener("click", () => {
 $("fileInputCam").addEventListener("change", (ev) => handleFile(ev.target));
 $("fileInputAny").addEventListener("change", (ev) => handleFile(ev.target));
 $("listBtn").addEventListener("click", showList);
+$("syncBtn")?.addEventListener("click", manualSync);
 
 async function handleFile(input) {
   const file = input.files?.[0];
