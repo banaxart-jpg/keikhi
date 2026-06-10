@@ -46,9 +46,8 @@ body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); 
 .app-desc { font-size: 11px; color: var(--text2); font-weight: 600; line-height: 1.5; }
 .app-badge { position: absolute; top: 12px; right: 12px; font-size: 9px; font-weight: 800; letter-spacing: 0.1em; color: var(--text3); }
 
-/* ───── 編集モード (iOS 風 jiggle + ドラッグ並べ替え + × で非表示) ───── */
-body.edit-mode .app-card { animation: jiggle 0.25s ease-in-out infinite alternate; cursor: grab; }
-body.edit-mode .app-card.is-dragging { animation: none; opacity: 0.4; transform: scale(0.96); transition: none; cursor: grabbing; }
+/* ───── 編集モード (iOS 風 jiggle + × で非表示。並び替えは MRU 自動) ───── */
+body.edit-mode .app-card { animation: jiggle 0.25s ease-in-out infinite alternate; cursor: default; }
 body.edit-mode .app-card.hidden-tile { opacity: 0.42; filter: grayscale(0.6); animation-delay: 0.12s; }
 @keyframes jiggle {
   from { transform: rotate(-0.7deg); }
@@ -65,10 +64,6 @@ body.edit-mode .app-card.hidden-tile { opacity: 0.42; filter: grayscale(0.6); an
 body.edit-mode .app-card .hide-btn { display: flex; }
 body.edit-mode .app-card { user-select: none; -webkit-user-select: none; }
 body.edit-mode #editBtn { background: var(--bulb2); color: white; box-shadow: inset 3px 3px 8px rgba(0,0,0,0.15); }
-body.edit-mode #sortBar { display: flex; }
-.sort-btn { padding: 6px 12px; border-radius: 14px; border: none; font-family: 'Outfit', sans-serif; font-size: 11px; font-weight: 700; cursor: pointer; background: var(--bg); color: var(--text2); box-shadow: 3px 3px 6px var(--sd), -2px -2px 5px var(--sl); }
-.sort-btn.on { background: var(--bulb2); color: white; box-shadow: inset 2px 2px 5px rgba(0,0,0,0.18); }
-.sort-btn:active { transform: scale(0.96); }
 
 #signinOverlay { display: none; position: fixed; inset: 0; z-index: 400; background: var(--bg); flex-direction: column; align-items: center; justify-content: center; padding: 32px; text-align: center; gap: 18px; }
 #signinOverlay .title { font-size: 26px; }
@@ -93,12 +88,6 @@ body.edit-mode #sortBar { display: flex; }
   <div class="wrap">
     <div class="title">アプリ</div>
     <div class="subtitle" id="who">サインイン済み</div>
-    <div id="sortBar" style="display:none; gap:8px; margin-bottom:14px; align-items:center; flex-wrap:wrap;">
-      <span style="font-size:11px; color:var(--text2); font-weight:700; letter-spacing:0.1em;">並び順:</span>
-      <button class="sort-btn" data-mode="default" onclick="applySort('default')">標準</button>
-      <button class="sort-btn" data-mode="aiueo" onclick="applySort('aiueo')">あいうえお</button>
-      <button class="sort-btn" data-mode="custom" onclick="applySort('custom')">自分で並べる</button>
-    </div>
     <div class="grid" id="grid"></div>
   </div>
 </div>
@@ -179,7 +168,8 @@ function isInternal() { return INTERNAL_EMAILS.has((currentUserEmail || "").toLo
 
 // ─── ユーザー別ランチャー設定 (Firestore: launcher_prefs/{uid} に保存) ───
 // uid をキーにすれば Firebase Auth 1本でユーザー識別できて、メアド変更にも追従する。
-let prefs = { order: [], hidden: [], sort: "default" };
+// 並びは MRU (最近開いた順) で自動、ユーザーは hide だけコントロールできる。
+let prefs = { mru: {}, hidden: [] };
 let editMode = false;
 let prefsSaveTimer = null;
 let fsDb = null;
@@ -190,22 +180,16 @@ async function loadPrefs(user) {
     const snap = await getDoc(doc(fsDb, "launcher_prefs", user.uid));
     if (snap.exists()) {
       const p = snap.data() || {};
-      prefs = {
-        order: Array.isArray(p.order) ? p.order : [],
-        hidden: Array.isArray(p.hidden) ? p.hidden : [],
-        sort: typeof p.sort === "string" ? p.sort : "default",
-      };
-      // 新しく追加したアプリ (= 保存済み order に含まれてない id) は先頭に挿入。
-      // genba みたいに「ユーザーが一番使う場所に出したい」新参を確実に上に出すため。
-      // すでに APPS 配列で先頭順なら APPS 内の順序で。
-      if (prefs.order.length) {
-        const have = new Set(prefs.order);
-        const missing = APPS.map((a) => a.id).filter((id) => !have.has(id));
-        if (missing.length) {
-          prefs.order = [...missing, ...prefs.order];
-          savePrefs();
-        }
+      const mru = (p.mru && typeof p.mru === "object") ? { ...p.mru } : {};
+      // 旧 prefs.order からの後方互換: order があれば最後尾を最古として並べる
+      if (Object.keys(mru).length === 0 && Array.isArray(p.order) && p.order.length) {
+        const base = Date.now() - p.order.length * 1000;
+        p.order.forEach((id, i) => { mru[id] = base + (p.order.length - i) * 1000; });
       }
+      prefs = {
+        mru,
+        hidden: Array.isArray(p.hidden) ? p.hidden : [],
+      };
       renderGrid();
     }
   } catch (e) { console.warn("loadPrefs:", e?.message || e); }
@@ -218,24 +202,43 @@ function savePrefs() {
       const user = fbAuth?.currentUser;
       if (!user || !fsDb) return;
       await setDoc(doc(fsDb, "launcher_prefs", user.uid), {
-        order: prefs.order || [],
+        mru: prefs.mru || {},
         hidden: prefs.hidden || [],
-        sort: prefs.sort || "default",
         updatedAt: Date.now(),
       }, { merge: true });
     } catch (e) { console.warn("savePrefs:", e?.message || e); }
   }, 600); // debounce
 }
 
+// アプリタップ時に呼ぶ: mru を即時更新 + Firestore に直書きしてから navigate。
+// debounce 待ちの間にページ遷移するとローカル変更が消えるので、ここだけ即時 flush。
+async function bumpMru(appId) {
+  prefs.mru = { ...(prefs.mru || {}), [appId]: Date.now() };
+  // ローカルも一応書いておく (Firestore 失敗時のフォールバック / 次回 load 前の即時反映)
+  try { localStorage.setItem("launcher_mru_cache", JSON.stringify(prefs.mru)); } catch (_) {}
+  try {
+    const user = fbAuth?.currentUser;
+    if (user && fsDb) {
+      // 待たずに fire (Firestore SDK は offline queue するので navigate 後でも完了する)
+      setDoc(doc(fsDb, "launcher_prefs", user.uid), {
+        mru: prefs.mru,
+        updatedAt: Date.now(),
+      }, { merge: true }).catch(() => {});
+    }
+  } catch (_) {}
+}
+
 function orderedApps() {
   // techstudy / 手配リスト (kaimono) / タスク (task) は社外 auth ユーザーにも公開
   const PUBLIC_APPS = new Set(["techstudy", "kaimono", "task"]);
   const visible = APPS.filter((a) => isInternal() || PUBLIC_APPS.has(a.id));
-  const pos = new Map(prefs.order.map((id, i) => [id, i]));
+  const mru = prefs.mru || {};
+  // APPS 配列内の順序を未開封のフォールバック (先頭ほど優先) として保持
+  const fallback = new Map(APPS.map((a, i) => [a.id, i]));
   return visible.slice().sort((a, b) => {
-    const ai = pos.has(a.id) ? pos.get(a.id) : 1e9;
-    const bi = pos.has(b.id) ? pos.get(b.id) : 1e9;
-    return ai - bi;
+    const ra = mru[a.id] || 0, rb = mru[b.id] || 0;
+    if (ra !== rb) return rb - ra;  // 最近開いた順
+    return fallback.get(a.id) - fallback.get(b.id);
   });
 }
 
@@ -284,45 +287,17 @@ function toggleEditMode() {
   editMode = !editMode;
   document.body.classList.toggle("edit-mode", editMode);
   document.getElementById("editBtn").textContent = editMode ? "完了" : "編集";
-  refreshSortBar();
   renderGrid();
 }
 window.toggleEditMode = toggleEditMode;
 
-// 並び順モード: "default"(APPS定義順) / "aiueo"(あいうえお順) / "custom"(ドラッグで自由)
-// prefs.sort に保存。custom は prefs.order を尊重。default/aiueo は order を上書き&固定。
-function applySort(mode) {
-  prefs.sort = mode;
-  if (mode === "default") {
-    prefs.order = APPS.map((a) => a.id); // 定義順
-  } else if (mode === "aiueo") {
-    prefs.order = APPS.slice().sort((a, b) => (a.name || "").localeCompare(b.name || "", "ja")).map((a) => a.id);
-  }
-  // custom はそのまま (現在の prefs.order を維持)
-  refreshSortBar();
-  renderGrid();
-  savePrefs();
-}
-window.applySort = applySort;
-
-function refreshSortBar() {
-  const mode = prefs.sort || (prefs.order && prefs.order.length ? "custom" : "default");
-  document.querySelectorAll(".sort-btn").forEach((b) => {
-    b.classList.toggle("on", b.dataset.mode === mode);
-  });
-}
-
-// ───── 長押し → 編集モード + ドラッグ並び替え (iPhone 風) ─────
+// ───── 長押し → 編集モード突入 (iPhone 風) ─────
 // 通常モードでは:
-//   - 短いタップ → アプリ起動
-//   - 長押し (450ms 静止) → 編集モード突入 + そのカードのドラッグ開始
-// 編集モード中は:
-//   - pointerdown 即ドラッグ開始 (= 「編集」ボタン経由でも従来通り使える)
-//   - 完了ボタンで終了
+//   - 短いタップ → アプリ起動 (= MRU タイムスタンプ更新 → 並びが先頭へ)
+//   - 長押し (450ms 静止) → 編集モード突入 (hide ボタンで非表示にできるだけ)
+// 並び順はユーザーが直接いじれない (= 最近開いた順に自動で前に出る)。
 const LONGPRESS_MS = 450;
 const TAP_MAX_MOVE = 8;
-let dragId = null;
-let dragEl = null;
 
 function attachCardHandlers(card, app) {
   const id = app.id;
@@ -335,16 +310,12 @@ function attachCardHandlers(card, app) {
     if (e.target.closest(".hide-btn")) return;
     pressX = e.clientX; pressY = e.clientY;
     moved = false;
-    if (editMode) {
-      // 既に編集モード中 → 即ドラッグ開始
-      startDrag(card, id, e.pointerId);
-    } else {
-      // 通常モード → タイマー開始、長押し継続なら編集+ドラッグへ
+    if (!editMode) {
+      // 通常モード → 長押し検知タイマー開始
       pressTimer = setTimeout(() => {
         pressTimer = null;
-        if (!editMode) toggleEditMode();
-        startDrag(card, id, e.pointerId);
-        if (navigator.vibrate) navigator.vibrate(20);  // 触覚 (Android のみ反応)
+        toggleEditMode();
+        if (navigator.vibrate) navigator.vibrate(20);
       }, LONGPRESS_MS);
     }
   });
@@ -353,70 +324,24 @@ function attachCardHandlers(card, app) {
     const dx = Math.abs(e.clientX - pressX);
     const dy = Math.abs(e.clientY - pressY);
     if (dx > TAP_MAX_MOVE || dy > TAP_MAX_MOVE) moved = true;
-    // 長押し中にスクロール開始 → 長押しキャンセル (= アプリ起動でもなく drag でもなく、スクロール)
     if (pressTimer && moved) { clearTimeout(pressTimer); pressTimer = null; }
-    // ドラッグ中なら指の下のカードと入れ替え (既存ロジック)
-    if (dragId) {
-      e.preventDefault();
-      const under = document.elementFromPoint(e.clientX, e.clientY)?.closest(".app-card");
-      if (under && under.dataset.appId && under.dataset.appId !== dragId) {
-        swapOrder(dragId, under.dataset.appId);
-        renderGrid();
-        // 再 render 後の自分の card を再 grab (dragEl はもう DOM から消えてる)
-        const grid = document.getElementById("grid");
-        const next = grid.querySelector(`[data-app-id="${dragId}"]`);
-        if (next) {
-          next.classList.add("is-dragging");
-          try { next.setPointerCapture?.(e.pointerId); } catch (_) {}
-          dragEl = next;
-        }
-      }
-    }
   });
 
   card.addEventListener("pointerup", () => {
     if (pressTimer) {
       clearTimeout(pressTimer);
       pressTimer = null;
-      // 短いタップ → 通常モードならアプリ起動
-      if (!editMode && !moved && app.path) location.href = app.path;
+      // 短いタップ → 通常モードならアプリ起動 (MRU bump → 次回先頭へ)
+      if (!editMode && !moved && app.path) {
+        bumpMru(id);
+        location.href = app.path;
+      }
     }
-    endDrag();
   });
 
   card.addEventListener("pointercancel", () => {
     if (pressTimer) { clearTimeout(pressTimer); pressTimer = null; }
-    endDrag();
   });
-}
-
-function startDrag(card, id, pointerId) {
-  if (card.classList.contains("soon")) return;
-  dragId = id;
-  dragEl = card;
-  card.classList.add("is-dragging");
-  try { card.setPointerCapture?.(pointerId); } catch (_) {}
-}
-function endDrag() {
-  if (!dragId) return;
-  dragId = null;
-  if (dragEl) dragEl.classList.remove("is-dragging");
-  dragEl = null;
-  // ドラッグ後は強制的に custom モード扱い (= 自分で並べた順を維持)
-  prefs.sort = "custom";
-  refreshSortBar();
-  savePrefs();
-}
-
-function swapOrder(a, b) {
-  // 現状の visible 順序を取得 → a を b の位置へ移動
-  const cur = orderedApps().map((x) => x.id);
-  const ia = cur.indexOf(a);
-  const ib = cur.indexOf(b);
-  if (ia < 0 || ib < 0) return;
-  cur.splice(ia, 1);
-  cur.splice(ib, 0, a);
-  prefs.order = cur;
 }
 
 // ───────── 共通ログイン（全ミニアプリで共有） ─────────
