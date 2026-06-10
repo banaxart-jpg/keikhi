@@ -289,7 +289,6 @@ import {
   getFirestore, collection, doc, setDoc, updateDoc, deleteDoc, onSnapshot,
   serverTimestamp,
 } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
-import { gateInternal } from "/internal-gate.js";
 import { BottomSheet } from "/bottom-sheet.js";
 
 const API_BASE = (window.API_BASE || "").replace(/\/$/, "");
@@ -1065,7 +1064,7 @@ const App = {
         fbAuth = getAuth(app);
         fbDb = getFirestore(app);
         await setPersistence(fbAuth, browserLocalPersistence);
-        gateInternal(fbAuth);
+        // 社外メアドも入れる (手配リストと同じ権限。/tasks のルールも全認証ユーザーへ緩和済み)
         let entered = false;
         onAuthStateChanged(fbAuth, async (user) => {
           if (user) {

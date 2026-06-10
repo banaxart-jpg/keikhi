@@ -41,15 +41,11 @@ service cloud.firestore {
       allow read, write: if request.auth != null;
     }
 
-    // タスク: 社内 3 アカウント限定 (小西・名取・banaxart)。
-    // Cloud SQL の tasks テーブルから Firestore へ移行 (realtime 同期 + 現場分け対応)。
+    // タスク: 手配リスト (shopping_items) と同じく、認証済みなら社外含む全員。
+    // (社内 3 アカ限定 → 認証ユーザー全員 に緩和。
+    //  外部協力者がタスクを引き受けるようなフローにも使うため。)
     match /tasks/{taskId} {
-      allow read, write: if request.auth != null
-        && request.auth.token.email in [
-          'info@banax.tokyo',
-          'konishi0221@gmail.com',
-          'banaxart@gmail.com'
-        ];
+      allow read, write: if request.auth != null;
     }
 
     // 請求書 (seikyu): 社内 3 アカウント限定。localStorage → Firestore に移行して

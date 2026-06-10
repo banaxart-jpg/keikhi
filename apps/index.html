@@ -228,8 +228,8 @@ function savePrefs() {
 }
 
 function orderedApps() {
-  // techstudy と 手配リスト (kaimono) は社外 auth ユーザーにも公開
-  const PUBLIC_APPS = new Set(["techstudy", "kaimono"]);
+  // techstudy / 手配リスト (kaimono) / タスク (task) は社外 auth ユーザーにも公開
+  const PUBLIC_APPS = new Set(["techstudy", "kaimono", "task"]);
   const visible = APPS.filter((a) => isInternal() || PUBLIC_APPS.has(a.id));
   const pos = new Map(prefs.order.map((id, i) => [id, i]));
   return visible.slice().sort((a, b) => {
