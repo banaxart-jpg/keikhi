@@ -30,67 +30,35 @@ body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); 
 .pill { padding: 9px 14px; border-radius: 24px; font-size: 12px; font-weight: 700; border: none; color: var(--text2); background: var(--bg); box-shadow: 4px 4px 10px var(--sd), -4px -4px 10px var(--sl); cursor: pointer; font-family: 'Outfit', sans-serif; text-decoration: none; display: inline-flex; align-items: center; gap: 4px; }
 .pill:active { box-shadow: inset 3px 3px 8px var(--sd), inset -3px -3px 8px var(--sl); transform: scale(0.97); }
 
-/* 現場タブ (kaimono/task と同じパターン、MRU 順) */
-.tabs { display: flex; gap: 8px; padding: 4px 18px 10px; overflow-x: auto; scrollbar-width: none; }
+/* タブ共通 (現場・日付ともに同パターン) */
+.tabs { display: flex; gap: 8px; overflow-x: auto; scrollbar-width: none; }
 .tabs::-webkit-scrollbar { display: none; }
-.tab { padding: 9px 16px; border-radius: 18px; font-size: 13px; font-weight: 700; border: none; color: var(--text2); background: var(--bg); box-shadow: 4px 4px 10px var(--sd), -4px -4px 10px var(--sl); cursor: pointer; flex-shrink: 0; font-family: 'Outfit', sans-serif; transition: all 200ms ease; }
+.tabs.sites { padding: 4px 18px 8px; }
+.tabs.dates { padding: 0 18px 12px; }
+.tab { padding: 9px 16px; border-radius: 18px; font-size: 13px; font-weight: 700; border: none; color: var(--text2); background: var(--bg); box-shadow: 4px 4px 10px var(--sd), -4px -4px 10px var(--sl); cursor: pointer; flex-shrink: 0; font-family: 'Outfit', sans-serif; transition: all 200ms ease; white-space: nowrap; display: inline-flex; align-items: center; gap: 4px; }
 .tab.on { color: white; background: linear-gradient(145deg, var(--accent2), var(--accent)); box-shadow: 6px 6px 14px var(--accent-glow), -3px -3px 10px var(--sl); }
+.tab.dates-tab { font-size: 12px; padding: 7px 13px; border-radius: 14px; }
+.tab.dates-tab .dot { width: 5px; height: 5px; border-radius: 50%; background: var(--accent); display: inline-block; opacity: 0.85; }
+.tab.dates-tab.on .dot { background: white; }
 
-/* 日付ナビ (前日 / 今日ラベル / 翌日) */
-.date-bar { display: flex; align-items: center; padding: 4px 14px 12px; gap: 8px; }
-.date-nav { width: 36px; height: 36px; border-radius: 18px; border: none; background: var(--bg); box-shadow: 4px 4px 10px var(--sd), -4px -4px 10px var(--sl); color: var(--text2); cursor: pointer; font-family: inherit; flex-shrink: 0; display: flex; align-items: center; justify-content: center; }
-.date-nav:active { box-shadow: inset 3px 3px 8px var(--sd); transform: scale(0.95); }
-.date-nav:disabled { opacity: 0.35; cursor: default; }
-.date-lbl { flex: 1; text-align: center; font-size: 15px; font-weight: 800; color: var(--text); letter-spacing: 0.02em; }
-.date-lbl .sub { font-size: 10px; font-weight: 700; color: var(--text2); margin-left: 8px; padding: 2px 8px; border-radius: 10px; background: var(--bg2); box-shadow: inset 2px 2px 5px var(--sd); }
-.date-lbl .sub.today { color: var(--accent); }
-.today-btn { padding: 7px 13px; border-radius: 16px; font-size: 11px; font-weight: 800; border: none; cursor: pointer; font-family: inherit; color: var(--accent); background: var(--bg); box-shadow: 3px 3px 8px var(--sd), -2px -2px 6px var(--sl); flex-shrink: 0; }
-.today-btn:active { box-shadow: inset 2px 2px 6px var(--sd); transform: scale(0.96); }
-
-/* メイン: 1枚のテキストエリア。書いたら debounce 1s で auto save */
-.wrap { padding: 8px 16px 100px; }
+/* メイン: 1枚のテキストエリア (auto-resize) */
+.wrap { padding: 6px 16px 100px; }
 .empty-state { text-align: center; padding: 60px 24px; color: var(--text3); font-size: 13px; font-weight: 600; line-height: 1.7; }
 .empty-state a { color: var(--accent); font-weight: 800; text-decoration: none; }
 .editor-card { background: var(--bg); border-radius: 18px; padding: 16px; box-shadow: 6px 6px 16px var(--sd), -5px -5px 14px var(--sl); }
-.editor-meta { display: flex; justify-content: space-between; align-items: center; font-size: 11px; color: var(--text2); font-weight: 700; margin-bottom: 8px; }
-.editor-meta .lhs { display: inline-flex; align-items: center; gap: 6px; }
-.editor-meta .rhs { display: inline-flex; align-items: center; gap: 5px; }
-.editor-meta .status { font-size: 10px; }
+.editor-meta { display: flex; justify-content: space-between; align-items: center; font-size: 11px; color: var(--text2); font-weight: 700; margin-bottom: 10px; }
+.status { font-size: 10px; font-weight: 800; letter-spacing: 0.04em; }
 .status.dirty { color: var(--accent); }
 .status.saved { color: var(--text3); }
 .status.error { color: var(--danger); }
 .memo-area {
-  width: 100%; min-height: 220px;
-  border: none; outline: none; resize: vertical;
-  font-family: 'Outfit', -apple-system, sans-serif; font-size: 15px; line-height: 1.7; color: var(--text);
+  width: 100%; min-height: 60vh;
+  border: none; outline: none; resize: none;
+  font-family: 'Outfit', -apple-system, sans-serif; font-size: 16px; line-height: 1.7; color: var(--text);
   background: var(--bg2); border-radius: 12px; padding: 14px;
   box-shadow: inset 4px 4px 10px var(--sd), inset -4px -4px 10px var(--sl);
 }
 .memo-area::placeholder { color: var(--text3); font-style: italic; }
-.memo-area.readonly { background: var(--bg3); box-shadow: inset 3px 3px 8px var(--sd), inset -2px -2px 6px var(--sl); opacity: 0.92; cursor: default; min-height: 80px; }
-.memo-area.readonly:empty::before { content: "(まだ書かれてません)"; color: var(--text3); font-style: italic; }
-.editor-card + .editor-card { margin-top: 14px; }
-.editor-card.mine .editor-meta .lhs { color: var(--accent); }
-.editor-card.theirs .editor-meta .lhs { color: var(--text2); }
-.author-chip { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 10px; background: var(--bg2); font-size: 10px; font-weight: 800; }
-.author-chip.natori { background: rgba(121,134,203,0.18); color: #4a5499; }
-.author-chip.konishi { background: rgba(176,137,104,0.22); color: #7a5c3d; }
-
-/* 過去ログ折りたたみ */
-.history { margin-top: 18px; background: var(--bg); border-radius: 16px; box-shadow: 6px 6px 14px var(--sd), -5px -5px 12px var(--sl); overflow: hidden; }
-.history-h { display: flex; justify-content: space-between; align-items: center; padding: 12px 14px; cursor: pointer; font-size: 12px; font-weight: 800; color: var(--text2); }
-.history-h .chev { transition: transform 200ms ease; }
-.history.open .history-h .chev { transform: rotate(180deg); }
-.history-body { display: none; padding: 4px 4px 8px; }
-.history.open .history-body { display: block; animation: fade-in 200ms ease-out; }
-@keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
-.hist-row { padding: 10px 12px; margin: 0 8px 6px; background: var(--bg2); border-radius: 10px; cursor: pointer; transition: background 150ms ease; }
-.hist-row:active { background: var(--bg3); transform: scale(0.99); }
-.hist-row-head { font-size: 12px; font-weight: 700; color: var(--text); display: flex; justify-content: space-between; align-items: baseline; }
-.hist-row-head .date { letter-spacing: 0.02em; }
-.hist-row-head .len { font-size: 10px; color: var(--text3); font-weight: 700; }
-.hist-row .preview { font-size: 11px; color: var(--text2); margin-top: 4px; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; line-height: 1.4; }
-.hist-empty { padding: 24px; text-align: center; color: var(--text3); font-size: 11px; }
 
 #signinOverlay { position: fixed; inset: 0; z-index: 400; background: var(--bg); display: none; flex-direction: column; align-items: center; justify-content: center; padding: 32px; text-align: center; gap: 18px; }
 #signinOverlay.show { display: flex; }
@@ -116,24 +84,15 @@ import {
   getAuth, setPersistence, browserLocalPersistence, onAuthStateChanged, signOut,
 } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
 import {
-  getFirestore, collection, doc, setDoc, onSnapshot, query, where, orderBy, limit,
+  getFirestore, collection, doc, setDoc, onSnapshot, query, orderBy, limit,
   serverTimestamp,
 } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
-import { gateInternal } from "/internal-gate.js";
 
 const API_BASE = (window.API_BASE || "").replace(/\/$/, "");
-const MEMOS = "genba_memos";
+const ROOT = "genba_memos";   // genba_memos/{uid}/memos/{memoId}
+const SUB = "memos";
 const SAVE_DEBOUNCE_MS = 800;
-const HISTORY_LIMIT = 60;   // 過去 60 件まで読み込み
-
-// 著者キー: 名取は 2 メアド持ち、両方 "natori" に正規化
-const AUTHOR_KEY = {
-  "info@banax.tokyo": "natori",
-  "banaxart@gmail.com": "natori",
-  "konishi0221@gmail.com": "konishi",
-};
-const AUTHOR_LABEL = { natori: "名取", konishi: "小西" };
-const OTHER_KEY = { natori: "konishi", konishi: "natori" };
+const HISTORY_LIMIT = 200;    // 過去 200 件まで読み込み
 
 // JST で YYYY-MM-DD を返す
 function todayJst() {
@@ -141,13 +100,7 @@ function todayJst() {
   const jst = new Date(now.getTime() + (now.getTimezoneOffset() + 9 * 60) * 60 * 1000);
   return jst.toISOString().slice(0, 10);
 }
-function shiftDateIso(iso, days) {
-  const d = new Date(iso + "T12:00:00Z"); // 中央寄せして TZ ぶれ回避
-  d.setUTCDate(d.getUTCDate() + days);
-  return d.toISOString().slice(0, 10);
-}
 function dateLabel(iso) {
-  // "M/D (曜)" 形式
   const d = new Date(iso + "T12:00:00Z");
   const wd = ["日", "月", "火", "水", "木", "金", "土"][d.getUTCDay()];
   return `${d.getUTCMonth() + 1}/${d.getUTCDate()} (${wd})`;
@@ -164,8 +117,14 @@ const TEMPLATE = `
       <span class="title"><span class="icon">edit_note</span> 現場メモ</span>
       <button class="pill" @click="doSignOut" title="サインアウト"><span class="icon">logout</span></button>
     </div>
-    <div v-if="sortedSites.length" class="tabs">
+    <div v-if="sortedSites.length" class="tabs sites">
       <button v-for="s in sortedSites" :key="s" class="tab" :class="{ on: activeSite === s }" @click="selectSite(s)">{{ s }}</button>
+    </div>
+    <div v-if="activeSite && dateTabs.length" class="tabs dates">
+      <button v-for="d in dateTabs" :key="d.date" class="tab dates-tab" :class="{ on: currentDate === d.date }" @click="selectDate(d.date)">
+        <span v-if="d.hasMemo" class="dot"></span>
+        {{ d.label }}
+      </button>
     </div>
   </div>
 
@@ -179,56 +138,17 @@ const TEMPLATE = `
   </template>
 
   <template v-else-if="activeSite">
-    <div class="date-bar">
-      <button class="date-nav" @click="shiftDate(-1)" title="前日"><span class="icon">chevron_left</span></button>
-      <div class="date-lbl">
-        {{ dateLabelOf(currentDate) }}
-        <span class="sub" :class="{ today: isToday }">{{ isToday ? '今日' : (isYesterday ? '昨日' : '過去') }}</span>
-      </div>
-      <button class="date-nav" @click="shiftDate(1)" :disabled="isToday" title="翌日"><span class="icon">chevron_right</span></button>
-      <button v-if="!isToday" class="today-btn" @click="goToday">今日へ</button>
-    </div>
-
     <div class="wrap">
-      <!-- 自分のメモ (編集可) -->
-      <div class="editor-card mine">
+      <div class="editor-card">
         <div class="editor-meta">
-          <span class="lhs"><span class="author-chip" :class="myKey">{{ myLabel }}</span> のメモ</span>
-          <span class="rhs">
-            <span class="status" :class="statusClass">{{ statusLabel }}</span>
-          </span>
+          <span><span class="icon">place</span> {{ activeSite }} · {{ currentDateLabel }}</span>
+          <span class="status" :class="statusClass">{{ statusLabel }}</span>
         </div>
         <textarea class="memo-area"
-                  v-model="myContent"
+                  v-model="content"
                   :placeholder="placeholderText"
                   @input="onInput"
                   ref="memoEl"></textarea>
-      </div>
-
-      <!-- 相手のメモ (read-only、リアルタイム同期) -->
-      <div class="editor-card theirs">
-        <div class="editor-meta">
-          <span class="lhs"><span class="author-chip" :class="theirKey">{{ theirLabel }}</span> のメモ</span>
-          <span class="rhs"><span class="status saved">{{ theirContent ? '受信中' : '' }}</span></span>
-        </div>
-        <div class="memo-area readonly">{{ theirContent }}</div>
-      </div>
-
-      <div class="history" :class="{ open: historyOpen }">
-        <div class="history-h" @click="historyOpen = !historyOpen">
-          <span><span class="icon">history</span> 過去のメモ ({{ pastMemos.length }})</span>
-          <span class="icon chev">expand_more</span>
-        </div>
-        <div class="history-body">
-          <div v-if="!pastMemos.length" class="hist-empty">過去のメモはまだありません</div>
-          <div v-for="m in pastMemos" :key="m.id" class="hist-row" @click="jumpTo(m.date)">
-            <div class="hist-row-head">
-              <span class="date">{{ dateLabelOf(m.date) }}</span>
-              <span class="len">{{ previewLenOf(m) }} 字</span>
-            </div>
-            <div class="preview">{{ previewTextOf(m) }}</div>
-          </div>
-        </div>
       </div>
     </div>
   </template>
@@ -243,25 +163,21 @@ const App = {
     const sites = ref([]);
     const activeSite = ref("");
     const currentDate = ref(todayJst());
-    const myContent = ref("");      // 自分のテキスト (v-model)
+    const content = ref("");
     const status = ref("saved");   // "dirty" | "saving" | "saved" | "error"
     const errorMsg = ref("");
-    const historyOpen = ref(false);
     const memoEl = ref(null);
-    const memos = ref([]);   // 全現場・全日付の memo (snapshot で受信)
-    const myKey = ref("natori");  // boot で確定 (natori/konishi)
-    const theirKey = computed(() => OTHER_KEY[myKey.value]);
-    const myLabel = computed(() => AUTHOR_LABEL[myKey.value]);
-    const theirLabel = computed(() => AUTHOR_LABEL[theirKey.value]);
+    const memos = ref([]);   // 自分の memo を全件 (site 横断、最新 200 件)
+    const uid = ref("");
 
     let fbAuth = null;
     let db = null;
     let user = null;
     let unsubMemos = null;
     let saveTimer = null;
-    let suppressNextSave = false;   // onSnapshot で content 更新する時、その後の watch から save しないように
+    let suppressNextSave = false;  // snapshot で content 更新する時、その後の input から save しないように
 
-    // ─── MRU (現場タブの並び) ───
+    // ─── MRU (現場タブの並び順、user 単位) ───
     const mruKey = computed(() => `genba_memo_mru_${(user?.email || "anon").toLowerCase()}`);
     const mru = ref({});
     function loadMru() {
@@ -284,25 +200,60 @@ const App = {
     function selectSite(s) {
       activeSite.value = s;
       bumpMru(s);
-      // 現場を切り替えたら今日にリセット (= まっさら start の挙動を維持)
+      // 現場切り替え時は今日に戻す (まっさら start を維持)
       currentDate.value = todayJst();
     }
-
-    // ─── 日付ラベル ───
-    const isToday = computed(() => currentDate.value === todayJst());
-    const isYesterday = computed(() => currentDate.value === shiftDateIso(todayJst(), -1));
-    function dateLabelOf(iso) { return dateLabel(iso); }
-    function shiftDate(days) {
-      currentDate.value = shiftDateIso(currentDate.value, days);
-    }
-    function goToday() { currentDate.value = todayJst(); }
-    function jumpTo(iso) {
-      currentDate.value = iso;
-      historyOpen.value = false;
+    function selectDate(d) {
+      currentDate.value = d;
       nextTick(() => memoEl.value?.focus());
     }
 
-    // ─── status 表示 ───
+    // ─── 日付タブ: 今日 + 同現場で memo を持つ過去日。新しい順 ───
+    const dateTabs = computed(() => {
+      const today = todayJst();
+      const dates = new Set([today]);
+      for (const m of memos.value) {
+        if (m.site === activeSite.value && m.date) dates.add(m.date);
+      }
+      const sorted = [...dates].sort((a, b) => (a < b ? 1 : -1));   // 新しい順
+      return sorted.map((d) => ({
+        date: d,
+        label: d === today ? "今日" : dateLabel(d),
+        hasMemo: memos.value.some((m) => m.site === activeSite.value && m.date === d && (m.content || "").trim()),
+      }));
+    });
+    const currentDateLabel = computed(() => {
+      const today = todayJst();
+      return currentDate.value === today ? `今日 (${dateLabel(currentDate.value)})` : dateLabel(currentDate.value);
+    });
+
+    // ─── 表示中のメモ ──────────────────────────────
+    const currentMemo = computed(() => {
+      if (!activeSite.value || !currentDate.value) return null;
+      const id = memoDocId(activeSite.value, currentDate.value);
+      return memos.value.find((m) => m.id === id) || null;
+    });
+
+    // 切替え時にサーバ側のコンテンツに揃える
+    watch([activeSite, currentDate], () => {
+      const m = currentMemo.value;
+      suppressNextSave = true;
+      content.value = m?.content || "";
+      status.value = "saved";
+      errorMsg.value = "";
+    });
+
+    // realtime 更新 (他デバイスからの編集) を反映。ただし自分の編集中は保護。
+    watch(currentMemo, (m) => {
+      if (!m) return;
+      if (status.value === "saving" || status.value === "dirty") return;
+      if ((m.content || "") !== content.value) {
+        suppressNextSave = true;
+        content.value = m.content || "";
+      }
+    });
+
+    // ─── 表示用 status ───
     const statusClass = computed(() => ({
       dirty: status.value === "dirty" || status.value === "saving",
       saved: status.value === "saved",
@@ -314,53 +265,11 @@ const App = {
       if (status.value === "dirty") return "未保存";
       return "保存済み";
     });
-
     const placeholderText = computed(() =>
-      isToday.value ? "ここに今日のメモを書く…" : `${dateLabelOf(currentDate.value)} のメモ`
+      currentDate.value === todayJst() ? "ここに今日のメモを書く…" : `${dateLabel(currentDate.value)} のメモ`
     );
 
-    // ─── 表示中のメモ ↔ Firestore の sync ───
-    //   activeSite or currentDate が変わったら memos.value から該当ドキュメント拾ってきて
-    //   content にセット。ユーザーがタイプしたら debounce で save。
-    const currentMemo = computed(() => {
-      if (!activeSite.value || !currentDate.value) return null;
-      const id = memoDocId(activeSite.value, currentDate.value);
-      return memos.value.find((m) => m.id === id) || null;
-    });
-
-    // 自分・相手の content をドキュメントから取り出す。
-    // 旧形式 (m.content) との後方互換: フィールド未分離なら "natori" 側に詰めとく。
-    function pickContent(m, key) {
-      if (!m) return "";
-      if (m[key]?.content != null) return m[key].content;
-      if (key === "natori" && typeof m.content === "string") return m.content;
-      return "";
-    }
-    const theirContent = computed(() => pickContent(currentMemo.value, theirKey.value));
-
-    watch([activeSite, currentDate, myKey], () => {
-      // 切替え時はサーバ側の最新コンテンツに揃える (まっさら start = 該当日の doc が無ければ空文字)
-      const m = currentMemo.value;
-      suppressNextSave = true;
-      myContent.value = pickContent(m, myKey.value);
-      status.value = "saved";
-      errorMsg.value = "";
-    });
-
-    // currentMemo が realtime 更新で変わった時 (他デバイスからの書込み)、
-    // 自分側の content を上書き。ただし自分が今編集中の保留分は保護したい:
-    //   → 自分の save 直後の echo は status === "saving" 中なので、その間は受けない。
-    //   theirContent は computed なので別途 watch 不要、自動反映。
-    watch(currentMemo, (m) => {
-      if (!m) return;
-      if (status.value === "saving" || status.value === "dirty") return;
-      const incoming = pickContent(m, myKey.value);
-      if (incoming !== myContent.value) {
-        suppressNextSave = true;
-        myContent.value = incoming;
-      }
-    });
-
+    // ─── 編集 → debounce save ───
     function onInput() {
       if (suppressNextSave) { suppressNextSave = false; return; }
       status.value = "dirty";
@@ -369,47 +278,22 @@ const App = {
     }
 
     async function saveCurrent() {
-      if (!db || !activeSite.value || !currentDate.value) return;
+      if (!db || !uid.value || !activeSite.value || !currentDate.value) return;
       const id = memoDocId(activeSite.value, currentDate.value);
-      const text = myContent.value || "";
-      const key = myKey.value;   // natori | konishi
+      const text = content.value || "";
       status.value = "saving";
       try {
-        // merge:true で自分のサブツリーだけ更新 → 相手の content は触らない
-        await setDoc(doc(db, MEMOS, id), {
+        await setDoc(doc(db, ROOT, uid.value, SUB, id), {
           site: activeSite.value,
           date: currentDate.value,
-          [key]: {
-            content: text,
-            updatedAt: serverTimestamp(),
-            updatedBy: (user?.email || "").toLowerCase(),
-          },
+          content: text,
+          updatedAt: serverTimestamp(),
         }, { merge: true });
         status.value = "saved";
       } catch (e) {
         status.value = "error";
         errorMsg.value = e?.message || String(e);
       }
-    }
-
-    // ─── 過去メモ一覧 (現在の現場のみ、今日以外を新しい順) ───
-    const pastMemos = computed(() => {
-      const today = todayJst();
-      return memos.value
-        .filter((m) => m.site === activeSite.value && m.date !== today)
-        .sort((a, b) => (a.date < b.date ? 1 : -1));
-    });
-    // 過去リストプレビュー: 両者のメモを「名取: ...  小西: ...」形式で連結
-    function previewTextOf(m) {
-      const n = pickContent(m, "natori");
-      const k = pickContent(m, "konishi");
-      const parts = [];
-      if (n) parts.push(`名取: ${n}`);
-      if (k) parts.push(`小西: ${k}`);
-      return parts.join("  /  ") || "(空)";
-    }
-    function previewLenOf(m) {
-      return pickContent(m, "natori").length + pickContent(m, "konishi").length;
     }
 
     // ─── auth + データ初期化 ───
@@ -419,7 +303,7 @@ const App = {
 
     async function boot(u) {
       user = u;
-      myKey.value = AUTHOR_KEY[(u.email || "").toLowerCase()] || "natori";
+      uid.value = u.uid;
       loadMru();
       signedIn.value = true;
       // 現場一覧 (失敗しても続行)
@@ -437,16 +321,20 @@ const App = {
       if (!activeSite.value && sortedSites.value.length) {
         activeSite.value = sortedSites.value[0];
       }
-      // メモ全件購読 (社内 3 人だけなので件数少なめ。HISTORY_LIMIT で念のため絞る)
+      // 自分の memo 全件購読 (site 横断、新しい日付順、200 件まで)
       try {
-        const q = query(collection(db, MEMOS), orderBy("date", "desc"), limit(HISTORY_LIMIT));
+        const q = query(
+          collection(db, ROOT, uid.value, SUB),
+          orderBy("date", "desc"),
+          limit(HISTORY_LIMIT),
+        );
         unsubMemos = onSnapshot(q, (snap) => {
           memos.value = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-          // 初回受信時、表示中の日付の自分側 content を埋める
+          // 初回受信時に表示中の日付の content を反映
           const m = currentMemo.value;
           if (m && status.value === "saved") {
             suppressNextSave = true;
-            myContent.value = pickContent(m, myKey.value);
+            content.value = m.content || "";
           }
         }, (e) => { console.warn("[memo] snapshot failed", e); });
       } catch (e) { console.warn("[memo] subscribe failed", e); }
@@ -461,7 +349,6 @@ const App = {
         fbAuth = getAuth(fbApp);
         db = getFirestore(fbApp);
         await setPersistence(fbAuth, browserLocalPersistence);
-        gateInternal(fbAuth);
         let entered = false;
         onAuthStateChanged(fbAuth, async (u) => {
           if (u) {
@@ -487,16 +374,6 @@ const App = {
         document.getElementById("signinOverlay").classList.add("show");
         document.getElementById("signinErr").textContent = "init失敗: " + (e?.message || e);
       }
-
-      // 日付切替 (例: 真夜中をまたぐ) でラベルがズレないよう 5 分毎に再評価
-      const tick = setInterval(() => {
-        // currentDate.value を再代入することで isToday computed が更新される
-        // (実際には何もしない、reactive trigger のため)
-        const cd = currentDate.value;
-        currentDate.value = "";
-        currentDate.value = cd;
-      }, 5 * 60 * 1000);
-      onBeforeUnmount(() => clearInterval(tick));
     });
 
     onBeforeUnmount(() => {
@@ -506,12 +383,10 @@ const App = {
 
     return {
       signedIn, ready, sites, sortedSites, activeSite, currentDate,
-      myContent, theirContent, myKey, theirKey, myLabel, theirLabel,
-      status, errorMsg, historyOpen, memoEl,
-      isToday, isYesterday, dateLabelOf,
+      content, status, errorMsg, memoEl,
+      dateTabs, currentDateLabel,
       placeholderText, statusClass, statusLabel,
-      selectSite, shiftDate, goToday, jumpTo, onInput,
-      pastMemos, previewTextOf, previewLenOf,
+      selectSite, selectDate, onInput,
       doSignOut,
     };
   },
