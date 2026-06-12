@@ -855,6 +855,50 @@ app.post("/api/invoice-sheet", async (req, res) => {
   res.json(result);
 });
 
+// 過去にスキップされた請求書 PDF/画像 を GCS から引っ張って Drive へ移行。
+// (以前は seikyu が source 未指定で default 'camera' 扱い → Drive スキップだった分の救済)
+// フロント側で migration 要否を判定 → bills を items として送ってもらう。
+// 各 item: { id, imageUrl ("gs://..."), mimeType?, issuer?, issueDate? }
+// 返り値: { results: [{ id, ok, driveUrl?, error? }], ok, failed }
+app.post("/api/seikyu/migrate-to-drive", async (req, res) => {
+  if (!DRIVE_FOLDER_ID || !storage) {
+    return res.status(503).json({ error: "Drive または GCS が設定されてません" });
+  }
+  const items = Array.isArray(req.body?.items) ? req.body.items : [];
+  if (!items.length) return res.json({ results: [], ok: 0, failed: 0 });
+
+  const results = [];
+  let okCount = 0, failedCount = 0;
+  for (const it of items) {
+    const id = String(it?.id || "");
+    const imageUrl = String(it?.imageUrl || "");
+    if (!id || !imageUrl.startsWith("gs://")) {
+      results.push({ id, ok: false, error: "imageUrl が gs:// で始まらない" });
+      failedCount++;
+      continue;
+    }
+    try {
+      const m = imageUrl.match(/^gs:\/\/([^/]+)\/(.+)$/);
+      if (!m) throw new Error("invalid gs:// URL");
+      const [, bucket, key] = m;
+      const [buffer] = await storage.bucket(bucket).file(key).download();
+      const mimeType = String(it.mimeType || (key.toLowerCase().endsWith(".pdf") ? "application/pdf" : "image/jpeg"));
+      const yyyymm = String(it.issueDate || "").slice(0, 7) || new Date().toISOString().slice(0, 7);
+      const ext = mimeType === "application/pdf" ? "pdf" : "jpg";
+      const fname = `${String(it.issuer || "invoice").replace(/[\\/:*?"<>|]/g, "_").slice(0, 40)}_${id.slice(0, 8)}.${ext}`;
+      const dr = await uploadToDrive(buffer, fname, mimeType, yyyymm);
+      if (!dr) throw new Error("Drive upload returned null");
+      results.push({ id, ok: true, driveUrl: dr.url });
+      okCount++;
+    } catch (e) {
+      console.warn(`[seikyu-migrate] ${id} failed: ${e.message}`);
+      results.push({ id, ok: false, error: e.message });
+      failedCount++;
+    }
+  }
+  res.json({ results, ok: okCount, failed: failedCount });
+});
+
 // ───── 新「取引」シートのセットアップ (4タブ作成 + dashboard 数式投入) ─────
 // 1 回叩けば 月別/現場別/カテゴリ別 タブを idempotent に作成する。
 app.post("/api/tx/setup", async (req, res) => {

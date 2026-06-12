@@ -448,11 +448,44 @@ async function manualSync() {
         await batch.commit();
       }
     }
-    // bills は onSnapshot で更新されるが、即時に setSyncStatus("synced") を出すため少し待つ
-    setTimeout(() => setSyncStatus("synced", "同期済"), 600);
+    // Drive 未保存の請求書を一括移行 (imageUrl はあるけど driveUrl が空のもの)
+    await migrateMissingDriveUrls();
+    setTimeout(() => setSyncStatus("synced", `同期済 ${bills.length}件`), 600);
   } catch (e) {
     console.warn("[seikyu] manual sync failed:", e?.message || e);
     setSyncStatus("error", "失敗");
+  }
+}
+
+// 過去にスキップされた請求書を Drive へ一括アップ。一回完了したら自動でスキップ。
+async function migrateMissingDriveUrls() {
+  const missing = bills.filter((b) => b?.imageUrl && !b?.driveUrl);
+  if (missing.length === 0) return { ok: 0, failed: 0 };
+  setSyncStatus("syncing", `Drive 移行 0/${missing.length}`);
+  const items = missing.map((b) => ({
+    id: b.id, imageUrl: b.imageUrl,
+    mimeType: b.mimeType, issuer: b.issuer, issueDate: b.issueDate,
+  }));
+  try {
+    const resp = await api("POST", "/api/seikyu/migrate-to-drive", { items });
+    // 成功した分の driveUrl を Firestore に反映 (saveBills で Firestore に伝搬)
+    if (resp?.results?.length) {
+      const okMap = {};
+      for (const r of resp.results) if (r.ok && r.driveUrl) okMap[r.id] = r.driveUrl;
+      let touched = false;
+      for (let i = 0; i < bills.length; i++) {
+        if (okMap[bills[i].id]) {
+          bills[i] = { ...bills[i], driveUrl: okMap[bills[i].id] };
+          touched = true;
+        }
+      }
+      if (touched) saveBills();
+    }
+    setSyncStatus("syncing", `Drive 移行 ${resp.ok}/${missing.length}`);
+    return resp;
+  } catch (e) {
+    console.warn("[seikyu] Drive migrate failed:", e?.message || e);
+    return { ok: 0, failed: missing.length, error: e?.message };
   }
 }
 
