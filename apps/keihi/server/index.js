@@ -2405,14 +2405,14 @@ app.post("/api/yado/sync", async (req, res) => {
 app.post("/api/scan", async (req, res) => {
   try {
     if (!genAI) return res.status(503).json({ error: "GEMINI_API_KEY not configured" });
-    // source="camera" の領収書は紙でそのまま税理士に郵送するため Drive 保存しない。
-    // source="library"/"file" (デジタル保管しか無いやつ) のみ Drive にバックアップ。
+    // 請求書 (kind=invoice) はデジタル管理 (紙の郵送ルートが無い) なので常に Drive 保存。
+    // 領収書 (kind=receipt) は: camera は紙で税理士に郵送、library/file はデジタル → Drive 保存。
     const {
       image, mimeType = "image/jpeg", sites = [], kind = "receipt", direction = "in",
       source = "camera",     // "camera" | "library" | "file"
     } = req.body || {};
     if (!image) return res.status(400).json({ error: "image (base64) is required" });
-    const skipDrive = source === "camera";
+    const skipDrive = (kind === "receipt") && (source === "camera");
 
     let imageUrl = null;
     let driveUrl = null;
