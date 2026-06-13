@@ -464,7 +464,7 @@ async function migrateMissingDriveUrls() {
   setSyncStatus("syncing", `Drive 移行 0/${missing.length}`);
   const items = missing.map((b) => ({
     id: b.id, imageUrl: b.imageUrl,
-    mimeType: b.mimeType, issuer: b.issuer, issueDate: b.issueDate,
+    mimeType: b.mimeType, issuer: b.issuer, issueDate: b.issueDate, direction: b.direction,
   }));
   try {
     const resp = await api("POST", "/api/seikyu/migrate-to-drive", { items });

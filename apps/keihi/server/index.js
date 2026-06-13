@@ -138,54 +138,72 @@ async function getDriveApi() {
   return driveApi;
 }
 
-// 月別サブフォルダ (YYYY-MM 形式) の Drive folder ID を取得 or 作成。
-// 探索 → 無ければ作成 で 1 ヶ月あたり 2 API call、結果は instance ライフタイム中キャッシュ。
-const driveMonthFolderCache = new Map();   // "YYYY-MM" -> folderId
-async function getOrCreateDriveMonthFolder(yyyymm) {
-  if (!DRIVE_FOLDER_ID || !yyyymm) return DRIVE_FOLDER_ID;
-  if (!/^\d{4}-\d{2}$/.test(yyyymm)) return DRIVE_FOLDER_ID;
-  if (driveMonthFolderCache.has(yyyymm)) return driveMonthFolderCache.get(yyyymm);
+// 任意のネストフォルダ (例: ["領収書", "2026-06"]) の Drive folder ID を取得 or 作成。
+// 探索 → 無ければ作成 を階層分繰り返す。結果は instance ライフタイム中キャッシュ。
+const driveFolderCache = new Map();   // join(/) → folderId
+async function getOrCreateDriveSubfolder(pathParts) {
+  if (!DRIVE_FOLDER_ID) return null;
+  const parts = (pathParts || []).filter(Boolean);
+  if (parts.length === 0) return DRIVE_FOLDER_ID;
+  const key = parts.join("/");
+  if (driveFolderCache.has(key)) return driveFolderCache.get(key);
   try {
     const drive = await getDriveApi();
-    // 既存検索 (parent 指定 + name 完全一致 + フォルダ MIME + 未ゴミ箱)
-    const q = `name = '${yyyymm}' and '${DRIVE_FOLDER_ID}' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed = false`;
-    const res = await drive.files.list({
-      q,
-      fields: "files(id,name)",
-      supportsAllDrives: true,
-      includeItemsFromAllDrives: true,
-      corpora: "allDrives",
-    });
-    let folderId;
-    if (res.data.files && res.data.files.length) {
-      folderId = res.data.files[0].id;
-    } else {
-      const created = await drive.files.create({
-        requestBody: {
-          name: yyyymm,
-          mimeType: "application/vnd.google-apps.folder",
-          parents: [DRIVE_FOLDER_ID],
-        },
-        fields: "id",
+    let parentId = DRIVE_FOLDER_ID;
+    let cumulative = "";
+    for (const name of parts) {
+      cumulative = cumulative ? `${cumulative}/${name}` : name;
+      if (driveFolderCache.has(cumulative)) {
+        parentId = driveFolderCache.get(cumulative);
+        continue;
+      }
+      // 探索
+      const escaped = String(name).replace(/'/g, "\\'");
+      const q = `name = '${escaped}' and '${parentId}' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed = false`;
+      const res = await drive.files.list({
+        q,
+        fields: "files(id,name)",
         supportsAllDrives: true,
+        includeItemsFromAllDrives: true,
+        corpora: "allDrives",
       });
-      folderId = created.data.id;
-      console.log(`[drive] created month folder ${yyyymm} id=${folderId}`);
+      let folderId;
+      if (res.data.files && res.data.files.length) {
+        folderId = res.data.files[0].id;
+      } else {
+        const created = await drive.files.create({
+          requestBody: { name, mimeType: "application/vnd.google-apps.folder", parents: [parentId] },
+          fields: "id",
+          supportsAllDrives: true,
+        });
+        folderId = created.data.id;
+        console.log(`[drive] created folder ${cumulative} id=${folderId}`);
+      }
+      driveFolderCache.set(cumulative, folderId);
+      parentId = folderId;
     }
-    driveMonthFolderCache.set(yyyymm, folderId);
-    return folderId;
+    return parentId;
   } catch (e) {
-    console.warn(`[drive] month folder ensure failed for ${yyyymm}: ${e.message}`);
+    console.warn(`[drive] subfolder ensure failed for ${key}: ${e.message}`);
     return DRIVE_FOLDER_ID;   // fallback: ルート
   }
 }
 
+// 後方互換: 旧 getOrCreateDriveMonthFolder (yyyymm 単体) は ["YYYY-MM"] にマップ
+async function getOrCreateDriveMonthFolder(yyyymm) {
+  return getOrCreateDriveSubfolder(yyyymm ? [yyyymm] : []);
+}
+
 // 画像/PDF を Drive の指定フォルダにアップロードして「リンクを知ってる人は閲覧可」に。
-// yyyymm を指定すると月別サブフォルダ配下にアップ。失敗しても本体処理は止めない (null を返す)。
-async function uploadToDrive(buffer, filename, mimeType, yyyymm = null) {
+// 引数 yyyymmOrPath: 文字列 "YYYY-MM" (互換) or 配列 ["領収書", "2026-06"] (推奨)。
+// 失敗しても本体処理は止めない (null を返す)。
+async function uploadToDrive(buffer, filename, mimeType, yyyymmOrPath = null) {
   if (!DRIVE_FOLDER_ID) return null;
   try {
-    const parentId = yyyymm ? await getOrCreateDriveMonthFolder(yyyymm) : DRIVE_FOLDER_ID;
+    const pathParts = Array.isArray(yyyymmOrPath)
+      ? yyyymmOrPath
+      : (yyyymmOrPath ? [yyyymmOrPath] : []);
+    const parentId = pathParts.length ? await getOrCreateDriveSubfolder(pathParts) : DRIVE_FOLDER_ID;
     const drive = await getDriveApi();
     const created = await drive.files.create({
       requestBody: { name: filename, parents: [parentId], mimeType },
@@ -918,7 +936,9 @@ app.post("/api/seikyu/migrate-to-drive", async (req, res) => {
       const yyyymm = String(it.issueDate || "").slice(0, 7) || new Date().toISOString().slice(0, 7);
       const ext = mimeType === "application/pdf" ? "pdf" : "jpg";
       const fname = `${String(it.issuer || "invoice").replace(/[\\/:*?"<>|]/g, "_").slice(0, 40)}_${id.slice(0, 8)}.${ext}`;
-      const dr = await uploadToDrive(buffer, fname, mimeType, yyyymm);
+      // 請求書を direction で「支払請求書」/「売上請求書」フォルダに振り分け
+      const categoryFolder = String(it.direction || "in") === "out" ? "売上請求書" : "支払請求書";
+      const dr = await uploadToDrive(buffer, fname, mimeType, [categoryFolder, yyyymm]);
       if (!dr) throw new Error("Drive upload returned null");
       results.push({ id, ok: true, driveUrl: dr.url });
       okCount++;
@@ -2512,9 +2532,13 @@ app.post("/api/scan", async (req, res) => {
     } else {
       console.warn(`[scan] image not saved (storage=${!!storage}, bucket=${RECEIPTS_BUCKET || "(empty)"})`);
     }
-    // Drive にアップロード (税理士共有用、月別フォルダに整理)。カメラ撮影は skip。
+    // Drive にアップロード (税理士共有用、カテゴリ/月別フォルダに整理)。カメラ撮影は skip。
+    // フォルダ: 「領収書」 / 「支払請求書」 / 「売上請求書」 → YYYY-MM
     if (DRIVE_FOLDER_ID && !skipDrive) {
-      const dr = await uploadToDrive(buf, key.replace(/\//g, "_"), mimeType, currentYm);
+      const categoryFolder = kind === "invoice"
+        ? (direction === "out" ? "売上請求書" : "支払請求書")
+        : "領収書";
+      const dr = await uploadToDrive(buf, key.replace(/\//g, "_"), mimeType, [categoryFolder, currentYm]);
       if (dr) driveUrl = dr.url;
     }
 
