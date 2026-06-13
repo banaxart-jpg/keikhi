@@ -440,8 +440,16 @@ const TX_SHEET_ID = (process.env.TX_SHEET_ID || "1MFeJCDurzRqQiJB3aeIjwNH9PRocZz
 const TX_TAB = "取引";
 const TX_HEADER = [
   "日付", "種別", "大分類", "小分類", "金額", "対象", "現場",
-  "状態", "支払方法", "メモ", "写真", "ソース", "元ID",
+  "状態", "支払方法", "メモ", "写真", "ソース", "元ID", "登録日",
 ];
+// 列数が増えた時にヘッダー行を 1 回だけ書き直すためのフラグ (cold start ごと)
+let txHeaderEnsured = false;
+// JST (UTC+9) の YYYY-MM-DD を返す。Cloud Run のロケール非依存。
+function jstTodayStr() {
+  const t = new Date();
+  const jst = new Date(t.getTime() + 9 * 3600 * 1000);
+  return jst.toISOString().slice(0, 10);
+}
 // 元ID 列 (M=12) の重複を避けるための簡易キャッシュ。再起動でリセットされるが
 // 二重投入の主な原因は「短時間の連打」なので実用上は十分。
 const txSeenRefIds = new Set();
@@ -457,6 +465,19 @@ async function appendTx(r) {
   try {
     const sheets = await getSheetsApi();
     await ensureSheetTabGeneric(sheets, TX_SHEET_ID, TX_TAB, TX_HEADER, [0]);
+    // 既存タブのヘッダー行が古い列数だった場合に備えて、cold start 後 1 回だけ
+    // A1:N1 を最新ヘッダーで上書き (idempotent)
+    if (!txHeaderEnsured) {
+      try {
+        await sheets.spreadsheets.values.update({
+          spreadsheetId: TX_SHEET_ID,
+          range: `${TX_TAB}!A1:N1`,
+          valueInputOption: "RAW",
+          requestBody: { values: [TX_HEADER] },
+        });
+      } catch (e) { console.warn(`[tx] header ensure failed: ${e.message}`); }
+      txHeaderEnsured = true;
+    }
     // cold start 後の初回 append で dashboard タブも揃える (失敗しても本体は続行)
     if (!txDashboardsInit) {
       txDashboardsInit = true; // 先にフラグ立てて並行呼び出しでの多重実行を防ぐ
@@ -467,7 +488,7 @@ async function appendTx(r) {
     }
     await sheets.spreadsheets.values.append({
       spreadsheetId: TX_SHEET_ID,
-      range: `${TX_TAB}!A:M`,
+      range: `${TX_TAB}!A:N`,
       valueInputOption: "USER_ENTERED",
       insertDataOption: "INSERT_ROWS",
       requestBody: {
@@ -476,6 +497,7 @@ async function appendTx(r) {
           Number(r.amount) || 0, r.counterparty || "", r.site || "",
           r.status || "確定", r.paymentMethod || "", r.memo || "",
           r.photoCell || "", r.source || "", r.refId || "",
+          r.registeredAt || jstTodayStr(),    // 登録日 (JST)
         ]],
       },
     });
@@ -1006,7 +1028,7 @@ app.post("/api/tx/update", async (req, res) => {
     const sheets = await getSheetsApi();
     const r = await sheets.spreadsheets.values.get({
       spreadsheetId: TX_SHEET_ID,
-      range: `${TX_TAB}!A2:M`,
+      range: `${TX_TAB}!A2:N`,
       valueRenderOption: "UNFORMATTED_VALUE",
       dateTimeRenderOption: "FORMATTED_STRING",
     });
@@ -1016,7 +1038,7 @@ app.post("/api/tx/update", async (req, res) => {
     if (idx < 0) return res.status(404).json({ error: `行が見つかりません (refId=${refId}, source=${source})` });
     const sheetRow = idx + 2;  // ヘッダー1行 + 0-indexed → 1-indexed
     const updated = [...(allRows[idx] || [])];
-    while (updated.length < 13) updated.push("");
+    while (updated.length < 14) updated.push("");
     const FIELD_TO_IDX = {
       date: 0, type: 1, category: 2, subcategory: 3, amount: 4,
       counterparty: 5, site: 6, status: 7, paymentMethod: 8, memo: 9,
@@ -1028,7 +1050,7 @@ app.post("/api/tx/update", async (req, res) => {
     }
     await sheets.spreadsheets.values.update({
       spreadsheetId: TX_SHEET_ID,
-      range: `${TX_TAB}!A${sheetRow}:M${sheetRow}`,
+      range: `${TX_TAB}!A${sheetRow}:N${sheetRow}`,
       valueInputOption: "USER_ENTERED",
       requestBody: { values: [updated] },
     });
@@ -1217,11 +1239,11 @@ async function fetchAllTransactions(force = false) {
   const sheets = await getSheetsApi();
   const r = await sheets.spreadsheets.values.get({
     spreadsheetId: TX_SHEET_ID,
-    range: `${TX_TAB}!A2:M`,
+    range: `${TX_TAB}!A2:N`,
     valueRenderOption: "UNFORMATTED_VALUE",
     dateTimeRenderOption: "FORMATTED_STRING",
   });
-  // 各行: [日付, 種別, 大分類, 小分類, 金額, 対象, 現場, 状態, 支払方法, メモ, 写真, ソース, 元ID]
+  // 各行: [日付, 種別, 大分類, 小分類, 金額, 対象, 現場, 状態, 支払方法, メモ, 写真, ソース, 元ID, 登録日]
   const rows = (r.data.values || []).map((row) => ({
     date: String(row[0] || "").slice(0, 10),
     type: row[1] || "",
@@ -1235,6 +1257,7 @@ async function fetchAllTransactions(force = false) {
     memo: row[9] || "",
     source: row[11] || "",
     refId: row[12] || "",
+    registeredAt: String(row[13] || "").slice(0, 10),
   })).filter((r) => /^\d{4}-\d{2}-\d{2}$/.test(r.date) && (r.type === "収入" || r.type === "支出") && r.amount > 0);
   keiriCache.fetchedAt = Date.now();
   keiriCache.rows = rows;
@@ -1547,7 +1570,7 @@ app.post("/api/tx/delete-by-source", async (req, res) => {
     const sheets = await getSheetsApi();
     const r = await sheets.spreadsheets.values.get({
       spreadsheetId: TX_SHEET_ID,
-      range: `${TX_TAB}!A2:M`,
+      range: `${TX_TAB}!A2:N`,
       valueRenderOption: "UNFORMATTED_VALUE",
       dateTimeRenderOption: "FORMATTED_STRING",
     });
@@ -1565,12 +1588,12 @@ app.post("/api/tx/delete-by-source", async (req, res) => {
     // データ範囲を一旦クリア → 残行を書き戻し (絶対範囲指定で SUMIFS / QUERY は不変)
     await sheets.spreadsheets.values.clear({
       spreadsheetId: TX_SHEET_ID,
-      range: `${TX_TAB}!A2:M`,
+      range: `${TX_TAB}!A2:N`,
     });
     if (keep.length) {
       await sheets.spreadsheets.values.update({
         spreadsheetId: TX_SHEET_ID,
-        range: `${TX_TAB}!A2:M`,
+        range: `${TX_TAB}!A2:N`,
         valueInputOption: "USER_ENTERED",
         requestBody: { values: keep },
       });
