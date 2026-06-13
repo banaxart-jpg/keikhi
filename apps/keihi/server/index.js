@@ -936,9 +936,9 @@ app.post("/api/seikyu/migrate-to-drive", async (req, res) => {
       const yyyymm = String(it.issueDate || "").slice(0, 7) || new Date().toISOString().slice(0, 7);
       const ext = mimeType === "application/pdf" ? "pdf" : "jpg";
       const fname = `${String(it.issuer || "invoice").replace(/[\\/:*?"<>|]/g, "_").slice(0, 40)}_${id.slice(0, 8)}.${ext}`;
-      // 請求書を direction で「支払請求書」/「売上請求書」フォルダに振り分け
+      // 月の中で direction によって「支払請求書」/「売上請求書」フォルダに振り分け
       const categoryFolder = String(it.direction || "in") === "out" ? "売上請求書" : "支払請求書";
-      const dr = await uploadToDrive(buffer, fname, mimeType, [categoryFolder, yyyymm]);
+      const dr = await uploadToDrive(buffer, fname, mimeType, [yyyymm, categoryFolder]);
       if (!dr) throw new Error("Drive upload returned null");
       results.push({ id, ok: true, driveUrl: dr.url });
       okCount++;
@@ -2532,13 +2532,13 @@ app.post("/api/scan", async (req, res) => {
     } else {
       console.warn(`[scan] image not saved (storage=${!!storage}, bucket=${RECEIPTS_BUCKET || "(empty)"})`);
     }
-    // Drive にアップロード (税理士共有用、カテゴリ/月別フォルダに整理)。カメラ撮影は skip。
-    // フォルダ: 「領収書」 / 「支払請求書」 / 「売上請求書」 → YYYY-MM
+    // Drive にアップロード (税理士共有用、月別フォルダの中をカテゴリで分割)。カメラ撮影は skip。
+    // フォルダ: YYYY-MM → 「領収書」 / 「支払請求書」 / 「売上請求書」
     if (DRIVE_FOLDER_ID && !skipDrive) {
       const categoryFolder = kind === "invoice"
         ? (direction === "out" ? "売上請求書" : "支払請求書")
         : "領収書";
-      const dr = await uploadToDrive(buf, key.replace(/\//g, "_"), mimeType, [categoryFolder, currentYm]);
+      const dr = await uploadToDrive(buf, key.replace(/\//g, "_"), mimeType, [currentYm, categoryFolder]);
       if (dr) driveUrl = dr.url;
     }
 
