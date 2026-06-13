@@ -50,10 +50,20 @@ body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); 
 
 .detail { padding: 4px 16px 14px; border-top: 1px solid rgba(168,172,192,0.18); display: flex; flex-direction: column; gap: 10px; animation: slide-down 200ms ease-out; }
 @keyframes slide-down { from { opacity: 0; max-height: 0; padding-top: 0; padding-bottom: 0; } to { opacity: 1; max-height: 400px; padding-top: 12px; padding-bottom: 14px; } }
-.field-row { font-size: 12px; color: var(--text2); display: flex; gap: 6px; align-items: baseline; }
+.field-row { font-size: 12px; color: var(--text2); display: flex; gap: 6px; align-items: center; }
 .field-row .lbl { font-weight: 800; letter-spacing: 0.04em; color: var(--text2); flex-shrink: 0; min-width: 70px; display: flex; align-items: center; gap: 4px; }
 .field-row .val { color: var(--text); font-weight: 600; word-break: break-word; flex: 1; }
 .field-row .val.empty-val { color: var(--text3); font-style: italic; }
+.copy-btn { background: var(--bg); border: none; cursor: pointer; padding: 4px 7px; border-radius: 8px; box-shadow: 2px 2px 6px var(--sd), -2px -2px 6px var(--sl); color: var(--text2); font-family: 'Outfit', sans-serif; flex-shrink: 0; }
+.copy-btn:active, .copy-btn.flashed { box-shadow: inset 2px 2px 5px var(--sd); color: var(--bulb2); }
+.copy-btn .icon { font-size: 14px; }
+.mini-btn { display: inline-flex; align-items: center; gap: 3px; padding: 3px 8px; border-radius: 10px; border: none; font-family: 'Outfit', sans-serif; font-size: 10px; font-weight: 700; cursor: pointer; background: var(--bg); color: var(--bulb2); box-shadow: 2px 2px 6px var(--sd), -2px -2px 6px var(--sl); margin-left: 8px; }
+.mini-btn:active { box-shadow: inset 2px 2px 5px var(--sd); }
+.mini-btn:disabled { opacity: 0.6; cursor: wait; }
+.mini-btn .icon { font-size: 12px; }
+.icon.spin { animation: spin 0.9s linear infinite; display: inline-block; }
+@keyframes spin { from { transform: rotate(0); } to { transform: rotate(360deg); } }
+.act-btn.copy-all { color: var(--bulb2); }
 .actions { display: flex; gap: 8px; margin-top: 4px; }
 .act-btn { padding: 8px 14px; border-radius: 12px; border: none; cursor: pointer; font-family: 'Outfit', sans-serif; font-weight: 700; font-size: 12px; color: var(--text2); background: var(--bg); box-shadow: 3px 3px 8px var(--sd), -3px -3px 8px var(--sl); }
 .act-btn:active { box-shadow: inset 2px 2px 5px var(--sd), inset -2px -2px 5px var(--sl); transform: scale(0.96); }
@@ -111,6 +121,15 @@ textarea.inp { resize: vertical; min-height: 60px; font-family: 'Outfit', sans-s
     <div class="field">
       <label><span class="icon">location_on</span> 住所</label>
       <textarea class="inp" id="fAddress" placeholder="例: 東京都足立区西新井1-2-3" rows="2"></textarea>
+    </div>
+    <div class="field">
+      <label>
+        <span class="icon">local_post_office</span> 郵便番号
+        <button type="button" id="lookupPostalBtn" class="mini-btn" title="住所からAIで調べる">
+          <span class="icon">auto_awesome</span> 住所から探す
+        </button>
+      </label>
+      <input class="inp" id="fPostal" placeholder="例: 123-4567" maxlength="8">
     </div>
     <div class="field">
       <label><span class="icon">vpn_key</span> キーボックス</label>
@@ -213,14 +232,27 @@ function render() {
       ${isOpen ? `
         <div class="detail">
           <div class="field-row">
+            <span class="lbl"><span class="icon">domain</span> 現場名</span>
+            <span class="val">${escapeHtml(s.name)}</span>
+            <button class="copy-btn" data-act="copy" data-text="${escapeHtml(s.name)}" title="コピー"><span class="icon">content_copy</span></button>
+          </div>
+          <div class="field-row">
+            <span class="lbl"><span class="icon">local_post_office</span> 〒</span>
+            <span class="val ${s.postal ? "" : "empty-val"}">${s.postal ? escapeHtml(s.postal) : "未入力"}</span>
+            ${s.postal ? `<button class="copy-btn" data-act="copy" data-text="${escapeHtml(s.postal)}" title="コピー"><span class="icon">content_copy</span></button>` : ""}
+          </div>
+          <div class="field-row">
             <span class="lbl"><span class="icon">location_on</span> 住所</span>
             <span class="val ${s.address ? "" : "empty-val"}">${s.address ? escapeHtml(s.address) : "未入力"}</span>
+            ${s.address ? `<button class="copy-btn" data-act="copy" data-text="${escapeHtml(s.address)}" title="コピー"><span class="icon">content_copy</span></button>` : ""}
           </div>
           <div class="field-row">
             <span class="lbl"><span class="icon">vpn_key</span> キーボックス</span>
             <span class="val ${s.keyBox ? "" : "empty-val"}">${s.keyBox ? escapeHtml(s.keyBox) : "未入力"}</span>
+            ${s.keyBox ? `<button class="copy-btn" data-act="copy" data-text="${escapeHtml(s.keyBox)}" title="コピー"><span class="icon">content_copy</span></button>` : ""}
           </div>
           <div class="actions">
+            <button class="act-btn copy-all" data-act="copy-all" data-id="${sid}"><span class="icon">content_copy</span> 全部コピー</button>
             <button class="act-btn edit" data-act="edit" data-id="${sid}">編集</button>
             <button class="act-btn del" data-act="del" data-id="${sid}">削除</button>
           </div>
@@ -231,14 +263,22 @@ function render() {
   }
 }
 
-$("list").addEventListener("click", (e) => {
+$("list").addEventListener("click", async (e) => {
   const actBtn = e.target.closest("[data-act]");
   if (actBtn) {
+    e.stopPropagation();   // カードのトグルが走らないよう
+    const act = actBtn.dataset.act;
+    if (act === "copy") {
+      const text = actBtn.dataset.text || "";
+      await copyToClipboard(text, actBtn);
+      return;
+    }
     const id = actBtn.dataset.id;   // 文字列のまま
     const s = sites.find((x) => String(x.id) === id);
     if (!s) return;
-    if (actBtn.dataset.act === "edit") openEditModal(s);
-    if (actBtn.dataset.act === "del") onDelete(s);
+    if (act === "edit") openEditModal(s);
+    if (act === "del") onDelete(s);
+    if (act === "copy-all") await copyAllSiteInfo(s, actBtn);
     return;
   }
   const row = e.target.closest(".row");
@@ -248,11 +288,59 @@ $("list").addEventListener("click", (e) => {
   render();
 });
 
+async function copyToClipboard(text, btn) {
+  try {
+    await navigator.clipboard.writeText(text);
+    if (btn) flashBtn(btn, "✓");
+  } catch (e) {
+    alert("コピー失敗: " + e.message);
+  }
+}
+async function copyAllSiteInfo(s, btn) {
+  const parts = [];
+  if (s.name) parts.push(s.name);
+  if (s.postal) parts.push(`〒${s.postal}`);
+  if (s.address) parts.push(s.address);
+  if (s.keyBox) parts.push(`キーボックス: ${s.keyBox}`);
+  await copyToClipboard(parts.join("\n"), btn);
+}
+function flashBtn(btn, mark) {
+  const orig = btn.innerHTML;
+  btn.innerHTML = `<span style="font-weight:900;">${mark}</span>`;
+  btn.classList.add("flashed");
+  setTimeout(() => { btn.innerHTML = orig; btn.classList.remove("flashed"); }, 900);
+}
+
+// 住所 → Gemini で郵便番号を調べてフォームに自動入力。
+$("lookupPostalBtn")?.addEventListener("click", async () => {
+  const address = $("fAddress").value.trim();
+  if (!address) { $("modalErr").textContent = "住所を先に入力してください"; return; }
+  const btn = $("lookupPostalBtn");
+  btn.disabled = true;
+  const orig = btn.innerHTML;
+  btn.innerHTML = `<span class="icon spin">progress_activity</span> 調べてる…`;
+  try {
+    const resp = await api("POST", "/api/genba/lookup-postal", { address });
+    if (resp?.postal) {
+      $("fPostal").value = resp.postal;
+      $("modalErr").textContent = "";
+    } else {
+      $("modalErr").textContent = "郵便番号を特定できませんでした (手入力してください)";
+    }
+  } catch (e) {
+    $("modalErr").textContent = "検索失敗: " + e.message;
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = orig;
+  }
+});
+
 function openAddModal() {
   editingId = null;
   $("modalTitle").textContent = "新規現場";
   $("fName").value = "";
   $("fAddress").value = "";
+  $("fPostal").value = "";
   $("fKeyBox").value = "";
   $("modalErr").textContent = "";
   $("modal").classList.add("open");
@@ -263,6 +351,7 @@ function openEditModal(s) {
   $("modalTitle").textContent = "現場を編集";
   $("fName").value = s.name || "";
   $("fAddress").value = s.address || "";
+  $("fPostal").value = s.postal || "";
   $("fKeyBox").value = s.keyBox || "";
   $("modalErr").textContent = "";
   $("modal").classList.add("open");
@@ -277,15 +366,16 @@ $("saveBtn").addEventListener("click", async () => {
   if (!name) { $("modalErr").textContent = "現場名を入力してください"; $("fName").focus(); return; }
   const address = $("fAddress").value.trim();
   const keyBox = $("fKeyBox").value.trim();
+  const postal = $("fPostal").value.trim();
   const btn = $("saveBtn");
   btn.disabled = true;
   btn.textContent = "保存中…";
   try {
     let saved;
     if (editingId) {
-      saved = await api("PUT", "/api/sites/" + editingId, { name, address, keyBox });
+      saved = await api("PUT", "/api/sites/" + editingId, { name, address, keyBox, postal });
     } else {
-      saved = await api("POST", "/api/sites", { name, address, keyBox });
+      saved = await api("POST", "/api/sites", { name, address, keyBox, postal });
     }
     closeModal();
     // 戻り先指定があれば、新規追加した現場名を ?site= で渡して遷移

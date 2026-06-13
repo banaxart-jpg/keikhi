@@ -634,6 +634,7 @@ async function ensureSchema() {
     // sites: /genba/ アプリ用に住所 + キーボックスメモを保持
     await p.query("ALTER TABLE sites ADD COLUMN IF NOT EXISTS address TEXT");
     await p.query("ALTER TABLE sites ADD COLUMN IF NOT EXISTS key_box TEXT");
+    await p.query("ALTER TABLE sites ADD COLUMN IF NOT EXISTS postal TEXT");
     // 「会社」サイト (オフィス・会社全般の手配/タスク用) を常時用意
     await p.query("INSERT INTO sites (name) VALUES ('会社') ON CONFLICT (name) DO NOTHING");
     await p.query(`
@@ -710,7 +711,7 @@ app.get("/api/sites", async (req, res) => {
   try {
     await ensureSchema();
     const { rows } = await p.query(
-      'SELECT id, name, address, key_box AS "keyBox" FROM sites ORDER BY id ASC'
+      'SELECT id, name, address, key_box AS "keyBox", postal FROM sites ORDER BY id ASC'
     );
     res.json(rows);
   } catch (err) {
@@ -726,13 +727,14 @@ app.post("/api/sites", async (req, res) => {
   if (!name) return res.status(400).json({ error: "name required" });
   const address = (req.body?.address || "").trim() || null;
   const keyBox = (req.body?.keyBox || "").trim() || null;
+  const postal = (req.body?.postal || "").trim() || null;
   try {
     await ensureSchema();
     const { rows } = await p.query(
-      `INSERT INTO sites (name, address, key_box) VALUES ($1, $2, $3)
-       ON CONFLICT (name) DO UPDATE SET address=EXCLUDED.address, key_box=EXCLUDED.key_box
-       RETURNING id, name, address, key_box AS "keyBox"`,
-      [name, address, keyBox]
+      `INSERT INTO sites (name, address, key_box, postal) VALUES ($1, $2, $3, $4)
+       ON CONFLICT (name) DO UPDATE SET address=EXCLUDED.address, key_box=EXCLUDED.key_box, postal=EXCLUDED.postal
+       RETURNING id, name, address, key_box AS "keyBox", postal`,
+      [name, address, keyBox, postal]
     );
     res.status(201).json(rows[0]);
   } catch (err) {
@@ -748,12 +750,13 @@ app.put("/api/sites/:id", async (req, res) => {
   if (!name) return res.status(400).json({ error: "name required" });
   const address = (req.body?.address || "").trim() || null;
   const keyBox = (req.body?.keyBox || "").trim() || null;
+  const postal = (req.body?.postal || "").trim() || null;
   try {
     await ensureSchema();
     const { rows } = await p.query(
-      `UPDATE sites SET name=$1, address=$2, key_box=$3 WHERE id=$4
-       RETURNING id, name, address, key_box AS "keyBox"`,
-      [name, address, keyBox, req.params.id]
+      `UPDATE sites SET name=$1, address=$2, key_box=$3, postal=$4 WHERE id=$5
+       RETURNING id, name, address, key_box AS "keyBox", postal`,
+      [name, address, keyBox, postal, req.params.id]
     );
     if (!rows.length) return res.status(404).json({ error: "not found" });
     res.json(rows[0]);
@@ -772,6 +775,35 @@ app.delete("/api/sites/:id", async (req, res) => {
   } catch (err) {
     console.error("sites delete", err);
     res.status(500).json({ error: err.message });
+  }
+});
+
+// 住所から郵便番号を調べる (現場アプリの自動入力用)。Gemini で安価にやれる。
+// 返り値: { postal: "123-4567" } または { postal: "" } (判別不可)
+app.post("/api/genba/lookup-postal", async (req, res) => {
+  if (!genAI) return res.status(503).json({ error: "GEMINI_API_KEY not configured" });
+  const address = String(req.body?.address || "").trim();
+  if (!address) return res.json({ postal: "" });
+  try {
+    const prompt = `次の日本の住所の郵便番号 (7 桁、123-4567 形式) を答えてください。確実に分かる場合のみ。
+住所: ${address}
+
+回答は JSON で {"postal":"123-4567"} の形式。判別できない、または日本以外の住所の場合は {"postal":""} を返してください。
+町名・番地・建物名まで完全に一致しなくても、町名レベルで特定できれば OK。`;
+    const { result } = await callGeminiWithFallback(prompt, {
+      primaryModel: "gemini-2.5-flash-lite",   // 軽量モデルで十分
+      maxOutputTokens: 64,
+      jsonMode: true,
+    });
+    const text = result?.response?.text?.() || "";
+    const parsed = parseLooseJson(text, { logErr: false });
+    const postal = String(parsed?.postal || "").trim();
+    // 形式チェック: 7 桁数字 (ハイフン任意)
+    const m = postal.match(/(\d{3})-?(\d{4})/);
+    res.json({ postal: m ? `${m[1]}-${m[2]}` : "" });
+  } catch (e) {
+    console.warn("[genba] postal lookup failed:", e.message);
+    res.json({ postal: "" });
   }
 });
 
