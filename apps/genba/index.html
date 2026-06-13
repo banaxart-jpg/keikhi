@@ -64,6 +64,13 @@ body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); 
 .icon.spin { animation: spin 0.9s linear infinite; display: inline-block; }
 @keyframes spin { from { transform: rotate(0); } to { transform: rotate(360deg); } }
 .act-btn.copy-all { color: var(--bulb2); }
+.act-btn.done-btn { color: var(--ok, #7c9d75); }
+.act-btn.resume { color: var(--bulb2); }
+/* 完了現場: 全体を少し沈める + 完了タグを付与 */
+.card.done { opacity: 0.55; }
+.card.done.open { opacity: 1; }
+.card.done .icon-lead { color: var(--ok, #7c9d75); }
+.done-tag { display: inline-block; padding: 1px 7px; border-radius: 8px; font-size: 9px; font-weight: 800; color: var(--ok, #7c9d75); background: rgba(124,157,117,0.18); margin-left: 6px; vertical-align: 2px; letter-spacing: 0.04em; }
 .actions { display: flex; gap: 8px; margin-top: 4px; }
 .act-btn { padding: 8px 14px; border-radius: 12px; border: none; cursor: pointer; font-family: 'Outfit', sans-serif; font-weight: 700; font-size: 12px; color: var(--text2); background: var(--bg); box-shadow: 3px 3px 8px var(--sd), -3px -3px 8px var(--sl); }
 .act-btn:active { box-shadow: inset 2px 2px 5px var(--sd), inset -2px -2px 5px var(--sl); transform: scale(0.96); }
@@ -220,13 +227,14 @@ function render() {
     // 数値化すると行展開 / 編集 / 削除ボタンの id 比較が一致しなくなるので
     // 全て String(...) で揃える。
     const sid = String(s.id);
+    const isDone = !!s.doneAt;
     const card = document.createElement("div");
-    card.className = "card" + (openId === sid ? " open" : "");
+    card.className = "card" + (openId === sid ? " open" : "") + (isDone ? " done" : "");
     const isOpen = openId === sid;
     card.innerHTML = `
       <div class="row" data-id="${sid}">
-        <span class="icon icon-lead">domain</span>
-        <div class="name">${escapeHtml(s.name)}</div>
+        <span class="icon icon-lead">${isDone ? "task_alt" : "domain"}</span>
+        <div class="name">${escapeHtml(s.name)}${isDone ? ' <span class="done-tag">完了</span>' : ""}</div>
         <span class="icon chev">expand_more</span>
       </div>
       ${isOpen ? `
@@ -253,6 +261,9 @@ function render() {
           </div>
           <div class="actions">
             <button class="act-btn copy-all" data-act="copy-all" data-id="${sid}"><span class="icon">content_copy</span> 全部コピー</button>
+            <button class="act-btn ${isDone ? "resume" : "done-btn"}" data-act="${isDone ? "resume" : "done"}" data-id="${sid}">
+              <span class="icon">${isDone ? "refresh" : "task_alt"}</span> ${isDone ? "工事再開" : "完了"}
+            </button>
             <button class="act-btn edit" data-act="edit" data-id="${sid}">編集</button>
             <button class="act-btn del" data-act="del" data-id="${sid}">削除</button>
           </div>
@@ -279,6 +290,8 @@ $("list").addEventListener("click", async (e) => {
     if (act === "edit") openEditModal(s);
     if (act === "del") onDelete(s);
     if (act === "copy-all") await copyAllSiteInfo(s, actBtn);
+    if (act === "done") await toggleDone(s, true);
+    if (act === "resume") await toggleDone(s, false);
     return;
   }
   const row = e.target.closest(".row");
@@ -303,6 +316,16 @@ async function copyAllSiteInfo(s, btn) {
   if (s.address) parts.push(s.address);
   if (s.keyBox) parts.push(`キーボックス: ${s.keyBox}`);
   await copyToClipboard(parts.join("\n"), btn);
+}
+async function toggleDone(s, done) {
+  try {
+    const updated = await api("PATCH", "/api/sites/" + s.id + "/done", { done });
+    // クライアント側の現場情報を差し替えて再描画 (一覧の並び順はサーバ側で done_at で決定)
+    Object.assign(s, updated);
+    await loadSites();
+  } catch (e) {
+    alert((done ? "完了" : "再開") + "失敗: " + e.message);
+  }
 }
 function flashBtn(btn, mark) {
   const orig = btn.innerHTML;

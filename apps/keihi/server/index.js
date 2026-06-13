@@ -52,7 +52,7 @@ const SERVER_STARTED_AT = new Date().toISOString();
 
 app.use((req, res, next) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Methods", "GET,POST,PUT,DELETE,OPTIONS");
+  res.setHeader("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "content-type,authorization");
   if (req.method === "OPTIONS") return res.sendStatus(204);
   next();
@@ -653,6 +653,7 @@ async function ensureSchema() {
     await p.query("ALTER TABLE sites ADD COLUMN IF NOT EXISTS address TEXT");
     await p.query("ALTER TABLE sites ADD COLUMN IF NOT EXISTS key_box TEXT");
     await p.query("ALTER TABLE sites ADD COLUMN IF NOT EXISTS postal TEXT");
+    await p.query("ALTER TABLE sites ADD COLUMN IF NOT EXISTS done_at TIMESTAMPTZ");
     // 「会社」サイト (オフィス・会社全般の手配/タスク用) を常時用意
     await p.query("INSERT INTO sites (name) VALUES ('会社') ON CONFLICT (name) DO NOTHING");
     await p.query(`
@@ -729,7 +730,11 @@ app.get("/api/sites", async (req, res) => {
   try {
     await ensureSchema();
     const { rows } = await p.query(
-      'SELECT id, name, address, key_box AS "keyBox", postal FROM sites ORDER BY id ASC'
+      `SELECT id, name, address, key_box AS "keyBox", postal, done_at AS "doneAt"
+         FROM sites
+        ORDER BY (done_at IS NOT NULL) ASC,
+                 CASE WHEN done_at IS NULL THEN id END ASC,
+                 done_at DESC`
     );
     res.json(rows);
   } catch (err) {
@@ -792,6 +797,26 @@ app.delete("/api/sites/:id", async (req, res) => {
     res.status(204).end();
   } catch (err) {
     console.error("sites delete", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 完了/再開の toggle。{ done: true } で done_at = NOW()、{ done: false } で NULL に。
+app.patch("/api/sites/:id/done", async (req, res) => {
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  const done = req.body?.done === true;
+  try {
+    await ensureSchema();
+    const { rows } = await p.query(
+      `UPDATE sites SET done_at = ${done ? "NOW()" : "NULL"} WHERE id = $1
+       RETURNING id, name, address, key_box AS "keyBox", postal, done_at AS "doneAt"`,
+      [req.params.id]
+    );
+    if (!rows.length) return res.status(404).json({ error: "not found" });
+    res.json(rows[0]);
+  } catch (err) {
+    console.error("sites done toggle", err);
     res.status(500).json({ error: err.message });
   }
 });
