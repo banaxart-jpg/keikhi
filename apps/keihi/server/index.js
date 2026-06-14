@@ -5117,74 +5117,85 @@ async function ensureSekoUser(p, email) {
   return rows[0];
 }
 
-// AI で 1 問だけ生成して seko_questions に INSERT、新しい question row を返す。
-// 型は choice 中心 (二次の記述系も AI 採点しやすいよう穴埋め/語群選択化を促す)。
-async function generateSekoQuestion(p, genre, groupId, examLevel) {
+// AI で N 問まとめて生成して seko_questions に INSERT、行配列を返す。
+// 1 リクエストで複数問取ることでコールドスタートを大幅短縮 (10問 ~10 秒)。
+async function generateSekoQuestionsBatch(p, items) {
   if (!genAI) throw new Error("Gemini 未設定");
-  const grpRow = (SEKO_GENRES_DATA?.groups || []).find((g) => g.id === groupId);
-  const grpName = grpRow?.name || "建築施工管理";
-  const subject = SEKO_GENRES_DATA?.domain?.ai_subject || "建築施工管理技士検定";
-  const isNiji = examLevel === "2ji" || grpRow?.exam_level === "2ji";
-  const typeHint = isNiji
-    ? "二次検定対策。穴埋め (語群から1つ選ぶ4択) もしくは「次の記述で誤っているのはどれか」の四肢択一を作る。記述問題そのものは選択式に変換して出題する。"
-    : "一次検定対策。技術検定の過去問形式 (四肢択一) で 1 問。";
+  if (!items.length) return [];
+  const subject = SEKO_GENRES_DATA?.domain?.ai_subject || "2級建築施工管理技士検定";
+  const lines = items.map((it, i) => {
+    const grp = (SEKO_GENRES_DATA?.groups || []).find((g) => g.id === it.groupId);
+    const lvl = it.examLevel === "2ji" ? "二次" : "一次";
+    return `[${i + 1}] 分野: ${grp?.name || it.groupId} / ジャンル: ${it.genre} / 試験: ${lvl}`;
+  }).join("\n");
   const prompt = `あなたは ${subject} の出題者。
-分野: ${grpName}
-ジャンル: ${genre}
-形式の指示: ${typeHint}
+次の ${items.length} 件、それぞれ別の問題を作って:
+${lines}
 
-出題方針:
-- 受験生が実務で「これ知らなかった」と気づける、頻出論点をひとつだけ。
-- 引っ掛けや細かすぎる数値より、現場での意味と判断基準を優先。
-- 「四つのうち最も不適当なものはどれか」「次のうち正しいものはどれか」型の四肢択一を 1 問。
-- options は 4 つ、いずれもそれっぽい誤答も混ぜる。answer は正解の選択肢の文字列そのもの (A/B/C/D の記号は不要)。
-- 解説は 3-5 文。なぜそれが正解か、誤答はなぜ違うか、現場での運用上の注意を 1 文。
+各問の方針:
+- 受験生が現場で「これ知らなかった」と気づける頻出論点をひとつ。
+- 細かすぎる数値より現場での意味・判断基準を優先。
+- 「四つのうち最も不適当なものはどれか」「次のうち正しいものはどれか」型の四肢択一。
+- options は 4 つ。answer は正解の選択肢の文字列そのまま (A/B/C/D の記号不要)。
+- 解説は 3-5 文。なぜ正解か、誤答はなぜ違うか、現場の留意点を 1 文。
+- 二次対策の場合は経験記述や記述式の論点を選択肢化したものに寄せる。
 
-JSON でだけ返す (前置きや説明禁止):
-{
-  "category": "${groupId}",
-  "difficulty": 3,
-  "type": "choice",
-  "question": "...",
-  "options": ["...", "...", "...", "..."],
-  "answer": "options のうちの正解そのまま",
-  "keywords": ["..."],
-  "explanation": "3-5 文の解説",
-  "claude_example": "",
-  "genre": "${genre}",
-  "group_id": "${groupId}",
-  "exam_level": "${isNiji ? "2ji" : "1ji"}"
-}`;
+JSON 配列でだけ返す (前置きや説明禁止)。配列の長さは ${items.length} 件、入力順:
+[
+  {
+    "category": "group_id",
+    "difficulty": 3,
+    "type": "choice",
+    "question": "...",
+    "options": ["...","...","...","..."],
+    "answer": "options のうちの正解",
+    "keywords": ["..."],
+    "explanation": "3-5 文",
+    "claude_example": ""
+  },
+  ... (合計 ${items.length} 件)
+]`;
   const { result } = await callGeminiWithFallback(prompt, {
     primaryModel: "gemini-2.5-flash",
-    maxOutputTokens: 1200,
+    maxOutputTokens: Math.min(8000, 800 + items.length * 600),
   });
   const text = (result.response.text() || "").trim();
-  const m = text.match(/\{[\s\S]*\}/);
-  if (!m) throw new Error("AI レスポンスから JSON 取れず");
-  const parsed = JSON.parse(m[0]);
-  const ins = await p.query(
-    `INSERT INTO seko_questions
-       (category, difficulty, type, question, options, answer, keywords, explanation,
-        claude_example, genre, group_id, exam_level, source)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'generated')
-     RETURNING *`,
-    [
-      parsed.category || groupId,
-      Number(parsed.difficulty) || 3,
-      parsed.type === "free" ? "free" : "choice",
-      String(parsed.question || "").trim(),
-      JSON.stringify(parsed.options || []),
-      String(parsed.answer || "").trim(),
-      JSON.stringify(parsed.keywords || []),
-      String(parsed.explanation || "").trim(),
-      parsed.claude_example || "",
-      genre,
-      groupId,
-      isNiji ? "2ji" : "1ji",
-    ]
-  );
-  return ins.rows[0];
+  const m = text.match(/\[[\s\S]*\]/);
+  if (!m) throw new Error("AI レスポンスから JSON 配列取れず");
+  const arr = JSON.parse(m[0]);
+  if (!Array.isArray(arr)) throw new Error("配列ではない");
+  const out = [];
+  for (let i = 0; i < arr.length && i < items.length; i++) {
+    const parsed = arr[i] || {};
+    const it = items[i];
+    try {
+      const ins = await p.query(
+        `INSERT INTO seko_questions
+           (category, difficulty, type, question, options, answer, keywords, explanation,
+            claude_example, genre, group_id, exam_level, source)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'generated')
+         RETURNING *`,
+        [
+          parsed.category || it.groupId,
+          Number(parsed.difficulty) || 3,
+          parsed.type === "free" ? "free" : "choice",
+          String(parsed.question || "").trim(),
+          JSON.stringify(parsed.options || []),
+          String(parsed.answer || "").trim(),
+          JSON.stringify(parsed.keywords || []),
+          String(parsed.explanation || "").trim(),
+          parsed.claude_example || "",
+          it.genre,
+          it.groupId,
+          it.examLevel === "2ji" ? "2ji" : "1ji",
+        ]
+      );
+      out.push(ins.rows[0]);
+    } catch (e) {
+      console.warn("[seko] insert failed for item", i, e.message);
+    }
+  }
+  return out;
 }
 
 // ───── seko endpoints ─────
@@ -5364,26 +5375,29 @@ app.post("/api/seko/sessions/start", async (req, res) => {
 
     let picked = fresh.slice(0, SESSION_SIZE);
 
-    // 足りなければ AI で生成して埋める
-    let gens = 0;
-    const GEN_DEADLINE = Date.now() + 25000;   // 25 秒タイムアウト
-    while (picked.length < SESSION_SIZE && Date.now() < GEN_DEADLINE && gens < 6) {
-      const g = targetGenres[Math.floor(Math.random() * targetGenres.length)];
-      const groupId = SEKO_GENRE_TO_GROUP.get(g);
-      const groupRow = (SEKO_GENRES_DATA?.groups || []).find((x) => x.id === groupId);
+    // 足りなければ AI で 1 リクエストにまとめて生成 (~10 秒で N 問取れる)
+    const need = SESSION_SIZE - picked.length;
+    if (need > 0) {
+      const items = [];
+      for (let i = 0; i < need; i++) {
+        const g = targetGenres[Math.floor(Math.random() * targetGenres.length)];
+        const groupId = SEKO_GENRE_TO_GROUP.get(g);
+        const groupRow = (SEKO_GENRES_DATA?.groups || []).find((x) => x.id === groupId);
+        items.push({ genre: g, groupId, examLevel: groupRow?.exam_level || "1ji" });
+      }
       try {
-        const q = await generateSekoQuestion(p, g, groupId, groupRow?.exam_level || "1ji");
-        picked.push(q);
-        gens++;
+        const gen = await generateSekoQuestionsBatch(p, items);
+        picked.push(...gen);
       } catch (e) {
-        console.warn("[seko] gen failed:", e.message);
-        gens++;
-        break;
+        console.warn("[seko] batch gen failed:", e.message);
       }
     }
 
     if (!picked.length) {
-      return res.status(503).json({ error: "問題を準備できませんでした。少し待って再試行してください。" });
+      return res.status(503).json({
+        error: "問題を準備できませんでした。少し待ってもう一度試してください。",
+        hint: "AI 出題生成に失敗。Gemini API のレート制限か接続エラーの可能性",
+      });
     }
 
     res.json({
