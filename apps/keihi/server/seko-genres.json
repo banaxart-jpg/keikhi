@@ -12,17 +12,17 @@
       "PERT 図はアメリカ海軍のポラリスミサイル開発(1958)で生まれた"
     ]
   },
-  "_phase_note": "exam_target が first_full のユーザーは全 phase、second_only のユーザーは exam_level=2ji の group / genre だけが出る (server 側で filter)。",
+  "_phase_note": "exam_target が first_full なら全 phase、second_only なら exam_level=2ji の group のみ。さらに shubetsu (kenchiku/kutai/shiage) で group.shubetsu_relevance を AND フィルタする。",
   "phases": [
     {
-      "_label": "一次: 建築学 + 施工 + 施工管理法 + 法規 の基礎を一周",
+      "_label": "一次: 建築学 + 施工 + 施工管理法 + 法規 (種別関係なく共通プールから選択回答)",
       "max_correct": 60,
       "groups": ["kenchiku_gaku", "shiko_doboku", "shiko_kotai", "shiko_shiage", "kanri_ho", "ho_ki"]
     },
     {
-      "_label": "二次: 経験記述 + 施工記述 + 用語",
+      "_label": "二次: 経験記述 + 共通記述 + 種別別記述 (問題5) + 用語",
       "max_correct": 160,
-      "groups": ["kenchiku_gaku", "shiko_doboku", "shiko_kotai", "shiko_shiage", "kanri_ho", "ho_ki", "niji_keiken", "niji_kijutsu", "niji_yougo"]
+      "groups": ["niji_keiken", "niji_kijutsu_kyotsu", "niji_kijutsu_kenchiku", "niji_kijutsu_kutai", "niji_kijutsu_shiage", "niji_yougo"]
     }
   ],
   "ui_template_groups": [],
@@ -33,6 +33,7 @@
       "_purpose": "環境工学 (採光・換気・音響・熱)、構造力学、材料の基礎。一次の頭。",
       "color": "#0891b2",
       "exam_level": "1ji",
+      "shubetsu_relevance": ["kenchiku", "kutai", "shiage"],
       "genres": [
         { "name": "採光・照明 (昼光率・人工照明)", "target_count": 8 },
         { "name": "換気 (機械換気・自然換気の方式)", "target_count": 8 },
@@ -53,9 +54,10 @@
     {
       "id": "shiko_doboku",
       "name": "施工 (仮設・土工事・地業)",
-      "_purpose": "工事着手前後の仮設、掘削、杭・基礎の打ち方。",
+      "_purpose": "工事着手前後の仮設、掘削、杭・基礎の打ち方。一次共通だが躯体寄り。",
       "color": "#b08968",
       "exam_level": "1ji",
+      "shubetsu_relevance": ["kenchiku", "kutai"],
       "genres": [
         { "name": "仮設工事 (足場・養生・仮囲い)", "target_count": 8 },
         { "name": "山留め (親杭横矢板・SMW)", "target_count": 8 },
@@ -67,9 +69,10 @@
     {
       "id": "shiko_kotai",
       "name": "施工 (躯体工事)",
-      "_purpose": "鉄筋・コンクリート・鉄骨・木造の本体工事。",
+      "_purpose": "鉄筋・コンクリート・鉄骨・木造の本体工事。躯体種別のメイン分野。",
       "color": "#7c9d75",
       "exam_level": "1ji",
+      "shubetsu_relevance": ["kenchiku", "kutai"],
       "genres": [
         { "name": "鉄筋工事 (加工・組立・継手・かぶり)", "target_count": 10 },
         { "name": "型枠工事 (せき板・支保工・打設時の側圧)", "target_count": 8 },
@@ -84,9 +87,10 @@
     {
       "id": "shiko_shiage",
       "name": "施工 (仕上工事)",
-      "_purpose": "防水、屋根、左官、塗装、内装、外装の仕上げ。",
+      "_purpose": "防水、屋根、左官、塗装、内装、外装の仕上げ。仕上種別のメイン分野。",
       "color": "#c4a574",
       "exam_level": "1ji",
+      "shubetsu_relevance": ["kenchiku", "shiage"],
       "genres": [
         { "name": "防水工事 (アスファルト・改質アスファルト・シート)", "target_count": 10 },
         { "name": "シーリング工事 (打設・養生・3面接着)", "target_count": 6 },
@@ -104,9 +108,10 @@
     {
       "id": "kanri_ho",
       "name": "施工管理法 (工程・品質・安全・原価)",
-      "_purpose": "一次の山。工程表・QC・労災防止・原価のコントロール。",
+      "_purpose": "一次の山。工程表・QC・労災防止・原価のコントロール。種別共通。",
       "color": "#4338ca",
       "exam_level": "1ji",
+      "shubetsu_relevance": ["kenchiku", "kutai", "shiage"],
       "genres": [
         { "name": "施工計画書 (作成項目と承認手順)", "target_count": 6 },
         { "name": "工程管理 (ガントチャート・出来高累計曲線)", "target_count": 8 },
@@ -122,9 +127,10 @@
     {
       "id": "ho_ki",
       "name": "法規",
-      "_purpose": "建築基準法、労働安全衛生法、労働基準法、建設業法、廃棄物処理法。",
+      "_purpose": "建築基準法、労働安全衛生法、労働基準法、建設業法、廃棄物処理法。種別共通。",
       "color": "#b5766a",
       "exam_level": "1ji",
+      "shubetsu_relevance": ["kenchiku", "kutai", "shiage"],
       "genres": [
         { "name": "建築基準法 (用語の定義・建築確認)", "target_count": 8 },
         { "name": "建築基準法 (単体規定・集団規定)", "target_count": 6 },
@@ -139,10 +145,11 @@
     },
     {
       "id": "niji_keiken",
-      "name": "二次: 経験記述",
-      "_purpose": "自身の現場経験を「品質管理」「工程管理」「安全管理」の観点で書く出題。AI が問いを出して書かせる。",
+      "name": "二次: 経験記述 (問題1)",
+      "_purpose": "自身の現場経験を「品質管理」「工程管理」「安全管理」の観点で書く出題。種別共通。",
       "color": "#9b7591",
       "exam_level": "2ji",
+      "shubetsu_relevance": ["kenchiku", "kutai", "shiage"],
       "genres": [
         { "name": "経験記述: 工事概要の書き方", "target_count": 4 },
         { "name": "経験記述: 品質管理で工夫したこと", "target_count": 6 },
@@ -152,32 +159,80 @@
       ]
     },
     {
-      "id": "niji_kijutsu",
-      "name": "二次: 施工記述",
-      "_purpose": "工種別の留意点・施工手順・不具合対策を文章で書く。AI が穴埋め化・要点列挙化で出題。",
+      "id": "niji_kijutsu_kyotsu",
+      "name": "二次: 共通記述 (問題2-4)",
+      "_purpose": "問題2 用語解説 / 問題3 工程管理 / 問題4 法規。種別関係なく全員出題。",
       "color": "#7a6e96",
       "exam_level": "2ji",
+      "shubetsu_relevance": ["kenchiku", "kutai", "shiage"],
+      "genres": [
+        { "name": "用語解説: 仮設・安全 (問題2)", "target_count": 6 },
+        { "name": "用語解説: 工程・品質 (問題2)", "target_count": 6 },
+        { "name": "工程管理: ネットワーク工程表の読み方 (問題3)", "target_count": 8 },
+        { "name": "工程管理: バーチャート工程表の読み方 (問題3)", "target_count": 4 },
+        { "name": "法規: 建設業法 (問題4)", "target_count": 4 },
+        { "name": "法規: 労働安全衛生法 (問題4)", "target_count": 4 },
+        { "name": "法規: 建築基準法 (問題4)", "target_count": 4 }
+      ]
+    },
+    {
+      "id": "niji_kijutsu_kutai",
+      "name": "二次: 躯体工事 記述 (問題5-B)",
+      "_purpose": "躯体種別の人だけ解く問題5-B。鉄筋・コンクリート・鉄骨・型枠の留意点。",
+      "color": "#7c9d75",
+      "exam_level": "2ji",
+      "shubetsu_relevance": ["kutai"],
       "genres": [
         { "name": "鉄筋工事の留意点 (記述)", "target_count": 6 },
         { "name": "コンクリート打設の留意点 (記述)", "target_count": 8 },
         { "name": "鉄骨建方の留意点 (記述)", "target_count": 6 },
-        { "name": "防水工事の留意点 (記述)", "target_count": 6 },
+        { "name": "型枠工事の留意点 (記述)", "target_count": 4 }
+      ]
+    },
+    {
+      "id": "niji_kijutsu_shiage",
+      "name": "二次: 仕上工事 記述 (問題5-C)",
+      "_purpose": "仕上種別の人だけ解く問題5-C。防水・タイル・塗装・内装・建具・断熱の留意点。内装業はここが本丸。",
+      "color": "#c4a574",
+      "exam_level": "2ji",
+      "shubetsu_relevance": ["shiage"],
+      "genres": [
+        { "name": "防水工事の留意点 (記述)", "target_count": 8 },
+        { "name": "シーリング工事の留意点 (記述)", "target_count": 4 },
         { "name": "タイル工事の留意点 (記述)", "target_count": 6 },
-        { "name": "塗装工事の留意点 (記述)", "target_count": 4 },
-        { "name": "内装工事の留意点 (記述)", "target_count": 4 },
-        { "name": "工程管理: ネットワーク工程表の読み方 (記述)", "target_count": 8 }
+        { "name": "塗装工事の留意点 (記述)", "target_count": 6 },
+        { "name": "内装ボード工事の留意点 (記述)", "target_count": 6 },
+        { "name": "床仕上げ工事の留意点 (記述)", "target_count": 6 },
+        { "name": "壁紙・クロス工事の留意点 (記述)", "target_count": 4 },
+        { "name": "建具・ガラス工事の留意点 (記述)", "target_count": 4 },
+        { "name": "断熱・気密工事の留意点 (記述)", "target_count": 4 },
+        { "name": "改修工事の留意点 (記述)", "target_count": 4 }
+      ]
+    },
+    {
+      "id": "niji_kijutsu_kenchiku",
+      "name": "二次: 建築一式 記述 (問題5-A)",
+      "_purpose": "建築種別の人だけ解く問題5-A。複数工種の総合管理。",
+      "color": "#a87f9c",
+      "exam_level": "2ji",
+      "shubetsu_relevance": ["kenchiku"],
+      "genres": [
+        { "name": "総合管理: 仮設計画の留意点 (記述)", "target_count": 4 },
+        { "name": "総合管理: 各工事の関連と工程 (記述)", "target_count": 6 },
+        { "name": "総合管理: 改修工事の留意点 (記述)", "target_count": 4 }
       ]
     },
     {
       "id": "niji_yougo",
       "name": "二次: 用語穴埋め",
-      "_purpose": "施工管理用語を語群選択 + 短答で身につける。択一化しやすい部分。",
+      "_purpose": "施工管理用語を語群選択 + 短答で身につける。択一化しやすい部分。種別共通だが種別寄りの用語を多めに。",
       "color": "#8aa6a8",
       "exam_level": "2ji",
+      "shubetsu_relevance": ["kenchiku", "kutai", "shiage"],
       "genres": [
-        { "name": "用語: 仮設・土工", "target_count": 6 },
-        { "name": "用語: 躯体・コンクリート", "target_count": 8 },
-        { "name": "用語: 鉄筋・鉄骨", "target_count": 6 },
+        { "name": "用語: 仮設・土工", "target_count": 4 },
+        { "name": "用語: 躯体・コンクリート", "target_count": 6 },
+        { "name": "用語: 鉄筋・鉄骨", "target_count": 4 },
         { "name": "用語: 仕上 (防水・屋根・左官・タイル・塗装)", "target_count": 10 },
         { "name": "用語: 設備・外構", "target_count": 4 }
       ]

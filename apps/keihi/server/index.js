@@ -770,11 +770,14 @@ async function ensureSchema() {
         total_answers   INTEGER NOT NULL DEFAULT 0,
         visible_to_peers BOOLEAN NOT NULL DEFAULT true,
         exam_target     TEXT,                        -- 'first_full' | 'second_only'
+        shubetsu        TEXT,                        -- 'kenchiku' | 'kutai' | 'shiage' (2級建築施工管理技士の受検種別)
         last_session_at TIMESTAMPTZ,
         created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
         updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
       )
     `);
+    // 既存テーブルに shubetsu カラム追加 (ALTER ... IF NOT EXISTS は PG 9.6+)
+    await p.query(`ALTER TABLE seko_users ADD COLUMN IF NOT EXISTS shubetsu TEXT`);
     schemaMigrated = true;
     console.log("[schema] migration ok: records.drive_url + tasks + yado_bookings + seko_* ensured");
   } catch (e) {
@@ -5078,21 +5081,15 @@ app.put("/api/kotonoha/me/visibility", async (req, res) => {
 let SEKO_GENRES_DATA = null;
 let SEKO_GENRE_TO_GROUP = new Map();
 let SEKO_GENRE_TARGET = new Map();
-let SEKO_GENRES_BY_PHASE = { first_full: new Set(), second_only: new Set() };
+let SEKO_GROUP_BY_ID = new Map();        // group_id → group object (shubetsu_relevance 参照用)
 try {
   const raw = fs.readFileSync(path.join(__dirname, "seko-genres.json"), "utf8");
   SEKO_GENRES_DATA = JSON.parse(raw);
   for (const g of SEKO_GENRES_DATA.groups || []) {
+    SEKO_GROUP_BY_ID.set(g.id, g);
     for (const gen of g.genres || []) {
       SEKO_GENRE_TO_GROUP.set(gen.name, g.id);
       SEKO_GENRE_TARGET.set(gen.name, gen.target_count || 10);
-      // exam_level 振り分け: 2ji は second_only に、1ji/null は両方に出す
-      if (g.exam_level === "2ji") {
-        SEKO_GENRES_BY_PHASE.first_full.add(gen.name);
-        SEKO_GENRES_BY_PHASE.second_only.add(gen.name);
-      } else {
-        SEKO_GENRES_BY_PHASE.first_full.add(gen.name);
-      }
     }
   }
   console.log(`[seko] loaded ${SEKO_GENRE_TO_GROUP.size} genres / ${SEKO_GENRES_DATA.groups?.length || 0} groups`);
@@ -5100,10 +5097,30 @@ try {
   console.warn("[seko] genres.json load failed:", e.message);
 }
 
-function sekoGenresForUser(examTarget) {
-  if (examTarget === "second_only") return SEKO_GENRES_BY_PHASE.second_only;
-  return SEKO_GENRES_BY_PHASE.first_full;
+// exam_target + shubetsu でユーザーに出題して良いジャンル名一覧を返す。
+// - exam_target='second_only' → exam_level='2ji' の group のみ
+// - exam_target='first_full'  → 全 group (一次 + 二次)
+// - shubetsu='shiage' のユーザーには group.shubetsu_relevance に 'shiage' が含まれる group だけ
+// - shubetsu 未設定なら全部通す (= 旧挙動互換)
+function sekoGenresForUser(examTarget, shubetsu) {
+  const out = [];
+  for (const g of SEKO_GENRES_DATA?.groups || []) {
+    if (examTarget === "second_only" && g.exam_level !== "2ji") continue;
+    if (shubetsu) {
+      const rel = Array.isArray(g.shubetsu_relevance) ? g.shubetsu_relevance : null;
+      // 関連配列が無い group は「種別共通」と解釈して通す
+      if (rel && !rel.includes(shubetsu)) continue;
+    }
+    for (const gen of g.genres || []) out.push(gen.name);
+  }
+  return out;
 }
+
+const SHUBETSU_LABEL = {
+  kenchiku: "建築 (建築一式)",
+  kutai: "躯体 (鉄筋・鉄骨・コンクリート)",
+  shiage: "仕上げ (内装・防水・タイル・塗装・建具)",
+};
 
 async function ensureSekoUser(p, email) {
   const display = String(email).split("@")[0] || "user";
@@ -5119,16 +5136,24 @@ async function ensureSekoUser(p, email) {
 
 // AI で N 問まとめて生成して seko_questions に INSERT、行配列を返す。
 // 1 リクエストで複数問取ることでコールドスタートを大幅短縮 (10問 ~10 秒)。
-async function generateSekoQuestionsBatch(p, items) {
+// shubetsu ('kenchiku'|'kutai'|'shiage') が指定されたら受検種別に合わせた論点・例題に寄せる。
+async function generateSekoQuestionsBatch(p, items, shubetsu) {
   if (!genAI) throw new Error("Gemini 未設定");
   if (!items.length) return [];
   const subject = SEKO_GENRES_DATA?.domain?.ai_subject || "2級建築施工管理技士検定";
+  const shubetsuLabel = shubetsu ? (SHUBETSU_LABEL[shubetsu] || shubetsu) : null;
   const lines = items.map((it, i) => {
-    const grp = (SEKO_GENRES_DATA?.groups || []).find((g) => g.id === it.groupId);
+    const grp = SEKO_GROUP_BY_ID.get(it.groupId);
     const lvl = it.examLevel === "2ji" ? "二次" : "一次";
     return `[${i + 1}] 分野: ${grp?.name || it.groupId} / ジャンル: ${it.genre} / 試験: ${lvl}`;
   }).join("\n");
+  const shubetsuBlock = shubetsuLabel ? `
+■ 受検種別 (重要): ${shubetsuLabel}
+- 受験生はこの種別で受けるため、出題は ${shubetsuLabel} の業務に直結する論点に絞ること。
+- ${shubetsu === "shiage" ? "防水・タイル・塗装・内装ボード・壁紙・床・建具・断熱・改修 を中心に。鉄筋径や鉄骨高力ボルトの細かい数値など、仕上技術者が現場で扱わない論点は避ける。" : ""}${shubetsu === "kutai" ? "鉄筋・型枠・コンクリート・鉄骨建方・木造軸組 を中心に。" : ""}${shubetsu === "kenchiku" ? "建築一式の総合管理 (複数工種の関連・工程・仮設) を中心に。" : ""}
+- 解説の最後に「【${shubetsuLabel} の現場で】」と添えて、当該種別の現場でのリアルな運用注意を 1 文加える。` : "";
   const prompt = `あなたは ${subject} の出題者。
+${shubetsuBlock}
 次の ${items.length} 件、それぞれ別の問題を作って:
 ${lines}
 
@@ -5292,9 +5317,26 @@ app.get("/api/seko/me", async (req, res) => {
         || allowList.includes(String(req.user.email || "").toLowerCase()),
       isOwner: KOTONOHA_OWNER_EMAILS.has(String(req.user.email || "").toLowerCase()),
       exam_target: user.exam_target || null,
+      shubetsu: user.shubetsu || null,
     });
   } catch (err) {
     console.error("seko me", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.put("/api/seko/me/shubetsu", async (req, res) => {
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  const s = req.body?.shubetsu;
+  if (!["kenchiku", "kutai", "shiage"].includes(s)) return res.status(400).json({ error: "shubetsu は kenchiku / kutai / shiage" });
+  try {
+    await p.query(
+      `UPDATE seko_users SET shubetsu = $1, updated_at=now() WHERE user_email = $2`,
+      [s, req.user.email]
+    );
+    res.json({ ok: true, shubetsu: s });
+  } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
@@ -5346,8 +5388,9 @@ app.post("/api/seko/sessions/start", async (req, res) => {
     await ensureSchema();
     const user = await ensureSekoUser(p, req.user.email);
     const examTarget = user.exam_target || "first_full";
-    const allowedGenres = [...sekoGenresForUser(examTarget)];
-    if (!allowedGenres.length) return res.status(503).json({ error: "ジャンルマスタ未ロード" });
+    const shubetsu = user.shubetsu || null;
+    const allowedGenres = sekoGenresForUser(examTarget, shubetsu);
+    if (!allowedGenres.length) return res.status(503).json({ error: "出題対象ジャンルがありません。受検種別 / 出題範囲の設定を確認してください。" });
     const SESSION_SIZE = 10;
 
     // フォーカスジャンル指定 (集中セッション) があればそれだけ
@@ -5363,13 +5406,23 @@ app.post("/api/seko/sessions/start", async (req, res) => {
     );
     const recentIds = new Set(recentRows.map((r) => r.question_id));
 
-    // プールから候補を取る
+    // プールから候補を取る (古い種別違いを混ぜないよう、group_id でも shubetsu フィルタ)
+    const allowedGroupIds = [];
+    for (const g of SEKO_GENRES_DATA?.groups || []) {
+      if (examTarget === "second_only" && g.exam_level !== "2ji") continue;
+      if (shubetsu) {
+        const rel = Array.isArray(g.shubetsu_relevance) ? g.shubetsu_relevance : null;
+        if (rel && !rel.includes(shubetsu)) continue;
+      }
+      allowedGroupIds.push(g.id);
+    }
     const { rows: pool } = await p.query(
       `SELECT * FROM seko_questions
         WHERE genre = ANY($1::text[])
+          AND (group_id = ANY($2::text[]) OR group_id IS NULL)
         ORDER BY random()
         LIMIT 50`,
-      [targetGenres]
+      [targetGenres, allowedGroupIds]
     );
     const fresh = pool.filter((q) => !recentIds.has(q.id));
 
@@ -5382,11 +5435,11 @@ app.post("/api/seko/sessions/start", async (req, res) => {
       for (let i = 0; i < need; i++) {
         const g = targetGenres[Math.floor(Math.random() * targetGenres.length)];
         const groupId = SEKO_GENRE_TO_GROUP.get(g);
-        const groupRow = (SEKO_GENRES_DATA?.groups || []).find((x) => x.id === groupId);
+        const groupRow = SEKO_GROUP_BY_ID.get(groupId);
         items.push({ genre: g, groupId, examLevel: groupRow?.exam_level || "1ji" });
       }
       try {
-        const gen = await generateSekoQuestionsBatch(p, items);
+        const gen = await generateSekoQuestionsBatch(p, items, shubetsu);
         picked.push(...gen);
       } catch (e) {
         console.warn("[seko] batch gen failed:", e.message);

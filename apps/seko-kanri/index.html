@@ -312,23 +312,52 @@ body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); 
 
 <div class="fb-overlay" id="fbOverlay"><span class="fb-icon" id="fbIcon"></span></div>
 
-<!-- 初回 exam_target 選択モーダル (me.exam_target が null の時だけ表示) -->
-<div id="examTargetModal" style="display:none; position:fixed; inset:0; z-index:300; background:rgba(180,184,205,0.5); align-items:center; justify-content:center; padding:24px;">
-  <div style="background:var(--bg); border-radius:24px; padding:24px 22px; max-width:420px; width:100%; box-shadow:-2px -10px 30px rgba(148,152,176,0.4);">
-    <div style="font-size:13px; font-weight:800; color:var(--accent); letter-spacing:0.1em; margin-bottom:6px;">START</div>
-    <div style="font-size:18px; font-weight:800; margin-bottom:6px;">受験パターンを選んでください</div>
-    <div style="font-size:11px; color:var(--text2); font-weight:600; margin-bottom:18px; line-height:1.6;">出題範囲がこれで決まる。あとから設定で変えられる予定。</div>
-    <button class="exam-choice" data-target="first_full"
-            style="display:block; width:100%; padding:16px 18px; margin-bottom:10px; border:none; border-radius:16px; background:var(--bg); box-shadow:6px 6px 14px var(--sd), -4px -4px 12px var(--sl); font-family:inherit; cursor:pointer; text-align:left;">
-      <div style="font-size:15px; font-weight:800; color:var(--text); margin-bottom:4px;">一次 + 二次 (フル)</div>
-      <div style="font-size:11px; color:var(--text2); font-weight:600;">建築学・施工・施工管理法・法規 + 二次対策の全範囲</div>
-    </button>
-    <button class="exam-choice" data-target="second_only"
-            style="display:block; width:100%; padding:16px 18px; border:none; border-radius:16px; background:var(--bg); box-shadow:6px 6px 14px var(--sd), -4px -4px 12px var(--sl); font-family:inherit; cursor:pointer; text-align:left;">
-      <div style="font-size:15px; font-weight:800; color:var(--text); margin-bottom:4px;">二次のみ</div>
-      <div style="font-size:11px; color:var(--text2); font-weight:600;">一次合格済の人向け。経験記述・施工記述・用語穴埋めだけ。</div>
-    </button>
-    <div id="examTargetErr" style="margin-top:12px; font-size:11px; color:var(--incorrect); font-weight:700;"></div>
+<!-- 初回 受検種別 + 出題範囲 選択モーダル (me.shubetsu または me.exam_target が null の時に表示) -->
+<div id="onboardModal" style="display:none; position:fixed; inset:0; z-index:300; background:rgba(180,184,205,0.5); align-items:center; justify-content:center; padding:24px;">
+  <div style="background:var(--bg); border-radius:24px; padding:24px 22px; max-width:420px; width:100%; box-shadow:-2px -10px 30px rgba(148,152,176,0.4); max-height:90vh; overflow-y:auto;">
+
+    <!-- ステップ1: 受検種別 -->
+    <div id="onboardStep1">
+      <div style="font-size:13px; font-weight:800; color:var(--accent); letter-spacing:0.1em; margin-bottom:6px;">STEP 1 / 2 ・ 受検種別</div>
+      <div style="font-size:18px; font-weight:800; margin-bottom:6px;">どの種別で受けますか？</div>
+      <div style="font-size:11px; color:var(--text2); font-weight:600; margin-bottom:18px; line-height:1.6;">2級建築施工管理技士は 3 種別 (建築 / 躯体 / 仕上げ)。出題内容と二次の問題 5 がここで変わります。</div>
+      <button class="shubetsu-choice" data-shubetsu="shiage"
+              style="display:block; width:100%; padding:14px 18px; margin-bottom:8px; border:none; border-radius:16px; background:var(--bg); box-shadow:6px 6px 14px var(--sd), -4px -4px 12px var(--sl); font-family:inherit; cursor:pointer; text-align:left;">
+        <div style="font-size:15px; font-weight:800; color:var(--text); margin-bottom:4px;">仕上げ</div>
+        <div style="font-size:11px; color:var(--text2); font-weight:600;">内装・防水・タイル・塗装・建具・断熱・改修。<strong>内装業はこれ</strong>。二次は問題 5-C。</div>
+      </button>
+      <button class="shubetsu-choice" data-shubetsu="kutai"
+              style="display:block; width:100%; padding:14px 18px; margin-bottom:8px; border:none; border-radius:16px; background:var(--bg); box-shadow:6px 6px 14px var(--sd), -4px -4px 12px var(--sl); font-family:inherit; cursor:pointer; text-align:left;">
+        <div style="font-size:15px; font-weight:800; color:var(--text); margin-bottom:4px;">躯体</div>
+        <div style="font-size:11px; color:var(--text2); font-weight:600;">鉄筋・鉄骨・コンクリート・型枠・解体。二次は問題 5-B。</div>
+      </button>
+      <button class="shubetsu-choice" data-shubetsu="kenchiku"
+              style="display:block; width:100%; padding:14px 18px; margin-bottom:8px; border:none; border-radius:16px; background:var(--bg); box-shadow:6px 6px 14px var(--sd), -4px -4px 12px var(--sl); font-family:inherit; cursor:pointer; text-align:left;">
+        <div style="font-size:15px; font-weight:800; color:var(--text); margin-bottom:4px;">建築 (一式)</div>
+        <div style="font-size:11px; color:var(--text2); font-weight:600;">複数工種をまとめる建築一式工事の総合管理。二次は問題 5-A。</div>
+      </button>
+    </div>
+
+    <!-- ステップ2: exam_target -->
+    <div id="onboardStep2" style="display:none;">
+      <div style="font-size:13px; font-weight:800; color:var(--accent); letter-spacing:0.1em; margin-bottom:6px;">STEP 2 / 2 ・ 受験パターン</div>
+      <div id="onboardSelectedShubetsu" style="font-size:11px; color:var(--text2); font-weight:700; margin-bottom:4px;"></div>
+      <div style="font-size:18px; font-weight:800; margin-bottom:6px;">どの試験を受けますか？</div>
+      <div style="font-size:11px; color:var(--text2); font-weight:600; margin-bottom:18px; line-height:1.6;">出題範囲がこれで決まる。試験日は 2026/11/8 (後期一次 + 二次同日)。</div>
+      <button class="exam-choice" data-target="first_full"
+              style="display:block; width:100%; padding:16px 18px; margin-bottom:10px; border:none; border-radius:16px; background:var(--bg); box-shadow:6px 6px 14px var(--sd), -4px -4px 12px var(--sl); font-family:inherit; cursor:pointer; text-align:left;">
+        <div style="font-size:15px; font-weight:800; color:var(--text); margin-bottom:4px;">一次 + 二次 (フル)</div>
+        <div style="font-size:11px; color:var(--text2); font-weight:600;">建築学・施工・施工管理法・法規 + 二次対策の全範囲</div>
+      </button>
+      <button class="exam-choice" data-target="second_only"
+              style="display:block; width:100%; padding:16px 18px; border:none; border-radius:16px; background:var(--bg); box-shadow:6px 6px 14px var(--sd), -4px -4px 12px var(--sl); font-family:inherit; cursor:pointer; text-align:left;">
+        <div style="font-size:15px; font-weight:800; color:var(--text); margin-bottom:4px;">二次のみ</div>
+        <div style="font-size:11px; color:var(--text2); font-weight:600;">一次合格済の人向け。経験記述・共通記述・種別記述・用語のみ。</div>
+      </button>
+      <button id="onboardBack" style="display:block; width:100%; padding:10px; margin-top:12px; border:none; border-radius:12px; background:transparent; color:var(--text2); font-family:inherit; font-size:12px; font-weight:700; cursor:pointer;">← 受検種別を選び直す</button>
+    </div>
+
+    <div id="onboardErr" style="margin-top:12px; font-size:11px; color:var(--incorrect); font-weight:700;"></div>
   </div>
 </div>
 
@@ -502,7 +531,12 @@ function daysUntilExam() {
   return Math.ceil((exam - today) / 86400000);
 }
 
-function renderCountdown(examTarget) {
+const SHUBETSU_LABEL = {
+  shiage:   "仕上げ",
+  kutai:    "躯体",
+  kenchiku: "建築",
+};
+function renderCountdown(examTarget, shubetsu) {
   const days = daysUntilExam();
   const lbl = document.getElementById("examDateLabel");
   const big = document.getElementById("examDaysBig");
@@ -520,9 +554,11 @@ function renderCountdown(examTarget) {
     big.textContent = "終了";
     sub.textContent = `${-days} 日経過`;
   }
-  if (examTarget === "first_full") chip.textContent = "▸ 一次 + 二次 (フル)";
-  else if (examTarget === "second_only") chip.textContent = "▸ 二次のみ";
-  else chip.textContent = "";
+  const parts = [];
+  if (shubetsu && SHUBETSU_LABEL[shubetsu]) parts.push(SHUBETSU_LABEL[shubetsu]);
+  if (examTarget === "first_full") parts.push("一次 + 二次");
+  else if (examTarget === "second_only") parts.push("二次のみ");
+  chip.textContent = parts.length ? "▸ " + parts.join(" ・ ") : "";
 }
 window.renderCountdown = renderCountdown;
 
@@ -539,6 +575,8 @@ const state = {
   groupColorMap: new Map(),
   groupNameMap: new Map(), // group_id → 表示用のグループ名 (genre 名は答えを spoiler するので隠す)
   examTarget: null,        // 'first_full' | 'second_only' (seko_users.exam_target から)
+  shubetsu: null,          // 'kenchiku' | 'kutai' | 'shiage' (seko_users.shubetsu から)
+  onboardShubetsu: null,   // モーダル中の一時的な選択値
 };
 
 
@@ -600,15 +638,24 @@ async function loadHome() {
   const verP    = fetch((window.API_BASE || "") + "/api/version").then((r) => r.json()).catch(() => null);
   const [me, peers, genresData, version] = await Promise.all([meP, peersP, genresP, verP]);
 
-  // 試験日カウントダウン + exam_target 初回選択
+  // 試験日カウントダウン + 受検種別/出題範囲 初回選択
   state.examTarget = me?.exam_target || null;
-  renderCountdown(state.examTarget);
-  const targetModal = document.getElementById("examTargetModal");
-  if (targetModal) {
-    if (state.examTarget) {
-      targetModal.style.display = "none";
-    } else if (!me?._err) {
-      targetModal.style.display = "flex";
+  state.shubetsu = me?.shubetsu || null;
+  renderCountdown(state.examTarget, state.shubetsu);
+  const onboardModal = document.getElementById("onboardModal");
+  if (onboardModal) {
+    const needsOnboard = (!state.shubetsu || !state.examTarget) && !me?._err;
+    if (needsOnboard) {
+      // 種別未設定なら step1 から、種別だけ既設なら step2 へ
+      state.onboardShubetsu = state.shubetsu;
+      document.getElementById("onboardStep1").style.display = state.shubetsu ? "none" : "";
+      document.getElementById("onboardStep2").style.display = state.shubetsu ? "" : "none";
+      if (state.shubetsu) {
+        document.getElementById("onboardSelectedShubetsu").textContent = `▸ 種別: ${SHUBETSU_LABEL[state.shubetsu] || state.shubetsu}`;
+      }
+      onboardModal.style.display = "flex";
+    } else {
+      onboardModal.style.display = "none";
     }
   }
 
@@ -1263,17 +1310,39 @@ function showHome() {
   loadHome();
   window.scrollTo({ top: 0 });
 }
-// exam_target 選択モーダルの click 結線
+// onboarding モーダル: step1 (受検種別) → step2 (出題範囲)
+document.querySelectorAll(".shubetsu-choice").forEach((btn) => {
+  btn.addEventListener("click", async () => {
+    const s = btn.dataset.shubetsu;
+    const errEl = document.getElementById("onboardErr");
+    errEl.textContent = "";
+    state.onboardShubetsu = s;
+    try {
+      await api("PUT", "/api/seko/me/shubetsu", { shubetsu: s });
+      state.shubetsu = s;
+      document.getElementById("onboardSelectedShubetsu").textContent = `▸ 種別: ${SHUBETSU_LABEL[s] || s}`;
+      document.getElementById("onboardStep1").style.display = "none";
+      document.getElementById("onboardStep2").style.display = "";
+      renderCountdown(state.examTarget, state.shubetsu);
+    } catch (e) {
+      errEl.textContent = "種別の保存に失敗: " + (e?.message || e);
+    }
+  });
+});
+document.getElementById("onboardBack")?.addEventListener("click", () => {
+  document.getElementById("onboardStep1").style.display = "";
+  document.getElementById("onboardStep2").style.display = "none";
+});
 document.querySelectorAll(".exam-choice").forEach((btn) => {
   btn.addEventListener("click", async () => {
     const target = btn.dataset.target;
-    const errEl = document.getElementById("examTargetErr");
+    const errEl = document.getElementById("onboardErr");
     errEl.textContent = "";
     try {
       await api("PUT", "/api/seko/me/exam-target", { exam_target: target });
       state.examTarget = target;
-      document.getElementById("examTargetModal").style.display = "none";
-      renderCountdown(target);
+      document.getElementById("onboardModal").style.display = "none";
+      renderCountdown(target, state.shubetsu);
       loadHome();
     } catch (e) {
       errEl.textContent = "保存失敗: " + (e?.message || e);
