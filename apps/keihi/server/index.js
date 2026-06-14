@@ -724,8 +724,59 @@ async function ensureSchema() {
         updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
       )
     `);
+    // seko-kanri (2級建築施工管理技士 対策): techstudy/kotonoha と同形の4テーブル。
+    // 既存 kotonoha データに影響を出さないため完全に分離。
+    await p.query(`
+      CREATE TABLE IF NOT EXISTS seko_questions (
+        id            BIGSERIAL PRIMARY KEY,
+        category      TEXT NOT NULL,
+        difficulty    INTEGER NOT NULL CHECK (difficulty BETWEEN 1 AND 10),
+        type          TEXT NOT NULL CHECK (type IN ('choice', 'free')),
+        question      TEXT NOT NULL,
+        options       JSONB,
+        answer        TEXT NOT NULL,
+        keywords      JSONB,
+        explanation   TEXT NOT NULL,
+        claude_example TEXT,
+        genre         TEXT,
+        group_id      TEXT,
+        exam_level    TEXT,                          -- '1ji' | '2ji'
+        source        TEXT DEFAULT 'generated',
+        prerequisites JSONB DEFAULT '[]'::jsonb,
+        created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+      )
+    `);
+    await p.query("CREATE INDEX IF NOT EXISTS seko_q_genre_idx ON seko_questions (genre)");
+    await p.query("CREATE INDEX IF NOT EXISTS seko_q_group_idx ON seko_questions (group_id)");
+    await p.query("CREATE INDEX IF NOT EXISTS seko_q_exam_level_idx ON seko_questions (exam_level)");
+    await p.query(`
+      CREATE TABLE IF NOT EXISTS seko_progress (
+        id           BIGSERIAL PRIMARY KEY,
+        user_email   TEXT NOT NULL,
+        question_id  BIGINT NOT NULL REFERENCES seko_questions(id) ON DELETE CASCADE,
+        is_correct   BOOLEAN NOT NULL,
+        user_answer  TEXT,
+        attempts     INTEGER NOT NULL DEFAULT 1,
+        answered_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+      )
+    `);
+    await p.query("CREATE INDEX IF NOT EXISTS seko_p_user_idx ON seko_progress (user_email, answered_at DESC)");
+    await p.query(`
+      CREATE TABLE IF NOT EXISTS seko_users (
+        user_email      TEXT PRIMARY KEY,
+        display_name    TEXT NOT NULL,
+        level           INTEGER NOT NULL DEFAULT 1,
+        total_correct   INTEGER NOT NULL DEFAULT 0,
+        total_answers   INTEGER NOT NULL DEFAULT 0,
+        visible_to_peers BOOLEAN NOT NULL DEFAULT true,
+        exam_target     TEXT,                        -- 'first_full' | 'second_only'
+        last_session_at TIMESTAMPTZ,
+        created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+        updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+      )
+    `);
     schemaMigrated = true;
-    console.log("[schema] migration ok: records.drive_url + tasks + yado_bookings ensured");
+    console.log("[schema] migration ok: records.drive_url + tasks + yado_bookings + seko_* ensured");
   } catch (e) {
     console.warn(`[schema] migration warning: ${e.message}`);
   }
@@ -5015,6 +5066,478 @@ app.put("/api/kotonoha/me/visibility", async (req, res) => {
 
 // (ランチャーのタイル並び/非表示は Firestore (launcher_prefs/{uid}) に保存。
 //  別 DB に持つと整合変なので Firebase 側で完結させる。)
+
+
+// ============================================================
+// seko-kanri: 2級建築施工管理技士検定 対策 (techstudy/kotonoha フォーク)
+// 既存 kotonoha との完全分離: テーブル seko_*、ジャンルマスタ seko-genres.json。
+// AI 出題プロンプトは domain.ai_subject で施工管理ドメインへ。
+// ユーザーは exam_target ('first_full' | 'second_only') を選んで出題範囲をフィルタ。
+// ============================================================
+
+let SEKO_GENRES_DATA = null;
+let SEKO_GENRE_TO_GROUP = new Map();
+let SEKO_GENRE_TARGET = new Map();
+let SEKO_GENRES_BY_PHASE = { first_full: new Set(), second_only: new Set() };
+try {
+  const raw = fs.readFileSync(path.join(__dirname, "seko-genres.json"), "utf8");
+  SEKO_GENRES_DATA = JSON.parse(raw);
+  for (const g of SEKO_GENRES_DATA.groups || []) {
+    for (const gen of g.genres || []) {
+      SEKO_GENRE_TO_GROUP.set(gen.name, g.id);
+      SEKO_GENRE_TARGET.set(gen.name, gen.target_count || 10);
+      // exam_level 振り分け: 2ji は second_only に、1ji/null は両方に出す
+      if (g.exam_level === "2ji") {
+        SEKO_GENRES_BY_PHASE.first_full.add(gen.name);
+        SEKO_GENRES_BY_PHASE.second_only.add(gen.name);
+      } else {
+        SEKO_GENRES_BY_PHASE.first_full.add(gen.name);
+      }
+    }
+  }
+  console.log(`[seko] loaded ${SEKO_GENRE_TO_GROUP.size} genres / ${SEKO_GENRES_DATA.groups?.length || 0} groups`);
+} catch (e) {
+  console.warn("[seko] genres.json load failed:", e.message);
+}
+
+function sekoGenresForUser(examTarget) {
+  if (examTarget === "second_only") return SEKO_GENRES_BY_PHASE.second_only;
+  return SEKO_GENRES_BY_PHASE.first_full;
+}
+
+async function ensureSekoUser(p, email) {
+  const display = String(email).split("@")[0] || "user";
+  const { rows } = await p.query(
+    `INSERT INTO seko_users (user_email, display_name)
+     VALUES ($1, $2)
+     ON CONFLICT (user_email) DO UPDATE SET updated_at=now()
+     RETURNING *`,
+    [email, display]
+  );
+  return rows[0];
+}
+
+// AI で 1 問だけ生成して seko_questions に INSERT、新しい question row を返す。
+// 型は choice 中心 (二次の記述系も AI 採点しやすいよう穴埋め/語群選択化を促す)。
+async function generateSekoQuestion(p, genre, groupId, examLevel) {
+  if (!genAI) throw new Error("Gemini 未設定");
+  const grpRow = (SEKO_GENRES_DATA?.groups || []).find((g) => g.id === groupId);
+  const grpName = grpRow?.name || "建築施工管理";
+  const subject = SEKO_GENRES_DATA?.domain?.ai_subject || "建築施工管理技士検定";
+  const isNiji = examLevel === "2ji" || grpRow?.exam_level === "2ji";
+  const typeHint = isNiji
+    ? "二次検定対策。穴埋め (語群から1つ選ぶ4択) もしくは「次の記述で誤っているのはどれか」の四肢択一を作る。記述問題そのものは選択式に変換して出題する。"
+    : "一次検定対策。技術検定の過去問形式 (四肢択一) で 1 問。";
+  const prompt = `あなたは ${subject} の出題者。
+分野: ${grpName}
+ジャンル: ${genre}
+形式の指示: ${typeHint}
+
+出題方針:
+- 受験生が実務で「これ知らなかった」と気づける、頻出論点をひとつだけ。
+- 引っ掛けや細かすぎる数値より、現場での意味と判断基準を優先。
+- 「四つのうち最も不適当なものはどれか」「次のうち正しいものはどれか」型の四肢択一を 1 問。
+- options は 4 つ、いずれもそれっぽい誤答も混ぜる。answer は正解の選択肢の文字列そのもの (A/B/C/D の記号は不要)。
+- 解説は 3-5 文。なぜそれが正解か、誤答はなぜ違うか、現場での運用上の注意を 1 文。
+
+JSON でだけ返す (前置きや説明禁止):
+{
+  "category": "${groupId}",
+  "difficulty": 3,
+  "type": "choice",
+  "question": "...",
+  "options": ["...", "...", "...", "..."],
+  "answer": "options のうちの正解そのまま",
+  "keywords": ["..."],
+  "explanation": "3-5 文の解説",
+  "claude_example": "",
+  "genre": "${genre}",
+  "group_id": "${groupId}",
+  "exam_level": "${isNiji ? "2ji" : "1ji"}"
+}`;
+  const { result } = await callGeminiWithFallback(prompt, {
+    primaryModel: "gemini-2.5-flash",
+    maxOutputTokens: 1200,
+  });
+  const text = (result.response.text() || "").trim();
+  const m = text.match(/\{[\s\S]*\}/);
+  if (!m) throw new Error("AI レスポンスから JSON 取れず");
+  const parsed = JSON.parse(m[0]);
+  const ins = await p.query(
+    `INSERT INTO seko_questions
+       (category, difficulty, type, question, options, answer, keywords, explanation,
+        claude_example, genre, group_id, exam_level, source)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'generated')
+     RETURNING *`,
+    [
+      parsed.category || groupId,
+      Number(parsed.difficulty) || 3,
+      parsed.type === "free" ? "free" : "choice",
+      String(parsed.question || "").trim(),
+      JSON.stringify(parsed.options || []),
+      String(parsed.answer || "").trim(),
+      JSON.stringify(parsed.keywords || []),
+      String(parsed.explanation || "").trim(),
+      parsed.claude_example || "",
+      genre,
+      groupId,
+      isNiji ? "2ji" : "1ji",
+    ]
+  );
+  return ins.rows[0];
+}
+
+// ───── seko endpoints ─────
+
+app.get("/api/seko/genres", (req, res) => {
+  if (!SEKO_GENRES_DATA) return res.status(503).json({ error: "genres not loaded" });
+  res.json(SEKO_GENRES_DATA);
+});
+
+// 学習進捗 (group / genre の正解 unique 数を集計)
+async function buildSekoProgress(p, email) {
+  const { rows: correctRows } = await p.query(
+    `SELECT q.group_id, q.genre, COUNT(DISTINCT q.id)::int AS unique_correct
+       FROM seko_progress pr
+       JOIN seko_questions q ON q.id = pr.question_id
+      WHERE pr.user_email = $1 AND pr.is_correct
+      GROUP BY q.group_id, q.genre`,
+    [email]
+  );
+  const byGenre = new Map();
+  for (const r of correctRows) byGenre.set(`${r.group_id}::${r.genre}`, r.unique_correct);
+  const groups = (SEKO_GENRES_DATA?.groups || []).map((g) => {
+    const genres = (g.genres || []).map((gen) => ({
+      name: gen.name,
+      target: gen.target_count || 10,
+      correct: byGenre.get(`${g.id}::${gen.name}`) || 0,
+    }));
+    const totT = genres.reduce((s, x) => s + x.target, 0);
+    const totC = genres.reduce((s, x) => s + x.correct, 0);
+    return { id: g.id, name: g.name, color: g.color || "#9ca3af", exam_level: g.exam_level || null, genres, target: totT, correct: totC };
+  });
+  return groups;
+}
+
+async function computeSekoStreak(p, email) {
+  // 直近 60 日で何日連続で 1 問以上回答しているか + 今日の活動有無
+  const { rows } = await p.query(
+    `SELECT DISTINCT (answered_at AT TIME ZONE 'Asia/Tokyo')::date AS d
+       FROM seko_progress WHERE user_email = $1
+      ORDER BY d DESC LIMIT 60`,
+    [email]
+  );
+  if (!rows.length) return { streak: 0, today_active: false };
+  const dates = rows.map((r) => String(r.d));
+  const today = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Tokyo" }));
+  const ymd = (dt) => dt.toISOString().slice(0, 10);
+  const todayStr = ymd(today);
+  let streak = 0;
+  const setD = new Set(dates);
+  for (let i = 0; ; i++) {
+    const d = new Date(today.getTime() - i * 86400000);
+    if (setD.has(ymd(d))) streak++;
+    else break;
+  }
+  return { streak, today_active: setD.has(todayStr) };
+}
+
+app.get("/api/seko/me", async (req, res) => {
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  try {
+    await ensureSchema();
+    const user = await ensureSekoUser(p, req.user.email);
+    const [groups, streak] = await Promise.all([
+      buildSekoProgress(p, req.user.email),
+      computeSekoStreak(p, req.user.email),
+    ]);
+    const { rows: poolRows } = await p.query(
+      `SELECT count(*)::int AS total,
+              count(*) FILTER (WHERE source = 'generated')::int AS generated,
+              count(*) FILTER (WHERE source = 'seed')::int AS seed,
+              count(*) FILTER (WHERE source = 'generated' AND created_at > now() - interval '1 hour')::int AS gen_last_hour
+         FROM seko_questions`
+    );
+    const pool = poolRows[0] || { total: 0, generated: 0, seed: 0, gen_last_hour: 0 };
+    const { rows: learned } = await p.query(
+      `SELECT q.genre AS label, MAX(pr.answered_at) AS answered_at, q.group_id, q.explanation
+         FROM seko_progress pr
+         JOIN seko_questions q ON q.id = pr.question_id
+        WHERE pr.user_email = $1 AND pr.is_correct AND q.genre IS NOT NULL
+        GROUP BY q.genre, q.group_id, q.explanation
+        ORDER BY answered_at DESC
+        LIMIT 60`,
+      [req.user.email]
+    );
+    res.json({
+      user,
+      streak,
+      groups,
+      pool,
+      recentWords: learned.slice(0, 12),
+      learned,
+      hasLauncherAccess: allowList.length === 0
+        || allowList.includes(String(req.user.email || "").toLowerCase()),
+      isOwner: KOTONOHA_OWNER_EMAILS.has(String(req.user.email || "").toLowerCase()),
+      exam_target: user.exam_target || null,
+    });
+  } catch (err) {
+    console.error("seko me", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.put("/api/seko/me/exam-target", async (req, res) => {
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  const t = req.body?.exam_target;
+  if (t !== "first_full" && t !== "second_only") return res.status(400).json({ error: "exam_target は first_full / second_only" });
+  try {
+    await p.query(
+      `UPDATE seko_users SET exam_target = $1, updated_at=now() WHERE user_email = $2`,
+      [t, req.user.email]
+    );
+    res.json({ ok: true, exam_target: t });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.put("/api/seko/me/visibility", async (req, res) => {
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  const visible = !!req.body?.visible;
+  try {
+    await p.query(
+      `UPDATE seko_users SET visible_to_peers = $1, updated_at=now() WHERE user_email = $2`,
+      [visible, req.user.email]
+    );
+    res.json({ ok: true, visible });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// MVP: ピア機能は後でちゃんと作る。最初は空配列で UI を出さない。
+app.get("/api/seko/peers", (req, res) => res.json([]));
+app.get("/api/seko/peer-learned", (req, res) => res.json({ learned: [] }));
+// UI デモ系は施工管理では不要 (IT 部品のため)。空 / 無効を返す。
+app.get("/api/seko/ui-demo-status", (req, res) => res.json({ pending: 0, total: 0, disabled: true }));
+app.get("/api/seko/ui-demos-list", (req, res) => res.json([]));
+
+// セッション開始: ユーザーの exam_target に合うジャンルから 10 問選ぶ。
+// プール薄ければ inline で AI 生成して埋める (最大 4 問 / 30 秒タイムアウト)。
+app.post("/api/seko/sessions/start", async (req, res) => {
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  try {
+    await ensureSchema();
+    const user = await ensureSekoUser(p, req.user.email);
+    const examTarget = user.exam_target || "first_full";
+    const allowedGenres = [...sekoGenresForUser(examTarget)];
+    if (!allowedGenres.length) return res.status(503).json({ error: "ジャンルマスタ未ロード" });
+    const SESSION_SIZE = 10;
+
+    // フォーカスジャンル指定 (集中セッション) があればそれだけ
+    const focus = (req.body?.genre || "").trim();
+    const focusValid = focus && allowedGenres.includes(focus);
+    const targetGenres = focusValid ? [focus] : allowedGenres;
+
+    // 直近 出題済の質問 ID (再出題を避けるため 50 件)
+    const { rows: recentRows } = await p.query(
+      `SELECT question_id FROM seko_progress WHERE user_email = $1
+        ORDER BY answered_at DESC LIMIT 50`,
+      [req.user.email]
+    );
+    const recentIds = new Set(recentRows.map((r) => r.question_id));
+
+    // プールから候補を取る
+    const { rows: pool } = await p.query(
+      `SELECT * FROM seko_questions
+        WHERE genre = ANY($1::text[])
+        ORDER BY random()
+        LIMIT 50`,
+      [targetGenres]
+    );
+    const fresh = pool.filter((q) => !recentIds.has(q.id));
+
+    let picked = fresh.slice(0, SESSION_SIZE);
+
+    // 足りなければ AI で生成して埋める
+    let gens = 0;
+    const GEN_DEADLINE = Date.now() + 25000;   // 25 秒タイムアウト
+    while (picked.length < SESSION_SIZE && Date.now() < GEN_DEADLINE && gens < 6) {
+      const g = targetGenres[Math.floor(Math.random() * targetGenres.length)];
+      const groupId = SEKO_GENRE_TO_GROUP.get(g);
+      const groupRow = (SEKO_GENRES_DATA?.groups || []).find((x) => x.id === groupId);
+      try {
+        const q = await generateSekoQuestion(p, g, groupId, groupRow?.exam_level || "1ji");
+        picked.push(q);
+        gens++;
+      } catch (e) {
+        console.warn("[seko] gen failed:", e.message);
+        gens++;
+        break;
+      }
+    }
+
+    if (!picked.length) {
+      return res.status(503).json({ error: "問題を準備できませんでした。少し待って再試行してください。" });
+    }
+
+    res.json({
+      total: picked.length,
+      questions: picked.map((q) => ({
+        id: q.id,
+        category: q.category,
+        difficulty: q.difficulty,
+        type: q.type,
+        question: q.question,
+        options: q.options,
+        genre: q.genre,
+        group_id: q.group_id,
+        exam_level: q.exam_level,
+      })),
+    });
+  } catch (err) {
+    console.error("seko sessions/start", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post("/api/seko/answer", async (req, res) => {
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  const { question_id, user_answer } = req.body || {};
+  if (!question_id) return res.status(400).json({ error: "question_id required" });
+  try {
+    const { rows: qRows } = await p.query(`SELECT * FROM seko_questions WHERE id=$1`, [question_id]);
+    if (!qRows.length) return res.status(404).json({ error: "question not found" });
+    const q = qRows[0];
+    const ua = String(user_answer || "").trim();
+
+    let isCorrect = false;
+    let aiReason = null;
+    if (q.type === "choice") {
+      isCorrect = ua === q.answer;
+      if (!isCorrect && /^[A-D]$/i.test(String(q.answer || "").trim())) {
+        const letter = String(q.answer).trim().toUpperCase();
+        if (Array.isArray(q.options)) {
+          const idx = letter.charCodeAt(0) - "A".charCodeAt(0);
+          if (q.options[idx] === ua) isCorrect = true;
+        }
+      }
+    } else {
+      const norm = (s) => String(s || "").trim().toLowerCase().replace(/\s+/g, "");
+      if (norm(ua) === norm(q.answer)) {
+        isCorrect = true;
+      } else if (Array.isArray(q.keywords) && q.keywords.some((k) => norm(ua).includes(norm(k)) || norm(k).includes(norm(ua)))) {
+        isCorrect = true;
+      } else if (genAI && ua) {
+        try {
+          const judgePrompt = `次のユーザー回答が、正解と意味的に同じか判定してください。
+建築施工管理の文脈で、用語のゆらぎ・言い換えは正解として認めます。
+
+問題: ${q.question}
+正解: ${q.answer}
+正解として認める同義語: ${JSON.stringify(q.keywords || [])}
+ユーザー回答: ${ua}
+
+JSON でだけ返す (前置きや説明禁止):
+{"correct": true|false, "reason": "1文の理由"}`;
+          const { result } = await callGeminiWithFallback(judgePrompt, {
+            primaryModel: "gemini-2.5-flash",
+            maxOutputTokens: 500,
+          });
+          const text = (result.response.text() || "").trim();
+          const m = text.match(/\{[\s\S]*\}/);
+          if (m) {
+            const j = JSON.parse(m[0]);
+            isCorrect = !!j.correct;
+            aiReason = j.reason || null;
+          }
+        } catch (e) {
+          console.warn("[seko] AI 判定失敗:", e.message);
+        }
+      }
+    }
+
+    const { rows: attemptRows } = await p.query(
+      `SELECT count(*)::int AS n FROM seko_progress WHERE user_email=$1 AND question_id=$2`,
+      [req.user.email, question_id]
+    );
+    const attempts = (attemptRows[0]?.n || 0) + 1;
+    await p.query(
+      `INSERT INTO seko_progress (user_email, question_id, is_correct, user_answer, attempts)
+       VALUES ($1,$2,$3,$4,$5)`,
+      [req.user.email, question_id, isCorrect, ua, attempts]
+    );
+    await p.query(
+      `UPDATE seko_users
+          SET total_correct = total_correct + $1, total_answers = total_answers + 1,
+              last_session_at = now(), updated_at = now()
+        WHERE user_email = $2`,
+      [isCorrect ? 1 : 0, req.user.email]
+    );
+
+    res.json({
+      is_correct: isCorrect,
+      answer: q.answer,
+      genre: q.genre,
+      group_id: q.group_id,
+      explanation: q.explanation,
+      claude_example: q.claude_example,
+      ai_reason: aiReason,
+    });
+  } catch (err) {
+    console.error("seko answer", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post("/api/seko/sessions/end", async (req, res) => {
+  const p = getPool();
+  if (!p) return res.json({ ok: true });
+  try {
+    // 直近 10 回答の正解率で簡易レベル調整 (≥70% → +1、<40% → -1、min 1)
+    const { rows } = await p.query(
+      `SELECT is_correct FROM seko_progress WHERE user_email = $1
+        ORDER BY answered_at DESC LIMIT 10`,
+      [req.user.email]
+    );
+    if (rows.length >= 5) {
+      const acc = rows.filter((r) => r.is_correct).length / rows.length;
+      let delta = 0;
+      if (acc >= 0.7) delta = 1;
+      else if (acc < 0.4) delta = -1;
+      if (delta !== 0) {
+        await p.query(
+          `UPDATE seko_users SET level = GREATEST(1, level + $1), updated_at=now() WHERE user_email = $2`,
+          [delta, req.user.email]
+        );
+      }
+    }
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// オーナー専用: seko_questions プール全消し (デバッグ用)
+app.post("/api/seko/wipe-all", async (req, res) => {
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  if (!KOTONOHA_OWNER_EMAILS.has(String(req.user.email || "").toLowerCase())) {
+    return res.status(403).json({ error: "owner only" });
+  }
+  try {
+    await p.query(`TRUNCATE seko_questions CASCADE`);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
 
 // ─────────────────────────────

@@ -1,0 +1,186 @@
+{
+  "_comment": "2級建築施工管理技士検定 対策。出題範囲は技術検定の標準シラバスに準拠。最初は骨組み + 一次/二次 主要分野のみ、運用で増やす。",
+  "domain": {
+    "title": "施工管理2級",
+    "subtitle": "2級建築施工管理技士 (一次・二次) 対策",
+    "ai_subject": "2級建築施工管理技士検定 (建築学・施工・施工管理法・法規)",
+    "ai_trivia_examples": [
+      "ガントチャートは20世紀初頭の生産管理コンサル Henry Gantt が考案",
+      "鉄筋コンクリート (RC) は19世紀フランスの庭師 Joseph Monier が植木鉢を補強するのに発明したのが起源",
+      "ヘルメット着用が労安衛法で義務化されたのは1972年改正以降",
+      "建築基準法の前身「市街地建築物法」は1919年制定、関東大震災(1923)後に大幅改正",
+      "PERT 図はアメリカ海軍のポラリスミサイル開発(1958)で生まれた"
+    ]
+  },
+  "_phase_note": "exam_target が first_full のユーザーは全 phase、second_only のユーザーは exam_level=2ji の group / genre だけが出る (server 側で filter)。",
+  "phases": [
+    {
+      "_label": "一次: 建築学 + 施工 + 施工管理法 + 法規 の基礎を一周",
+      "max_correct": 60,
+      "groups": ["kenchiku_gaku", "shiko_doboku", "shiko_kotai", "shiko_shiage", "kanri_ho", "ho_ki"]
+    },
+    {
+      "_label": "二次: 経験記述 + 施工記述 + 用語",
+      "max_correct": 160,
+      "groups": ["kenchiku_gaku", "shiko_doboku", "shiko_kotai", "shiko_shiage", "kanri_ho", "ho_ki", "niji_keiken", "niji_kijutsu", "niji_yougo"]
+    }
+  ],
+  "ui_template_groups": [],
+  "groups": [
+    {
+      "id": "kenchiku_gaku",
+      "name": "建築学 (一般)",
+      "_purpose": "環境工学 (採光・換気・音響・熱)、構造力学、材料の基礎。一次の頭。",
+      "color": "#0891b2",
+      "exam_level": "1ji",
+      "genres": [
+        { "name": "採光・照明 (昼光率・人工照明)", "target_count": 8 },
+        { "name": "換気 (機械換気・自然換気の方式)", "target_count": 8 },
+        { "name": "音響 (吸音・遮音・残響)", "target_count": 6 },
+        { "name": "熱・湿気 (結露・断熱・熱伝導)", "target_count": 8 },
+        { "name": "色彩・日照 (日影規制の基本)", "target_count": 6 },
+        { "name": "力のつりあいとモーメント", "target_count": 8 },
+        { "name": "梁・柱の応力 (曲げ・せん断)", "target_count": 8 },
+        { "name": "鉄筋コンクリート構造の基本", "target_count": 8 },
+        { "name": "鋼構造の基本 (接合・部材)", "target_count": 8 },
+        { "name": "木造の構造 (軸組・耐力壁)", "target_count": 8 },
+        { "name": "コンクリートの性質と材料試験", "target_count": 8 },
+        { "name": "鋼材の規格と性質", "target_count": 6 },
+        { "name": "木材・合板・集成材", "target_count": 6 },
+        { "name": "セメント・骨材・混和材", "target_count": 6 }
+      ]
+    },
+    {
+      "id": "shiko_doboku",
+      "name": "施工 (仮設・土工事・地業)",
+      "_purpose": "工事着手前後の仮設、掘削、杭・基礎の打ち方。",
+      "color": "#b08968",
+      "exam_level": "1ji",
+      "genres": [
+        { "name": "仮設工事 (足場・養生・仮囲い)", "target_count": 8 },
+        { "name": "山留め (親杭横矢板・SMW)", "target_count": 8 },
+        { "name": "土工事 (掘削・埋戻し)", "target_count": 6 },
+        { "name": "地業工事 (基礎・支持地盤)", "target_count": 8 },
+        { "name": "杭基礎 (既製杭・場所打ち杭)", "target_count": 8 }
+      ]
+    },
+    {
+      "id": "shiko_kotai",
+      "name": "施工 (躯体工事)",
+      "_purpose": "鉄筋・コンクリート・鉄骨・木造の本体工事。",
+      "color": "#7c9d75",
+      "exam_level": "1ji",
+      "genres": [
+        { "name": "鉄筋工事 (加工・組立・継手・かぶり)", "target_count": 10 },
+        { "name": "型枠工事 (せき板・支保工・打設時の側圧)", "target_count": 8 },
+        { "name": "コンクリート工事 (運搬・打設・養生)", "target_count": 10 },
+        { "name": "コンクリートの品質 (スランプ・空気量)", "target_count": 8 },
+        { "name": "鉄骨工事 (建方・本締・現場溶接)", "target_count": 8 },
+        { "name": "高力ボルト接合 (TC・許容トルク・本締順)", "target_count": 6 },
+        { "name": "ALC・コンクリートブロック工事", "target_count": 6 },
+        { "name": "木工事 (在来軸組・継手・仕口)", "target_count": 6 }
+      ]
+    },
+    {
+      "id": "shiko_shiage",
+      "name": "施工 (仕上工事)",
+      "_purpose": "防水、屋根、左官、塗装、内装、外装の仕上げ。",
+      "color": "#c4a574",
+      "exam_level": "1ji",
+      "genres": [
+        { "name": "防水工事 (アスファルト・改質アスファルト・シート)", "target_count": 10 },
+        { "name": "シーリング工事 (打設・養生・3面接着)", "target_count": 6 },
+        { "name": "屋根工事 (金属・瓦・粘土瓦)", "target_count": 6 },
+        { "name": "左官工事 (モルタル・しっくい・吹付け)", "target_count": 6 },
+        { "name": "タイル工事 (圧着・改良圧着・モザイク)", "target_count": 6 },
+        { "name": "石工事 (湿式・乾式・引き金物)", "target_count": 4 },
+        { "name": "塗装工事 (素地調整・塗回数)", "target_count": 6 },
+        { "name": "建具・ガラス工事", "target_count": 6 },
+        { "name": "内装工事 (ボード・床仕上・壁紙)", "target_count": 8 },
+        { "name": "断熱・防露工事", "target_count": 4 },
+        { "name": "外装改修・補修", "target_count": 4 }
+      ]
+    },
+    {
+      "id": "kanri_ho",
+      "name": "施工管理法 (工程・品質・安全・原価)",
+      "_purpose": "一次の山。工程表・QC・労災防止・原価のコントロール。",
+      "color": "#4338ca",
+      "exam_level": "1ji",
+      "genres": [
+        { "name": "施工計画書 (作成項目と承認手順)", "target_count": 6 },
+        { "name": "工程管理 (ガントチャート・出来高累計曲線)", "target_count": 8 },
+        { "name": "ネットワーク工程表 (CP・TF・FF)", "target_count": 10 },
+        { "name": "品質管理 (QC七つ道具・特性要因図)", "target_count": 8 },
+        { "name": "鉄筋・コンクリートの品質試験", "target_count": 6 },
+        { "name": "安全管理 (KYK・TBM・リスクアセスメント)", "target_count": 8 },
+        { "name": "墜落・転落防止 (足場・安全帯)", "target_count": 8 },
+        { "name": "重機・揚重 (クレーン・玉掛け)", "target_count": 6 },
+        { "name": "原価管理 (実行予算・原価率)", "target_count": 4 }
+      ]
+    },
+    {
+      "id": "ho_ki",
+      "name": "法規",
+      "_purpose": "建築基準法、労働安全衛生法、労働基準法、建設業法、廃棄物処理法。",
+      "color": "#b5766a",
+      "exam_level": "1ji",
+      "genres": [
+        { "name": "建築基準法 (用語の定義・建築確認)", "target_count": 8 },
+        { "name": "建築基準法 (単体規定・集団規定)", "target_count": 6 },
+        { "name": "労働安全衛生法 (作業主任者の選任)", "target_count": 8 },
+        { "name": "労働安全衛生法 (足場・型枠支保工)", "target_count": 6 },
+        { "name": "労働基準法 (労働時間・休日)", "target_count": 6 },
+        { "name": "建設業法 (建設業の許可・配置技術者)", "target_count": 8 },
+        { "name": "建設業法 (元請・下請・施工体制台帳)", "target_count": 6 },
+        { "name": "騒音・振動規制法", "target_count": 4 },
+        { "name": "廃棄物処理法 (産廃マニフェスト)", "target_count": 6 }
+      ]
+    },
+    {
+      "id": "niji_keiken",
+      "name": "二次: 経験記述",
+      "_purpose": "自身の現場経験を「品質管理」「工程管理」「安全管理」の観点で書く出題。AI が問いを出して書かせる。",
+      "color": "#9b7591",
+      "exam_level": "2ji",
+      "genres": [
+        { "name": "経験記述: 工事概要の書き方", "target_count": 4 },
+        { "name": "経験記述: 品質管理で工夫したこと", "target_count": 6 },
+        { "name": "経験記述: 工程管理で工夫したこと", "target_count": 6 },
+        { "name": "経験記述: 安全管理で工夫したこと", "target_count": 6 },
+        { "name": "経験記述: 留意した事項と理由", "target_count": 4 }
+      ]
+    },
+    {
+      "id": "niji_kijutsu",
+      "name": "二次: 施工記述",
+      "_purpose": "工種別の留意点・施工手順・不具合対策を文章で書く。AI が穴埋め化・要点列挙化で出題。",
+      "color": "#7a6e96",
+      "exam_level": "2ji",
+      "genres": [
+        { "name": "鉄筋工事の留意点 (記述)", "target_count": 6 },
+        { "name": "コンクリート打設の留意点 (記述)", "target_count": 8 },
+        { "name": "鉄骨建方の留意点 (記述)", "target_count": 6 },
+        { "name": "防水工事の留意点 (記述)", "target_count": 6 },
+        { "name": "タイル工事の留意点 (記述)", "target_count": 6 },
+        { "name": "塗装工事の留意点 (記述)", "target_count": 4 },
+        { "name": "内装工事の留意点 (記述)", "target_count": 4 },
+        { "name": "工程管理: ネットワーク工程表の読み方 (記述)", "target_count": 8 }
+      ]
+    },
+    {
+      "id": "niji_yougo",
+      "name": "二次: 用語穴埋め",
+      "_purpose": "施工管理用語を語群選択 + 短答で身につける。択一化しやすい部分。",
+      "color": "#8aa6a8",
+      "exam_level": "2ji",
+      "genres": [
+        { "name": "用語: 仮設・土工", "target_count": 6 },
+        { "name": "用語: 躯体・コンクリート", "target_count": 8 },
+        { "name": "用語: 鉄筋・鉄骨", "target_count": 6 },
+        { "name": "用語: 仕上 (防水・屋根・左官・タイル・塗装)", "target_count": 10 },
+        { "name": "用語: 設備・外構", "target_count": 4 }
+      ]
+    }
+  ]
+}
