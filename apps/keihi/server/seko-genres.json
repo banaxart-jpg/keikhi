@@ -17,7 +17,7 @@
     {
       "_label": "一次: 建築学 + 施工 + 施工管理法 + 法規 (種別関係なく共通プールから選択回答)",
       "max_correct": 60,
-      "groups": ["kenchiku_gaku", "shiko_doboku", "shiko_kotai", "shiko_shiage", "kanri_ho", "ho_ki"]
+      "groups": ["kenchiku_gaku", "kyotsu_setsubi", "shiko_doboku", "shiko_kotai", "shiko_shiage", "kanri_ho", "ho_ki"]
     },
     {
       "_label": "二次: 経験記述 + 共通記述 + 種別別記述 (問題5) + 用語",
@@ -50,6 +50,23 @@
         { "name": "鋼材の規格と性質", "target_count": 6 },
         { "name": "木材・合板・集成材", "target_count": 6 },
         { "name": "セメント・骨材・混和材", "target_count": 6 }
+      ]
+    },
+    {
+      "id": "kyotsu_setsubi",
+      "name": "共通 (設備・その他)",
+      "_purpose": "一次の正式区分『共通』。給排水・空調・電気設備の基礎。仕上ユーザーは天井裏配管・空調吹出し位置等の調整に関わるので必読。",
+      "color": "#5db4a8",
+      "exam_level": "1ji",
+      "default_question_type": "choice",
+      "shubetsu_relevance": ["kenchiku", "kutai", "shiage"],
+      "genres": [
+        { "name": "給排水設備 (給水方式・排水トラップ)", "target_count": 6 },
+        { "name": "空気調和設備 (空調方式・換気量)", "target_count": 6 },
+        { "name": "電気設備 (配電方式・幹線・分電盤)", "target_count": 4 },
+        { "name": "照明・コンセント設備", "target_count": 4 },
+        { "name": "防災設備 (消火栓・スプリンクラー・自火報)", "target_count": 4 },
+        { "name": "測量・舗装・植栽 (外構の基本)", "target_count": 4 }
       ]
     },
     {
@@ -98,12 +115,14 @@
       "genres": [
         { "name": "防水工事 (アスファルト・改質アスファルト・シート)", "target_count": 10 },
         { "name": "シーリング工事 (打設・養生・3面接着)", "target_count": 6 },
-        { "name": "屋根工事 (金属・瓦・粘土瓦)", "target_count": 6 },
+        { "name": "屋根工事 (金属葺・折板葺・粘土瓦)", "target_count": 8 },
         { "name": "左官工事 (モルタル・しっくい・吹付け)", "target_count": 6 },
         { "name": "タイル工事 (圧着・改良圧着・モザイク)", "target_count": 6 },
         { "name": "石工事 (湿式・乾式・引き金物)", "target_count": 4 },
         { "name": "塗装工事 (素地調整・塗回数)", "target_count": 6 },
         { "name": "建具・ガラス工事", "target_count": 6 },
+        { "name": "軽量鉄骨下地 (天井下地・壁下地・スタッド)", "target_count": 8 },
+        { "name": "内装木工事 (造作・建具枠・床組)", "target_count": 6 },
         { "name": "内装工事 (ボード・床仕上・壁紙)", "target_count": 8 },
         { "name": "断熱・防露工事", "target_count": 4 },
         { "name": "外装改修・補修", "target_count": 4 }
@@ -176,10 +195,19 @@
       "genres": [
         { "name": "用語解説: 仮設・安全 (問題2)", "target_count": 6 },
         { "name": "用語解説: 工程・品質 (問題2)", "target_count": 6 },
+        { "name": "用語解説: 防水・シーリング (問題2 / 仕上)", "target_count": 6 },
+        { "name": "用語解説: タイル・石 (問題2 / 仕上)", "target_count": 6 },
+        { "name": "用語解説: 塗装・左官 (問題2 / 仕上)", "target_count": 6 },
+        { "name": "用語解説: 建具・ガラス (問題2 / 仕上)", "target_count": 6 },
+        { "name": "用語解説: 屋根・金属 (問題2 / 仕上)", "target_count": 6 },
+        { "name": "用語解説: 内装・床仕上 (問題2 / 仕上)", "target_count": 6 },
+        { "name": "用語解説: 木工 (問題2 / 仕上)", "target_count": 6 },
+        { "name": "用語解説: 鉄筋・コンクリート (問題2 / 躯体)", "target_count": 4 },
+        { "name": "用語解説: 鉄骨 (問題2 / 躯体)", "target_count": 4 },
         { "name": "工程管理: ネットワーク工程表の読み方 (問題3)", "target_count": 8 },
         { "name": "工程管理: バーチャート工程表の読み方 (問題3)", "target_count": 4 },
-        { "name": "法規: 建設業法 (問題4)", "target_count": 4 },
-        { "name": "法規: 労働安全衛生法 (問題4)", "target_count": 4 },
+        { "name": "法規: 建設業法 (問題4)", "target_count": 6 },
+        { "name": "法規: 労働安全衛生法 (問題4)", "target_count": 6 },
         { "name": "法規: 建築基準法 (問題4)", "target_count": 4 }
       ]
     },
@@ -211,6 +239,9 @@
         { "name": "シーリング工事の留意点 (記述)", "target_count": 4 },
         { "name": "タイル工事の留意点 (記述)", "target_count": 6 },
         { "name": "塗装工事の留意点 (記述)", "target_count": 6 },
+        { "name": "屋根工事の留意点 (金属葺・折板葺) (記述)", "target_count": 6 },
+        { "name": "金属工事の留意点 (軽量鉄骨下地・スタッド) (記述)", "target_count": 8 },
+        { "name": "内装木工事の留意点 (造作・建具枠) (記述)", "target_count": 6 },
         { "name": "内装ボード工事の留意点 (記述)", "target_count": 6 },
         { "name": "床仕上げ工事の留意点 (記述)", "target_count": 6 },
         { "name": "壁紙・クロス工事の留意点 (記述)", "target_count": 4 },

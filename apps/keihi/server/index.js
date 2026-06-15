@@ -5105,7 +5105,7 @@ try {
 //   (一次合格から時間が経ってる人向け。二次は一次知識の上に乗るので復習問題を 30% 程度混ぜる)
 // - shubetsu の group.shubetsu_relevance フィルタは両 target 共通
 const SEKO_REVIEW_GROUPS_FOR_2JI = new Set([
-  "kanri_ho", "ho_ki", "shiko_shiage", "kenchiku_gaku",
+  "kanri_ho", "ho_ki", "shiko_shiage", "kenchiku_gaku", "kyotsu_setsubi",
 ]); // shubetsu によって shiage_relevance フィルタが二次掛けて適切な group だけ残る
 function sekoGroupsForUser(examTarget, shubetsu) {
   const primary = [];
