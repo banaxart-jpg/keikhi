@@ -49,6 +49,9 @@ body { font-family: 'Outfit', -apple-system, sans-serif; font-weight: 400; backg
 .migrate-btn { display: block; margin: 30px auto; padding: 10px 18px; border-radius: 14px; border: 1px dashed var(--text3); background: none; cursor: pointer; font-family: 'Outfit', sans-serif; font-size: 11px; font-weight: 700; color: var(--text3); }
 .migrate-btn:hover { color: var(--accent); border-color: var(--accent); }
 .migrate-btn:disabled { opacity: 0.5; cursor: wait; }
+.clear-row { display: flex; justify-content: flex-end; padding: 4px 18px 14px; }
+.clear-btn { font-size: 11px; font-weight: 700; color: var(--text3); background: none; border: none; cursor: pointer; padding: 4px 10px; font-family: inherit; }
+.clear-btn:hover { color: var(--hi); }
 
 .list { padding: 0 16px 130px; display: flex; flex-direction: column; gap: 9px; }
 .empty { text-align: center; padding: 40px 20px; color: var(--text3); font-size: 13px; font-weight: 600; }
@@ -415,6 +418,10 @@ const TEMPLATE = `
       </div>
     </div>
 
+    <div v-if="doneInView.length" class="clear-row">
+      <button class="clear-btn" @click="clearDone">✓ 完了を削除 ({{ doneInView.length }})</button>
+    </div>
+
     <button v-if="tasks.length === 0" class="migrate-btn" :disabled="migrating" @click="onMigrate">
       <span v-if="migrating">取り込み中…</span>
       <span v-else><span class="icon">download</span> Cloud SQL から既存タスクを取り込み</span>
@@ -663,6 +670,9 @@ const App = {
         : visible.filter((t) => (t.site || "") === currentSite.value);
       return filtered.slice().sort(cmp);
     });
+    // 一覧に出てる「完了 (薄くなってるやつ)」 = アーカイブ前で、現在のタブに属するもの。
+    // 一括削除ボタンの対象。
+    const doneInView = computed(() => sortedTasks.value.filter((t) => t.status === "done"));
     // アーカイブ一覧: archived task を JST 日付でグルーピング (kaimono と同形)
     const archivedByDay = computed(() => {
       const groups = new Map();
@@ -930,6 +940,14 @@ const App = {
       try { await removeTask(t.id); }
       catch (err) { alert("削除失敗: " + err.message); }
     }
+    // 現在のタブに見えてる「完了」をまとめて削除。kaimono の「済みを削除」と同じ感覚。
+    async function clearDone() {
+      const targets = doneInView.value;
+      if (targets.length === 0) return;
+      if (!confirm(`完了タスク ${targets.length} 件を削除しますか?`)) return;
+      try { await Promise.all(targets.map((t) => removeTask(t.id))); }
+      catch (err) { alert("削除失敗: " + (err.message || err)); }
+    }
 
     // ───── モーダル ─────
     function openModal(t) {
@@ -1138,13 +1156,13 @@ const App = {
       signedIn, authChecked, signinErr, me, partner, tasks, sites, currentSite,
       pickerOpenId, expandedId, modalOpen, editingId, form, saving, migrating,
       titleInput, swipe,
-      meLabel, tabs, currentLabel, tabCount, sortedTasks,
+      meLabel, tabs, currentLabel, tabCount, sortedTasks, doneInView,
       posOf, emailOfPos, roleLabel, colorKey,
       fmtDate, fmtTime, deadlineClass, isUnread, linkedFor, availableFor,
       onAttachMaterial, onDetachMaterial, linkedItemOpenId,
       isFlipping, roleBtnClass, roleBtnStyle, cardStyleFor,
       onCardDown,
-      onTabClick, onRoleClick, onToggleDone, onCyclePriority, onDelete,
+      onTabClick, onRoleClick, onToggleDone, onCyclePriority, onDelete, clearDone,
       openModal, closeModal, saveModal,
       onMigrate,
       showArchive, archExpandedId, archivedByDay, onRestoreTask,
