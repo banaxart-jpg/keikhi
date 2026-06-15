@@ -221,9 +221,32 @@ details summary::-webkit-details-marker { display: none; }
   <div class="sheet">
     <div class="sheet-handle"></div>
     <h3>新規バックテスト</h3>
+
     <div class="field">
-      <div class="field-lbl">通貨ペア</div>
-      <input id="btInstrument" placeholder="USD_JPY">
+      <div class="field-lbl">データソース</div>
+      <select id="btSource" onchange="updateBtSourceUi()">
+        <option value="csv" selected>CSV アップロード (推奨)</option>
+        <option value="oanda">OANDA API (要 API key)</option>
+      </select>
+      <div style="font-size:10px; color:var(--text2); margin-top:4px;">
+        OANDA Japan のデモ API は本番口座 + Gold ステータス必須なので、まずは CSV 推奨。<br>
+        <a href="http://www.histdata.com/download-free-forex-data/" target="_blank" style="color:var(--accent);">HistData (無料、月次 M1 CSV)</a> /
+        <a href="https://www.dukascopy.com/swiss/english/marketwatch/historical/" target="_blank" style="color:var(--accent);">Dukascopy</a> 等から DL。
+      </div>
+    </div>
+
+    <div class="field" id="btCsvField">
+      <div class="field-lbl">CSV 貼り付け / アップロード</div>
+      <input type="file" id="btCsvFile" accept=".csv,text/csv,text/plain" style="margin-bottom:8px; font-size:11px;">
+      <textarea id="btCsv" placeholder="ts,open,high,low,close,volume の形式で貼り付け OK (HistData / Dukascopy / Stooq 等の形式自動判定)" rows="4" style="resize:vertical; width:100%; padding:11px 14px; border-radius:12px; border:none; background:var(--bg); box-shadow:inset 3px 3px 7px var(--sd), inset -3px -3px 7px var(--sl); font-family:ui-monospace,monospace; font-size:11px;"></textarea>
+      <div style="font-size:10px; color:var(--text2); margin-top:4px;">
+        60 行以上 / 50000 行まで。M5 の場合 1 日 = 288 行、1 週間 = ~2000 行。
+      </div>
+    </div>
+
+    <div class="field">
+      <div class="field-lbl">通貨ペア (ラベル用)</div>
+      <input id="btInstrument" placeholder="USD_JPY" value="USD_JPY">
     </div>
     <div class="field">
       <div class="field-lbl">足の粒度</div>
@@ -231,8 +254,8 @@ details summary::-webkit-details-marker { display: none; }
         <option>M1</option><option selected>M5</option><option>M15</option><option>M30</option><option>H1</option>
       </select>
     </div>
-    <div class="field">
-      <div class="field-lbl">期間 (日、最大 30)</div>
+    <div class="field" id="btDaysField" style="display:none;">
+      <div class="field-lbl">期間 (日、最大 30) ※ OANDA 経路のみ</div>
       <input id="btDays" type="number" min="1" max="30" value="7">
     </div>
     <div class="field">
@@ -598,23 +621,47 @@ function renderBacktests(bts) {
   }).join("");
 }
 
-window.openBacktest = function () { $("btSheet").classList.add("open"); };
+window.openBacktest = function () { $("btSheet").classList.add("open"); updateBtSourceUi(); };
 window.closeBacktest = function () { $("btSheet").classList.remove("open"); };
 
+window.updateBtSourceUi = function () {
+  const src = $("btSource").value;
+  $("btCsvField").style.display = src === "csv" ? "" : "none";
+  $("btDaysField").style.display = src === "oanda" ? "" : "none";
+};
+
+// ファイル選択時にテキストエリアに流し込む
+$("btCsvFile").addEventListener("change", async (e) => {
+  const f = e.target.files?.[0];
+  if (!f) return;
+  if (f.size > 15 * 1024 * 1024) { showErr("ファイル大きすぎ (15MB上限)"); return; }
+  const txt = await f.text();
+  $("btCsv").value = txt;
+  showErr(`${f.name} (${(f.size/1024).toFixed(0)}KB) 読み込み済`);
+  setTimeout(() => showErr(null), 3000);
+});
+
 window.submitBacktest = async function () {
+  const src = $("btSource").value;
   const body = {
     instrument: $("btInstrument").value.trim().toUpperCase() || "USD_JPY",
     granularity: $("btGranularity").value,
-    days: parseInt($("btDays").value, 10) || 7,
     sample_rate: parseInt($("btSample").value, 10) || 5,
     tp_pips: parseFloat($("btTp").value) || 10,
     sl_pips: parseFloat($("btSl").value) || 10,
     confidence_threshold: parseFloat($("btConf").value) || 0.7,
   };
+  if (src === "csv") {
+    const csv = $("btCsv").value.trim();
+    if (!csv) { showErr("CSV が空です"); return; }
+    body.csv = csv;
+  } else {
+    body.days = parseInt($("btDays").value, 10) || 7;
+  }
   try {
     const r = await api("POST", "/api/fx/backtest", body);
-    showErr(`バックテスト #${r.id} 開始 (背景で実行中)`);
-    setTimeout(() => showErr(null), 4000);
+    showErr(`バックテスト #${r.id} 開始 ${r.candles ? `(${r.candles} 本のデータ、` : "("}背景で実行中)`);
+    setTimeout(() => showErr(null), 5000);
     closeBacktest();
     await loadStatus();
   } catch (e) { showErr(e.message); }

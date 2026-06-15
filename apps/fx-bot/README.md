@@ -70,8 +70,16 @@ gcloud scheduler jobs create http fx-bot-tick \
 実弾を 1 ヶ月待たないとサンプル 100 件貯まらないが、バックテストなら
 30 分で 1000 件貯められる。
 
+### データソース 2 種類
+1. **CSV アップロード** (推奨、API key 不要)
+   - [HistData](http://www.histdata.com/) (無料、月次 M1 CSV)
+   - [Dukascopy](https://www.dukascopy.com/swiss/english/marketwatch/historical/)
+   - [Stooq](https://stooq.com/) 等から DL → モーダルに貼る or ファイル選択
+   - 形式自動判定 (HistData セミコロン形式 / Dukascopy / ISO8601 等)
+2. **OANDA API** (要 API key、Japan は本番口座 + Gold 限定で実質難しい)
+
 ### 仕組み
-1. OANDA の過去 candle (最大 30 日 / 1 リクエスト 5000 本ページネーション) を取得
+1. ヒストリカル candle を取得 (CSV パース or OANDA fetch)
 2. 50 本 window で walk-forward、N candle ごとに 1 回 AI に判断させる
 3. 次の 12 本で TP/SL に当たったかをシミュレーション (本物の bot と同じロジック)
 4. 全予測を `fx_backtest_predictions` に保存

@@ -12,6 +12,7 @@ import { Readable } from "node:stream";
 import * as fxOanda from "./fx-lib/oanda.js";
 import { buildChartSummary as fxBuildChart } from "./fx-lib/chart.js";
 import { decideFromChart as fxDecide } from "./fx-lib/ai.js";
+import { parseCandlesCsv as fxParseCsv } from "./fx-lib/csv.js";
 import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -6581,7 +6582,7 @@ function fxPipSize(instrument) {
 
 const _fxBacktestRunning = new Set();
 
-async function runFxBacktest(p, btId) {
+async function runFxBacktest(p, btId, preloadedCandles) {
   if (_fxBacktestRunning.has(btId)) return;
   _fxBacktestRunning.add(btId);
   try {
@@ -6589,18 +6590,26 @@ async function runFxBacktest(p, btId) {
     const bt = rows[0];
     if (!bt) return;
 
-    // candle 取得は practice 環境で十分 (履歴はどちらも同じ)
-    const settings = await fxLoadSettings(p);
-    const ctx = fxOandaCtx(settings);
-
-    await p.query(`UPDATE fx_backtests SET status='fetching' WHERE id=$1`, [btId]);
-    const fromIso = new Date(bt.from_time).toISOString();
-    const toIso = new Date(bt.to_time).toISOString();
-    const candles = await fxOanda.fetchHistoricalCandles(ctx, bt.instrument, bt.granularity, fromIso, toIso);
-    await p.query(
-      `UPDATE fx_backtests SET status='running', candle_count=$1 WHERE id=$2`,
-      [candles.length, btId]
-    );
+    // candle: 引数で渡されてれば CSV 経路、無ければ OANDA API から取得
+    let candles;
+    if (preloadedCandles && preloadedCandles.length) {
+      candles = preloadedCandles;
+      await p.query(
+        `UPDATE fx_backtests SET status='running', candle_count=$1 WHERE id=$2`,
+        [candles.length, btId]
+      );
+    } else {
+      const settings = await fxLoadSettings(p);
+      const ctx = fxOandaCtx(settings);
+      await p.query(`UPDATE fx_backtests SET status='fetching' WHERE id=$1`, [btId]);
+      const fromIso = new Date(bt.from_time).toISOString();
+      const toIso = new Date(bt.to_time).toISOString();
+      candles = await fxOanda.fetchHistoricalCandles(ctx, bt.instrument, bt.granularity, fromIso, toIso);
+      await p.query(
+        `UPDATE fx_backtests SET status='running', candle_count=$1 WHERE id=$2`,
+        [candles.length, btId]
+      );
+    }
 
     const WINDOW = 50;
     const FUTURE = 12;
@@ -6730,9 +6739,29 @@ app.post("/api/fx/backtest", async (req, res) => {
   const slPips = Math.max(1, Math.min(100, Number(b.sl_pips) || 10));
   const ct = Math.max(0, Math.min(1, Number(b.confidence_threshold) || 0.7));
   const sampleRate = Math.max(1, Math.min(60, Number(b.sample_rate) || 5));
-  const days = Math.max(1, Math.min(30, Number(b.days) || 7));
-  const toTime = new Date();
-  const fromTime = new Date(Date.now() - days * 86400000);
+
+  // データソース: CSV が来てればそれ、無ければ OANDA API
+  let preloadedCandles = null;
+  let fromTime, toTime;
+  if (typeof b.csv === "string" && b.csv.trim()) {
+    try {
+      preloadedCandles = fxParseCsv(b.csv);
+    } catch (e) {
+      return res.status(400).json({ error: "CSV パース失敗: " + e.message });
+    }
+    if (preloadedCandles.length < 60) {
+      return res.status(400).json({ error: `candle 不足 (${preloadedCandles.length} 行)。最低 60 行必要` });
+    }
+    if (preloadedCandles.length > 50000) {
+      return res.status(400).json({ error: "candle 過多 (50000 行上限)" });
+    }
+    fromTime = new Date(preloadedCandles[0].time);
+    toTime = new Date(preloadedCandles[preloadedCandles.length - 1].time);
+  } else {
+    const days = Math.max(1, Math.min(30, Number(b.days) || 7));
+    toTime = new Date();
+    fromTime = new Date(Date.now() - days * 86400000);
+  }
 
   try {
     const ins = await p.query(
@@ -6744,9 +6773,9 @@ app.post("/api/fx/backtest", async (req, res) => {
        tpPips, slPips, ct, sampleRate]
     );
     const btId = Number(ins.rows[0].id);
-    // 非同期で走らせる (fire-and-forget)
-    runFxBacktest(p, btId).catch((e) => console.error("[fx-bt] runner err:", e));
-    res.json({ id: btId, status: "queued" });
+    // 非同期で走らせる (fire-and-forget)。CSV があれば一緒に渡す
+    runFxBacktest(p, btId, preloadedCandles).catch((e) => console.error("[fx-bt] runner err:", e));
+    res.json({ id: btId, status: "queued", source: preloadedCandles ? "csv" : "oanda", candles: preloadedCandles?.length });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
