@@ -5139,6 +5139,58 @@ const SHUBETSU_LABEL = {
   shiage: "仕上げ (内装・防水・タイル・塗装・建具)",
 };
 
+// バックグラウンド プリウォーム: ユーザーがホーム見てる間に問題プールを温める。
+// 同時実行を防ぐためフラグで gate。1 ユーザー = 1 並行。
+const _sekoPrewarmRunning = new Set();
+async function prewarmSekoPool(p, user) {
+  const examTarget = user.exam_target || "first_full";
+  const shubetsu = user.shubetsu || null;
+  const userLevel = user.level || 1;
+  const allowedGenres = sekoGenresForUser(examTarget, shubetsu);
+  if (!allowedGenres.length) return;
+  // この (target, shubetsu) 組合せで近 1 時間内に何問生成済か
+  const allowedGroupIds = [];
+  for (const g of SEKO_GENRES_DATA?.groups || []) {
+    if (examTarget === "second_only" && g.exam_level !== "2ji" && !SEKO_REVIEW_GROUPS_FOR_2JI.has(g.id)) continue;
+    if (shubetsu) {
+      const rel = Array.isArray(g.shubetsu_relevance) ? g.shubetsu_relevance : null;
+      if (rel && !rel.includes(shubetsu)) continue;
+    }
+    allowedGroupIds.push(g.id);
+  }
+  const { rows: cnt } = await p.query(
+    `SELECT COUNT(*)::int AS n FROM seko_questions
+      WHERE genre = ANY($1::text[])
+        AND (group_id = ANY($2::text[]) OR group_id IS NULL)
+        AND created_at > now() - interval '7 days'`,
+    [allowedGenres, allowedGroupIds]
+  );
+  const fresh = cnt[0]?.n || 0;
+  const TARGET = 12;   // 直近 1 週間分のプール目標
+  const need = Math.min(5, TARGET - fresh);
+  if (need <= 0) return;
+  const lock = `${user.user_email}::${examTarget}::${shubetsu || "_"}`;
+  if (_sekoPrewarmRunning.has(lock)) return;
+  _sekoPrewarmRunning.add(lock);
+  try {
+    const items = [];
+    for (let i = 0; i < need; i++) {
+      const g = allowedGenres[Math.floor(Math.random() * allowedGenres.length)];
+      const groupId = SEKO_GENRE_TO_GROUP.get(g);
+      const groupRow = SEKO_GROUP_BY_ID.get(groupId);
+      let qtype = "choice";
+      const dt = groupRow?.default_question_type;
+      if (dt === "free") qtype = "free";
+      else if (dt === "mixed") qtype = userLevel <= 2 ? "choice" : (Math.random() < 0.5 ? "choice" : "free");
+      items.push({ genre: g, groupId, examLevel: groupRow?.exam_level || "1ji", qtype });
+    }
+    const gen = await generateSekoQuestionsBatch(p, items, shubetsu);
+    console.log(`[seko] prewarm: +${gen.length} for ${lock}`);
+  } finally {
+    _sekoPrewarmRunning.delete(lock);
+  }
+}
+
 async function ensureSekoUser(p, email) {
   const display = String(email).split("@")[0] || "user";
   const { rows } = await p.query(
@@ -5152,11 +5204,22 @@ async function ensureSekoUser(p, email) {
 }
 
 // AI で N 問まとめて生成して seko_questions に INSERT、行配列を返す。
-// 1 リクエストで複数問取ることでコールドスタートを大幅短縮 (10問 ~10 秒)。
-// shubetsu ('kenchiku'|'kutai'|'shiage') が指定されたら受検種別に合わせた論点・例題に寄せる。
+// 大きすぎる応答は Gemini が JSON 切ったり time out するので、N>5 は分割並列で呼ぶ。
 async function generateSekoQuestionsBatch(p, items, shubetsu) {
   if (!genAI) throw new Error("Gemini 未設定");
   if (!items.length) return [];
+  // 5 問より多ければ 2 並列に分割
+  if (items.length > 5) {
+    const mid = Math.ceil(items.length / 2);
+    const [a, b] = await Promise.allSettled([
+      generateSekoQuestionsBatch(p, items.slice(0, mid), shubetsu),
+      generateSekoQuestionsBatch(p, items.slice(mid), shubetsu),
+    ]);
+    const out = [];
+    if (a.status === "fulfilled") out.push(...a.value);
+    if (b.status === "fulfilled") out.push(...b.value);
+    return out;
+  }
   const subject = SEKO_GENRES_DATA?.domain?.ai_subject || "2級建築施工管理技士検定";
   const shubetsuLabel = shubetsu ? (SHUBETSU_LABEL[shubetsu] || shubetsu) : null;
   const lines = items.map((it, i) => {
@@ -5170,7 +5233,7 @@ async function generateSekoQuestionsBatch(p, items, shubetsu) {
   const shubetsuBlock = shubetsuLabel ? `
 ■ 受検種別 (重要): ${shubetsuLabel}
 - 受験生はこの種別で受けるため、出題は ${shubetsuLabel} の業務に直結する論点に絞ること。
-- ${shubetsu === "shiage" ? "防水・タイル・塗装・内装ボード・壁紙・床・建具・断熱・改修 を中心に。鉄筋径や鉄骨高力ボルトの細かい数値など、仕上技術者が現場で扱わない論点は避ける。" : ""}${shubetsu === "kutai" ? "鉄筋・型枠・コンクリート・鉄骨建方・木造軸組 を中心に。" : ""}${shubetsu === "kenchiku" ? "建築一式の総合管理 (複数工種の関連・工程・仮設) を中心に。" : ""}
+- ${shubetsu === "shiage" ? "防水・タイル・塗装・内装ボード・壁紙・床・建具・断熱・改修・軽量鉄骨下地・内装木工 を中心に。鉄筋径や鉄骨高力ボルトの細かい数値など、仕上技術者が現場で扱わない論点は避ける。実際の二次5-C の頻出論点 (改質アスファルトシート防水トーチ工法・改良圧着張り・吹付け塗り・軽量鉄骨天井下地のハンガー間隔・グリッパー工法・塩化ビニル床シート熱溶接) を意識する。" : ""}${shubetsu === "kutai" ? "鉄筋・型枠・コンクリート・鉄骨建方・木造軸組 を中心に。" : ""}${shubetsu === "kenchiku" ? "建築一式の総合管理 (複数工種の関連・工程・仮設) を中心に。" : ""}
 - 解説の最後に「【${shubetsuLabel} の現場で】」と添えて、当該種別の現場でのリアルな運用注意を 1 文加える。` : "";
   const prompt = `あなたは ${subject} の出題者。
 ${shubetsuBlock}
@@ -5354,6 +5417,8 @@ app.get("/api/seko/me", async (req, res) => {
   try {
     await ensureSchema();
     const user = await ensureSekoUser(p, req.user.email);
+    // バックグラウンドで問題プールを温める (ユーザーがホーム見てる ~5 秒で 5 問生成完了 → セッション開始即時)
+    prewarmSekoPool(p, user).catch((e) => console.warn("[seko] prewarm failed:", e.message));
     const [groups, streak] = await Promise.all([
       buildSekoProgress(p, req.user.email, user.exam_target || "first_full", user.shubetsu || null),
       computeSekoStreak(p, req.user.email),
@@ -5558,10 +5623,17 @@ app.post("/api/seko/sessions/start", async (req, res) => {
       }
     }
 
+    // 取れた数で開始 (最低 1 問あれば動く。503 で UX 止めない)
+    if (!picked.length) {
+      // 最後の手段: pool から exam_target/shubetsu 無視で取る
+      const { rows: anyRows } = await p.query(
+        `SELECT * FROM seko_questions ORDER BY random() LIMIT 5`
+      );
+      picked = anyRows;
+    }
     if (!picked.length) {
       return res.status(503).json({
-        error: "問題を準備できませんでした。少し待ってもう一度試してください。",
-        hint: "AI 出題生成に失敗。Gemini API のレート制限か接続エラーの可能性",
+        error: "問題プールが空です。少し待って再試行 (バックグラウンドで生成中)。",
       });
     }
 
