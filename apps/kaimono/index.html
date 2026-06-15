@@ -500,11 +500,14 @@ const App = {
       return (now.value - t) > ARCHIVE_AFTER_MS;
     }
 
+    // アクティブな現場名 Set (完了現場のアイテムを ALL からも除外するため)
+    const activeSitesSet = computed(() => new Set(sites.value));
     const filteredItems = computed(() =>
       items.value
         .filter((i) => {
           if (isArchived(i)) return false;
-          if (activeSite.value === ALL_KEY) return true;   // 「すべて」: 現場で絞らない
+          // 「すべて」: 完了済み現場のアイテムは出さない (再開すれば現場名 set に戻り再表示)
+          if (activeSite.value === ALL_KEY) return activeSitesSet.value.has(i.site);
           return i.site === activeSite.value;
         })
         // 未チェック先、済みを下に。同じ状態内は createdAt desc (新しい順)。
@@ -522,8 +525,9 @@ const App = {
       for (const it of items.value) {
         if (it.checked) continue;
         if (isArchived(it)) continue;
+        if (!(it.site in m)) continue;   // 完了現場のアイテムは ALL からも除外
         m[ALL_KEY]++;
-        if (it.site in m) m[it.site]++;
+        m[it.site]++;
       }
       return m;
     });
@@ -815,7 +819,7 @@ const App = {
           });
           if (r.ok) {
             const rows = await r.json();
-            sites.value = (Array.isArray(rows) ? rows : []).map((x) => x.name).filter(Boolean);
+            sites.value = (Array.isArray(rows) ? rows : []).filter((x) => !x.doneAt).map((x) => x.name).filter(Boolean);
             if (!sites.value.includes("駒込")) {
               alert("『駒込』が現場アプリに登録されていません。先に /genba/ で作成してください。");
               seeding.value = false;
@@ -879,8 +883,8 @@ const App = {
             });
             if (res.ok) {
               const rows = await res.json();
-              // /api/sites は [{ id, name, ... }] を返す
-              sites.value = (Array.isArray(rows) ? rows : []).map((r) => r.name).filter(Boolean);
+              // /api/sites は [{ id, name, doneAt, ... }] を返す。完了現場 (doneAt 有り) はタブから除外。
+              sites.value = (Array.isArray(rows) ? rows : []).filter((r) => !r.doneAt).map((r) => r.name).filter(Boolean);
             }
           } catch (e) { /* タブ取得失敗は致命じゃない、Firestore は購読続行 */ }
           // 2) Firestore リアルタイム購読 (shopping_items)

@@ -314,7 +314,8 @@ const App = {
         });
         if (r.ok) {
           const sj = await r.json();
-          sites.value = (Array.isArray(sj) ? sj : []).map((s) => s.name).filter(Boolean);
+          // 完了した現場 (doneAt 有り) はタブから除外。再開すれば genba 側で doneAt が NULL に戻り再表示される。
+          sites.value = (Array.isArray(sj) ? sj : []).filter((s) => !s.doneAt).map((s) => s.name).filter(Boolean);
         }
       } catch (e) { console.warn("[memo] sites fetch failed", e); }
       // 初期 active site: MRU 最上位 or sortedSites[0]

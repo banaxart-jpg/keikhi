@@ -644,7 +644,10 @@ const App = {
       return currentSite.value || "雑務";
     });
     function tabCount(key) {
-      if (key === ALL_KEY) return tasks.value.filter((t) => t.status === "active").length;
+      if (key === ALL_KEY) {
+        // 完了現場のタスクは ALL からも除外。雑務 ("") は常に通す。
+        return tasks.value.filter((t) => t.status === "active" && (!t.site || activeSitesSet.value.has(t.site))).length;
+      }
       return tasks.value.filter((t) => (t.site || "") === key && t.status === "active").length;
     }
     function sortKey(t) {
@@ -663,10 +666,13 @@ const App = {
       }
       return 0;
     }
+    // アクティブな現場名 Set (完了現場のタスクを ALL からも除外するため)
+    const activeSitesSet = computed(() => new Set(sites.value));
     const sortedTasks = computed(() => {
       const visible = tasks.value.filter((t) => !isArchived(t));
       const filtered = currentSite.value === ALL_KEY
-        ? visible                                                        // 「すべて」: 現場で絞らない
+        // 「すべて」: 現場で絞らないが、完了した現場のタスクは除外。雑務 ("") は常に通す。
+        ? visible.filter((t) => !t.site || activeSitesSet.value.has(t.site))
         : visible.filter((t) => (t.site || "") === currentSite.value);
       return filtered.slice().sort(cmp);
     });
@@ -1045,7 +1051,8 @@ const App = {
         });
         if (r.ok) {
           const sj = await r.json();
-          sites.value = (Array.isArray(sj) ? sj : []).map((s) => s.name).filter(Boolean);
+          // 完了した現場 (doneAt 有り) はタブに出さない。再開すれば genba 側で doneAt が NULL に戻り再表示される。
+          sites.value = (Array.isArray(sj) ? sj : []).filter((s) => !s.doneAt).map((s) => s.name).filter(Boolean);
         }
       } catch (e) { console.warn("[task] sites fetch failed", e); sites.value = []; }
       // 初期 currentSite: MRU 最上位 (= 最後に開いた現場)。無ければ "" (雑務)。
