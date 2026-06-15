@@ -5296,6 +5296,16 @@ app.get("/api/seko/me", async (req, res) => {
          FROM seko_questions`
     );
     const pool = poolRows[0] || { total: 0, generated: 0, seed: 0, gen_last_hour: 0 };
+    // 直近 7 日の回答ペース (per_day 平均 + last7Correct)
+    const { rows: paceRows } = await p.query(
+      `SELECT
+         COUNT(*)::int AS last7_answers,
+         COUNT(*) FILTER (WHERE is_correct)::int AS last7_correct
+         FROM seko_progress
+        WHERE user_email = $1 AND answered_at > now() - interval '7 days'`,
+      [req.user.email]
+    );
+    const pace = paceRows[0] || { last7_answers: 0, last7_correct: 0 };
     const { rows: learned } = await p.query(
       `SELECT q.genre AS label, MAX(pr.answered_at) AS answered_at, q.group_id, q.explanation
          FROM seko_progress pr
@@ -5318,6 +5328,7 @@ app.get("/api/seko/me", async (req, res) => {
       isOwner: KOTONOHA_OWNER_EMAILS.has(String(req.user.email || "").toLowerCase()),
       exam_target: user.exam_target || null,
       shubetsu: user.shubetsu || null,
+      pace,
     });
   } catch (err) {
     console.error("seko me", err);

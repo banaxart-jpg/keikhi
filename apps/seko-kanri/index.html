@@ -387,18 +387,30 @@ body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); 
   <div class="title" id="appTitle">施工管理2級</div>
   <div class="subtitle" id="appSubtitle">2級建築施工管理技士検定 (一次・二次) 対策</div>
 
-  <!-- 試験日カウントダウン (試験日が決まったら EXAM_DATE 定数を更新) -->
-  <div id="examCountdown" class="card" style="text-align:center; padding:18px 14px; background: linear-gradient(145deg, #fff6ec, #ffe9d1); box-shadow: 6px 6px 16px rgba(180,135,90,0.18), inset 1px 1px 0 rgba(255,255,255,0.55);">
-    <div class="label" style="color:#b08968; letter-spacing:0.2em;">次回 試験日</div>
-    <div id="examDateLabel" style="font-size: 13px; font-weight:700; color:#7a5c3d; margin: 6px 0 4px;"></div>
-    <div id="examDaysBig" style="font-size: 44px; font-weight: 900; line-height:1; color:#b08968; letter-spacing:-1px;">--</div>
-    <div id="examDaysSub" style="font-size: 11px; font-weight: 800; color:#7a5c3d; margin-top: 6px; letter-spacing:0.1em;">DAYS LEFT</div>
-    <div id="examTargetChip" style="font-size: 10px; font-weight: 800; color:#7a5c3d; margin-top: 10px; letter-spacing:0.04em;"></div>
-  </div>
   <div id="versionBadge" style="font-family: ui-monospace, Menlo, monospace; font-size: 10px; color: var(--text3); margin-top: 4px; margin-bottom: 18px;">v.loading…</div>
 
   <!-- ホーム画面 -->
   <div class="view active" id="homeView">
+
+    <!-- 試験日カウントダウン (ホームのみ表示。session 中は非表示にしてノイズ減らす) -->
+    <div id="examCountdown" class="card" style="text-align:center; padding:18px 14px 16px; background: linear-gradient(145deg, #fff6ec, #ffe9d1); box-shadow: 6px 6px 16px rgba(180,135,90,0.18), inset 1px 1px 0 rgba(255,255,255,0.55);">
+      <div class="label" style="color:#b08968; letter-spacing:0.2em; margin-bottom:0;">次回 試験日</div>
+      <div id="examDateLabel" style="font-size: 13px; font-weight:700; color:#7a5c3d; margin: 6px 0 4px;"></div>
+      <div id="examDaysBig" style="font-size: 44px; font-weight: 900; line-height:1; color:#b08968; letter-spacing:-1px;">--</div>
+      <div id="examDaysSub" style="font-size: 11px; font-weight: 800; color:#7a5c3d; margin-top: 6px; letter-spacing:0.1em;">DAYS LEFT</div>
+      <div id="examTargetChip" style="font-size: 10px; font-weight: 800; color:#7a5c3d; margin-top: 10px; letter-spacing:0.04em;"></div>
+
+      <!-- ペース評価ブロック -->
+      <div id="paceBlock" style="margin-top: 14px; padding-top: 14px; border-top: 1px solid rgba(176,137,104,0.25); display:none;">
+        <div id="paceProgressText" style="font-size: 11px; font-weight: 700; color: #7a5c3d; letter-spacing: 0.04em;"></div>
+        <div style="height: 6px; background: rgba(176,137,104,0.18); border-radius: 4px; margin: 8px 0 10px; overflow: hidden;">
+          <div id="paceProgressBar" style="height: 100%; width: 0%; background: linear-gradient(90deg, #b08968, #7a5c3d); transition: width 400ms ease;"></div>
+        </div>
+        <div id="paceRequiredLine" style="font-size: 11px; color: #7a5c3d; font-weight: 700; line-height: 1.6;"></div>
+        <div id="paceActualLine" style="font-size: 11px; color: #7a5c3d; font-weight: 600; line-height: 1.6; margin-top: 2px;"></div>
+        <div id="paceVerdict" style="margin-top: 10px; padding: 8px 12px; border-radius: 12px; font-size: 12px; font-weight: 800; letter-spacing: 0.03em;"></div>
+      </div>
+    </div>
     <div class="card">
       <div class="label">あなた</div>
       <div class="level-hero">
@@ -562,6 +574,65 @@ function renderCountdown(examTarget, shubetsu) {
 }
 window.renderCountdown = renderCountdown;
 
+// ペース評価: groups (進捗 + target) と pace (直近 7 日回答数) からカード内に書く
+function renderPace(groups, pace) {
+  const block = document.getElementById("paceBlock");
+  if (!block || !Array.isArray(groups)) return;
+  const totalTarget = groups.reduce((s, g) => s + (g.target || 0), 0);
+  const totalCorrect = groups.reduce((s, g) => s + (g.correct || 0), 0);
+  if (totalTarget <= 0) { block.style.display = "none"; return; }
+  block.style.display = "";
+
+  const days = Math.max(1, daysUntilExam());
+  const remaining = Math.max(0, totalTarget - totalCorrect);
+  const pct = Math.min(100, Math.round((totalCorrect / totalTarget) * 100));
+  const needPerDay = remaining / days;                 // 試験日までに必要な 1 日あたり問題数
+  const last7Correct = pace?.last7_correct || 0;
+  const actualPerDay = last7Correct / 7;               // 直近 7 日の実績 (正解 base)
+
+  document.getElementById("paceProgressText").textContent =
+    `進捗 ${totalCorrect} / ${totalTarget} 問 ・ ${pct}%`;
+  document.getElementById("paceProgressBar").style.width = pct + "%";
+
+  const reqLine = document.getElementById("paceRequiredLine");
+  if (remaining === 0) {
+    reqLine.innerHTML = `<span style="font-weight:800;">目標問題数を全クリア済み</span>`;
+  } else {
+    reqLine.innerHTML = `残り <b>${remaining}</b> 問 ・ 試験日まで毎日 <b>${needPerDay.toFixed(1)}</b> 問解けば届く`;
+  }
+
+  const actLine = document.getElementById("paceActualLine");
+  if (last7Correct === 0) {
+    actLine.textContent = "直近 7 日: まだ正解記録なし";
+  } else {
+    actLine.innerHTML = `直近 7 日: <b>${last7Correct}</b> 問正解 ・ 1日平均 <b>${actualPerDay.toFixed(1)}</b> 問`;
+  }
+
+  const verdict = document.getElementById("paceVerdict");
+  let bg, color, text;
+  if (remaining === 0) {
+    bg = "rgba(42,140,58,0.16)"; color = "#2a8c3a";
+    text = "✓ 全範囲クリア。継続でこの状態を保てば余裕で合格圏";
+  } else if (last7Correct === 0) {
+    // まだ実績がない → 必要ペースだけで判定
+    if (needPerDay <= 3) { bg = "rgba(42,140,58,0.14)"; color = "#2a8c3a"; text = "余裕ペース。今日 3 問解けば届く"; }
+    else if (needPerDay <= 8) { bg = "rgba(176,137,104,0.18)"; color = "#7a5c3d"; text = `今日から 1 日 ${Math.ceil(needPerDay)} 問ペースで合格圏`; }
+    else if (needPerDay <= 15) { bg = "rgba(245,158,11,0.18)"; color = "#a35d00"; text = `1 日 ${Math.ceil(needPerDay)} 問。気合い入れていけば届く`; }
+    else { bg = "rgba(176,64,64,0.18)"; color = "#b04040"; text = `1 日 ${Math.ceil(needPerDay)} 問 必要。範囲広い、早めに毎日習慣化を`; }
+  } else {
+    // 実績ペース vs 必要ペースの比較
+    const ratio = actualPerDay / needPerDay;
+    if (ratio >= 1.3) { bg = "rgba(42,140,58,0.16)"; color = "#2a8c3a"; text = `✓ このペースなら余裕で合格圏 (必要の ${Math.round(ratio*100)}%)`; }
+    else if (ratio >= 1.0) { bg = "rgba(42,140,58,0.14)"; color = "#2a8c3a"; text = `✓ このペースで届きます (必要の ${Math.round(ratio*100)}%)`; }
+    else if (ratio >= 0.7) { bg = "rgba(245,158,11,0.18)"; color = "#a35d00"; text = `△ あと少しペースアップ (現状は必要の ${Math.round(ratio*100)}%)`; }
+    else { bg = "rgba(176,64,64,0.18)"; color = "#b04040"; text = `✗ ペース不足 (必要の ${Math.round(ratio*100)}%)。1 日 ${Math.ceil(needPerDay)} 問を目標に`; }
+  }
+  verdict.style.background = bg;
+  verdict.style.color = color;
+  verdict.textContent = text;
+}
+window.renderPace = renderPace;
+
 const state = {
   view: "home",
   questionMap: new Map(),  // id → question
@@ -642,6 +713,7 @@ async function loadHome() {
   state.examTarget = me?.exam_target || null;
   state.shubetsu = me?.shubetsu || null;
   renderCountdown(state.examTarget, state.shubetsu);
+  renderPace(me?.groups || [], me?.pace || null);
   const onboardModal = document.getElementById("onboardModal");
   if (onboardModal) {
     const needsOnboard = (!state.shubetsu || !state.examTarget) && !me?._err;
