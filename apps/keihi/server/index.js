@@ -862,6 +862,58 @@ async function ensureSchema() {
     `);
     await p.query("CREATE INDEX IF NOT EXISTS fx_opt_created_idx ON fx_optimizations (created_at DESC)");
 
+    // バックテスト: 過去 candle に対して AI 判断を再生 → 結果集計 → 設定校正
+    await p.query(`
+      CREATE TABLE IF NOT EXISTS fx_backtests (
+        id                   BIGSERIAL PRIMARY KEY,
+        instrument           TEXT NOT NULL,
+        granularity          TEXT NOT NULL,
+        from_time            TIMESTAMPTZ NOT NULL,
+        to_time              TIMESTAMPTZ NOT NULL,
+        tp_pips              NUMERIC NOT NULL,
+        sl_pips              NUMERIC NOT NULL,
+        confidence_threshold NUMERIC NOT NULL,
+        sample_rate          INTEGER NOT NULL DEFAULT 5,    -- N candle ごとに 1 回判断
+        status               TEXT NOT NULL DEFAULT 'queued', -- queued|fetching|running|done|error
+        progress             INTEGER NOT NULL DEFAULT 0,
+        candle_count         INTEGER,
+        total_predictions    INTEGER,
+        pass_count           INTEGER,
+        long_count           INTEGER,
+        short_count          INTEGER,
+        trades_taken         INTEGER,
+        wins                 INTEGER,
+        losses               INTEGER,
+        timeouts             INTEGER,      -- TP/SL どちらも当たらず時間切れ
+        total_pnl_pips       NUMERIC,
+        profit_factor        NUMERIC,
+        win_rate             NUMERIC,
+        conf_buckets         JSONB,        -- { "0.5-0.6": {n,w,l,wr,pnl}, ... }
+        error                TEXT,
+        created_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
+        finished_at          TIMESTAMPTZ
+      )
+    `);
+    await p.query("CREATE INDEX IF NOT EXISTS fx_bt_created_idx ON fx_backtests (created_at DESC)");
+    await p.query(`
+      CREATE TABLE IF NOT EXISTS fx_backtest_predictions (
+        id            BIGSERIAL PRIMARY KEY,
+        backtest_id   BIGINT NOT NULL REFERENCES fx_backtests(id) ON DELETE CASCADE,
+        candle_time   TIMESTAMPTZ NOT NULL,
+        decision      TEXT NOT NULL,
+        confidence    NUMERIC,
+        reasoning     TEXT,
+        entry_price   NUMERIC,
+        hit_tp        BOOLEAN,
+        hit_sl        BOOLEAN,
+        exit_price    NUMERIC,
+        pnl_pips      NUMERIC,
+        bars_to_exit  INTEGER,
+        taken         BOOLEAN
+      )
+    `);
+    await p.query("CREATE INDEX IF NOT EXISTS fx_btp_bt_idx ON fx_backtest_predictions (backtest_id, candle_time)");
+
     schemaMigrated = true;
     console.log("[schema] migration ok: records.drive_url + tasks + yado_bookings + seko_* + fx_* ensured");
   } catch (e) {
@@ -6518,6 +6570,300 @@ app.post("/api/internal/fx/optimize", async (req, res) => {
     console.error("[fx] internal optimize err:", err);
     res.status(500).json({ error: err.message });
   }
+});
+
+// ───── バックテスト (過去 candle で AI 判断を再生) ─────
+// AI の予測 → 次 N 本での TP/SL シミュレーション → conf bucket 別の win rate 集計。
+// 学習データを「実弾を待たずに高速に貯める」目的。
+function fxPipSize(instrument) {
+  return instrument.endsWith("_JPY") ? 0.01 : 0.0001;
+}
+
+const _fxBacktestRunning = new Set();
+
+async function runFxBacktest(p, btId) {
+  if (_fxBacktestRunning.has(btId)) return;
+  _fxBacktestRunning.add(btId);
+  try {
+    const { rows } = await p.query(`SELECT * FROM fx_backtests WHERE id=$1`, [btId]);
+    const bt = rows[0];
+    if (!bt) return;
+
+    // candle 取得は practice 環境で十分 (履歴はどちらも同じ)
+    const settings = await fxLoadSettings(p);
+    const ctx = fxOandaCtx(settings);
+
+    await p.query(`UPDATE fx_backtests SET status='fetching' WHERE id=$1`, [btId]);
+    const fromIso = new Date(bt.from_time).toISOString();
+    const toIso = new Date(bt.to_time).toISOString();
+    const candles = await fxOanda.fetchHistoricalCandles(ctx, bt.instrument, bt.granularity, fromIso, toIso);
+    await p.query(
+      `UPDATE fx_backtests SET status='running', candle_count=$1 WHERE id=$2`,
+      [candles.length, btId]
+    );
+
+    const WINDOW = 50;
+    const FUTURE = 12;
+    const SAMPLE = Math.max(1, Number(bt.sample_rate) || 5);
+    const pip = fxPipSize(bt.instrument);
+    const thresh = Number(bt.confidence_threshold);
+    const tpPips = Number(bt.tp_pips);
+    const slPips = Number(bt.sl_pips);
+
+    let predictions = 0, pass = 0, longCnt = 0, shortCnt = 0;
+    let taken = 0, wins = 0, losses = 0, timeouts = 0;
+    let totalPnl = 0;
+    const buckets = {}; // "0.5-0.6": { n, w, l, t, pnl }
+    const recordBucket = (conf, hitTp, hitSl, tookIt, pnl) => {
+      const b = Math.floor(Math.min(0.99, Math.max(0, conf)) * 10) / 10;
+      const key = `${b.toFixed(1)}-${(b + 0.1).toFixed(1)}`;
+      const slot = buckets[key] || (buckets[key] = { n: 0, w: 0, l: 0, t: 0, pnl: 0 });
+      slot.n++;
+      if (tookIt) slot.t++;
+      if (tookIt && hitTp) slot.w++;
+      if (tookIt && hitSl) slot.l++;
+      if (tookIt) slot.pnl += pnl;
+    };
+
+    // walk forward
+    for (let i = WINDOW; i < candles.length - FUTURE; i += SAMPLE) {
+      const window = candles.slice(i - WINDOW, i);
+      const future = candles.slice(i, i + FUTURE);
+      const entry = candles[i].c;
+      const chartText = fxBuildChart(window, bt.instrument, bt.granularity);
+
+      let decision;
+      try {
+        decision = await fxDecide(callGeminiWithFallback, chartText);
+      } catch (e) {
+        // AI 失敗は記録だけしてスキップ
+        await p.query(
+          `INSERT INTO fx_backtest_predictions (backtest_id, candle_time, decision, confidence, reasoning, entry_price, taken)
+           VALUES ($1,$2,'ERROR',NULL,$3,$4,false)`,
+          [btId, candles[i].time, e.message.slice(0, 200), entry]
+        );
+        continue;
+      }
+
+      let hitTp = false, hitSl = false, exitPrice = null, barsToExit = null;
+      if (decision.decision === "LONG") {
+        const tp = entry + tpPips * pip;
+        const sl = entry - slPips * pip;
+        for (let j = 0; j < future.length; j++) {
+          if (future[j].h >= tp) { hitTp = true; exitPrice = tp; barsToExit = j + 1; break; }
+          if (future[j].l <= sl) { hitSl = true; exitPrice = sl; barsToExit = j + 1; break; }
+        }
+      } else if (decision.decision === "SHORT") {
+        const tp = entry - tpPips * pip;
+        const sl = entry + slPips * pip;
+        for (let j = 0; j < future.length; j++) {
+          if (future[j].l <= tp) { hitTp = true; exitPrice = tp; barsToExit = j + 1; break; }
+          if (future[j].h >= sl) { hitSl = true; exitPrice = sl; barsToExit = j + 1; break; }
+        }
+      }
+      // PASS は exit なし
+
+      const wouldTake = decision.decision !== "PASS" && decision.confidence >= thresh;
+      let pnlPips = 0;
+      if (wouldTake) {
+        taken++;
+        if (hitTp) { wins++; pnlPips = tpPips; }
+        else if (hitSl) { losses++; pnlPips = -slPips; }
+        else { timeouts++; pnlPips = 0; }
+        totalPnl += pnlPips;
+      }
+      if (decision.decision === "LONG") longCnt++;
+      else if (decision.decision === "SHORT") shortCnt++;
+      else pass++;
+      recordBucket(decision.confidence, hitTp, hitSl, wouldTake, pnlPips);
+
+      await p.query(
+        `INSERT INTO fx_backtest_predictions
+           (backtest_id, candle_time, decision, confidence, reasoning, entry_price,
+            hit_tp, hit_sl, exit_price, pnl_pips, bars_to_exit, taken)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+        [btId, candles[i].time, decision.decision, decision.confidence,
+         decision.reasoning?.slice(0, 500), entry,
+         hitTp, hitSl, exitPrice, pnlPips, barsToExit, wouldTake]
+      );
+
+      predictions++;
+      if (predictions % 10 === 0) {
+        await p.query(`UPDATE fx_backtests SET progress=$1 WHERE id=$2`, [predictions, btId]);
+      }
+      // rate limit 緩和 (50ms 待機)
+      await new Promise((r) => setTimeout(r, 50));
+    }
+
+    const wr = taken > 0 ? wins / taken : 0;
+    const pf = losses > 0 ? (wins * tpPips) / (losses * slPips) : null;
+    await p.query(
+      `UPDATE fx_backtests SET
+         status='done', progress=$1, total_predictions=$1,
+         pass_count=$2, long_count=$3, short_count=$4,
+         trades_taken=$5, wins=$6, losses=$7, timeouts=$8,
+         total_pnl_pips=$9, win_rate=$10, profit_factor=$11,
+         conf_buckets=$12, finished_at=now()
+       WHERE id=$13`,
+      [predictions, pass, longCnt, shortCnt, taken, wins, losses, timeouts,
+       totalPnl, wr, pf, JSON.stringify(buckets), btId]
+    );
+  } catch (e) {
+    console.error("[fx-bt] err:", e);
+    await p.query(
+      `UPDATE fx_backtests SET status='error', error=$1, finished_at=now() WHERE id=$2`,
+      [String(e.message || e).slice(0, 500), btId]
+    );
+  } finally {
+    _fxBacktestRunning.delete(btId);
+  }
+}
+
+app.post("/api/fx/backtest", async (req, res) => {
+  if (!requireFxOwner(req, res)) return;
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  const b = req.body || {};
+  const instrument = (b.instrument || "USD_JPY").toUpperCase();
+  const granularity = b.granularity || "M5";
+  const tpPips = Math.max(1, Math.min(100, Number(b.tp_pips) || 10));
+  const slPips = Math.max(1, Math.min(100, Number(b.sl_pips) || 10));
+  const ct = Math.max(0, Math.min(1, Number(b.confidence_threshold) || 0.7));
+  const sampleRate = Math.max(1, Math.min(60, Number(b.sample_rate) || 5));
+  const days = Math.max(1, Math.min(30, Number(b.days) || 7));
+  const toTime = new Date();
+  const fromTime = new Date(Date.now() - days * 86400000);
+
+  try {
+    const ins = await p.query(
+      `INSERT INTO fx_backtests
+         (instrument, granularity, from_time, to_time, tp_pips, sl_pips,
+          confidence_threshold, sample_rate, status)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'queued') RETURNING id`,
+      [instrument, granularity, fromTime.toISOString(), toTime.toISOString(),
+       tpPips, slPips, ct, sampleRate]
+    );
+    const btId = Number(ins.rows[0].id);
+    // 非同期で走らせる (fire-and-forget)
+    runFxBacktest(p, btId).catch((e) => console.error("[fx-bt] runner err:", e));
+    res.json({ id: btId, status: "queued" });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get("/api/fx/backtests", async (req, res) => {
+  if (!requireFxOwner(req, res)) return;
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  try {
+    const { rows } = await p.query(
+      `SELECT id, instrument, granularity, from_time, to_time, tp_pips, sl_pips,
+              confidence_threshold, sample_rate, status, progress, candle_count,
+              total_predictions, trades_taken, wins, losses, timeouts,
+              total_pnl_pips, profit_factor, win_rate, conf_buckets,
+              error, created_at, finished_at
+         FROM fx_backtests ORDER BY id DESC LIMIT 20`
+    );
+    res.json({ backtests: rows });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.get("/api/fx/backtest/:id", async (req, res) => {
+  if (!requireFxOwner(req, res)) return;
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  try {
+    const { rows: btRows } = await p.query(`SELECT * FROM fx_backtests WHERE id=$1`, [req.params.id]);
+    if (!btRows.length) return res.status(404).json({ error: "not found" });
+    const { rows: preds } = await p.query(
+      `SELECT candle_time, decision, confidence, entry_price, hit_tp, hit_sl,
+              exit_price, pnl_pips, bars_to_exit, taken, reasoning
+         FROM fx_backtest_predictions WHERE backtest_id=$1
+        ORDER BY candle_time DESC LIMIT 100`,
+      [req.params.id]
+    );
+    res.json({ backtest: btRows[0], predictions: preds });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// バックテスト結果を AI に投げて設定校正案を作る
+app.post("/api/fx/backtest/:id/optimize", async (req, res) => {
+  if (!requireFxOwner(req, res)) return;
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  try {
+    const { rows } = await p.query(`SELECT * FROM fx_backtests WHERE id=$1`, [req.params.id]);
+    const bt = rows[0];
+    if (!bt) return res.status(404).json({ error: "not found" });
+    if (bt.status !== "done") return res.status(400).json({ error: "backtest 未完了" });
+    const settings = await fxLoadSettings(p);
+
+    const prompt = `バックテスト結果から、戦略設定の校正案を作ってください。
+
+【バックテスト】
+- 通貨ペア: ${bt.instrument}
+- 粒度: ${bt.granularity}
+- 期間: ${bt.from_time} 〜 ${bt.to_time}
+- TP: ${bt.tp_pips} pips / SL: ${bt.sl_pips} pips
+- 現在の confidence 閾値: ${bt.confidence_threshold}
+
+【総合成績】
+- 予測数: ${bt.total_predictions}
+- 採用 (閾値以上): ${bt.trades_taken} / 勝 ${bt.wins} / 負 ${bt.losses} / 時間切れ ${bt.timeouts}
+- 勝率: ${(Number(bt.win_rate) * 100).toFixed(1)}%
+- PF: ${bt.profit_factor ?? "-"}
+- 通算 pips: ${bt.total_pnl_pips}
+
+【confidence bucket 別】
+${JSON.stringify(bt.conf_buckets, null, 2)}
+
+【現在の本番設定】
+- confidence_threshold: ${settings.confidence_threshold}
+- take_profit_pips: ${settings.take_profit_pips}
+- stop_loss_pips: ${settings.stop_loss_pips}
+
+【方針】
+- conf_buckets の win rate が最も高い帯を読み取り、その閾値を提案する
+- 全 bucket で win rate < 50% なら戦略を疑い "suggestions" を空 {} にして reasoning に明記
+- TP/SL の比率: PF が低いなら TP を伸ばす or SL を狭める案を 1 つだけ
+- 変更幅は ±20% 程度の穏当な範囲
+
+JSON でだけ返す:
+{
+  "analysis": "結果の要約 (1-2 文)",
+  "suggestions": {
+    "confidence_threshold": 0.75,
+    "take_profit_pips": 12,
+    "stop_loss_pips": 8
+  },
+  "reasoning": "なぜこの校正案にしたか (2-3 文、bucket データ根拠を含める)"
+}`;
+    let parsed;
+    try {
+      const { result } = await callGeminiWithFallback(prompt, {
+        primaryModel: "gemini-2.5-flash",
+        maxOutputTokens: 1500,
+        jsonMode: true,
+      });
+      const text = (result.response.text() || "").trim();
+      const m = text.match(/\{[\s\S]*\}/);
+      if (!m) throw new Error("AI 応答 JSON 取れず");
+      parsed = JSON.parse(m[0]);
+    } catch (e) {
+      return res.status(500).json({ error: e.message });
+    }
+    const suggestions = (parsed.suggestions && typeof parsed.suggestions === "object") ? parsed.suggestions : {};
+    const ins = await p.query(
+      `INSERT INTO fx_optimizations (stats, analysis, suggestions, reasoning)
+       VALUES ($1, $2, $3, $4) RETURNING *`,
+      [JSON.stringify({ source: "backtest", backtest_id: bt.id, win_rate: bt.win_rate, pf: bt.profit_factor, conf_buckets: bt.conf_buckets }),
+       String(parsed.analysis || "").slice(0, 1000),
+       JSON.stringify(suggestions),
+       String(parsed.reasoning || "").slice(0, 2000)]
+    );
+    res.json({ optimization: ins.rows[0] });
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // Cloud Scheduler 用 internal endpoint。X-Internal-Token で簡易認証。

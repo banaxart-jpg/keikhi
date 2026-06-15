@@ -65,7 +65,35 @@ gcloud scheduler jobs create http fx-bot-tick \
 - units_per_trade は **減方向のみ** 自動適用 (増は手動でしか変えられない)
 - oanda_env / instrument の変更は受理しない (安全フィールド)
 
+## バックテスト (= 学習データを高速に貯める仕組み)
+
+実弾を 1 ヶ月待たないとサンプル 100 件貯まらないが、バックテストなら
+30 分で 1000 件貯められる。
+
+### 仕組み
+1. OANDA の過去 candle (最大 30 日 / 1 リクエスト 5000 本ページネーション) を取得
+2. 50 本 window で walk-forward、N candle ごとに 1 回 AI に判断させる
+3. 次の 12 本で TP/SL に当たったかをシミュレーション (本物の bot と同じロジック)
+4. 全予測を `fx_backtest_predictions` に保存
+5. 集計: 総勝率 / PF / **confidence 帯別の勝率** ← これが本命
+6. 「AI 校正案を作る」ボタンで Gemini にバケット成績を渡し、最適な閾値・TP/SL の提案を生成
+
+### confidence 帯別の勝率テーブル
+バックテスト詳細画面で表示。「0.7-0.8 帯は勝率 62%、0.5-0.6 帯は 38%」みたいに
+出てくれば、閾値 0.7 → 0.75 などの実データに基づく校正が可能。
+
+### コストとリソース感
+- 1 件のバックテスト: 数百〜1500 予測 ≒ Gemini 数百回 ≒ $0.5-1.5、30 分前後
+- DB に予測を全部残すので後で別 prompt と比較できる
+- 期間 30 日上限・sample rate 60 上限の入力 validation あり
+
+### API
+- POST /api/fx/backtest               新規実行 (background)
+- GET  /api/fx/backtests              履歴一覧
+- GET  /api/fx/backtest/:id           詳細 + 直近 100 予測
+- POST /api/fx/backtest/:id/optimize  完了結果から AI 校正案生成
+
 ## 残課題
 - 損益カーブの可視化 (sparkline チャート)
-- バックテスト (過去 candle で AI 判断を再生)
 - 複数通貨ペア並行運用
+- バックテストの prompt variant 比較 (同じ candle に別 prompt で AI 判定 → どちらが勝てるか)

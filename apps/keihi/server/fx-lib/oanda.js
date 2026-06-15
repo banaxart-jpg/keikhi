@@ -118,6 +118,34 @@ export async function getAccountSummary(ctx) {
 }
 
 // 指定 instrument の bid/ask/mid
+// 期間指定で履歴 candle を全部取る (OANDA は 1 リクエスト 5000 本上限、ページネーション)
+export async function fetchHistoricalCandles(ctx, instrument, granularity, fromIso, toIso) {
+  const all = [];
+  let from = fromIso;
+  let safetyCounter = 0;
+  while (safetyCounter++ < 50) {
+    const j = await get(ctx,
+      `/v3/accounts/${ctx.accountId}/instruments/${instrument}/candles?from=${encodeURIComponent(from)}&to=${encodeURIComponent(toIso)}&granularity=${granularity}&price=M&count=5000`
+    );
+    const batch = (j.candles || []).filter((c) => c.complete).map((c) => ({
+      time: c.time,
+      o: Number(c.mid.o),
+      h: Number(c.mid.h),
+      l: Number(c.mid.l),
+      c: Number(c.mid.c),
+      v: c.volume,
+    }));
+    if (!batch.length) break;
+    all.push(...batch);
+    if (batch.length < 5000) break;
+    // 続きは最後の +1 秒から
+    const lastT = new Date(batch[batch.length - 1].time).getTime();
+    from = new Date(lastT + 1000).toISOString();
+    if (new Date(from).getTime() >= new Date(toIso).getTime()) break;
+  }
+  return all;
+}
+
 export async function getCurrentPrice(ctx, instrument) {
   const j = await get(ctx, `/v3/accounts/${ctx.accountId}/pricing?instruments=${instrument}`);
   const px = j.prices?.[0];

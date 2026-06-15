@@ -205,6 +205,69 @@ details summary::-webkit-details-marker { display: none; }
     <div class="label">取引履歴 <span style="text-transform:none;letter-spacing:0;color:var(--text3);font-weight:600;font-size:9px;" id="trCount"></span></div>
     <div id="trList"><div class="empty">まだ取引なし</div></div>
   </div>
+
+  <!-- バックテスト -->
+  <div class="card">
+    <div style="display:flex; align-items:center; gap:10px; margin-bottom:12px;">
+      <div class="label" style="margin-bottom:0; flex:1;">バックテスト <span id="btCount" style="text-transform:none;letter-spacing:0;color:var(--text3);font-weight:600;font-size:9px;"></span></div>
+      <button class="pill" onclick="openBacktest()"><span class="icon">history</span> 新規実行</button>
+    </div>
+    <div id="btList"><div class="empty">まだ実行なし</div></div>
+  </div>
+</div>
+
+<!-- バックテスト 新規実行モーダル -->
+<div class="sheet-bd" id="btSheet" onclick="if(event.target===this)closeBacktest()">
+  <div class="sheet">
+    <div class="sheet-handle"></div>
+    <h3>新規バックテスト</h3>
+    <div class="field">
+      <div class="field-lbl">通貨ペア</div>
+      <input id="btInstrument" placeholder="USD_JPY">
+    </div>
+    <div class="field">
+      <div class="field-lbl">足の粒度</div>
+      <select id="btGranularity">
+        <option>M1</option><option selected>M5</option><option>M15</option><option>M30</option><option>H1</option>
+      </select>
+    </div>
+    <div class="field">
+      <div class="field-lbl">期間 (日、最大 30)</div>
+      <input id="btDays" type="number" min="1" max="30" value="7">
+    </div>
+    <div class="field">
+      <div class="field-lbl">N candle ごとに 1 回判断 (sample rate)</div>
+      <input id="btSample" type="number" min="1" max="60" value="5">
+      <div style="font-size: 10px; color: var(--text2); margin-top: 4px;">大きい = 高速・データ少、小さい = 高コスト・データ多</div>
+    </div>
+    <div class="field">
+      <div class="field-lbl">利確 (pips)</div>
+      <input id="btTp" type="number" min="1" max="100" value="10">
+    </div>
+    <div class="field">
+      <div class="field-lbl">損切 (pips)</div>
+      <input id="btSl" type="number" min="1" max="100" value="10">
+    </div>
+    <div class="field">
+      <div class="field-lbl">採用とみなす confidence 閾値</div>
+      <input id="btConf" type="number" min="0" max="1" step="0.05" value="0.7">
+    </div>
+    <button class="btn-pri" onclick="submitBacktest()" style="margin-top:8px;">開始 (バックグラウンド)</button>
+    <button class="pill" onclick="closeBacktest()" style="margin-top:10px; width:100%;">キャンセル</button>
+  </div>
+</div>
+
+<!-- バックテスト 詳細モーダル -->
+<div class="sheet-bd" id="btDetailSheet" onclick="if(event.target===this)closeBacktestDetail()">
+  <div class="sheet">
+    <div class="sheet-handle"></div>
+    <h3 id="btDetailTitle">バックテスト結果</h3>
+    <div id="btDetailBody"></div>
+    <div style="display:flex; gap:10px; margin-top:14px;">
+      <button class="btn-pri" id="btOptBtn" style="flex:1;">AI 校正案を作る</button>
+      <button class="pill" onclick="closeBacktestDetail()" style="flex:1;">閉じる</button>
+    </div>
+  </div>
 </div>
 
 <!-- 設定 bottom sheet -->
@@ -332,6 +395,10 @@ async function loadStatus() {
   } catch (e) {
     showErr("読み込み失敗: " + e.message);
   }
+  try {
+    const r = await api("GET", "/api/fx/backtests");
+    renderBacktests(r.backtests || []);
+  } catch (e) { console.warn("backtests load:", e.message); }
 
   try {
     const v = await fetch((window.API_BASE || "") + "/api/version").then((r) => r.json()).catch(() => null);
@@ -497,6 +564,135 @@ function renderOptimization(opts, settings) {
   // sug が空なら apply ボタン無効化
   $("optApply").disabled = !sugKeys.length;
 }
+
+// バックテスト履歴を一覧表示
+function renderBacktests(bts) {
+  $("btCount").textContent = bts.length ? `(${bts.length})` : "";
+  const el = $("btList");
+  if (!bts.length) { el.innerHTML = `<div class="empty">まだ実行なし</div>`; return; }
+  el.innerHTML = bts.map((bt) => {
+    const t = new Date(bt.created_at).toLocaleString("ja-JP", { month:"numeric", day:"numeric", hour:"2-digit", minute:"2-digit" });
+    let statusEl, summary = "";
+    if (bt.status === "done") {
+      const wr = bt.win_rate != null ? (Number(bt.win_rate) * 100).toFixed(1) + "%" : "-";
+      const pf = bt.profit_factor != null ? Number(bt.profit_factor).toFixed(2) : "-";
+      const pnl = bt.total_pnl_pips != null ? `${Number(bt.total_pnl_pips) > 0 ? "+" : ""}${Number(bt.total_pnl_pips).toFixed(1)} pips` : "-";
+      statusEl = `<span style="color:var(--gain);font-size:10px;font-weight:800;">DONE</span>`;
+      summary = `<div style="font-size:11px;color:var(--text2);margin-top:4px;">勝率 <b>${wr}</b> ・ PF <b>${pf}</b> ・ ${pnl} ・ 採用 ${bt.trades_taken}/${bt.total_predictions}</div>`;
+    } else if (bt.status === "error") {
+      statusEl = `<span style="color:var(--loss);font-size:10px;font-weight:800;">ERR</span>`;
+      summary = `<div style="font-size:11px;color:var(--loss);margin-top:4px;">${escapeHtml(bt.error || "")}</div>`;
+    } else {
+      const prog = bt.progress || 0;
+      statusEl = `<span style="color:var(--text2);font-size:10px;font-weight:800;">${escapeHtml(bt.status.toUpperCase())}</span>`;
+      summary = `<div style="font-size:11px;color:var(--text2);margin-top:4px;">進捗 ${prog}${bt.candle_count?` / ~${Math.floor(bt.candle_count / (bt.sample_rate||5))}`:""}</div>`;
+    }
+    return `<div onclick="openBacktestDetail(${bt.id})" style="padding:10px 0; border-bottom:1px solid rgba(154,160,184,0.18); cursor:pointer;">
+      <div style="display:flex;align-items:center;gap:10px;">
+        <span style="font-size:12px;font-weight:700;flex:1;">${escapeHtml(bt.instrument)} / ${escapeHtml(bt.granularity)} ・ TP${bt.tp_pips} SL${bt.sl_pips}</span>
+        ${statusEl}
+      </div>
+      ${summary}
+      <div style="font-size:9px;color:var(--text3);margin-top:3px;letter-spacing:0.06em;">${escapeHtml(t)}</div>
+    </div>`;
+  }).join("");
+}
+
+window.openBacktest = function () { $("btSheet").classList.add("open"); };
+window.closeBacktest = function () { $("btSheet").classList.remove("open"); };
+
+window.submitBacktest = async function () {
+  const body = {
+    instrument: $("btInstrument").value.trim().toUpperCase() || "USD_JPY",
+    granularity: $("btGranularity").value,
+    days: parseInt($("btDays").value, 10) || 7,
+    sample_rate: parseInt($("btSample").value, 10) || 5,
+    tp_pips: parseFloat($("btTp").value) || 10,
+    sl_pips: parseFloat($("btSl").value) || 10,
+    confidence_threshold: parseFloat($("btConf").value) || 0.7,
+  };
+  try {
+    const r = await api("POST", "/api/fx/backtest", body);
+    showErr(`バックテスト #${r.id} 開始 (背景で実行中)`);
+    setTimeout(() => showErr(null), 4000);
+    closeBacktest();
+    await loadStatus();
+  } catch (e) { showErr(e.message); }
+};
+
+window.openBacktestDetail = async function (id) {
+  $("btDetailTitle").textContent = `バックテスト #${id}`;
+  $("btDetailBody").innerHTML = `<div class="empty">読み込み中...</div>`;
+  $("btDetailSheet").classList.add("open");
+  try {
+    const r = await api("GET", `/api/fx/backtest/${id}`);
+    const bt = r.backtest;
+    let html = `
+      <div style="font-size:12px;color:var(--text2);margin-bottom:14px;line-height:1.7;">
+        <div><b>${escapeHtml(bt.instrument)}</b> / ${escapeHtml(bt.granularity)} 足</div>
+        <div>期間 ${new Date(bt.from_time).toLocaleDateString("ja-JP")} 〜 ${new Date(bt.to_time).toLocaleDateString("ja-JP")}</div>
+        <div>TP ${bt.tp_pips} pips / SL ${bt.sl_pips} pips / 閾値 ${bt.confidence_threshold}</div>
+        <div>${escapeHtml(bt.status)} ${bt.candle_count?`・ ${bt.candle_count} candles`:""}</div>
+      </div>`;
+    if (bt.status === "done") {
+      const buckets = bt.conf_buckets || {};
+      const keys = Object.keys(buckets).sort();
+      html += `<div style="background:rgba(15,118,110,0.06); padding:12px; border-radius:14px; margin-bottom:14px;">
+        <div style="font-size:11px;color:var(--text2);font-weight:800;letter-spacing:0.08em;margin-bottom:8px;">総合</div>
+        <div style="font-size:12px;line-height:1.8;">
+          予測 ${bt.total_predictions} (LONG ${bt.long_count}/SHORT ${bt.short_count}/PASS ${bt.pass_count})<br>
+          採用 (閾値≥${bt.confidence_threshold}): <b>${bt.trades_taken}</b><br>
+          勝 ${bt.wins} / 負 ${bt.losses} / 時間切れ ${bt.timeouts}<br>
+          勝率 <b style="color:${Number(bt.win_rate)>=0.5?"var(--gain)":"var(--loss)"};">${(Number(bt.win_rate)*100).toFixed(1)}%</b> ・ PF <b>${bt.profit_factor!=null?Number(bt.profit_factor).toFixed(2):"-"}</b><br>
+          通算 <b style="color:${Number(bt.total_pnl_pips)>=0?"var(--gain)":"var(--loss)"};">${Number(bt.total_pnl_pips)>0?"+":""}${Number(bt.total_pnl_pips).toFixed(1)} pips</b>
+        </div>
+      </div>`;
+      if (keys.length) {
+        html += `<div style="font-size:11px;color:var(--text2);font-weight:800;letter-spacing:0.08em;margin-bottom:8px;">confidence 帯別の勝率</div>
+        <table style="width:100%;font-size:11px;border-collapse:collapse;margin-bottom:14px;">
+          <thead><tr style="color:var(--text3);font-weight:800;">
+            <th style="text-align:left;padding:4px 0;">conf</th><th>件数</th><th>採用</th><th>勝</th><th>負</th><th>勝率</th><th>pips</th>
+          </tr></thead><tbody>`;
+        for (const k of keys) {
+          const b = buckets[k];
+          const wr = b.t > 0 ? (b.w / b.t * 100).toFixed(0) + "%" : "-";
+          html += `<tr style="border-top:1px solid rgba(154,160,184,0.2);">
+            <td style="padding:5px 0;font-weight:700;">${k}</td>
+            <td style="text-align:center;">${b.n}</td>
+            <td style="text-align:center;">${b.t}</td>
+            <td style="text-align:center;color:var(--gain);">${b.w}</td>
+            <td style="text-align:center;color:var(--loss);">${b.l}</td>
+            <td style="text-align:center;font-weight:700;">${wr}</td>
+            <td style="text-align:right;">${b.pnl?Number(b.pnl).toFixed(1):"-"}</td>
+          </tr>`;
+        }
+        html += `</tbody></table>`;
+      }
+      $("btOptBtn").disabled = false;
+      $("btOptBtn").onclick = async () => {
+        $("btOptBtn").disabled = true;
+        try {
+          await api("POST", `/api/fx/backtest/${id}/optimize`);
+          showErr("AI 校正案を生成しました。ホームの『AI 最適化提案』を確認");
+          setTimeout(() => showErr(null), 5000);
+          closeBacktestDetail();
+          await loadStatus();
+        } catch (e) { showErr(e.message); }
+        finally { $("btOptBtn").disabled = false; }
+      };
+    } else if (bt.status === "error") {
+      html += `<div class="err">${escapeHtml(bt.error || "")}</div>`;
+      $("btOptBtn").style.display = "none";
+    } else {
+      html += `<div class="empty">実行中... 進捗 ${bt.progress || 0}</div>`;
+      $("btOptBtn").style.display = "none";
+    }
+    $("btDetailBody").innerHTML = html;
+  } catch (e) {
+    $("btDetailBody").innerHTML = `<div class="err">${escapeHtml(e.message)}</div>`;
+  }
+};
+window.closeBacktestDetail = function () { $("btDetailSheet").classList.remove("open"); };
 
 window.runOptimize = async function () {
   const btn = $("optBtn");
