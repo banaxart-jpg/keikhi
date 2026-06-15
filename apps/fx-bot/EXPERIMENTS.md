@@ -240,7 +240,73 @@ fast=20/slow=50/TP=ATR×1.5/SL=ATR×1.5、勝率 51.2%、avg +0.5 pips/trade、�
 - D. ML / 特徴量を組合せた decision tree への移行
 - E. 諦めて 手書き bot から別アプローチへ
 
-→ user 判断待ち
+---
+
+## 実験 9: 複合戦略 グリッドサーチ + robustness 再検証 (致命的な統計バイアス発覚)
+
+**日時**: 2026-06-15
+**仮説**: MTF にプルバック / 時間帯 / ボラ フィルタを重ねれば edge 出る
+**通貨ペア**: USD/JPY、GBP/JPY、EUR/USD、GBP/USD (4 pair × H1 12000+ 本)
+**スクリプト**: `/tmp/fx_combo.mjs`、`/tmp/fx_verify_fast.mjs`
+
+### Step 1: random sampling グリッドサーチ
+random 200 × 5 seeds = 1000 attempts でフィルタ通過後の集計:
+
+| rank | pair | filter | TP/SL | sig | wr | avg net |
+|---|---|---|---|---|---|---|
+| 1 | EURUSD | MTF + vol(1.0x) | 1.5/1.5 | 200 | 53.0% | +2.1 |
+| 4 | **USDJPY** | **MTF + time** | **1/1** | **132** | **56.1%** | **+1.5** |
+| 6 | GBPJPY | MTF + pullback | 1.5/1.5 | 142 | 51.4% | +0.9 |
+
+「USDJPY MTF + 時間帯 = 56.1% 勝率」が見えてきた → 検証へ
+
+### Step 2: 全データ評価で本物か確認 (= sampling 外し)
+ランダムじゃなく **全 h1 idx を順に評価**:
+
+| variant | sig | 全期間 wr | 全期間 avg | 前半 wr | 後半 wr |
+|---|---|---|---|---|---|
+| London+NY UTC 7-15 | 1565 | 48.8% | -1.8 | 50.5% | 47.2% |
+| London only | 787 | 46.0% | -2.9 | 49.7% | 42.7% |
+| NY only | 778 | 51.5% | -0.7 | 51.2% | 51.8% |
+| Tokyo open | 788 | 49.2% | -1.1 | **52.4% (+0.9)** | 46.1% (-3.0) |
+| Off-hours | 1288 | 47.4% | -1.6 | **52.4% (+1.0)** | 42.7% (-4.1) |
+| London+NY TP×1.5 | 1565 | 38.8% | -2.1 | 39.6% | 38.1% |
+| London+NY TP×1.5/SL×0.8 | 1565 | 33.6% | -2.2 | 34.5% | 32.8% |
+
+### 重大な発見: random sampling の統計バイアス
+- random 132 signals で 56.1% → 全データ 1565 signals で **48.8%** に収束
+- 信頼区間で言うと 132 件の 56% は 95% CI で [47.2%, 64.5%] → 50% を含む
+- 全データ 1565 件で **真の値は 48.8% 程度** (= ランダム or 負け)
+
+### 後半 (2025〜) で極端な LONG bias
+ほぼ全 variant で 後半 LONG/SHORT ≒ 800/30 と異常な偏り。
+USD/JPY ほぼ trending up regime → MTF alignment が本質的に「上昇追従だけ」になり
+反対方向で死ぬ。
+
+### 結論
+**MTF + 時間帯 + ATR スケール、すべての通貨ペアで本物の edge 無し**。
+random sampling で見えた「56%」は signals 数 100-200 の statistical artifact だった。
+
+これも実験 5 の look-ahead bias と同じ「**統計バイアス系のミス**」。教訓:
+- ✓ サンプリング後の集計を妄信しない、全データで再確認
+- ✓ signals 数 200 未満は wr の信頼区間が広すぎる (±10pt 平気)
+- ✓ regime fit は 前半/後半 split で必ず炙り出す
+
+### 候補絞り直し
+ここまでの実験で証明された事実:
+- 単一指標 (RSI / EMA / BB) は edge 無し
+- MTF alignment は edge 無し
+- ATR スケール TP/SL は不利でも有利でもない
+- 時間帯フィルタ単体では edge 出ない
+- 通貨ペア替えても edge 出ない (USDJPY / GBPJPY / EURUSD / GBPUSD すべて)
+
+= **retail simple TA の手筋はほぼ全滅**。残ってる選択肢:
+- F. **mean reversion + ML**: 特徴量 (RSI, MACD, ATR, BB pos, time-of-day, day-of-week, prev N bars return) を 20 個くらい入れて simple classifier (logistic regression / random forest) を訓練、TimeSeriesSplit で正しく交差検証
+- G. **ペアトレード** (USD/JPY と EUR/JPY の相関乖離) → これは元々統計裁定の領域
+- H. **ニュース系** (NFP / 日銀) ← user 制約で却下
+- I. **諦めて FX bot プロジェクト凍結** (= 学びとしてはここまでで十分)
+
+→ 次は user 判断待ち。F (ML) 試すなら scikit-learn でやれば 1 日くらいで結果出る。
 
 ---
 
