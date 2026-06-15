@@ -144,6 +144,7 @@ details summary::-webkit-details-marker { display: none; }
       <div class="state-env" id="stateEnv">-</div>
       <div class="toggle" id="botToggle" onclick="toggleBot()"></div>
     </div>
+    <div id="stateStrategy" style="font-size:11px; color:var(--text2); font-weight:700; margin-top:10px; padding-top:10px; border-top:1px solid rgba(154,160,184,0.18);"></div>
   </div>
 
   <!-- 口座サマリ -->
@@ -245,6 +246,13 @@ details summary::-webkit-details-marker { display: none; }
     </div>
 
     <div class="field">
+      <div class="field-lbl">戦略</div>
+      <select id="btStrategy" onchange="renderStrategyParams('btStrategy', 'btStrategyParams', true)"></select>
+      <div id="btStrategyDesc" style="font-size:10px; color:var(--text2); margin-top:4px; line-height:1.5;"></div>
+      <div id="btStrategyParams" style="margin-top:8px;"></div>
+    </div>
+
+    <div class="field">
       <div class="field-lbl">通貨ペア (ラベル用)</div>
       <input id="btInstrument" placeholder="USD_JPY" value="USD_JPY">
     </div>
@@ -314,6 +322,13 @@ details summary::-webkit-details-marker { display: none; }
       <select id="setGranularity">
         <option>M1</option><option>M5</option><option>M15</option><option>M30</option><option>H1</option>
       </select>
+    </div>
+    <div class="field">
+      <div class="field-lbl">戦略</div>
+      <select id="setStrategy" onchange="renderStrategyParams('setStrategy', 'setStrategyParams', false)">
+      </select>
+      <div id="setStrategyDesc" style="font-size:10px; color:var(--text2); margin-top:4px; line-height:1.5;"></div>
+      <div id="setStrategyParams" style="margin-top:8px;"></div>
     </div>
     <div class="field">
       <div class="field-lbl">1 トレードのロット (通貨)</div>
@@ -405,6 +420,62 @@ function showErr(msg) {
   $("errBox").textContent = String(msg);
 }
 
+// 戦略一覧をキャッシュ
+let _strategies = null;
+async function ensureStrategies() {
+  if (_strategies) return _strategies;
+  try {
+    const r = await api("GET", "/api/fx/strategies");
+    _strategies = r.strategies || [];
+  } catch (_) { _strategies = []; }
+  return _strategies;
+}
+
+// select に戦略一覧、その下にパラメータ入力フィールド (paramSchema 駆動)
+async function renderStrategyParams(selId, paramsContainerId, isBacktest) {
+  const strats = await ensureStrategies();
+  const sel = document.getElementById(selId);
+  // optionが空なら一覧で埋める
+  if (!sel.options.length) {
+    for (const s of strats) {
+      const opt = document.createElement("option");
+      opt.value = s.id; opt.textContent = s.name;
+      sel.appendChild(opt);
+    }
+  }
+  const id = sel.value;
+  const strat = strats.find((s) => s.id === id);
+  const descId = selId + "Desc";
+  if (document.getElementById(descId)) {
+    document.getElementById(descId).textContent = strat?.description || "";
+  }
+  const container = document.getElementById(paramsContainerId);
+  container.innerHTML = "";
+  if (!strat || !strat.paramSchema?.length) return;
+  for (const ps of strat.paramSchema) {
+    const cur = strat.defaultParams[ps.key];
+    const wrap = document.createElement("div");
+    wrap.style.cssText = "display:flex; align-items:center; gap:10px; margin-bottom:6px;";
+    wrap.innerHTML = `
+      <label style="flex:1; font-size:11px; color:var(--text2);">${ps.label}</label>
+      <input data-strategy-param="${ps.key}" type="number" min="${ps.min}" max="${ps.max}" step="${ps.step}" value="${cur}"
+             style="width:90px; padding:6px 10px; border-radius:8px; border:none; background:var(--bg);
+                    box-shadow: inset 2px 2px 5px var(--sd), inset -2px -2px 5px var(--sl);
+                    font-family:inherit; font-size:12px; text-align:right; color:var(--text);">`;
+    container.appendChild(wrap);
+  }
+}
+
+function collectStrategyParams(containerId) {
+  const out = {};
+  document.querySelectorAll(`#${containerId} input[data-strategy-param]`).forEach((el) => {
+    const k = el.dataset.strategyParam;
+    const v = Number(el.value);
+    if (Number.isFinite(v)) out[k] = v;
+  });
+  return out;
+}
+
 async function loadStatus() {
   showErr(null);
   try {
@@ -415,6 +486,14 @@ async function loadStatus() {
     renderDecisions(s.decisions);
     renderTrades(s.trades);
     renderOptimization(s.optimizations, s.settings);
+    // 戦略名をホームカードに表示
+    await ensureStrategies();
+    const strat = (_strategies || []).find((x) => x.id === s.settings?.active_strategy);
+    if (strat) {
+      $("stateStrategy").innerHTML = `<span class="icon" style="vertical-align:-0.2em;">insights</span> 戦略: <b style="color:var(--text);">${escapeHtml(strat.name)}</b>`;
+    } else {
+      $("stateStrategy").textContent = "";
+    }
   } catch (e) {
     showErr("読み込み失敗: " + e.message);
   }
@@ -621,7 +700,11 @@ function renderBacktests(bts) {
   }).join("");
 }
 
-window.openBacktest = function () { $("btSheet").classList.add("open"); updateBtSourceUi(); };
+window.openBacktest = async function () {
+  $("btSheet").classList.add("open");
+  updateBtSourceUi();
+  await renderStrategyParams("btStrategy", "btStrategyParams", true);
+};
 window.closeBacktest = function () { $("btSheet").classList.remove("open"); };
 
 window.updateBtSourceUi = function () {
@@ -658,6 +741,8 @@ window.submitBacktest = async function () {
   } else {
     body.days = parseInt($("btDays").value, 10) || 7;
   }
+  body.strategy = $("btStrategy").value;
+  body.strategy_params = collectStrategyParams("btStrategyParams");
   try {
     const r = await api("POST", "/api/fx/backtest", body);
     showErr(`バックテスト #${r.id} 開始 ${r.candles ? `(${r.candles} 本のデータ、` : "("}背景で実行中)`);
@@ -788,6 +873,16 @@ window.openSettings = async function () {
   try {
     const s = await api("GET", "/api/fx/status");
     const st = s.settings || {};
+    // 戦略 select 初期化 + 現在値で復元
+    await renderStrategyParams("setStrategy", "setStrategyParams", false);
+    $("setStrategy").value = st.active_strategy || "ema_crossover";
+    await renderStrategyParams("setStrategy", "setStrategyParams", false);
+    // 現在保存されてる strategy_params で input を上書き
+    const sp = st.strategy_params || {};
+    document.querySelectorAll('#setStrategyParams input[data-strategy-param]').forEach((el) => {
+      const k = el.dataset.strategyParam;
+      if (sp[k] != null) el.value = sp[k];
+    });
     $("setEnv").value = st.oanda_env || "practice";
     $("setInstrument").value = st.instrument || "USD_JPY";
     $("setGranularity").value = st.granularity || "M5";
@@ -817,6 +912,8 @@ window.saveSettings = async function () {
     cooldown_after_losses: Math.max(0, parseInt($("setCdN").value, 10) || 0),
     cooldown_minutes: Math.max(0, parseInt($("setCdMin").value, 10) || 60),
     auto_apply_optimizations: $("setAutoToggle").classList.contains("on"),
+    active_strategy: $("setStrategy").value,
+    strategy_params: collectStrategyParams("setStrategyParams"),
   };
   try {
     await api("PUT", "/api/fx/settings", body);

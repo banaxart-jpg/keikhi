@@ -3,6 +3,23 @@
 OANDA × Gemini で 1 通貨単位の AI 自動売買 (owner 専用)。
 旧 `/fx-lab/` (Node スクリプト) をミニアプリ化したもの。
 
+## 設計の核
+
+**売買判断は決定的アルゴ (戦略)、AI はパラメータ最適化担当**。
+hot path から Gemini を外したので: 高速 / 再現性 / ブレない / コスト最小。
+AI はバックテスト結果を眺めて「fast=12 → 10 に下げよう」みたいに提案する役。
+
+## 内蔵戦略 (4 種、apps/keihi/server/fx-lib/strategies.js)
+
+| ID | 名前 | 中身 |
+|---|---|---|
+| `ema_crossover` | EMA クロス | EMA 短期/長期 のクロスでトレンドフォロー (デフォルト) |
+| `rsi_mean_revert` | RSI 逆張り | RSI 30 切で LONG、70 超で SHORT (レンジ向け) |
+| `bb_breakout` | BB ブレイク | ボリンジャー上下抜けで順張りモメンタム |
+| `ai_vision` | AI 判断 | Gemini にチャート渡して決める旧式 (重い、参考用) |
+
+各戦略は paramSchema を持ち、UI に自動的にスライダー入力が生える。
+
 ## できること
 - 現在の口座残高 / 本日損益 / 維持率 をホームで一覧
 - Bot ON/OFF トグル (Cloud Scheduler が 5 分毎に `/api/internal/fx/tick` を叩く想定)

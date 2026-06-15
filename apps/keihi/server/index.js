@@ -13,6 +13,7 @@ import * as fxOanda from "./fx-lib/oanda.js";
 import { buildChartSummary as fxBuildChart } from "./fx-lib/chart.js";
 import { decideFromChart as fxDecide } from "./fx-lib/ai.js";
 import { parseCandlesCsv as fxParseCsv } from "./fx-lib/csv.js";
+import { runStrategy as fxRunStrategy, strategyList as fxStrategyList } from "./fx-lib/strategies.js";
 import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -846,6 +847,9 @@ async function ensureSchema() {
     await p.query(`INSERT INTO fx_settings (id) VALUES (1) ON CONFLICT (id) DO NOTHING`);
     // auto_apply_optimizations は後から追加 (既存 deploy のため IF NOT EXISTS)
     await p.query(`ALTER TABLE fx_settings ADD COLUMN IF NOT EXISTS auto_apply_optimizations BOOLEAN NOT NULL DEFAULT false`);
+    // 戦略選択 (決定的アルゴ + パラメータ)。AI は ai_vision 戦略として 1 つの選択肢。
+    await p.query(`ALTER TABLE fx_settings ADD COLUMN IF NOT EXISTS active_strategy TEXT NOT NULL DEFAULT 'ema_crossover'`);
+    await p.query(`ALTER TABLE fx_settings ADD COLUMN IF NOT EXISTS strategy_params JSONB NOT NULL DEFAULT '{}'::jsonb`);
     await p.query(`
       CREATE TABLE IF NOT EXISTS fx_optimizations (
         id              BIGSERIAL PRIMARY KEY,
@@ -914,6 +918,9 @@ async function ensureSchema() {
       )
     `);
     await p.query("CREATE INDEX IF NOT EXISTS fx_btp_bt_idx ON fx_backtest_predictions (backtest_id, candle_time)");
+    // fx_backtests: 戦略 + パラメータを記録 (どの戦略を試したか後で見るため)
+    await p.query(`ALTER TABLE fx_backtests ADD COLUMN IF NOT EXISTS strategy_name TEXT`);
+    await p.query(`ALTER TABLE fx_backtests ADD COLUMN IF NOT EXISTS strategy_params JSONB`);
 
     schemaMigrated = true;
     console.log("[schema] migration ok: records.drive_url + tasks + yado_bookings + seko_* + fx_* ensured");
@@ -6141,20 +6148,17 @@ async function runFxTick(p) {
   // 観測
   const candles = await fxOanda.fetchCandles(ctx, instrument, granularity, Number(settings.candle_count || 100));
   if (candles.length < 50) return { skipped: true, reason: `candle 不足 ${candles.length}` };
-  const chartText = fxBuildChart(candles, instrument, granularity);
 
-  // AI 判断
-  let decision;
-  try {
-    decision = await fxDecide(callGeminiWithFallback, chartText);
-  } catch (e) {
-    await p.query(
-      `INSERT INTO fx_decisions (instrument, granularity, skipped, skip_reason, decision)
-       VALUES ($1, $2, true, $3, 'PASS')`,
-      [instrument, granularity, "AI 失敗: " + e.message]
-    );
-    return { skipped: true, reason: "AI 失敗: " + e.message };
-  }
+  // 戦略で判断 (決定的アルゴ。ai_vision を選んだ時だけ Gemini を呼ぶ)
+  const strategy = settings.active_strategy || "ema_crossover";
+  const strategyParams = settings.strategy_params || {};
+  const ctxStrat = {
+    callGemini: callGeminiWithFallback,
+    buildChartSummary: fxBuildChart,
+    aiDecide: fxDecide,
+    granularity,
+  };
+  const decision = await fxRunStrategy(strategy, candles, strategyParams, instrument, ctxStrat);
   const lastClose = candles[candles.length - 1].c;
   await p.query(
     `INSERT INTO fx_decisions (instrument, granularity, last_close, decision, confidence, reasoning)
@@ -6290,6 +6294,8 @@ app.put("/api/fx/settings", async (req, res) => {
     cooldown_after_losses: (v) => Number.isInteger(v) && v >= 0 && v <= 20,
     cooldown_minutes: (v) => Number.isInteger(v) && v >= 0 && v <= 1440,
     auto_apply_optimizations: (v) => typeof v === "boolean",
+    active_strategy: (v) => typeof v === "string" && /^[a-z_]+$/.test(v) && v.length <= 32,
+    strategy_params: (v) => typeof v === "object" && v !== null && !Array.isArray(v),
   };
   const updates = [];
   const values = [];
@@ -6297,7 +6303,7 @@ app.put("/api/fx/settings", async (req, res) => {
   for (const [k, validator] of Object.entries(allowed)) {
     if (b[k] !== undefined && validator(b[k])) {
       updates.push(`${k} = $${i++}`);
-      values.push(b[k]);
+      values.push(k === "strategy_params" ? JSON.stringify(b[k]) : b[k]);
     }
   }
   if (!updates.length) return res.status(400).json({ error: "更新対象なし" });
@@ -6635,24 +6641,20 @@ async function runFxBacktest(p, btId, preloadedCandles) {
     };
 
     // walk forward
+    const strategy = bt.strategy_name || "ema_crossover";
+    const strategyParams = bt.strategy_params || {};
+    const ctxStrat = {
+      callGemini: callGeminiWithFallback,
+      buildChartSummary: fxBuildChart,
+      aiDecide: fxDecide,
+      granularity: bt.granularity,
+    };
     for (let i = WINDOW; i < candles.length - FUTURE; i += SAMPLE) {
       const window = candles.slice(i - WINDOW, i);
       const future = candles.slice(i, i + FUTURE);
       const entry = candles[i].c;
-      const chartText = fxBuildChart(window, bt.instrument, bt.granularity);
 
-      let decision;
-      try {
-        decision = await fxDecide(callGeminiWithFallback, chartText);
-      } catch (e) {
-        // AI 失敗は記録だけしてスキップ
-        await p.query(
-          `INSERT INTO fx_backtest_predictions (backtest_id, candle_time, decision, confidence, reasoning, entry_price, taken)
-           VALUES ($1,$2,'ERROR',NULL,$3,$4,false)`,
-          [btId, candles[i].time, e.message.slice(0, 200), entry]
-        );
-        continue;
-      }
+      const decision = await fxRunStrategy(strategy, window, strategyParams, bt.instrument, ctxStrat);
 
       let hitTp = false, hitSl = false, exitPrice = null, barsToExit = null;
       if (decision.decision === "LONG") {
@@ -6697,11 +6699,11 @@ async function runFxBacktest(p, btId, preloadedCandles) {
       );
 
       predictions++;
-      if (predictions % 10 === 0) {
+      if (predictions % 50 === 0) {
         await p.query(`UPDATE fx_backtests SET progress=$1 WHERE id=$2`, [predictions, btId]);
       }
-      // rate limit 緩和 (50ms 待機)
-      await new Promise((r) => setTimeout(r, 50));
+      // 決定的戦略は sleep 不要、AI 戦略のみ rate limit 緩和
+      if (strategy === "ai_vision") await new Promise((r) => setTimeout(r, 50));
     }
 
     const wr = taken > 0 ? wins / taken : 0;
@@ -6763,22 +6765,33 @@ app.post("/api/fx/backtest", async (req, res) => {
     fromTime = new Date(Date.now() - days * 86400000);
   }
 
+  // 戦略選択
+  const strategy = String(b.strategy || "ema_crossover");
+  const stratParams = (b.strategy_params && typeof b.strategy_params === "object") ? b.strategy_params : {};
+
+  // ai_vision の場合は sample_rate を最小 20 に強制 (コスト爆発防止)
+  const effSample = strategy === "ai_vision" ? Math.max(20, sampleRate) : sampleRate;
+
   try {
     const ins = await p.query(
       `INSERT INTO fx_backtests
          (instrument, granularity, from_time, to_time, tp_pips, sl_pips,
-          confidence_threshold, sample_rate, status)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'queued') RETURNING id`,
+          confidence_threshold, sample_rate, status, strategy_name, strategy_params)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'queued',$9,$10) RETURNING id`,
       [instrument, granularity, fromTime.toISOString(), toTime.toISOString(),
-       tpPips, slPips, ct, sampleRate]
+       tpPips, slPips, ct, effSample, strategy, JSON.stringify(stratParams)]
     );
     const btId = Number(ins.rows[0].id);
-    // 非同期で走らせる (fire-and-forget)。CSV があれば一緒に渡す
     runFxBacktest(p, btId, preloadedCandles).catch((e) => console.error("[fx-bt] runner err:", e));
-    res.json({ id: btId, status: "queued", source: preloadedCandles ? "csv" : "oanda", candles: preloadedCandles?.length });
+    res.json({ id: btId, status: "queued", source: preloadedCandles ? "csv" : "oanda", candles: preloadedCandles?.length, strategy });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
+});
+
+app.get("/api/fx/strategies", (req, res) => {
+  if (!requireFxOwner(req, res)) return;
+  res.json({ strategies: fxStrategyList() });
 });
 
 app.get("/api/fx/backtests", async (req, res) => {
