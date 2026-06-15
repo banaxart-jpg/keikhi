@@ -1,15 +1,8 @@
-import { GoogleGenerativeAI } from "@google/generative-ai";
-import { config } from "./config.js";
+// 既存 keihi-api の callGeminiWithFallback を使うので genAI 直接呼び出しではなく、
+// 「呼び出し関数を inject する」設計にして循環依存を避ける。
+// callGemini = (prompt, opts) => Promise<{result, modelUsed, attempts}>
 
-const genAI = new GoogleGenerativeAI(config.gemini.apiKey);
-
-// Gemini に「LONG / SHORT / PASS + 信頼度 + 理由」を返させる。
-// chart = chart.js が組み立てた observability テキスト。
-export async function decideFromChart(chartText) {
-  const model = genAI.getGenerativeModel({
-    model: config.gemini.model,
-    generationConfig: { responseMimeType: "application/json", maxOutputTokens: 1000 },
-  });
+export async function decideFromChart(callGemini, chartText, opts = {}) {
   const prompt = `あなたは短期 FX トレーダー (スキャル / デイトレ)。
 以下の観測から「次の 5-30 分の値動き」を予想し、エントリー判断を返してください。
 
@@ -27,8 +20,12 @@ JSON でだけ返す (前置きや説明禁止):
   "confidence": 0.0-1.0,
   "reasoning": "1-2 文の根拠 (具体に)"
 }`;
-  const r = await model.generateContent(prompt);
-  const text = (r.response.text() || "").trim();
+  const { result } = await callGemini(prompt, {
+    primaryModel: opts.model || "gemini-2.5-flash",
+    maxOutputTokens: 1000,
+    jsonMode: true,
+  });
+  const text = (result.response.text() || "").trim();
   const m = text.match(/\{[\s\S]*\}/);
   if (!m) throw new Error("AI レスポンスから JSON 取れず: " + text.slice(0, 200));
   const j = JSON.parse(m[0]);

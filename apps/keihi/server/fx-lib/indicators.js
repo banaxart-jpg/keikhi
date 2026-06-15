@@ -1,10 +1,10 @@
-// 軽量インディケータ計算。candles は new (最新) が末尾の前提。
+// EMA / RSI / ATR 計算。pure JS、依存なし。
+// candles は new (最新) が末尾の前提。
 
 export function ema(values, period) {
   if (values.length < period) return [];
   const k = 2 / (period + 1);
   const out = new Array(values.length).fill(null);
-  // 初期値は最初の period 個の SMA
   let sma = 0;
   for (let i = 0; i < period; i++) sma += values[i];
   sma /= period;
@@ -55,5 +55,4 @@ export function atr(candles, period = 14) {
   return out;
 }
 
-// 最新値を取り出すヘルパ
 export const last = (arr) => arr.length ? arr[arr.length - 1] : null;

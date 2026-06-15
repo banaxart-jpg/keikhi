@@ -9,6 +9,9 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { Readable } from "node:stream";
+import * as fxOanda from "./fx-lib/oanda.js";
+import { buildChartSummary as fxBuildChart } from "./fx-lib/chart.js";
+import { decideFromChart as fxDecide } from "./fx-lib/ai.js";
 import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -780,8 +783,69 @@ async function ensureSchema() {
     await p.query(`ALTER TABLE seko_users ADD COLUMN IF NOT EXISTS shubetsu TEXT`);
     // seko_questions に image_url カラム追加 (図解が要る問題で AI 生成 SVG を data URI で保存)
     await p.query(`ALTER TABLE seko_questions ADD COLUMN IF NOT EXISTS image_url TEXT`);
+
+    // fx-bot: OANDA 自動売買用テーブル
+    await p.query(`
+      CREATE TABLE IF NOT EXISTS fx_decisions (
+        id            BIGSERIAL PRIMARY KEY,
+        instrument    TEXT NOT NULL,
+        granularity   TEXT NOT NULL,
+        last_close    NUMERIC,
+        decision      TEXT NOT NULL,        -- 'LONG' | 'SHORT' | 'PASS'
+        confidence    NUMERIC,
+        reasoning     TEXT,
+        skipped       BOOLEAN NOT NULL DEFAULT false,
+        skip_reason   TEXT,
+        created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+      )
+    `);
+    await p.query("CREATE INDEX IF NOT EXISTS fx_dec_created_idx ON fx_decisions (created_at DESC)");
+    await p.query(`
+      CREATE TABLE IF NOT EXISTS fx_trades (
+        id              BIGSERIAL PRIMARY KEY,
+        kind            TEXT NOT NULL,             -- 'opened' | 'closed' | 'order_failed'
+        instrument      TEXT NOT NULL,
+        side            TEXT,                      -- 'LONG' | 'SHORT'
+        units           INTEGER,
+        entry_price     NUMERIC,
+        tp_price        NUMERIC,
+        sl_price        NUMERIC,
+        close_price     NUMERIC,
+        pnl             NUMERIC,
+        confidence      NUMERIC,
+        reasoning       TEXT,
+        oanda_order_id  TEXT,
+        oanda_fill_id   TEXT,
+        oanda_trade_id  TEXT,
+        error           TEXT,
+        opened_at       TIMESTAMPTZ,
+        closed_at       TIMESTAMPTZ,
+        created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+      )
+    `);
+    await p.query("CREATE INDEX IF NOT EXISTS fx_tr_created_idx ON fx_trades (created_at DESC)");
+    await p.query(`
+      CREATE TABLE IF NOT EXISTS fx_settings (
+        id                  INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+        bot_enabled         BOOLEAN NOT NULL DEFAULT false,
+        oanda_env           TEXT NOT NULL DEFAULT 'practice',  -- 'practice' | 'live'
+        instrument          TEXT NOT NULL DEFAULT 'USD_JPY',
+        granularity         TEXT NOT NULL DEFAULT 'M5',
+        candle_count        INTEGER NOT NULL DEFAULT 100,
+        units_per_trade     INTEGER NOT NULL DEFAULT 1,
+        take_profit_pips    NUMERIC NOT NULL DEFAULT 10,
+        stop_loss_pips      NUMERIC NOT NULL DEFAULT 10,
+        max_trades_per_day  INTEGER NOT NULL DEFAULT 20,
+        confidence_threshold NUMERIC NOT NULL DEFAULT 0.7,
+        cooldown_after_losses INTEGER NOT NULL DEFAULT 3,
+        cooldown_minutes    INTEGER NOT NULL DEFAULT 60,
+        updated_at          TIMESTAMPTZ NOT NULL DEFAULT now()
+      )
+    `);
+    await p.query(`INSERT INTO fx_settings (id) VALUES (1) ON CONFLICT (id) DO NOTHING`);
+
     schemaMigrated = true;
-    console.log("[schema] migration ok: records.drive_url + tasks + yado_bookings + seko_* ensured");
+    console.log("[schema] migration ok: records.drive_url + tasks + yado_bookings + seko_* + fx_* ensured");
   } catch (e) {
     console.warn(`[schema] migration warning: ${e.message}`);
   }
@@ -5855,6 +5919,348 @@ app.post("/api/seko/wipe-all", async (req, res) => {
     await p.query(`TRUNCATE seko_questions CASCADE`);
     res.json({ ok: true });
   } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+
+// ============================================================
+// fx-bot: OANDA + Gemini で AI 自動売買 (1 通貨単位の実弾実験用)
+// ============================================================
+//
+// Cloud Run env で OANDA_API_KEY / OANDA_ACCOUNT_ID を渡す。
+// OANDA_ENV=practice/live は fx_settings テーブルで切替できる。
+// owner だけが触れる (実弾飛ぶので)。
+//
+// ENDPOINTS
+//  GET  /api/fx/status           - 口座サマリ + 直近 decisions / trades + 設定
+//  POST /api/fx/tick             - 手動 tick (owner、即時 1 回判定)
+//  POST /api/fx/toggle           - Bot ON/OFF
+//  PUT  /api/fx/settings         - 設定変更
+//  POST /api/fx/close/:tradeId   - open 中の trade を強制決済
+//  POST /api/internal/fx/tick    - Cloud Scheduler 用 (X-Internal-Token 認証)
+//
+const FX_OWNER_EMAILS = new Set(
+  String(process.env.FX_OWNER_EMAILS || process.env.KOTONOHA_OWNER_EMAILS || "")
+    .toLowerCase().split(",").map((s) => s.trim()).filter(Boolean)
+);
+
+function isFxOwner(email) {
+  if (!email) return false;
+  if (FX_OWNER_EMAILS.size === 0) return false;
+  return FX_OWNER_EMAILS.has(String(email).toLowerCase());
+}
+
+function requireFxOwner(req, res) {
+  if (!isFxOwner(req.user?.email)) {
+    res.status(403).json({ error: "fx-bot は owner のみ" });
+    return false;
+  }
+  return true;
+}
+
+async function fxLoadSettings(p) {
+  const { rows } = await p.query(`SELECT * FROM fx_settings WHERE id = 1`);
+  return rows[0] || {};
+}
+
+function fxOandaCtx(settings) {
+  const apiKey = process.env.OANDA_API_KEY;
+  const accountId = process.env.OANDA_ACCOUNT_ID;
+  if (!apiKey || !accountId) throw new Error("OANDA_API_KEY / OANDA_ACCOUNT_ID 未設定");
+  const env = settings.oanda_env === "live" ? "live" : "practice";
+  const baseUrl = env === "live"
+    ? "https://api-fxtrade.oanda.com"
+    : "https://api-fxpractice.oanda.com";
+  return { apiKey, accountId, env, baseUrl };
+}
+
+// 直近 N 件の trades (closed) を DB から
+async function fxCountTradesToday(p) {
+  const { rows } = await p.query(
+    `SELECT count(*)::int AS n FROM fx_trades
+      WHERE kind = 'opened' AND created_at >= date_trunc('day', now())`
+  );
+  return rows[0]?.n || 0;
+}
+
+async function fxRecentClosedPnls(p, n) {
+  const { rows } = await p.query(
+    `SELECT pnl, closed_at FROM fx_trades
+      WHERE kind = 'closed' AND closed_at IS NOT NULL
+      ORDER BY closed_at DESC LIMIT $1`,
+    [n]
+  );
+  return rows;
+}
+
+async function fxRiskCheck(p, settings, { decision, confidence }) {
+  if (decision === "PASS") return { ok: false, reason: "AI が PASS" };
+  if (confidence < Number(settings.confidence_threshold || 0.7)) {
+    return { ok: false, reason: `confidence ${confidence.toFixed(2)} < 閾値 ${settings.confidence_threshold}` };
+  }
+  const todayCount = await fxCountTradesToday(p);
+  if (todayCount >= Number(settings.max_trades_per_day || 20)) {
+    return { ok: false, reason: `1日上限 ${settings.max_trades_per_day} (今日 ${todayCount})` };
+  }
+  const n = Number(settings.cooldown_after_losses || 0);
+  if (n > 0) {
+    const recent = await fxRecentClosedPnls(p, n);
+    if (recent.length >= n && recent.every((t) => Number(t.pnl) < 0)) {
+      const lastAt = new Date(recent[0].closed_at).getTime();
+      const sinceMin = (Date.now() - lastAt) / 60000;
+      const cd = Number(settings.cooldown_minutes || 60);
+      if (sinceMin < cd) {
+        return { ok: false, reason: `連敗 ${n} クールダウン (残り ${Math.round(cd - sinceMin)} 分)` };
+      }
+    }
+  }
+  return { ok: true, units: Number(settings.units_per_trade || 1) };
+}
+
+// 1 tick: 観測 → AI → リスク → 発注 → DB ログ
+async function runFxTick(p) {
+  const settings = await fxLoadSettings(p);
+  if (!settings.bot_enabled) return { skipped: true, reason: "Bot OFF" };
+  const ctx = fxOandaCtx(settings);
+  const instrument = settings.instrument || "USD_JPY";
+  const granularity = settings.granularity || "M5";
+
+  // 既に open のものがあれば skip
+  const opens = await fxOanda.getOpenTrades(ctx, instrument);
+  if (opens.length > 0) {
+    const r = { skipped: true, reason: `open ${opens.length} 件あり` };
+    await p.query(
+      `INSERT INTO fx_decisions (instrument, granularity, skipped, skip_reason, decision)
+       VALUES ($1, $2, true, $3, 'PASS')`,
+      [instrument, granularity, r.reason]
+    );
+    return r;
+  }
+
+  // closed trade を DB に同期 (last closed 以降)
+  try {
+    const { rows: lastClosed } = await p.query(
+      `SELECT closed_at FROM fx_trades WHERE kind='closed' ORDER BY closed_at DESC LIMIT 1`
+    );
+    const sinceIso = lastClosed[0]?.closed_at?.toISOString?.() || new Date(Date.now() - 86400000).toISOString();
+    const closed = await fxOanda.fetchRecentClosedTrades(ctx, sinceIso);
+    for (const t of closed) {
+      const dup = await p.query(`SELECT 1 FROM fx_trades WHERE oanda_trade_id = $1`, [t.id]);
+      if (dup.rowCount > 0) continue;
+      await p.query(
+        `INSERT INTO fx_trades (kind, instrument, side, units, entry_price, close_price, pnl,
+                                 oanda_trade_id, opened_at, closed_at)
+         VALUES ('closed', $1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+        [
+          t.instrument,
+          Number(t.initialUnits) > 0 ? "LONG" : "SHORT",
+          Math.abs(Number(t.initialUnits)),
+          Number(t.price),
+          Number(t.averageClosePrice || t.price),
+          Number(t.realizedPL || 0),
+          t.id,
+          t.openTime,
+          t.closeTime,
+        ]
+      );
+    }
+  } catch (e) { console.warn("[fx] closed sync failed:", e.message); }
+
+  // 観測
+  const candles = await fxOanda.fetchCandles(ctx, instrument, granularity, Number(settings.candle_count || 100));
+  if (candles.length < 50) return { skipped: true, reason: `candle 不足 ${candles.length}` };
+  const chartText = fxBuildChart(candles, instrument, granularity);
+
+  // AI 判断
+  let decision;
+  try {
+    decision = await fxDecide(callGeminiWithFallback, chartText);
+  } catch (e) {
+    await p.query(
+      `INSERT INTO fx_decisions (instrument, granularity, skipped, skip_reason, decision)
+       VALUES ($1, $2, true, $3, 'PASS')`,
+      [instrument, granularity, "AI 失敗: " + e.message]
+    );
+    return { skipped: true, reason: "AI 失敗: " + e.message };
+  }
+  const lastClose = candles[candles.length - 1].c;
+  await p.query(
+    `INSERT INTO fx_decisions (instrument, granularity, last_close, decision, confidence, reasoning)
+     VALUES ($1, $2, $3, $4, $5, $6)`,
+    [instrument, granularity, lastClose, decision.decision, decision.confidence, decision.reasoning]
+  );
+
+  // リスクチェック
+  const judge = await fxRiskCheck(p, settings, decision);
+  if (!judge.ok) return { skipped: true, reason: judge.reason, decision };
+
+  // 発注
+  let order;
+  try {
+    order = await fxOanda.placeMarketWithOCO(ctx, {
+      instrument,
+      side: decision.decision,
+      units: judge.units,
+      takeProfitPips: Number(settings.take_profit_pips || 10),
+      stopLossPips: Number(settings.stop_loss_pips || 10),
+    });
+  } catch (e) {
+    await p.query(
+      `INSERT INTO fx_trades (kind, instrument, side, units, error, confidence, reasoning)
+       VALUES ('order_failed', $1, $2, $3, $4, $5, $6)`,
+      [instrument, decision.decision, judge.units, e.message, decision.confidence, decision.reasoning]
+    );
+    return { skipped: true, reason: "発注失敗: " + e.message, decision };
+  }
+  await p.query(
+    `INSERT INTO fx_trades (kind, instrument, side, units, entry_price, tp_price, sl_price,
+                             confidence, reasoning, oanda_order_id, oanda_fill_id, opened_at)
+     VALUES ('opened', $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, now())`,
+    [
+      instrument, decision.decision, judge.units,
+      order.fillPrice, order.tp, order.sl,
+      decision.confidence, decision.reasoning,
+      order.orderId, order.fillId,
+    ]
+  );
+  return {
+    placed: true, side: decision.decision,
+    fill_price: order.fillPrice, tp: order.tp, sl: order.sl,
+    confidence: decision.confidence, reasoning: decision.reasoning,
+  };
+}
+
+// ───── endpoints ─────
+
+app.get("/api/fx/status", async (req, res) => {
+  if (!requireFxOwner(req, res)) return;
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  try {
+    const settings = await fxLoadSettings(p);
+    let summary = null, openTrades = [];
+    try {
+      const ctx = fxOandaCtx(settings);
+      summary = await fxOanda.getAccountSummary(ctx);
+      openTrades = await fxOanda.getOpenTrades(ctx);
+    } catch (e) { console.warn("[fx] OANDA status fetch failed:", e.message); }
+    const { rows: decisions } = await p.query(
+      `SELECT id, instrument, granularity, last_close, decision, confidence, reasoning,
+              skipped, skip_reason, created_at
+         FROM fx_decisions ORDER BY id DESC LIMIT 30`
+    );
+    const { rows: trades } = await p.query(
+      `SELECT id, kind, instrument, side, units, entry_price, tp_price, sl_price,
+              close_price, pnl, confidence, reasoning, oanda_trade_id, error,
+              opened_at, closed_at, created_at
+         FROM fx_trades ORDER BY id DESC LIMIT 30`
+    );
+    // 日次 PnL (直近 7 日)
+    const { rows: dailyPnl } = await p.query(
+      `SELECT date_trunc('day', closed_at AT TIME ZONE 'Asia/Tokyo')::date AS d,
+              SUM(pnl)::numeric AS pnl, COUNT(*)::int AS n
+         FROM fx_trades
+        WHERE kind = 'closed' AND closed_at > now() - interval '7 days'
+        GROUP BY d ORDER BY d DESC`
+    );
+    res.json({ settings, summary, openTrades, decisions, trades, dailyPnl });
+  } catch (err) {
+    console.error("[fx] status err:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post("/api/fx/tick", async (req, res) => {
+  if (!requireFxOwner(req, res)) return;
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  try {
+    const r = await runFxTick(p);
+    res.json(r);
+  } catch (err) {
+    console.error("[fx] tick err:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post("/api/fx/toggle", async (req, res) => {
+  if (!requireFxOwner(req, res)) return;
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  const enabled = !!req.body?.enabled;
+  try {
+    await p.query(`UPDATE fx_settings SET bot_enabled = $1, updated_at = now() WHERE id = 1`, [enabled]);
+    res.json({ ok: true, bot_enabled: enabled });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.put("/api/fx/settings", async (req, res) => {
+  if (!requireFxOwner(req, res)) return;
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  const b = req.body || {};
+  // 許可されたフィールドだけ
+  const allowed = {
+    oanda_env: (v) => (v === "live" || v === "practice"),
+    instrument: (v) => typeof v === "string" && v.length <= 16,
+    granularity: (v) => typeof v === "string" && v.length <= 8,
+    candle_count: (v) => Number.isInteger(v) && v >= 50 && v <= 500,
+    units_per_trade: (v) => Number.isInteger(v) && v >= 1 && v <= 10000,
+    take_profit_pips: (v) => typeof v === "number" && v > 0 && v <= 200,
+    stop_loss_pips: (v) => typeof v === "number" && v > 0 && v <= 200,
+    max_trades_per_day: (v) => Number.isInteger(v) && v >= 1 && v <= 200,
+    confidence_threshold: (v) => typeof v === "number" && v >= 0 && v <= 1,
+    cooldown_after_losses: (v) => Number.isInteger(v) && v >= 0 && v <= 20,
+    cooldown_minutes: (v) => Number.isInteger(v) && v >= 0 && v <= 1440,
+  };
+  const updates = [];
+  const values = [];
+  let i = 1;
+  for (const [k, validator] of Object.entries(allowed)) {
+    if (b[k] !== undefined && validator(b[k])) {
+      updates.push(`${k} = $${i++}`);
+      values.push(b[k]);
+    }
+  }
+  if (!updates.length) return res.status(400).json({ error: "更新対象なし" });
+  try {
+    await p.query(
+      `UPDATE fx_settings SET ${updates.join(", ")}, updated_at = now() WHERE id = 1`,
+      values
+    );
+    const settings = await fxLoadSettings(p);
+    res.json({ ok: true, settings });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post("/api/fx/close/:tradeId", async (req, res) => {
+  if (!requireFxOwner(req, res)) return;
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  try {
+    const settings = await fxLoadSettings(p);
+    const ctx = fxOandaCtx(settings);
+    const r = await fxOanda.closeTrade(ctx, req.params.tradeId);
+    res.json({ ok: true, raw: r });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Cloud Scheduler 用 internal endpoint。X-Internal-Token で簡易認証。
+app.post("/api/internal/fx/tick", async (req, res) => {
+  const tok = req.get("X-Internal-Token") || "";
+  if (!process.env.INTERNAL_TICK_TOKEN || tok !== process.env.INTERNAL_TICK_TOKEN) {
+    return res.status(403).json({ error: "forbidden" });
+  }
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  try {
+    const r = await runFxTick(p);
+    res.json(r);
+  } catch (err) {
+    console.error("[fx] internal tick err:", err);
     res.status(500).json({ error: err.message });
   }
 });

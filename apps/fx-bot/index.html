@@ -1,0 +1,549 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="FX bot">
+<title>FX bot</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@24,500,0,0">
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+:root {
+  --bg: #e4e6ee; --sl: #fff; --sd: rgba(168,172,192,0.75);
+  --text: #42455e; --text2: rgba(66,69,94,0.52); --text3: rgba(66,69,94,0.28);
+  --accent: #0f766e;
+  --gain: #2a8c3a; --loss: #b04040;
+}
+body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; padding-bottom: 120px; }
+.icon { font-family: 'Material Symbols Outlined'; font-size: 1.1em; vertical-align: -0.18em; }
+
+.bar { display: flex; justify-content: space-between; align-items: center; padding: 40px 20px 0; }
+.hint { font-size: 11px; letter-spacing: 0.22em; color: var(--text3); font-weight: 700; text-transform: uppercase; }
+.pill { padding: 8px 16px; border-radius: 24px; font-size: 12px; font-weight: 700; border: none; color: var(--text2); background: var(--bg); box-shadow: 4px 4px 10px var(--sd), -4px -4px 10px var(--sl); cursor: pointer; font-family: inherit; text-decoration: none; display: inline-block; }
+.pill:active { box-shadow: inset 3px 3px 8px var(--sd), inset -3px -3px 8px var(--sl); transform: scale(0.97); }
+
+.wrap { padding: 24px 18px 40px; max-width: 600px; margin: 0 auto; }
+.title { font-size: 26px; font-weight: 800; }
+.subtitle { font-size: 12px; color: var(--text2); font-weight: 600; margin-top: 2px; margin-bottom: 4px; }
+
+.vbadge { font-family: ui-monospace, Menlo, monospace; font-size: 10px; color: var(--text3); margin-top: 4px; margin-bottom: 18px; }
+
+.card { background: var(--bg); border-radius: 22px; padding: 18px; margin-bottom: 16px; box-shadow: 8px 8px 18px var(--sd), -6px -6px 16px var(--sl); }
+.label { font-size: 11px; font-weight: 700; letter-spacing: 0.16em; color: var(--text3); text-transform: uppercase; margin-bottom: 12px; }
+
+/* 状態カード (Bot ON/OFF + 環境) */
+.state-row { display: flex; align-items: center; gap: 12px; }
+.state-name { flex: 1; font-size: 16px; font-weight: 800; }
+.state-env { font-size: 10px; font-weight: 800; letter-spacing: 0.08em; padding: 3px 8px; border-radius: 8px; }
+.env-practice { color: var(--accent); background: rgba(15,118,110,0.12); }
+.env-live { color: var(--loss); background: rgba(176,64,64,0.16); }
+
+/* iOS 風トグル */
+.toggle { position: relative; width: 56px; height: 32px; background: var(--bg); border-radius: 18px; box-shadow: inset 3px 3px 8px var(--sd), inset -3px -3px 8px var(--sl); cursor: pointer; transition: background 0.2s; }
+.toggle::after { content: ""; position: absolute; top: 4px; left: 4px; width: 24px; height: 24px; border-radius: 12px; background: var(--bg); box-shadow: 3px 3px 6px rgba(0,0,0,0.18); transition: transform 0.2s, background 0.2s; }
+.toggle.on { background: var(--accent); box-shadow: inset 3px 3px 8px rgba(0,0,0,0.16); }
+.toggle.on::after { transform: translateX(24px); background: #fff; }
+
+/* 数値ハイライト系 */
+.hero-row { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 14px; padding: 6px 0 4px; }
+.hero-stat { text-align: center; }
+.hero-num { font-size: 26px; font-weight: 900; line-height: 1; letter-spacing: -1px; color: var(--text); }
+.hero-num.gain { color: var(--gain); }
+.hero-num.loss { color: var(--loss); }
+.hero-unit { font-size: 12px; font-weight: 700; opacity: 0.6; margin-left: 1px; }
+.hero-lbl { font-size: 9px; font-weight: 800; letter-spacing: 0.14em; color: var(--text3); text-transform: uppercase; margin-top: 6px; }
+
+/* open trade 行 */
+.trade-row { display: flex; align-items: center; gap: 10px; padding: 10px 0; border-bottom: 1px solid rgba(154,160,184,0.18); }
+.trade-row:last-child { border-bottom: none; }
+.trade-side { font-size: 11px; font-weight: 800; padding: 3px 8px; border-radius: 8px; }
+.trade-side.LONG { background: rgba(42,140,58,0.16); color: var(--gain); }
+.trade-side.SHORT { background: rgba(176,64,64,0.16); color: var(--loss); }
+.trade-main { flex: 1; min-width: 0; }
+.trade-ins { font-size: 13px; font-weight: 700; }
+.trade-px { font-size: 11px; color: var(--text2); font-weight: 600; }
+.trade-act { font-size: 11px; font-weight: 700; color: var(--loss); background: none; border: none; cursor: pointer; padding: 4px 10px; border-radius: 8px; box-shadow: 2px 2px 6px var(--sd), -2px -2px 6px var(--sl); font-family: inherit; }
+.trade-act:active { box-shadow: inset 2px 2px 6px var(--sd), inset -2px -2px 6px var(--sl); }
+
+/* decisions / trades 履歴 */
+details { background: var(--bg); border-radius: 14px; padding: 12px 14px; margin-bottom: 8px; box-shadow: 3px 3px 8px var(--sd), -2px -2px 6px var(--sl); }
+details summary { cursor: pointer; font-size: 13px; font-weight: 700; display: flex; align-items: center; gap: 8px; list-style: none; }
+details summary::-webkit-details-marker { display: none; }
+.dec-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.dec-dot.LONG { background: var(--gain); }
+.dec-dot.SHORT { background: var(--loss); }
+.dec-dot.PASS { background: var(--text3); }
+.dec-time { font-size: 10px; color: var(--text3); font-weight: 600; margin-left: auto; }
+.dec-body { font-size: 12px; color: var(--text2); margin-top: 10px; line-height: 1.6; padding-left: 16px; }
+
+.btn-row { display: flex; gap: 10px; margin-bottom: 16px; }
+.btn-pri { flex: 1; padding: 14px; border-radius: 16px; border: none; background: var(--bg); box-shadow: 6px 6px 14px var(--sd), -4px -4px 12px var(--sl); font-family: inherit; font-size: 13px; font-weight: 800; color: var(--accent); cursor: pointer; }
+.btn-pri:active { box-shadow: inset 3px 3px 8px var(--sd), inset -3px -3px 8px var(--sl); transform: scale(0.98); }
+.btn-pri:disabled { opacity: 0.5; cursor: wait; }
+
+/* 設定 bottom sheet */
+.sheet-bd { position: fixed; inset: 0; background: rgba(180,184,205,0); pointer-events: none; visibility: hidden; opacity: 0; transition: background 0.2s, opacity 0.2s; z-index: 100; display: flex; align-items: flex-end; }
+.sheet-bd.open { background: rgba(180,184,205,0.5); pointer-events: auto; visibility: visible; opacity: 1; }
+.sheet { width: 100%; max-width: 600px; margin: 0 auto; background: var(--bg); border-radius: 26px 26px 0 0; padding: 14px 22px 30px; box-shadow: -2px -10px 30px rgba(148,152,176,0.4); transform: translateY(100%); transition: transform 0.25s cubic-bezier(.2,.8,.2,1); max-height: 88vh; overflow-y: auto; touch-action: pan-y; }
+.sheet-bd.open .sheet { transform: translateY(0); }
+.sheet-handle { width: 42px; height: 5px; border-radius: 3px; background: rgba(100,104,130,0.22); margin: 0 auto 16px; }
+.sheet h3 { font-size: 16px; font-weight: 800; margin-bottom: 14px; }
+.field { margin-bottom: 12px; }
+.field-lbl { font-size: 11px; font-weight: 800; letter-spacing: 0.08em; color: var(--text3); text-transform: uppercase; margin-bottom: 5px; }
+.field input, .field select { width: 100%; padding: 11px 14px; border-radius: 12px; border: none; background: var(--bg); box-shadow: inset 3px 3px 7px var(--sd), inset -3px -3px 7px var(--sl); font-family: inherit; font-size: 13px; color: var(--text); }
+.field input:focus, .field select:focus { outline: none; box-shadow: inset 3px 3px 7px var(--sd), inset -3px -3px 7px var(--sl), 0 0 0 2px rgba(15,118,110,0.3); }
+
+.signin-overlay { position: fixed; inset: 0; z-index: 400; background: var(--bg); display: none; flex-direction: column; align-items: center; justify-content: center; padding: 32px; text-align: center; gap: 18px; }
+.signin-overlay.show { display: flex; }
+.signin-title { font-size: 26px; font-weight: 800; }
+.signin-sub { font-size: 13px; color: var(--text2); }
+.signin-btn { padding: 14px 28px; border-radius: 30px; font-size: 14px; font-weight: 700; border: none; cursor: pointer; font-family: inherit; color: var(--text); background: var(--bg); box-shadow: 6px 6px 14px var(--sd), -4px -4px 12px var(--sl); display: inline-flex; align-items: center; gap: 8px; }
+.signin-err { color: var(--loss); font-size: 11px; font-weight: 600; max-width: 320px; word-break: break-all; }
+.signin-status { font-size: 11px; color: var(--text2); }
+
+.err { font-size: 12px; color: var(--loss); font-weight: 600; padding: 8px 12px; border-radius: 10px; background: rgba(176,64,64,0.1); margin-bottom: 10px; word-break: break-word; }
+.empty { font-size: 12px; color: var(--text3); padding: 8px 0; text-align: center; font-weight: 600; }
+</style>
+</head>
+<body>
+
+<div class="signin-overlay" id="signinOverlay">
+  <div class="signin-title">FX bot</div>
+  <div class="signin-sub">OANDA × Gemini で AI 自動売買<br>owner 専用 (1 通貨単位)</div>
+  <button class="signin-btn" id="signinBtn">
+    <svg viewBox="0 0 18 18" width="18" xmlns="http://www.w3.org/2000/svg"><path fill="#4285F4" d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844a4.14 4.14 0 0 1-1.796 2.716v2.259h2.908c1.702-1.567 2.684-3.875 2.684-6.615z"/><path fill="#34A853" d="M9 18c2.43 0 4.467-.806 5.956-2.184l-2.908-2.259c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332A8.997 8.997 0 0 0 9 18z"/><path fill="#FBBC05" d="M3.964 10.706A5.41 5.41 0 0 1 3.682 9c0-.593.102-1.17.282-1.706V4.962H.957A8.996 8.996 0 0 0 0 9c0 1.452.348 2.827.957 4.038l3.007-2.332z"/><path fill="#EA4335" d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0A8.997 8.997 0 0 0 .957 4.962L3.964 7.294C4.672 5.167 6.656 3.58 9 3.58z"/></svg>
+    Google でサインイン
+  </button>
+  <div class="signin-status" id="signinStatus"></div>
+  <div class="signin-err" id="signinErr"></div>
+</div>
+
+<div class="bar">
+  <span class="hint">FX bot</span>
+  <div style="display:flex; gap:8px;">
+    <a class="pill" id="backBtn" href="/" style="display:none;"><span class="icon">arrow_back</span> 戻る</a>
+    <button class="pill" onclick="doSignOut()">サインアウト</button>
+  </div>
+</div>
+
+<div class="wrap">
+  <div class="title">FX bot</div>
+  <div class="subtitle">OANDA × Gemini ・ 1 通貨単位 自動売買</div>
+  <div class="vbadge" id="versionBadge">v.loading…</div>
+
+  <div class="err" id="errBox" style="display:none;"></div>
+
+  <!-- 状態カード -->
+  <div class="card">
+    <div class="state-row">
+      <div class="state-name" id="stateName">Bot</div>
+      <div class="state-env" id="stateEnv">-</div>
+      <div class="toggle" id="botToggle" onclick="toggleBot()"></div>
+    </div>
+  </div>
+
+  <!-- 口座サマリ -->
+  <div class="card">
+    <div class="label">口座</div>
+    <div class="hero-row">
+      <div class="hero-stat">
+        <div class="hero-num" id="acctBalance">-</div>
+        <div class="hero-lbl">残高</div>
+      </div>
+      <div class="hero-stat">
+        <div class="hero-num" id="acctPnl">-</div>
+        <div class="hero-lbl">本日損益</div>
+      </div>
+      <div class="hero-stat">
+        <div class="hero-num" id="acctMargin">-</div>
+        <div class="hero-lbl">維持率</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ボタン -->
+  <div class="btn-row">
+    <button class="btn-pri" id="tickBtn" onclick="manualTick()">
+      <span class="icon">play_arrow</span> 即実行
+    </button>
+    <button class="btn-pri" onclick="openSettings()">
+      <span class="icon">tune</span> 設定
+    </button>
+  </div>
+
+  <!-- open trade -->
+  <div class="card" id="openCard" style="display:none;">
+    <div class="label">保有中</div>
+    <div id="openList"></div>
+  </div>
+
+  <!-- 直近の判断 -->
+  <div class="card">
+    <div class="label">直近の判断 <span style="text-transform:none;letter-spacing:0;color:var(--text3);font-weight:600;font-size:9px;" id="decCount"></span></div>
+    <div id="decList"><div class="empty">まだ記録なし</div></div>
+  </div>
+
+  <!-- 過去のトレード -->
+  <div class="card">
+    <div class="label">取引履歴 <span style="text-transform:none;letter-spacing:0;color:var(--text3);font-weight:600;font-size:9px;" id="trCount"></span></div>
+    <div id="trList"><div class="empty">まだ取引なし</div></div>
+  </div>
+</div>
+
+<!-- 設定 bottom sheet -->
+<div class="sheet-bd" id="settingsSheet" onclick="if(event.target===this)closeSettings()">
+  <div class="sheet">
+    <div class="sheet-handle"></div>
+    <h3>設定</h3>
+    <div class="field">
+      <div class="field-lbl">環境</div>
+      <select id="setEnv">
+        <option value="practice">practice (デモ口座)</option>
+        <option value="live">live (本番・実弾)</option>
+      </select>
+    </div>
+    <div class="field">
+      <div class="field-lbl">通貨ペア</div>
+      <input id="setInstrument" placeholder="USD_JPY">
+    </div>
+    <div class="field">
+      <div class="field-lbl">足の粒度</div>
+      <select id="setGranularity">
+        <option>M1</option><option>M5</option><option>M15</option><option>M30</option><option>H1</option>
+      </select>
+    </div>
+    <div class="field">
+      <div class="field-lbl">1 トレードのロット (通貨)</div>
+      <input id="setUnits" type="number" min="1">
+    </div>
+    <div class="field">
+      <div class="field-lbl">利確 (pips)</div>
+      <input id="setTp" type="number" min="0.1" step="0.1">
+    </div>
+    <div class="field">
+      <div class="field-lbl">損切 (pips)</div>
+      <input id="setSl" type="number" min="0.1" step="0.1">
+    </div>
+    <div class="field">
+      <div class="field-lbl">confidence 閾値 (0-1)</div>
+      <input id="setConf" type="number" min="0" max="1" step="0.05">
+    </div>
+    <div class="field">
+      <div class="field-lbl">1日上限トレード数</div>
+      <input id="setMaxDay" type="number" min="1">
+    </div>
+    <div class="field">
+      <div class="field-lbl">連敗クールダウン (回 / 分)</div>
+      <div style="display:flex; gap:10px;">
+        <input id="setCdN" type="number" min="0" style="flex:1;">
+        <input id="setCdMin" type="number" min="0" style="flex:1;">
+      </div>
+    </div>
+    <button class="btn-pri" onclick="saveSettings()" style="margin-top:8px;">保存</button>
+    <button class="pill" onclick="closeSettings()" style="margin-top:10px; width:100%;">キャンセル</button>
+  </div>
+</div>
+
+<script src="/config.js"></script>
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js";
+import {
+  getAuth, onAuthStateChanged, signOut,
+  GoogleAuthProvider, signInWithPopup, signInWithRedirect, getRedirectResult,
+  setPersistence, browserLocalPersistence,
+} from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
+
+const $ = (id) => document.getElementById(id);
+const escapeHtml = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({
+  "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+}[c]));
+const fmt = (n, d=2) => n == null ? "-" : Number(n).toLocaleString("ja-JP", { minimumFractionDigits: d, maximumFractionDigits: d });
+
+let fbUser = null, authToken = null;
+
+const fbConfig = window.firebaseConfig || {};
+const app = initializeApp(fbConfig);
+const auth = getAuth(app);
+await setPersistence(auth, browserLocalPersistence).catch(() => {});
+
+async function api(method, path, body) {
+  if (!fbUser) throw new Error("ログインが切れました");
+  authToken ||= await fbUser.getIdToken();
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), 45000);
+  try {
+    const res = await fetch((window.API_BASE || "") + path, {
+      method,
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${authToken}` },
+      body: body ? JSON.stringify(body) : undefined,
+      signal: ctrl.signal,
+    });
+    clearTimeout(t);
+    const j = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(j.error || `HTTP ${res.status}`);
+    return j;
+  } catch (e) {
+    clearTimeout(t);
+    if (e.name === "AbortError") throw new Error("タイムアウト");
+    throw e;
+  }
+}
+
+function showErr(msg) {
+  if (!msg) { $("errBox").style.display = "none"; return; }
+  $("errBox").style.display = "";
+  $("errBox").textContent = String(msg);
+}
+
+async function loadStatus() {
+  showErr(null);
+  try {
+    const s = await api("GET", "/api/fx/status");
+    renderState(s.settings);
+    renderSummary(s.summary, s.dailyPnl);
+    renderOpenTrades(s.openTrades);
+    renderDecisions(s.decisions);
+    renderTrades(s.trades);
+  } catch (e) {
+    showErr("読み込み失敗: " + e.message);
+  }
+
+  try {
+    const v = await fetch((window.API_BASE || "") + "/api/version").then((r) => r.json()).catch(() => null);
+    if (v) $("versionBadge").textContent = `v.${v.version || "dev"}`;
+    else $("versionBadge").textContent = "v.unknown";
+  } catch (_) {}
+}
+
+function renderState(settings) {
+  if (!settings) return;
+  const env = settings.oanda_env || "practice";
+  $("stateEnv").textContent = env === "live" ? "LIVE" : "PRACTICE";
+  $("stateEnv").className = "state-env " + (env === "live" ? "env-live" : "env-practice");
+  const enabled = !!settings.bot_enabled;
+  $("botToggle").className = "toggle" + (enabled ? " on" : "");
+  $("stateName").textContent = enabled ? "Bot 稼働中" : "Bot 停止中";
+}
+
+function renderSummary(summary, dailyPnl) {
+  if (summary) {
+    $("acctBalance").textContent = fmt(summary.balance, 0);
+    const margin = summary.marginAvailable && summary.balance
+      ? Math.round((Number(summary.marginAvailable) / Number(summary.balance)) * 100) + "%"
+      : "-";
+    $("acctMargin").textContent = margin;
+  } else {
+    $("acctBalance").textContent = "-";
+    $("acctMargin").textContent = "-";
+  }
+  // 本日損益
+  const today = new Date().toISOString().slice(0,10);
+  let todayPnl = 0;
+  for (const d of (dailyPnl || [])) {
+    if (String(d.d).slice(0,10) === today) todayPnl = Number(d.pnl) || 0;
+  }
+  const e = $("acctPnl");
+  e.textContent = (todayPnl > 0 ? "+" : "") + fmt(todayPnl, 0);
+  e.className = "hero-num " + (todayPnl > 0 ? "gain" : todayPnl < 0 ? "loss" : "");
+}
+
+function renderOpenTrades(opens) {
+  const card = $("openCard");
+  const list = $("openList");
+  if (!opens?.length) { card.style.display = "none"; return; }
+  card.style.display = "";
+  list.innerHTML = opens.map((t) => {
+    const side = Number(t.initialUnits) > 0 ? "LONG" : "SHORT";
+    const upl = Number(t.unrealizedPL || 0);
+    return `<div class="trade-row">
+      <span class="trade-side ${side}">${side}</span>
+      <div class="trade-main">
+        <div class="trade-ins">${escapeHtml(t.instrument)} ・ ${Math.abs(Number(t.initialUnits))} 通貨</div>
+        <div class="trade-px">建値 ${escapeHtml(t.price)} ・ 含損益 <b style="color:${upl>0?"var(--gain)":upl<0?"var(--loss)":"inherit"};">${upl>0?"+":""}${fmt(upl,0)}</b></div>
+      </div>
+      <button class="trade-act" onclick="forceClose('${escapeHtml(t.id)}')">強制決済</button>
+    </div>`;
+  }).join("");
+}
+
+function renderDecisions(decs) {
+  $("decCount").textContent = decs?.length ? `(${decs.length})` : "";
+  const el = $("decList");
+  if (!decs?.length) { el.innerHTML = `<div class="empty">まだ記録なし</div>`; return; }
+  el.innerHTML = decs.map((d) => {
+    const t = new Date(d.created_at).toLocaleString("ja-JP", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
+    const label = d.skipped ? "SKIP" : d.decision;
+    const cls = d.skipped ? "PASS" : (d.decision || "PASS");
+    const conf = d.confidence != null ? ` (${(Number(d.confidence)*100).toFixed(0)}%)` : "";
+    return `<details>
+      <summary>
+        <span class="dec-dot ${cls}"></span>
+        <span>${escapeHtml(label)}${escapeHtml(conf)}</span>
+        <span class="dec-time">${escapeHtml(t)}</span>
+      </summary>
+      <div class="dec-body">
+        <div>${escapeHtml(d.instrument)} / ${escapeHtml(d.granularity)} / 終値 ${d.last_close ? escapeHtml(d.last_close) : "-"}</div>
+        ${d.reasoning ? `<div style="margin-top:6px;">${escapeHtml(d.reasoning)}</div>` : ""}
+        ${d.skip_reason ? `<div style="margin-top:6px;color:var(--text2);">skip: ${escapeHtml(d.skip_reason)}</div>` : ""}
+      </div>
+    </details>`;
+  }).join("");
+}
+
+function renderTrades(trades) {
+  $("trCount").textContent = trades?.length ? `(${trades.length})` : "";
+  const el = $("trList");
+  if (!trades?.length) { el.innerHTML = `<div class="empty">まだ取引なし</div>`; return; }
+  el.innerHTML = trades.map((tr) => {
+    const t = new Date(tr.created_at).toLocaleString("ja-JP", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
+    const side = tr.side || "-";
+    const pnl = Number(tr.pnl || 0);
+    const pnlTxt = tr.kind === "closed"
+      ? `<b style="color:${pnl>0?"var(--gain)":pnl<0?"var(--loss)":"inherit"};">${pnl>0?"+":""}${fmt(pnl,0)}</b>`
+      : tr.kind === "order_failed"
+        ? `<span style="color:var(--loss);">発注失敗</span>`
+        : `<span style="color:var(--text2);">保有中</span>`;
+    return `<details>
+      <summary>
+        <span class="dec-dot ${side === "LONG" ? "LONG" : side === "SHORT" ? "SHORT" : "PASS"}"></span>
+        <span>${escapeHtml(side)} ・ ${escapeHtml(tr.instrument)}</span>
+        <span class="dec-time">${escapeHtml(t)}</span>
+      </summary>
+      <div class="dec-body">
+        <div>${escapeHtml(tr.kind)} ・ ${tr.units || ""} 通貨 ・ 結果: ${pnlTxt}</div>
+        ${tr.entry_price ? `<div>建値 ${escapeHtml(tr.entry_price)} TP ${escapeHtml(tr.tp_price)} SL ${escapeHtml(tr.sl_price)}</div>` : ""}
+        ${tr.close_price ? `<div>決済 ${escapeHtml(tr.close_price)}</div>` : ""}
+        ${tr.reasoning ? `<div style="margin-top:6px;color:var(--text2);">${escapeHtml(tr.reasoning)}</div>` : ""}
+        ${tr.error ? `<div style="margin-top:6px;color:var(--loss);">err: ${escapeHtml(tr.error)}</div>` : ""}
+      </div>
+    </details>`;
+  }).join("");
+}
+
+window.toggleBot = async function () {
+  try {
+    const cur = $("botToggle").classList.contains("on");
+    await api("POST", "/api/fx/toggle", { enabled: !cur });
+    await loadStatus();
+  } catch (e) { showErr(e.message); }
+};
+
+window.manualTick = async function () {
+  const btn = $("tickBtn");
+  btn.disabled = true;
+  try {
+    const r = await api("POST", "/api/fx/tick");
+    if (r.placed) showErr(`PLACED ${r.side} fill=${r.fill_price}`);
+    else if (r.skipped) showErr("SKIP: " + r.reason);
+    await loadStatus();
+    setTimeout(() => showErr(null), 4000);
+  } catch (e) { showErr(e.message); }
+  finally { btn.disabled = false; }
+};
+
+window.forceClose = async function (tradeId) {
+  if (!confirm(`trade ${tradeId} を強制決済します。よろしいですか？`)) return;
+  try {
+    await api("POST", `/api/fx/close/${encodeURIComponent(tradeId)}`);
+    await loadStatus();
+  } catch (e) { showErr(e.message); }
+};
+
+window.openSettings = async function () {
+  try {
+    const s = await api("GET", "/api/fx/status");
+    const st = s.settings || {};
+    $("setEnv").value = st.oanda_env || "practice";
+    $("setInstrument").value = st.instrument || "USD_JPY";
+    $("setGranularity").value = st.granularity || "M5";
+    $("setUnits").value = st.units_per_trade ?? 1;
+    $("setTp").value = st.take_profit_pips ?? 10;
+    $("setSl").value = st.stop_loss_pips ?? 10;
+    $("setConf").value = st.confidence_threshold ?? 0.7;
+    $("setMaxDay").value = st.max_trades_per_day ?? 20;
+    $("setCdN").value = st.cooldown_after_losses ?? 3;
+    $("setCdMin").value = st.cooldown_minutes ?? 60;
+    $("settingsSheet").classList.add("open");
+  } catch (e) { showErr(e.message); }
+};
+window.closeSettings = function () { $("settingsSheet").classList.remove("open"); };
+
+window.saveSettings = async function () {
+  const body = {
+    oanda_env: $("setEnv").value,
+    instrument: $("setInstrument").value.trim().toUpperCase(),
+    granularity: $("setGranularity").value,
+    units_per_trade: Math.max(1, parseInt($("setUnits").value, 10) || 1),
+    take_profit_pips: Math.max(0.1, parseFloat($("setTp").value) || 10),
+    stop_loss_pips: Math.max(0.1, parseFloat($("setSl").value) || 10),
+    confidence_threshold: Math.max(0, Math.min(1, parseFloat($("setConf").value) || 0.7)),
+    max_trades_per_day: Math.max(1, parseInt($("setMaxDay").value, 10) || 20),
+    cooldown_after_losses: Math.max(0, parseInt($("setCdN").value, 10) || 0),
+    cooldown_minutes: Math.max(0, parseInt($("setCdMin").value, 10) || 60),
+  };
+  try {
+    await api("PUT", "/api/fx/settings", body);
+    closeSettings();
+    await loadStatus();
+  } catch (e) { showErr(e.message); }
+};
+
+// bottom-sheet drag to close
+(() => {
+  const bd = $("settingsSheet");
+  const sheet = bd.querySelector(".sheet");
+  let startY = null, dy = 0;
+  sheet.addEventListener("touchstart", (e) => {
+    startY = e.touches[0].clientY; dy = 0; sheet.style.transition = "none";
+  });
+  sheet.addEventListener("touchmove", (e) => {
+    if (startY == null) return;
+    dy = Math.max(0, e.touches[0].clientY - startY);
+    sheet.style.transform = `translateY(${dy}px)`;
+  });
+  sheet.addEventListener("touchend", () => {
+    sheet.style.transition = "";
+    if (dy > 100) bd.classList.remove("open");
+    sheet.style.transform = "";
+    startY = null; dy = 0;
+  });
+})();
+
+// ───── 認証 ─────
+window.doSignOut = async function () { try { await signOut(auth); } catch (_) {} location.reload(); };
+
+const signinBtn = $("signinBtn");
+signinBtn.addEventListener("click", async () => {
+  $("signinErr").textContent = "";
+  try {
+    await signInWithPopup(auth, new GoogleAuthProvider());
+  } catch (e) {
+    try { await signInWithRedirect(auth, new GoogleAuthProvider()); }
+    catch (e2) { $("signinErr").textContent = "サインイン失敗: " + (e2?.message || e.message); }
+  }
+});
+
+getRedirectResult(auth).catch(() => {});
+
+onAuthStateChanged(auth, async (user) => {
+  if (user) {
+    fbUser = user; authToken = null;
+    $("signinOverlay").classList.remove("show");
+    // ランチャー戻るリンク
+    const ref = document.referrer;
+    if (ref && new URL(ref).origin === location.origin) $("backBtn").style.display = "";
+    loadStatus();
+    // 30 秒毎に状態更新
+    setInterval(loadStatus, 30000);
+  } else {
+    fbUser = null;
+    $("signinOverlay").classList.add("show");
+  }
+});
+</script>
+</body>
+</html>
