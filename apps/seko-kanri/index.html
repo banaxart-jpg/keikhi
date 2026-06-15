@@ -489,7 +489,7 @@ body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); 
 
       <!-- 自由記述 -->
       <div id="freeArea" style="display:none;">
-        <input type="text" class="free-input" id="freeInput" placeholder="あなたの答え" autocomplete="off">
+        <textarea class="free-input" id="freeInput" placeholder="あなたの答え (記述問題は要点を 50-150 字で)" rows="3" style="resize:vertical; min-height:54px; line-height:1.5;"></textarea>
         <button class="free-submit" id="freeSubmit" onclick="submitFree()">送信</button>
       </div>
 

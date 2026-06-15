@@ -5097,22 +5097,37 @@ try {
   console.warn("[seko] genres.json load failed:", e.message);
 }
 
-// exam_target + shubetsu でユーザーに出題して良いジャンル名一覧を返す。
-// - exam_target='second_only' → exam_level='2ji' の group のみ
-// - exam_target='first_full'  → 全 group (一次 + 二次)
-// - shubetsu='shiage' のユーザーには group.shubetsu_relevance に 'shiage' が含まれる group だけ
-// - shubetsu 未設定なら全部通す (= 旧挙動互換)
-function sekoGenresForUser(examTarget, shubetsu) {
-  const out = [];
+// exam_target + shubetsu でユーザーに出題して良い group 一覧を返す。
+// - exam_target='first_full' → 全 group (一次 + 二次)
+// - exam_target='second_only' → 二次 group + 一次の「二次解答に効く復習 group」(法規・施工管理法・仕上工事・建築学)
+//   (一次合格から時間が経ってる人向け。二次は一次知識の上に乗るので復習問題を 30% 程度混ぜる)
+// - shubetsu の group.shubetsu_relevance フィルタは両 target 共通
+const SEKO_REVIEW_GROUPS_FOR_2JI = new Set([
+  "kanri_ho", "ho_ki", "shiko_shiage", "kenchiku_gaku",
+]); // shubetsu によって shiage_relevance フィルタが二次掛けて適切な group だけ残る
+function sekoGroupsForUser(examTarget, shubetsu) {
+  const primary = [];
+  const review = [];
   for (const g of SEKO_GENRES_DATA?.groups || []) {
-    if (examTarget === "second_only" && g.exam_level !== "2ji") continue;
     if (shubetsu) {
       const rel = Array.isArray(g.shubetsu_relevance) ? g.shubetsu_relevance : null;
-      // 関連配列が無い group は「種別共通」と解釈して通す
       if (rel && !rel.includes(shubetsu)) continue;
     }
-    for (const gen of g.genres || []) out.push(gen.name);
+    if (examTarget === "second_only") {
+      if (g.exam_level === "2ji") primary.push(g);
+      else if (SEKO_REVIEW_GROUPS_FOR_2JI.has(g.id)) review.push(g);
+    } else {
+      primary.push(g);
+    }
   }
+  return { primary, review };
+}
+
+function sekoGenresForUser(examTarget, shubetsu) {
+  const { primary, review } = sekoGroupsForUser(examTarget, shubetsu);
+  const out = [];
+  for (const g of primary) for (const gen of g.genres || []) out.push(gen.name);
+  for (const g of review) for (const gen of g.genres || []) out.push(gen.name);
   return out;
 }
 
@@ -5145,7 +5160,10 @@ async function generateSekoQuestionsBatch(p, items, shubetsu) {
   const lines = items.map((it, i) => {
     const grp = SEKO_GROUP_BY_ID.get(it.groupId);
     const lvl = it.examLevel === "2ji" ? "二次" : "一次";
-    return `[${i + 1}] 分野: ${grp?.name || it.groupId} / ジャンル: ${it.genre} / 試験: ${lvl}`;
+    const typeLabel = it.qtype === "free"
+      ? "記述式 (本試験の二次形式、選択肢なし)"
+      : "四肢択一";
+    return `[${i + 1}] 分野: ${grp?.name || it.groupId} / ジャンル: ${it.genre} / 試験: ${lvl} / 出題形式: ${typeLabel}`;
   }).join("\n");
   const shubetsuBlock = shubetsuLabel ? `
 ■ 受検種別 (重要): ${shubetsuLabel}
@@ -5160,20 +5178,20 @@ ${lines}
 各問の方針:
 - 受験生が現場で「これ知らなかった」と気づける頻出論点をひとつ。
 - 細かすぎる数値より現場での意味・判断基準を優先。
-- 「四つのうち最も不適当なものはどれか」「次のうち正しいものはどれか」型の四肢択一。
-- options は 4 つ。answer は正解の選択肢の文字列そのまま (A/B/C/D の記号不要)。
-- 解説は 3-5 文。なぜ正解か、誤答はなぜ違うか、現場の留意点を 1 文。
-- 二次対策の場合は経験記述や記述式の論点を選択肢化したものに寄せる。
+- 出題形式は「出題形式」欄に従う:
+  ・四肢択一: 「四つのうち最も不適当なものはどれか」「次のうち正しいものはどれか」型。options 4 つ、answer は正解の選択肢の文字列そのまま (A/B/C/D の記号不要)。type は "choice"。
+  ・記述式: 本試験二次の形式。設問は短答記述 (例「鉄筋工事における配筋検査の留意事項を 2 つ簡潔に述べよ」「コンクリート打設時の留意点を 80 字程度で述べよ」)。options は null。answer には模範解答の要点 (50-150 字) を入れる。keywords に採点キーワード 3-5 個を入れる (これが含まれれば部分正解扱い)。type は "free"。
+- 解説は 3-5 文。なぜ正解か、誤答はなぜ違うか (択一)、模範解答のポイント (記述)、現場の留意点を 1 文。
 
 JSON 配列でだけ返す (前置きや説明禁止)。配列の長さは ${items.length} 件、入力順:
 [
   {
     "category": "group_id",
     "difficulty": 3,
-    "type": "choice",
+    "type": "choice" | "free",
     "question": "...",
-    "options": ["...","...","...","..."],
-    "answer": "options のうちの正解",
+    "options": ["...","...","...","..."] または null,
+    "answer": "...",
     "keywords": ["..."],
     "explanation": "3-5 文",
     "claude_example": ""
@@ -5400,14 +5418,33 @@ app.post("/api/seko/sessions/start", async (req, res) => {
     const user = await ensureSekoUser(p, req.user.email);
     const examTarget = user.exam_target || "first_full";
     const shubetsu = user.shubetsu || null;
+    const { primary: primaryGroups, review: reviewGroups } = sekoGroupsForUser(examTarget, shubetsu);
     const allowedGenres = sekoGenresForUser(examTarget, shubetsu);
     if (!allowedGenres.length) return res.status(503).json({ error: "出題対象ジャンルがありません。受検種別 / 出題範囲の設定を確認してください。" });
     const SESSION_SIZE = 10;
 
-    // フォーカスジャンル指定 (集中セッション) があればそれだけ
+    // 集中セッション (genre 指定)
     const focus = (req.body?.genre || "").trim();
     const focusValid = focus && allowedGenres.includes(focus);
-    const targetGenres = focusValid ? [focus] : allowedGenres;
+    let targetGenres;
+    if (focusValid) {
+      targetGenres = [focus];
+    } else if (examTarget === "second_only" && reviewGroups.length) {
+      // 二次のみ受験でも一次の復習を 30% 混ぜる (二次解答に必要な基礎知識のため)
+      const primaryGenres = primaryGroups.flatMap((g) => (g.genres || []).map((x) => x.name));
+      const reviewGenres = reviewGroups.flatMap((g) => (g.genres || []).map((x) => x.name));
+      const wantPrimary = Math.ceil(SESSION_SIZE * 0.7);
+      const wantReview = SESSION_SIZE - wantPrimary;
+      const shuffle = (a) => { const c = a.slice(); for (let i = c.length-1; i>0; i--) { const j = Math.floor(Math.random()*(i+1)); [c[i],c[j]]=[c[j],c[i]]; } return c; };
+      targetGenres = [
+        ...shuffle(primaryGenres).slice(0, wantPrimary),
+        ...shuffle(reviewGenres).slice(0, wantReview),
+      ];
+      // 万一スライスで足りなければ全 allowed から補充
+      if (!targetGenres.length) targetGenres = allowedGenres;
+    } else {
+      targetGenres = allowedGenres;
+    }
 
     // 直近 出題済の質問 ID (再出題を避けるため 50 件)
     const { rows: recentRows } = await p.query(
@@ -5443,11 +5480,23 @@ app.post("/api/seko/sessions/start", async (req, res) => {
     const need = SESSION_SIZE - picked.length;
     if (need > 0) {
       const items = [];
+      const userLevel = user.level || 1;
       for (let i = 0; i < need; i++) {
         const g = targetGenres[Math.floor(Math.random() * targetGenres.length)];
         const groupId = SEKO_GENRE_TO_GROUP.get(g);
         const groupRow = SEKO_GROUP_BY_ID.get(groupId);
-        items.push({ genre: g, groupId, examLevel: groupRow?.exam_level || "1ji" });
+        // group の default_question_type と level で type 決定:
+        //   - 'choice'/'free' は固定
+        //   - 'mixed' は level<=2 で choice、>=3 で 50/50
+        let qtype = "choice";
+        const dt = groupRow?.default_question_type;
+        if (dt === "free") qtype = "free";
+        else if (dt === "choice") qtype = "choice";
+        else if (dt === "mixed") {
+          if (userLevel <= 2) qtype = "choice";
+          else qtype = Math.random() < 0.5 ? "choice" : "free";
+        }
+        items.push({ genre: g, groupId, examLevel: groupRow?.exam_level || "1ji", qtype });
       }
       try {
         const gen = await generateSekoQuestionsBatch(p, items, shubetsu);
