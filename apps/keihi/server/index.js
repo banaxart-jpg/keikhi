@@ -5099,6 +5099,50 @@ try {
   console.warn("[seko] genres.json load failed:", e.message);
 }
 
+// 起動時 seed ロード: seko_questions が空のときだけ手書きの seed を投入。
+// AI 生成が遅延・失敗してもセッションが即始まるよう、最低 20 問は seed で確保。
+async function loadSekoSeedIfEmpty() {
+  const p = getPool();
+  if (!p) return;
+  try {
+    const { rows } = await p.query(`SELECT count(*)::int AS n FROM seko_questions`);
+    if ((rows[0]?.n || 0) > 0) return;
+    const raw = fs.readFileSync(path.join(__dirname, "seko-seed.json"), "utf8");
+    const seed = JSON.parse(raw);
+    let inserted = 0;
+    for (const q of seed.questions || []) {
+      try {
+        await p.query(
+          `INSERT INTO seko_questions
+             (category, difficulty, type, question, options, answer, keywords, explanation,
+              claude_example, genre, group_id, exam_level, source)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'seed')`,
+          [
+            q.group_id || "uncategorized",
+            Number(q.difficulty) || 3,
+            q.type === "free" ? "free" : "choice",
+            String(q.question || "").trim(),
+            JSON.stringify(q.options || []),
+            String(q.answer || "").trim(),
+            JSON.stringify(q.keywords || []),
+            String(q.explanation || "").trim(),
+            q.claude_example || "",
+            q.genre,
+            q.group_id,
+            q.exam_level === "2ji" ? "2ji" : "1ji",
+          ]
+        );
+        inserted++;
+      } catch (e) { console.warn("[seko-seed] insert failed:", e.message); }
+    }
+    console.log(`[seko-seed] +${inserted} questions inserted from seed`);
+  } catch (e) {
+    console.warn("[seko-seed] load failed:", e.message);
+  }
+}
+// schema 起動完了後に seed を流し込む (FK 等に依存しない構造なので並列で OK)
+setTimeout(() => { loadSekoSeedIfEmpty().catch(() => {}); }, 3000);
+
 // exam_target + shubetsu でユーザーに出題して良い group 一覧を返す。
 // - exam_target='first_full' → 全 group (一次 + 二次)
 // - exam_target='second_only' → 二次 group + 一次の「二次解答に効く復習 group」(法規・施工管理法・仕上工事・建築学)
