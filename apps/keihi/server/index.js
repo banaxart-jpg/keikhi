@@ -778,6 +778,8 @@ async function ensureSchema() {
     `);
     // 既存テーブルに shubetsu カラム追加 (ALTER ... IF NOT EXISTS は PG 9.6+)
     await p.query(`ALTER TABLE seko_users ADD COLUMN IF NOT EXISTS shubetsu TEXT`);
+    // seko_questions に image_url カラム追加 (図解が要る問題で AI 生成 SVG を data URI で保存)
+    await p.query(`ALTER TABLE seko_questions ADD COLUMN IF NOT EXISTS image_url TEXT`);
     schemaMigrated = true;
     console.log("[schema] migration ok: records.drive_url + tasks + yado_bookings + seko_* ensured");
   } catch (e) {
@@ -5183,6 +5185,20 @@ ${lines}
   ・記述式: 本試験二次の形式。設問は短答記述 (例「鉄筋工事における配筋検査の留意事項を 2 つ簡潔に述べよ」「コンクリート打設時の留意点を 80 字程度で述べよ」)。options は null。answer には模範解答の要点 (50-150 字) を入れる。keywords に採点キーワード 3-5 個を入れる (これが含まれれば部分正解扱い)。type は "free"。
 - 解説は 3-5 文。なぜ正解か、誤答はなぜ違うか (択一)、模範解答のポイント (記述)、現場の留意点を 1 文。
 
+■ 図解 (svg) の指示 [重要]
+問題が「図がないと意図が伝わらない」「図があると明らかに理解しやすい」場合に限り、svg フィールドに inline SVG を入れる。
+該当例: 力のつりあい・梁の応力図 / ネットワーク工程表 (○ノードと矢印) / ガントチャート (棒) / 配筋詳細 / 基礎・断面詳細 / 足場の構成 / コンクリートのスランプ試験。
+不要なら svg は null。用語穴埋め・法規・概念問題などは null で良い。
+
+svg を出すときの厳密ルール:
+- 最小限の線画。viewBox="0 0 300 200" 固定、width="100%" 付き
+- 塗りつぶしは fill="none" 基本。線は stroke="#42455e" stroke-width="1.5"
+- 文字は font-family="sans-serif" font-size="11" fill="#42455e"
+- 矢印は <defs><marker id="arr">...</marker></defs> で <line marker-end="url(#arr)">
+- 30 要素以内 (子要素数)。複雑にしない
+- アニメーションや外部参照禁止 (<image> や <use href="..."> 不可)
+- 1 行で書いて改行禁止 (JSON のエスケープ事故を防ぐため)
+
 JSON 配列でだけ返す (前置きや説明禁止)。配列の長さは ${items.length} 件、入力順:
 [
   {
@@ -5194,7 +5210,8 @@ JSON 配列でだけ返す (前置きや説明禁止)。配列の長さは ${ite
     "answer": "...",
     "keywords": ["..."],
     "explanation": "3-5 文",
-    "claude_example": ""
+    "claude_example": "",
+    "svg": "<svg viewBox='0 0 300 200' width='100%' xmlns='http://www.w3.org/2000/svg'>...</svg>" または null
   },
   ... (合計 ${items.length} 件)
 ]`;
@@ -5211,12 +5228,23 @@ JSON 配列でだけ返す (前置きや説明禁止)。配列の長さは ${ite
   for (let i = 0; i < arr.length && i < items.length; i++) {
     const parsed = arr[i] || {};
     const it = items[i];
+    // svg があれば data URI に変換、明らかにおかしい (50 文字未満 / <svg なし) は捨てる
+    let imageUrl = null;
+    const svgRaw = typeof parsed.svg === "string" ? parsed.svg.trim() : null;
+    if (svgRaw && svgRaw.length > 50 && svgRaw.length < 6000 && svgRaw.startsWith("<svg") && svgRaw.endsWith("</svg>")) {
+      // 外部参照を含むものはセキュリティ上拒否
+      if (!/<\s*(script|foreignObject|use|image|iframe)\b/i.test(svgRaw)
+          && !/javascript:/i.test(svgRaw)
+          && !/(https?:)?\/\//.test(svgRaw)) {
+        imageUrl = "data:image/svg+xml;utf8," + encodeURIComponent(svgRaw);
+      }
+    }
     try {
       const ins = await p.query(
         `INSERT INTO seko_questions
            (category, difficulty, type, question, options, answer, keywords, explanation,
-            claude_example, genre, group_id, exam_level, source)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'generated')
+            claude_example, genre, group_id, exam_level, source, image_url)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'generated',$13)
          RETURNING *`,
         [
           parsed.category || it.groupId,
@@ -5231,6 +5259,7 @@ JSON 配列でだけ返す (前置きや説明禁止)。配列の長さは ${ite
           it.genre,
           it.groupId,
           it.examLevel === "2ji" ? "2ji" : "1ji",
+          imageUrl,
         ]
       );
       out.push(ins.rows[0]);
@@ -5248,8 +5277,9 @@ app.get("/api/seko/genres", (req, res) => {
   res.json(SEKO_GENRES_DATA);
 });
 
-// 学習進捗 (group / genre の正解 unique 数を集計)
-async function buildSekoProgress(p, email) {
+// 学習進捗 (group / genre の正解 unique 数を集計)。
+// examTarget / shubetsu に応じて、ユーザーに関係する group だけを返す。
+async function buildSekoProgress(p, email, examTarget, shubetsu) {
   const { rows: correctRows } = await p.query(
     `SELECT q.group_id, q.genre, COUNT(DISTINCT q.id)::int AS unique_correct
        FROM seko_progress pr
@@ -5260,7 +5290,19 @@ async function buildSekoProgress(p, email) {
   );
   const byGenre = new Map();
   for (const r of correctRows) byGenre.set(`${r.group_id}::${r.genre}`, r.unique_correct);
-  const groups = (SEKO_GENRES_DATA?.groups || []).map((g) => {
+
+  // 表示対象の group を絞る (例: 仕上ユーザーの radar に「二次: 躯体」は出さない)
+  const relevant = [];
+  for (const g of (SEKO_GENRES_DATA?.groups || [])) {
+    if (shubetsu) {
+      const rel = Array.isArray(g.shubetsu_relevance) ? g.shubetsu_relevance : null;
+      if (rel && !rel.includes(shubetsu)) continue;
+    }
+    if (examTarget === "second_only" && g.exam_level !== "2ji" && !SEKO_REVIEW_GROUPS_FOR_2JI.has(g.id)) continue;
+    relevant.push(g);
+  }
+
+  const groups = relevant.map((g) => {
     const genres = (g.genres || []).map((gen) => ({
       name: gen.name,
       target: gen.target_count || 10,
@@ -5268,7 +5310,8 @@ async function buildSekoProgress(p, email) {
     }));
     const totT = genres.reduce((s, x) => s + x.target, 0);
     const totC = genres.reduce((s, x) => s + x.correct, 0);
-    return { id: g.id, name: g.name, color: g.color || "#9ca3af", exam_level: g.exam_level || null, genres, target: totT, correct: totC };
+    const pct = totT ? Math.round((totC / totT) * 100) : 0;
+    return { id: g.id, name: g.name, color: g.color || "#9ca3af", exam_level: g.exam_level || null, genres, target: totT, correct: totC, pct };
   });
   return groups;
 }
@@ -5303,7 +5346,7 @@ app.get("/api/seko/me", async (req, res) => {
     await ensureSchema();
     const user = await ensureSekoUser(p, req.user.email);
     const [groups, streak] = await Promise.all([
-      buildSekoProgress(p, req.user.email),
+      buildSekoProgress(p, req.user.email, user.exam_target || "first_full", user.shubetsu || null),
       computeSekoStreak(p, req.user.email),
     ]);
     const { rows: poolRows } = await p.query(
@@ -5525,6 +5568,7 @@ app.post("/api/seko/sessions/start", async (req, res) => {
         genre: q.genre,
         group_id: q.group_id,
         exam_level: q.exam_level,
+        image_url: q.image_url || null,
       })),
     });
   } catch (err) {
