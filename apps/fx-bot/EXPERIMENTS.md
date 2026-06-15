@@ -369,6 +369,106 @@ DXY → 全 USD ペアの lag 1+ 時間相関は **すべて |0.03| 以下** = �
 
 ---
 
+## 実験 11: cointegration ベース統計裁定 + 機会主義的選択
+
+**日時**: 2026-06-15
+**user 提案**: 「lead-lag 駄目なら、通貨の縛りやめて、間違いなさそうな時に間違いなさそうな通貨買う」
+**仮説**: 各通貨ペアの spread z-score を毎時計算、|z| 最大のペアだけ trade すれば edge ?
+**スクリプト**: `/tmp/fx_pairarb.mjs`、`/tmp/fx_pair_v2.mjs`
+
+### 手法
+1. 11 通貨ペアの全期間 corr で「partner」を fix:
+   - usdjpy ↔ cadjpy (corr +0.885)
+   - gbpjpy ↔ eurjpy (+0.967)
+   - eurusd ↔ usdchf (-0.974)
+   - audusd ↔ audjpy (+0.860)
+   - nzdusd ↔ usdcad (-0.832)
+   等
+2. 毎 H1: spread = log(A) - β·log(B) を rolling 200 本回帰で算出 (look-ahead-free)
+3. spread z-score 計算
+4. **opportunistic 選択**: 全 11 ペアの中で |z| 最大だけ取る
+5. mean reversion (revert) or momentum (順張り) で entry、ATR スケール TP/SL
+
+### 結果 1: mean reversion (戻る方向にベット)
+
+| zT | TP/SL | sig | wr | avg net | total |
+|---|---|---|---|---|---|
+| 2.0 | 1/1.5 | 7799 | **60.0%** | -1.0 | -8123 |
+| 2.0 | 1/1 | 7799 | 49.1% | -1.3 | -10324 |
+| 3.0 | 1/1 | 1866 | 51.2% | -0.5 | -900 |
+| 勝ち組 only (gbpjpy/cadjpy/usdchf) | 1/1 | 4351 | 52.0% | -0.7 | -2833 |
+
+**60% 勝率出る (revert + TP1/SL1.5)** が、TP:SL の非対称で平均 -1.0 pips/trade = **コスト負け**。
+60% × 1 ATR + 40% × -1.5 ATR = 0 pips (= 期待値ゼロ)、cost -1 pip 引いて損失。
+
+### 結果 2: momentum (順方向にベット)
+
+| zT | TP/SL | sig | wr | avg net |
+|---|---|---|---|---|
+| 2.0 | 1/1 | 7799 | 46.6% | -2.1 |
+| 2.0 | 1.5/1 | 7799 | 36.9% | -2.3 |
+| 3.0 | 1/1 | 1866 | 45.1% | -2.9 |
+
+momentum 方向は完全に死亡。spread 乖離は **mean reversion 寄り**だが reward が小さくコスト負け。
+
+### Pair-level (best momentum config: zT=3 / TP=SL=ATR×1)
+| pair | sig | wr | avg net |
+|---|---|---|---|
+| **usdcad** | 197 | **55.8%** | **+0.8** |
+| usdjpy | 202 | 49.5% | +0.1 |
+| nzdusd | 194 | 48.5% | -1.5 |
+| その他 | ... | 40-48% | -1 〜 -6 |
+
+USD/CAD だけ slightly positive。signals 197 / 1.4 年。**ただし他 10 ペアが負け** なので全体マイナス。
+USD/CAD 単独でも +154 pips / 1.4 年 = 月 +10 pips ≒ 月 +1 円。
+ノイズと区別不可能。
+
+### 前後半 split (momentum |z|>3)
+- 前半: 44.6% / -3.0 pips
+- 後半: 46.1% / -2.6 pips
+- → どっちもほぼ同じだけ負け = 安定的に edge 無い
+
+### 結論
+
+cointegration ベース統計裁定も **retail H1 粒度では edge 無し**。
+- 60% 勝率は出るが TP/SL 非対称が打ち消す
+- USD/CAD だけ slightly positive だが ノイズ範囲
+- in-sample / out-of-sample で同じだけ負ける = regime fit ですらない、ただの負け
+
+理論的考察:
+- 統計裁定で edge 出すには通常 **両 leg simultaneously trading** が必要 (long A + short B)
+- 単一 leg の trade では mean reversion 方向は当たるが reversion magnitude が cost を超えない
+- = OANDA Japan retail にはアービトラージの余地が残ってない (HFT/banks が刈り取り済)
+
+### 全実験 1-11 の総括 (= 学術コンセンサスの再現)
+
+| アプローチ | 結果 |
+|---|---|
+| 単一指標 (RSI/EMA/BB) | edge 無し |
+| MTF alignment | edge 無し |
+| ATR スケール TP/SL | 中立 |
+| 時間帯フィルタ | edge 無し |
+| 通貨ペア変更 | 全 4 ペア edge 無し |
+| lead-lag 後追い | 存在せず |
+| 統計裁定 (cointegration) | edge 無し |
+
+**retail H1 粒度の TA で edge を見つけることは事実上不可能**、を 11 実験で実証。
+学術文献の通り。
+
+### 残選択肢
+- F. ML (overfitting 罠リスク高、実験 5/9/11 と同じパターンで死ぬ可能性大)
+- **I. 凍結** ← 推奨
+
+凍結する場合の収穫:
+1. fx-bot ミニアプリ自体は完成 (UI / API / DB / backtest engine / 4 戦略 / AI 最適化ループ)
+2. EXPERIMENTS.md = 「retail FX 戦略 検証実験記録」として価値ある
+3. バックテスト作法の知見 (look-ahead bias / 統計バイアス / regime fit / コスト計上 / pessimistic 同バー両 touch) を実装に焼き込み済
+4. 身銭ゼロで学術コンセンサスに到達
+
+→ user 最終判断待ち
+
+---
+
 ## メモ: バックテストの作法 (失敗から学んだこと)
 
 1. **look-ahead bias check**: entry 価格は signal 算出後に取得可能な価格か?
