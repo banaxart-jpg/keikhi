@@ -170,9 +170,22 @@ details summary::-webkit-details-marker { display: none; }
     <button class="btn-pri" id="tickBtn" onclick="manualTick()">
       <span class="icon">play_arrow</span> 即実行
     </button>
-    <button class="btn-pri" onclick="openSettings()">
-      <span class="icon">tune</span> 設定
+    <button class="btn-pri" id="optBtn" onclick="runOptimize()">
+      <span class="icon">tune</span> AI 提案
     </button>
+    <button class="btn-pri" onclick="openSettings()">
+      <span class="icon">settings</span> 設定
+    </button>
+  </div>
+
+  <!-- AI 最適化提案 (pending のみ) -->
+  <div class="card" id="optCard" style="display:none;">
+    <div class="label" style="color:var(--accent);">AI 最適化提案 <span id="optTime" style="text-transform:none;letter-spacing:0;color:var(--text3);font-weight:600;font-size:9px;"></span></div>
+    <div id="optBody"></div>
+    <div style="display:flex; gap:10px; margin-top:14px;">
+      <button class="btn-pri" id="optApply" style="flex:1;">適用</button>
+      <button class="pill" id="optReject" style="flex:1;">却下</button>
+    </div>
   </div>
 
   <!-- open trade -->
@@ -243,6 +256,13 @@ details summary::-webkit-details-marker { display: none; }
         <input id="setCdMin" type="number" min="0" style="flex:1;">
       </div>
     </div>
+    <div class="field" style="display:flex; align-items:center; gap:12px; padding: 10px 14px; background: rgba(15,118,110,0.06); border-radius: 12px;">
+      <div style="flex:1;">
+        <div style="font-size: 13px; font-weight: 700;">AI 提案を自動適用</div>
+        <div style="font-size: 10px; color: var(--text2); margin-top:2px;">±20% 以内 / ロット減方向のみ受理</div>
+      </div>
+      <div class="toggle" id="setAutoToggle" onclick="this.classList.toggle('on')"></div>
+    </div>
     <button class="btn-pri" onclick="saveSettings()" style="margin-top:8px;">保存</button>
     <button class="pill" onclick="closeSettings()" style="margin-top:10px; width:100%;">キャンセル</button>
   </div>
@@ -308,6 +328,7 @@ async function loadStatus() {
     renderOpenTrades(s.openTrades);
     renderDecisions(s.decisions);
     renderTrades(s.trades);
+    renderOptimization(s.optimizations, s.settings);
   } catch (e) {
     showErr("読み込み失敗: " + e.message);
   }
@@ -424,6 +445,73 @@ function renderTrades(trades) {
   }).join("");
 }
 
+// 直近 1 件の pending な最適化提案を表示
+function renderOptimization(opts, settings) {
+  const card = $("optCard");
+  const pending = (opts || []).find((o) => !o.applied && !o.rejected);
+  if (!pending) { card.style.display = "none"; return; }
+  card.style.display = "";
+  $("optTime").textContent = "・ " + new Date(pending.created_at).toLocaleString("ja-JP", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
+  const sug = pending.suggestions || {};
+  const sugKeys = Object.keys(sug);
+  const cur = settings || {};
+  const labelMap = {
+    confidence_threshold: "confidence 閾値",
+    take_profit_pips: "利確 (pips)",
+    stop_loss_pips: "損切 (pips)",
+    units_per_trade: "ロット",
+    max_trades_per_day: "1日上限",
+    cooldown_after_losses: "連敗クールダウン回",
+    cooldown_minutes: "クールダウン分",
+  };
+  let diff = "";
+  if (sugKeys.length) {
+    diff = `<div style="margin-bottom: 10px;"><table style="width:100%; font-size: 12px; border-collapse: collapse;">${sugKeys.map((k) => {
+      const c = cur[k], n = sug[k];
+      return `<tr><td style="padding:3px 0; color:var(--text2); font-weight:600;">${escapeHtml(labelMap[k] || k)}</td>
+        <td style="padding:3px 6px; color:var(--text3);">${escapeHtml(String(c))}</td>
+        <td style="padding:3px 6px; color:var(--accent);">→ ${escapeHtml(String(n))}</td></tr>`;
+    }).join("")}</table></div>`;
+  } else {
+    diff = `<div style="font-size: 12px; color: var(--text2); margin-bottom: 10px;">変更提案なし (現状維持を推奨)</div>`;
+  }
+  $("optBody").innerHTML = `
+    <div style="font-size: 13px; font-weight: 700; margin-bottom: 6px;">${escapeHtml(pending.analysis || "")}</div>
+    ${diff}
+    <div style="font-size: 11px; color: var(--text2); line-height: 1.5;">${escapeHtml(pending.reasoning || "")}</div>
+  `;
+  $("optApply").onclick = async () => {
+    try {
+      const r = await api("POST", `/api/fx/optimize/${pending.id}/apply`);
+      showErr(`適用: ${JSON.stringify(r.applied)}`);
+      setTimeout(() => showErr(null), 4000);
+      await loadStatus();
+    } catch (e) { showErr(e.message); }
+  };
+  $("optReject").onclick = async () => {
+    try {
+      await api("POST", `/api/fx/optimize/${pending.id}/reject`);
+      await loadStatus();
+    } catch (e) { showErr(e.message); }
+  };
+  // sug が空なら apply ボタン無効化
+  $("optApply").disabled = !sugKeys.length;
+}
+
+window.runOptimize = async function () {
+  const btn = $("optBtn");
+  btn.disabled = true;
+  try {
+    const r = await api("POST", "/api/fx/optimize");
+    if (r.skipped) showErr("SKIP: " + r.reason);
+    else if (r.error) showErr("AI エラー: " + r.error);
+    else showErr("AI 提案を生成しました");
+    setTimeout(() => showErr(null), 4000);
+    await loadStatus();
+  } catch (e) { showErr(e.message); }
+  finally { btn.disabled = false; }
+};
+
 window.toggleBot = async function () {
   try {
     const cur = $("botToggle").classList.contains("on");
@@ -467,6 +555,7 @@ window.openSettings = async function () {
     $("setMaxDay").value = st.max_trades_per_day ?? 20;
     $("setCdN").value = st.cooldown_after_losses ?? 3;
     $("setCdMin").value = st.cooldown_minutes ?? 60;
+    $("setAutoToggle").className = "toggle" + (st.auto_apply_optimizations ? " on" : "");
     $("settingsSheet").classList.add("open");
   } catch (e) { showErr(e.message); }
 };
@@ -484,6 +573,7 @@ window.saveSettings = async function () {
     max_trades_per_day: Math.max(1, parseInt($("setMaxDay").value, 10) || 20),
     cooldown_after_losses: Math.max(0, parseInt($("setCdN").value, 10) || 0),
     cooldown_minutes: Math.max(0, parseInt($("setCdMin").value, 10) || 60),
+    auto_apply_optimizations: $("setAutoToggle").classList.contains("on"),
   };
   try {
     await api("PUT", "/api/fx/settings", body);

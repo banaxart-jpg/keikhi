@@ -45,8 +45,27 @@ gcloud scheduler jobs create http fx-bot-tick \
 - `index.html` — PWA 一式 (ホーム + 設定モーダル + サインイン overlay)
 - `README.md` — これ
 
+## AI 自動最適化ループ
+
+直近 7 日のトレード成績 (勝率 / PF / 平均勝ち負け / 最大連敗 / 平均 confidence)
+を Gemini に渡して、設定の調整案を生成。
+
+- ホーム「AI 提案」ボタンで手動実行
+- Cloud Scheduler から定期実行も可: `POST /api/internal/fx/optimize` (X-Internal-Token)
+- 提案は `fx_optimizations` テーブルに保存、未適用のものはホームに自動表示
+- 「適用」「却下」のいずれかを owner が選ぶ
+
+### 自動適用モード (ガードレール付き)
+設定モーダルで「AI 提案を自動適用」を ON にすると、次の安全条件を満たした
+変更だけがその場で適用される:
+- 数値変更は ±20% 以内のみ
+- confidence_threshold は 0.5〜0.95 にクリップ
+- TP/SL は 1〜100 pips にクリップ
+- cooldown_minutes は 5〜720 分にクリップ
+- units_per_trade は **減方向のみ** 自動適用 (増は手動でしか変えられない)
+- oanda_env / instrument の変更は受理しない (安全フィールド)
+
 ## 残課題
-- AI 自動最適化ループ (取引履歴を AI に分析させて設定を自動チューニング)
 - 損益カーブの可視化 (sparkline チャート)
 - バックテスト (過去 candle で AI 判断を再生)
 - 複数通貨ペア並行運用

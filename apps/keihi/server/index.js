@@ -843,6 +843,24 @@ async function ensureSchema() {
       )
     `);
     await p.query(`INSERT INTO fx_settings (id) VALUES (1) ON CONFLICT (id) DO NOTHING`);
+    // auto_apply_optimizations は後から追加 (既存 deploy のため IF NOT EXISTS)
+    await p.query(`ALTER TABLE fx_settings ADD COLUMN IF NOT EXISTS auto_apply_optimizations BOOLEAN NOT NULL DEFAULT false`);
+    await p.query(`
+      CREATE TABLE IF NOT EXISTS fx_optimizations (
+        id              BIGSERIAL PRIMARY KEY,
+        stats           JSONB,
+        analysis        TEXT,
+        suggestions     JSONB,
+        reasoning       TEXT,
+        applied         BOOLEAN NOT NULL DEFAULT false,
+        applied_changes JSONB,
+        applied_at      TIMESTAMPTZ,
+        rejected        BOOLEAN NOT NULL DEFAULT false,
+        rejected_at     TIMESTAMPTZ,
+        created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+      )
+    `);
+    await p.query("CREATE INDEX IF NOT EXISTS fx_opt_created_idx ON fx_optimizations (created_at DESC)");
 
     schemaMigrated = true;
     console.log("[schema] migration ok: records.drive_url + tasks + yado_bookings + seko_* + fx_* ensured");
@@ -6164,7 +6182,12 @@ app.get("/api/fx/status", async (req, res) => {
         WHERE kind = 'closed' AND closed_at > now() - interval '7 days'
         GROUP BY d ORDER BY d DESC`
     );
-    res.json({ settings, summary, openTrades, decisions, trades, dailyPnl });
+    const { rows: optimizations } = await p.query(
+      `SELECT id, analysis, suggestions, reasoning, applied, applied_changes,
+              applied_at, rejected, rejected_at, created_at
+         FROM fx_optimizations ORDER BY id DESC LIMIT 10`
+    );
+    res.json({ settings, summary, openTrades, decisions, trades, dailyPnl, optimizations });
   } catch (err) {
     console.error("[fx] status err:", err);
     res.status(500).json({ error: err.message });
@@ -6213,6 +6236,7 @@ app.put("/api/fx/settings", async (req, res) => {
     confidence_threshold: (v) => typeof v === "number" && v >= 0 && v <= 1,
     cooldown_after_losses: (v) => Number.isInteger(v) && v >= 0 && v <= 20,
     cooldown_minutes: (v) => Number.isInteger(v) && v >= 0 && v <= 1440,
+    auto_apply_optimizations: (v) => typeof v === "boolean",
   };
   const updates = [];
   const values = [];
@@ -6244,6 +6268,254 @@ app.post("/api/fx/close/:tradeId", async (req, res) => {
     const r = await fxOanda.closeTrade(ctx, req.params.tradeId);
     res.json({ ok: true, raw: r });
   } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ───── AI 自動最適化ループ ─────
+// 直近 N トレードの成績を Gemini に分析させ、設定変更案を提案 → DB に保存。
+// auto_apply_optimizations=true ならガードレール内で自動適用。
+
+async function fxComputeStats(p) {
+  const { rows: trades } = await p.query(
+    `SELECT id, side, units, entry_price, close_price, pnl, confidence,
+            opened_at, closed_at
+       FROM fx_trades
+      WHERE kind = 'closed' AND closed_at > now() - interval '7 days'
+      ORDER BY closed_at DESC LIMIT 100`
+  );
+  if (!trades.length) return { count: 0 };
+  const wins = trades.filter((t) => Number(t.pnl) > 0);
+  const losses = trades.filter((t) => Number(t.pnl) < 0);
+  const totalPnl = trades.reduce((s, t) => s + Number(t.pnl || 0), 0);
+  const avgWin = wins.length ? wins.reduce((s, t) => s + Number(t.pnl), 0) / wins.length : 0;
+  const avgLoss = losses.length ? losses.reduce((s, t) => s + Number(t.pnl), 0) / losses.length : 0;
+  const pf = (losses.length === 0 || avgLoss === 0)
+    ? null
+    : Math.abs((avgWin * wins.length) / (avgLoss * losses.length));
+  // 連続損失の最大長
+  let maxConsLoss = 0, cur = 0;
+  for (const t of [...trades].reverse()) {
+    if (Number(t.pnl) < 0) { cur++; maxConsLoss = Math.max(maxConsLoss, cur); }
+    else cur = 0;
+  }
+  // confidence の平均
+  const avgConf = trades.filter((t) => t.confidence != null).length
+    ? trades.reduce((s, t) => s + Number(t.confidence || 0), 0) / trades.length
+    : null;
+  return {
+    count: trades.length,
+    wins: wins.length,
+    losses: losses.length,
+    winRate: wins.length / trades.length,
+    totalPnl,
+    avgWin,
+    avgLoss,
+    profitFactor: pf,
+    maxConsLoss,
+    avgConfidence: avgConf,
+    sampleTrades: trades.slice(0, 30).map((t) => ({
+      side: t.side, units: t.units, pnl: Number(t.pnl),
+      confidence: t.confidence != null ? Number(t.confidence) : null,
+      closed_at: t.closed_at,
+    })),
+  };
+}
+
+async function runFxOptimize(p) {
+  const settings = await fxLoadSettings(p);
+  const stats = await fxComputeStats(p);
+  if (stats.count < 10) {
+    return { skipped: true, reason: `分析に必要なトレード数 (10件) に届かず (現在 ${stats.count} 件)` };
+  }
+  const prompt = `あなたは FX スキャル / デイトレ戦略の最適化アドバイザ。
+直近トレードの成績から、現在の戦略設定の調整案を提案してください。
+
+【現在の設定】
+- confidence_threshold: ${settings.confidence_threshold} (AI 信頼度の発注閾値)
+- take_profit_pips: ${settings.take_profit_pips}
+- stop_loss_pips: ${settings.stop_loss_pips}
+- units_per_trade: ${settings.units_per_trade}
+- max_trades_per_day: ${settings.max_trades_per_day}
+- cooldown_after_losses: ${settings.cooldown_after_losses}
+- cooldown_minutes: ${settings.cooldown_minutes}
+
+【直近 7 日の成績】
+- 取引数: ${stats.count} (勝 ${stats.wins} / 負 ${stats.losses})
+- 勝率: ${(stats.winRate * 100).toFixed(1)}%
+- 通算損益: ${stats.totalPnl.toFixed(0)} 円
+- 平均勝ち: ${stats.avgWin.toFixed(2)}
+- 平均負け: ${stats.avgLoss.toFixed(2)}
+- プロフィットファクター: ${stats.profitFactor?.toFixed(2) ?? "-"}
+- 最大連敗: ${stats.maxConsLoss}
+- 平均 confidence: ${stats.avgConfidence?.toFixed(2) ?? "-"}
+
+【調整方針】
+- 勝率 50% 未満なら confidence_threshold を上げる方向、RR を見直す
+- 平均負けが平均勝ちより大きすぎるなら stop_loss を狭くするか take_profit を広く
+- 最大連敗が 3 以上なら cooldown を強化
+- 過剰トレードなら max_trades_per_day を下げる
+- 提案は 1-3 個に絞り、変更幅は穏当に (±20% 程度)
+- 自信のない提案や十分なデータ不足を感じたら suggestions を空 {} にしてよい
+
+JSON でだけ返す (前置きや説明禁止):
+{
+  "analysis": "1-2 文で現状の評価",
+  "suggestions": {
+    "confidence_threshold": 0.75,   // 変更不要なら省略
+    "take_profit_pips": 12,
+    "stop_loss_pips": 8,
+    "cooldown_after_losses": 3,
+    "cooldown_minutes": 90,
+    "max_trades_per_day": 15
+  },
+  "reasoning": "2-3 文でなぜこの変更案にしたか"
+}`;
+  let parsed;
+  try {
+    const { result } = await callGeminiWithFallback(prompt, {
+      primaryModel: "gemini-2.5-flash",
+      maxOutputTokens: 1500,
+      jsonMode: true,
+    });
+    const text = (result.response.text() || "").trim();
+    const m = text.match(/\{[\s\S]*\}/);
+    if (!m) throw new Error("AI 応答 JSON 取れず");
+    parsed = JSON.parse(m[0]);
+  } catch (e) {
+    return { error: e.message };
+  }
+
+  const suggestions = (parsed.suggestions && typeof parsed.suggestions === "object") ? parsed.suggestions : {};
+  const ins = await p.query(
+    `INSERT INTO fx_optimizations (stats, analysis, suggestions, reasoning)
+     VALUES ($1, $2, $3, $4) RETURNING *`,
+    [JSON.stringify(stats), String(parsed.analysis || "").slice(0, 1000),
+     JSON.stringify(suggestions), String(parsed.reasoning || "").slice(0, 2000)]
+  );
+  const opt = ins.rows[0];
+
+  // ガードレール付きで auto-apply
+  let appliedChanges = null;
+  if (settings.auto_apply_optimizations && Object.keys(suggestions).length) {
+    appliedChanges = await fxApplyOptimizationSafe(p, settings, suggestions);
+    if (appliedChanges && Object.keys(appliedChanges).length) {
+      await p.query(
+        `UPDATE fx_optimizations SET applied=true, applied_at=now(), applied_changes=$1 WHERE id=$2`,
+        [JSON.stringify(appliedChanges), opt.id]
+      );
+    }
+  }
+  return { optimization: opt, appliedChanges };
+}
+
+// 自動適用時のセーフガード:
+// - 数値は ±20% 以内のみ受理 (急変防止)
+// - confidence_threshold: 0.5-0.95 にクリップ
+// - units_per_trade は減方向のみ (増は手動)
+// - oanda_env / instrument の変更は受理しない
+async function fxApplyOptimizationSafe(p, cur, sug) {
+  const applied = {};
+  const numKey = (k, min, max) => {
+    if (sug[k] == null) return;
+    const newV = Number(sug[k]);
+    const curV = Number(cur[k]);
+    if (!Number.isFinite(newV) || !Number.isFinite(curV)) return;
+    const bounded = Math.max(min, Math.min(max, newV));
+    const within20pct = bounded >= curV * 0.8 && bounded <= curV * 1.2;
+    if (within20pct && Math.abs(bounded - curV) / Math.max(1e-6, curV) > 0.02) {
+      applied[k] = bounded;
+    }
+  };
+  numKey("confidence_threshold", 0.5, 0.95);
+  numKey("take_profit_pips", 1, 100);
+  numKey("stop_loss_pips", 1, 100);
+  numKey("cooldown_minutes", 5, 720);
+
+  if (sug.cooldown_after_losses != null) {
+    const v = Number(sug.cooldown_after_losses);
+    if (Number.isInteger(v) && v >= 0 && v <= 10) applied.cooldown_after_losses = v;
+  }
+  if (sug.max_trades_per_day != null) {
+    const v = Number(sug.max_trades_per_day);
+    const cv = Number(cur.max_trades_per_day);
+    if (Number.isInteger(v) && v >= 1 && v <= 100 && v <= cv * 1.2 && v >= cv * 0.8) {
+      applied.max_trades_per_day = v;
+    }
+  }
+  if (sug.units_per_trade != null) {
+    // 減方向のみ自動適用
+    const v = Math.floor(Number(sug.units_per_trade));
+    if (v >= 1 && v < Number(cur.units_per_trade)) applied.units_per_trade = v;
+  }
+
+  if (!Object.keys(applied).length) return applied;
+
+  const fields = Object.keys(applied);
+  const values = fields.map((k) => applied[k]);
+  const sets = fields.map((k, i) => `${k} = $${i + 1}`).join(", ");
+  await p.query(`UPDATE fx_settings SET ${sets}, updated_at = now() WHERE id = 1`, values);
+  return applied;
+}
+
+app.post("/api/fx/optimize", async (req, res) => {
+  if (!requireFxOwner(req, res)) return;
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  try {
+    const r = await runFxOptimize(p);
+    res.json(r);
+  } catch (err) {
+    console.error("[fx] optimize err:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post("/api/fx/optimize/:id/apply", async (req, res) => {
+  if (!requireFxOwner(req, res)) return;
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  try {
+    const { rows } = await p.query(`SELECT * FROM fx_optimizations WHERE id = $1`, [req.params.id]);
+    const opt = rows[0];
+    if (!opt) return res.status(404).json({ error: "not found" });
+    if (opt.applied) return res.status(400).json({ error: "既に適用済" });
+    if (opt.rejected) return res.status(400).json({ error: "却下済" });
+    const settings = await fxLoadSettings(p);
+    const applied = await fxApplyOptimizationSafe(p, settings, opt.suggestions || {});
+    await p.query(
+      `UPDATE fx_optimizations SET applied=true, applied_at=now(), applied_changes=$1 WHERE id=$2`,
+      [JSON.stringify(applied), opt.id]
+    );
+    res.json({ ok: true, applied });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post("/api/fx/optimize/:id/reject", async (req, res) => {
+  if (!requireFxOwner(req, res)) return;
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  try {
+    await p.query(
+      `UPDATE fx_optimizations SET rejected=true, rejected_at=now() WHERE id=$1`,
+      [req.params.id]
+    );
+    res.json({ ok: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post("/api/internal/fx/optimize", async (req, res) => {
+  const tok = req.get("X-Internal-Token") || "";
+  if (!process.env.INTERNAL_TICK_TOKEN || tok !== process.env.INTERNAL_TICK_TOKEN) {
+    return res.status(403).json({ error: "forbidden" });
+  }
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  try {
+    const r = await runFxOptimize(p);
+    res.json(r);
+  } catch (err) {
+    console.error("[fx] internal optimize err:", err);
     res.status(500).json({ error: err.message });
   }
 });
