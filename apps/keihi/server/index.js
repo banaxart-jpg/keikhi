@@ -5248,20 +5248,6 @@ ${lines}
   ・記述式: 本試験二次の形式。設問は短答記述 (例「鉄筋工事における配筋検査の留意事項を 2 つ簡潔に述べよ」「コンクリート打設時の留意点を 80 字程度で述べよ」)。options は null。answer には模範解答の要点 (50-150 字) を入れる。keywords に採点キーワード 3-5 個を入れる (これが含まれれば部分正解扱い)。type は "free"。
 - 解説は 3-5 文。なぜ正解か、誤答はなぜ違うか (択一)、模範解答のポイント (記述)、現場の留意点を 1 文。
 
-■ 図解 (svg) の指示 [重要]
-問題が「図がないと意図が伝わらない」「図があると明らかに理解しやすい」場合に限り、svg フィールドに inline SVG を入れる。
-該当例: 力のつりあい・梁の応力図 / ネットワーク工程表 (○ノードと矢印) / ガントチャート (棒) / 配筋詳細 / 基礎・断面詳細 / 足場の構成 / コンクリートのスランプ試験。
-不要なら svg は null。用語穴埋め・法規・概念問題などは null で良い。
-
-svg を出すときの厳密ルール:
-- 最小限の線画。viewBox="0 0 300 200" 固定、width="100%" 付き
-- 塗りつぶしは fill="none" 基本。線は stroke="#42455e" stroke-width="1.5"
-- 文字は font-family="sans-serif" font-size="11" fill="#42455e"
-- 矢印は <defs><marker id="arr">...</marker></defs> で <line marker-end="url(#arr)">
-- 30 要素以内 (子要素数)。複雑にしない
-- アニメーションや外部参照禁止 (<image> や <use href="..."> 不可)
-- 1 行で書いて改行禁止 (JSON のエスケープ事故を防ぐため)
-
 JSON 配列でだけ返す (前置きや説明禁止)。配列の長さは ${items.length} 件、入力順:
 [
   {
@@ -5273,35 +5259,29 @@ JSON 配列でだけ返す (前置きや説明禁止)。配列の長さは ${ite
     "answer": "...",
     "keywords": ["..."],
     "explanation": "3-5 文",
-    "claude_example": "",
-    "svg": "<svg viewBox='0 0 300 200' width='100%' xmlns='http://www.w3.org/2000/svg'>...</svg>" または null
+    "claude_example": ""
   },
   ... (合計 ${items.length} 件)
 ]`;
-  const { result } = await callGeminiWithFallback(prompt, {
+  // 15 秒のハードタイムアウト + jsonMode で構造保証。
+  const geminiP = callGeminiWithFallback(prompt, {
     primaryModel: "gemini-2.5-flash",
-    maxOutputTokens: Math.min(8000, 800 + items.length * 600),
+    maxOutputTokens: Math.min(5000, 600 + items.length * 500),
+    jsonMode: true,
   });
+  const timeoutP = new Promise((_, rej) => setTimeout(() => rej(new Error("Gemini タイムアウト (15s)")), 15000));
+  const { result } = await Promise.race([geminiP, timeoutP]);
   const text = (result.response.text() || "").trim();
   const m = text.match(/\[[\s\S]*\]/);
-  if (!m) throw new Error("AI レスポンスから JSON 配列取れず");
+  if (!m) throw new Error("AI レスポンスから JSON 配列取れず: " + text.slice(0, 100));
   const arr = JSON.parse(m[0]);
   if (!Array.isArray(arr)) throw new Error("配列ではない");
   const out = [];
   for (let i = 0; i < arr.length && i < items.length; i++) {
     const parsed = arr[i] || {};
     const it = items[i];
-    // svg があれば data URI に変換、明らかにおかしい (50 文字未満 / <svg なし) は捨てる
+    // 図解は当面オフ (jsonMode で <svg> を string に詰めると Gemini が JSON 壊しがち)
     let imageUrl = null;
-    const svgRaw = typeof parsed.svg === "string" ? parsed.svg.trim() : null;
-    if (svgRaw && svgRaw.length > 50 && svgRaw.length < 6000 && svgRaw.startsWith("<svg") && svgRaw.endsWith("</svg>")) {
-      // 外部参照を含むものはセキュリティ上拒否
-      if (!/<\s*(script|foreignObject|use|image|iframe)\b/i.test(svgRaw)
-          && !/javascript:/i.test(svgRaw)
-          && !/(https?:)?\/\//.test(svgRaw)) {
-        imageUrl = "data:image/svg+xml;utf8," + encodeURIComponent(svgRaw);
-      }
-    }
     try {
       const ins = await p.query(
         `INSERT INTO seko_questions
