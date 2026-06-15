@@ -283,6 +283,11 @@ details summary::-webkit-details-marker { display: none; }
       <div class="field-lbl">採用とみなす confidence 閾値</div>
       <input id="btConf" type="number" min="0" max="1" step="0.05" value="0.7">
     </div>
+    <div class="field">
+      <div class="field-lbl">想定コスト (round-trip pips) ※ スプレッド + スリッページ</div>
+      <input id="btCost" type="number" min="0" max="10" step="0.1" value="1">
+      <div style="font-size:10px;color:var(--text2);margin-top:4px;">USD/JPY なら 0.5-1.5 が現実的。0 にすると look-ahead-free でも"見かけ上"よく見える</div>
+    </div>
     <button class="btn-pri" onclick="submitBacktest()" style="margin-top:8px;">開始 (バックグラウンド)</button>
     <button class="pill" onclick="closeBacktest()" style="margin-top:10px; width:100%;">キャンセル</button>
   </div>
@@ -733,6 +738,7 @@ window.submitBacktest = async function () {
     tp_pips: parseFloat($("btTp").value) || 10,
     sl_pips: parseFloat($("btSl").value) || 10,
     confidence_threshold: parseFloat($("btConf").value) || 0.7,
+    cost_pips: Math.max(0, parseFloat($("btCost").value) || 1.0),
   };
   if (src === "csv") {
     const csv = $("btCsv").value.trim();

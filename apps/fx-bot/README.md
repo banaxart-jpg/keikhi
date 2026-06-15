@@ -9,6 +9,32 @@ OANDA × Gemini で 1 通貨単位の AI 自動売買 (owner 専用)。
 hot path から Gemini を外したので: 高速 / 再現性 / ブレない / コスト最小。
 AI はバックテスト結果を眺めて「fast=12 → 10 に下げよう」みたいに提案する役。
 
+## 戦略最適化に関する注意 (重要)
+
+シンプルな TA 戦略 + 1 年データの最適化で「勝率 65%」みたいな数字が出る場合は
+ほぼ確実に **look-ahead bias** か **regime fit** (= 後付けフィッティング)。
+
+look-ahead bias の典型: シグナル算出に使った candle の高安を、entry 後の
+TP/SL 判定にも流用する。本コードの backtest engine では:
+- シグナル window = candles[i-WINDOW..i-1] (day i-1 末)
+- entry = candles[i].open (day i 寄り、シグナル後最初に取得可能な価格)
+- future = candles[i..i+FUTURE-1] (entry 後の値動きを TP/SL チェック)
+
+これで「シグナルから entry までの 1 日分のサヤを無料で貰う」事故が防がれる。
+
+加えて:
+- 同バー内で TP と SL を両方触ったら **SL 優先 (pessimistic)** とみなす
+- spread + slippage を round-trip cost_pips (デフォルト 1 pip) として TP/SL
+  閾値をシフト、損益にも反映
+
+これらを入れた上で「日足 USD/JPY の simple TA に 60% 越えの edge は無い」
+というのが honest な結論 (学術コンセンサスと同じ)。エッジを探すなら:
+- 複数指標の組合せ + 時間帯 / セッションフィルタ
+- ニュースイベント回避 (NFP, 日銀, FOMC)
+- ボラレジーム (ATR) でルール切替
+- ML / ニューラル系へ移行
+あたり。
+
 ## 内蔵戦略 (4 種、apps/keihi/server/fx-lib/strategies.js)
 
 | ID | 名前 | 中身 |

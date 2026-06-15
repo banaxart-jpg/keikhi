@@ -921,6 +921,8 @@ async function ensureSchema() {
     // fx_backtests: 戦略 + パラメータを記録 (どの戦略を試したか後で見るため)
     await p.query(`ALTER TABLE fx_backtests ADD COLUMN IF NOT EXISTS strategy_name TEXT`);
     await p.query(`ALTER TABLE fx_backtests ADD COLUMN IF NOT EXISTS strategy_params JSONB`);
+    // スプレッド + スリッページの想定コスト (round-trip pips)。デフォルト 1 pip
+    await p.query(`ALTER TABLE fx_backtests ADD COLUMN IF NOT EXISTS cost_pips NUMERIC NOT NULL DEFAULT 1.0`);
 
     schemaMigrated = true;
     console.log("[schema] migration ok: records.drive_url + tasks + yado_bookings + seko_* + fx_* ensured");
@@ -6649,27 +6651,40 @@ async function runFxBacktest(p, btId, preloadedCandles) {
       aiDecide: fxDecide,
       granularity: bt.granularity,
     };
+    const costPips = Number(bt.cost_pips ?? 1.0);
+    const halfCost = costPips / 2;
     for (let i = WINDOW; i < candles.length - FUTURE; i += SAMPLE) {
+      // シグナル window = candles[i-WINDOW..i-1] (day i-1 末でシグナル決定)
       const window = candles.slice(i - WINDOW, i);
+      // entry = candles[i].open (day i 寄り。シグナル後最初に入手可能な価格、look-ahead bias 回避)
+      const entry = candles[i].o;
+      // future = candles[i..i+FUTURE-1] (entry 後の値動き)
       const future = candles.slice(i, i + FUTURE);
-      const entry = candles[i].c;
 
       const decision = await fxRunStrategy(strategy, window, strategyParams, bt.instrument, ctxStrat);
 
       let hitTp = false, hitSl = false, exitPrice = null, barsToExit = null;
+      // TP/SL 閾値: コスト分シフト (entry slip で SL は早めに、TP は遠めに)
       if (decision.decision === "LONG") {
-        const tp = entry + tpPips * pip;
-        const sl = entry - slPips * pip;
+        const tp = entry + (tpPips + halfCost) * pip;
+        const sl = entry - (slPips - halfCost) * pip;
         for (let j = 0; j < future.length; j++) {
-          if (future[j].h >= tp) { hitTp = true; exitPrice = tp; barsToExit = j + 1; break; }
-          if (future[j].l <= sl) { hitSl = true; exitPrice = sl; barsToExit = j + 1; break; }
+          const tpTouch = future[j].h >= tp;
+          const slTouch = future[j].l <= sl;
+          // 同バーで両方 → pessimistic に SL 優先
+          if (tpTouch && slTouch) { hitSl = true; exitPrice = sl; barsToExit = j + 1; break; }
+          if (tpTouch)            { hitTp = true; exitPrice = tp; barsToExit = j + 1; break; }
+          if (slTouch)            { hitSl = true; exitPrice = sl; barsToExit = j + 1; break; }
         }
       } else if (decision.decision === "SHORT") {
-        const tp = entry - tpPips * pip;
-        const sl = entry + slPips * pip;
+        const tp = entry - (tpPips + halfCost) * pip;
+        const sl = entry + (slPips - halfCost) * pip;
         for (let j = 0; j < future.length; j++) {
-          if (future[j].l <= tp) { hitTp = true; exitPrice = tp; barsToExit = j + 1; break; }
-          if (future[j].h >= sl) { hitSl = true; exitPrice = sl; barsToExit = j + 1; break; }
+          const tpTouch = future[j].l <= tp;
+          const slTouch = future[j].h >= sl;
+          if (tpTouch && slTouch) { hitSl = true; exitPrice = sl; barsToExit = j + 1; break; }
+          if (tpTouch)            { hitTp = true; exitPrice = tp; barsToExit = j + 1; break; }
+          if (slTouch)            { hitSl = true; exitPrice = sl; barsToExit = j + 1; break; }
         }
       }
       // PASS は exit なし
@@ -6678,9 +6693,19 @@ async function runFxBacktest(p, btId, preloadedCandles) {
       let pnlPips = 0;
       if (wouldTake) {
         taken++;
-        if (hitTp) { wins++; pnlPips = tpPips; }
-        else if (hitSl) { losses++; pnlPips = -slPips; }
-        else { timeouts++; pnlPips = 0; }
+        if (hitTp) { wins++; pnlPips = tpPips - costPips; }
+        else if (hitSl) { losses++; pnlPips = -slPips - costPips; }
+        else {
+          // 時間切れ: future 最終 close で決済 (cost 込み)
+          timeouts++;
+          const closeP = future[future.length - 1].c;
+          const grossPips = decision.decision === "LONG"
+            ? (closeP - entry) / pip
+            : (entry - closeP) / pip;
+          pnlPips = grossPips - costPips;
+          exitPrice = closeP;
+          barsToExit = future.length;
+        }
         totalPnl += pnlPips;
       }
       if (decision.decision === "LONG") longCnt++;
@@ -6768,6 +6793,7 @@ app.post("/api/fx/backtest", async (req, res) => {
   // 戦略選択
   const strategy = String(b.strategy || "ema_crossover");
   const stratParams = (b.strategy_params && typeof b.strategy_params === "object") ? b.strategy_params : {};
+  const costPips = Math.max(0, Math.min(10, Number(b.cost_pips ?? 1.0)));
 
   // ai_vision の場合は sample_rate を最小 20 に強制 (コスト爆発防止)
   const effSample = strategy === "ai_vision" ? Math.max(20, sampleRate) : sampleRate;
@@ -6776,10 +6802,10 @@ app.post("/api/fx/backtest", async (req, res) => {
     const ins = await p.query(
       `INSERT INTO fx_backtests
          (instrument, granularity, from_time, to_time, tp_pips, sl_pips,
-          confidence_threshold, sample_rate, status, strategy_name, strategy_params)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'queued',$9,$10) RETURNING id`,
+          confidence_threshold, sample_rate, status, strategy_name, strategy_params, cost_pips)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'queued',$9,$10,$11) RETURNING id`,
       [instrument, granularity, fromTime.toISOString(), toTime.toISOString(),
-       tpPips, slPips, ct, effSample, strategy, JSON.stringify(stratParams)]
+       tpPips, slPips, ct, effSample, strategy, JSON.stringify(stratParams), costPips]
     );
     const btId = Number(ins.rows[0].id);
     runFxBacktest(p, btId, preloadedCandles).catch((e) => console.error("[fx-bt] runner err:", e));
@@ -6804,6 +6830,7 @@ app.get("/api/fx/backtests", async (req, res) => {
               confidence_threshold, sample_rate, status, progress, candle_count,
               total_predictions, trades_taken, wins, losses, timeouts,
               total_pnl_pips, profit_factor, win_rate, conf_buckets,
+              strategy_name, strategy_params, cost_pips,
               error, created_at, finished_at
          FROM fx_backtests ORDER BY id DESC LIMIT 20`
     );
