@@ -366,6 +366,8 @@ const STORAGE_KEY = "seikyu_records";
 const SEIKYU_COL = "seikyu_invoices";   // Firestore コレクション (社内 3 アカウント共有)
 let db = null;                          // Firestore instance、setupFirestoreSync で初期化
 let lastSnapshotIds = [];               // 直近 snapshot の id 集合 (saveBills の差分削除用)
+let lastSyncedState = new Map();        // billId -> 直近 remote で見た JSON 文字列。差分の無い bill は再 write しない (PC の古い localStorage がスマホの最新更新を上書きするのを防ぐ)
+let pendingSyncAfterReady = false;      // db 未接続時に saveBills が走ったら立てる。db ready 後に flush
 let unsubscribeBills = null;            // onSnapshot 解除関数
 let bills = []; // {id, direction, issuer, total, dueDate, issueDate, category, site, account:{bank,branch,type,number,holder}, memo, status, paidAt, imageUrl, thumb, mimeType}
 let sites = []; // 経費アプリと共有の現場リスト [{id,name}]
@@ -401,18 +403,27 @@ function saveBills() {
   syncBillsToFirestore().catch((e) => console.warn("[seikyu] firestore sync failed:", e?.message || e));
 }
 
+// lastSyncedState (remote で見た最終状態) と比較して、差分があるものだけ書き込む。
+// これで PC の古い localStorage がスマホの最新変更 (例: 入金完了) を上書きする事故を防ぐ。
 async function syncBillsToFirestore() {
-  if (!db) return;
+  if (!db) { pendingSyncAfterReady = true; return; }
   const currentIds = new Set(bills.map((b) => b.id));
   const removedIds = lastSnapshotIds.filter((id) => !currentIds.has(id));
   const batch = writeBatch(db);
+  let writeCount = 0;
   for (const b of bills) {
+    const cur = JSON.stringify(b);
+    if (lastSyncedState.get(b.id) === cur) continue;   // 差分なし: 書かない (= remote の最新を尊重)
     batch.set(doc(db, SEIKYU_COL, b.id), b);
+    lastSyncedState.set(b.id, cur);
+    writeCount++;
   }
   for (const id of removedIds) {
     batch.delete(doc(db, SEIKYU_COL, id));
+    lastSyncedState.delete(id);
+    writeCount++;
   }
-  await batch.commit();
+  if (writeCount > 0) await batch.commit();
 }
 
 // 同期ステータス UI 更新 (色付きドット + ラベル)
@@ -444,7 +455,10 @@ async function manualSync() {
       const localOnly = localBillsRaw.filter((b) => b?.id && !remoteIds.has(b.id));
       if (localOnly.length > 0) {
         const batch = writeBatch(db);
-        for (const b of localOnly) batch.set(doc(db, SEIKYU_COL, b.id), b);
+        for (const b of localOnly) {
+          batch.set(doc(db, SEIKYU_COL, b.id), b);
+          lastSyncedState.set(b.id, JSON.stringify(b));
+        }
         await batch.commit();
       }
     }
@@ -506,7 +520,9 @@ async function setupFirestoreSync() {
       const remoteBills = snap.docs.map((d) => d.data());
 
       // 初回 snapshot だけ: local にあって remote に無い分を追加 (PC と スマホ両方が
-      // ローカルに持ってた場合でも、双方の差分が確実に Firestore に上がる)
+      // ローカルに持ってた場合でも、双方の差分が確実に Firestore に上がる)。
+      // ここで bills は上書きしない: 下の lastSyncedState/bills 更新で remote を反映、
+      // local-only は batch.commit の echo で 2 回目の snapshot が降ってきて完全な状態になる。
       if (!firstSnapshotProcessed) {
         firstSnapshotProcessed = true;
         const remoteSet = new Set(remoteIds);
@@ -518,16 +534,26 @@ async function setupFirestoreSync() {
             for (const b of localOnly) batch.set(doc(db, SEIKYU_COL, b.id), b);
             await batch.commit();
             localStorage.setItem(STORAGE_KEY + "_migrated", "1");
-            return;   // 次の snapshot で完全な状態が降ってくる
           } catch (e) { console.warn("[seikyu] migration failed:", e?.message || e); }
         } else {
           localStorage.setItem(STORAGE_KEY + "_migrated", "1");
         }
       }
 
+      // ここで毎回 bills を remote で上書き。remote が真実 = スマホでの「入金完了」が
+      // PC に即反映される。lastSyncedState も同時に更新して、PC で誤って saveBills が
+      // 走っても remote の最新を上書きしないようにする。
       lastSnapshotIds = remoteIds;
       bills = remoteBills;
+      lastSyncedState = new Map(remoteBills.map((b) => [b.id, JSON.stringify(b)]));
       setSyncStatus("synced", `同期済 ${bills.length}件`);
+
+      // db 接続前に saveBills が走ってた場合は、ここで flush
+      if (pendingSyncAfterReady) {
+        pendingSyncAfterReady = false;
+        syncBillsToFirestore().catch((e) => console.warn("[seikyu] flush failed:", e?.message || e));
+      }
+
       // 開いてる画面を再描画 (リスト / メイン / 確認)
       try { renderList(); } catch (_) {}
       try { renderMain?.(); } catch (_) {}
