@@ -305,61 +305,13 @@ select.nm-field { background: var(--bg2) url("data:image/svg+xml,%3Csvg xmlns='h
 
 <script src="/config.js"></script>
 <script type="module">
-import { initializeApp } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js";
-import {
-  getAuth, setPersistence, browserLocalPersistence,
-  onAuthStateChanged, signOut,
-} from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
+import { initAuthBoot, api, getFbAuth, doSignOut } from "/api-auth.js";
 import {
   getFirestore, collection, doc, setDoc, deleteDoc, onSnapshot, query, writeBatch,
 } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
-import { gateInternal } from "/internal-gate.js";
 
-// ───────── Config / Auth ─────────
-const API_BASE = (window.API_BASE || "").replace(/\/$/, "");
-let fbAuth = null;
-async function idToken() {
-  const u = fbAuth?.currentUser;
-  return u ? await u.getIdToken() : null;
-}
-
-(async function initAuth() {
-  if (window.DEV_NO_AUTH) {
-    document.getElementById("signinOverlay").style.display = "none";
-    boot();
-    return;
-  }
-  try {
-    const cfg = await fetch("/__/firebase/init.json").then((r) => r.json());
-    cfg.authDomain = location.hostname;
-    fbAuth = getAuth(initializeApp(cfg));
-    await setPersistence(fbAuth, browserLocalPersistence);
-    gateInternal(fbAuth);
-
-    let entered = false;
-    onAuthStateChanged(fbAuth, async (user) => {
-      if (user) {
-        if (entered) return;
-        entered = true;
-        sessionStorage.removeItem("authBounce");
-        document.getElementById("signinOverlay").style.display = "none";
-        boot();
-        return;
-      }
-      if (sessionStorage.getItem("authBounce")) {
-        document.getElementById("signinOverlay").style.display = "flex";
-        return;
-      }
-      sessionStorage.setItem("authBounce", "1");
-      location.replace("/?next=" + encodeURIComponent("/seikyu/"));
-    });
-  } catch (e) {
-    document.getElementById("signinOverlay").style.display = "flex";
-    document.getElementById("signinErr").textContent = "init失敗: " + e.message;
-  }
-})();
-
-window.doSignOut = async () => { if (fbAuth) await signOut(fbAuth); location.reload(); };
+initAuthBoot({ returnPath: "/seikyu/", onReady: () => boot() });
+window.doSignOut = doSignOut;
 
 // ───────── State ─────────
 const STORAGE_KEY = "seikyu_records";
@@ -505,11 +457,12 @@ async function migrateMissingDriveUrls() {
 
 // 認証完了後に呼ぶ。Firestore 接続 → 旧 localStorage の1回限り移行 → 購読開始。
 async function setupFirestoreSync() {
-  if (!fbAuth?.currentUser) return;
+  const auth = getFbAuth();
+  if (!auth?.currentUser) return;
   if (db) return;   // 二重初期化防止
   setSyncStatus("syncing", "接続中");
   try {
-    db = getFirestore(fbAuth.app);
+    db = getFirestore(auth.app);
     // local だけにある請求書を Firestore へ追加するため、購読開始前に snapshot を取っておく。
     // (snap が来ると bills が remote で上書きされるので、local データを保護)
     const pendingLocalBills = [...bills];
@@ -585,29 +538,6 @@ function toast(msg, isErr = false) {
     : null;
   clearTimeout(_toastTimer);
   _toastTimer = setTimeout(() => { t.style.display = "none"; }, isErr ? 15000 : 2500);
-}
-
-// ───────── API ─────────
-async function api(method, url, body) {
-  const target = API_BASE + url;
-  const opts = { method, headers: {} };
-  const tok = await idToken();
-  if (tok) opts.headers["Authorization"] = "Bearer " + tok;
-  if (body !== undefined) {
-    opts.headers["content-type"] = "application/json";
-    opts.body = JSON.stringify(body);
-  }
-  const r = await fetch(target, opts);
-  if (r.status === 401) {
-    document.getElementById("signinOverlay").style.display = "flex";
-    throw new Error("401 認証エラー");
-  }
-  if (!r.ok) {
-    let raw = ""; try { raw = await r.text(); } catch {}
-    let msg = ""; try { const j = JSON.parse(raw); if (j.error) msg = j.error; } catch {}
-    throw new Error(msg || `HTTP ${r.status}`);
-  }
-  return r.status === 204 ? null : r.json();
 }
 
 // ───────── Image utils ─────────

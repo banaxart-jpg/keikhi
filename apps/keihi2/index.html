@@ -300,41 +300,9 @@ select.edit-input { background: var(--bg2) url("data:image/svg+xml,%3Csvg xmlns=
 
 <script src="/config.js"></script>
 <script type="module">
-import { initializeApp } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js";
-import {
-  getAuth, setPersistence, browserLocalPersistence,
-  onAuthStateChanged, signOut,
-} from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
-import { gateInternal } from "/internal-gate.js";
+import { initAuthBoot, api } from "/api-auth.js";
 
-const API_BASE = (window.API_BASE || "").replace(/\/$/, "");
-let fbAuth = null;
-async function idToken() { const u = fbAuth?.currentUser; return u ? await u.getIdToken() : null; }
-
-(async function initAuth() {
-  if (window.DEV_NO_AUTH) {
-    document.getElementById("signinOverlay").style.display = "none";
-    boot();
-    return;
-  }
-  try {
-    const cfg = await fetch("/__/firebase/init.json").then((r) => r.json());
-    cfg.authDomain = location.hostname;
-    fbAuth = getAuth(initializeApp(cfg));
-    await setPersistence(fbAuth, browserLocalPersistence);
-    gateInternal(fbAuth);
-    let entered = false;
-    onAuthStateChanged(fbAuth, async (user) => {
-      if (user) { if (!entered) { entered = true; sessionStorage.removeItem("authBounce"); document.getElementById("signinOverlay").style.display = "none"; boot(); } return; }
-      if (sessionStorage.getItem("authBounce")) { document.getElementById("signinOverlay").style.display = "flex"; return; }
-      sessionStorage.setItem("authBounce", "1");
-      location.replace("/?next=" + encodeURIComponent("/keihi2/"));
-    });
-  } catch (e) {
-    document.getElementById("signinOverlay").style.display = "flex";
-    document.getElementById("signinErr").textContent = "init失敗: " + e.message;
-  }
-})();
+initAuthBoot({ returnPath: "/keihi2/", onReady: () => boot() });
 
 // ───────── State ─────────
 let buyer = localStorage.getItem("buyer") || "";
@@ -357,22 +325,6 @@ function toast(msg, isErr = false) {
   t.style.display = "block";
   clearTimeout(_toastTimer);
   _toastTimer = setTimeout(() => { t.style.display = "none"; }, isErr ? 5000 : 2000);
-}
-
-// ───────── API ─────────
-async function api(method, url, body) {
-  const opts = { method, headers: {} };
-  const tok = await idToken();
-  if (tok) opts.headers["Authorization"] = "Bearer " + tok;
-  if (body !== undefined) { opts.headers["content-type"] = "application/json"; opts.body = JSON.stringify(body); }
-  const r = await fetch(API_BASE + url, opts);
-  if (r.status === 401) { document.getElementById("signinOverlay").style.display = "flex"; throw new Error("401"); }
-  if (!r.ok) {
-    let raw = ""; try { raw = await r.text(); } catch {}
-    let msg = ""; try { const j = JSON.parse(raw); if (j.error) msg = j.error; } catch {}
-    throw new Error(msg || `HTTP ${r.status}`);
-  }
-  return r.status === 204 ? null : r.json();
 }
 
 // ───────── Image utils ─────────
