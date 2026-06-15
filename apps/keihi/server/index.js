@@ -5317,26 +5317,35 @@ async function buildSekoProgress(p, email, examTarget, shubetsu) {
 }
 
 async function computeSekoStreak(p, email) {
-  // 直近 60 日で何日連続で 1 問以上回答しているか + 今日の活動有無
+  const SEKO_STREAK_DAILY_MIN = 5;
+  // 直近 60 日で何日連続で 1 問以上正解しているか + 今日の活動状況
   const { rows } = await p.query(
-    `SELECT DISTINCT (answered_at AT TIME ZONE 'Asia/Tokyo')::date AS d
+    `SELECT (answered_at AT TIME ZONE 'Asia/Tokyo')::date AS d,
+            COUNT(*) FILTER (WHERE is_correct)::int AS correct
        FROM seko_progress WHERE user_email = $1
-      ORDER BY d DESC LIMIT 60`,
+      GROUP BY d ORDER BY d DESC LIMIT 60`,
     [email]
   );
-  if (!rows.length) return { streak: 0, today_active: false };
-  const dates = rows.map((r) => String(r.d));
   const today = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Tokyo" }));
   const ymd = (dt) => dt.toISOString().slice(0, 10);
   const todayStr = ymd(today);
+  if (!rows.length) {
+    return { streak: 0, today_active: false, today_correct: 0, daily_min: SEKO_STREAK_DAILY_MIN };
+  }
+  const byDate = new Map(rows.map((r) => [String(r.d), r.correct]));
   let streak = 0;
-  const setD = new Set(dates);
   for (let i = 0; ; i++) {
     const d = new Date(today.getTime() - i * 86400000);
-    if (setD.has(ymd(d))) streak++;
+    if ((byDate.get(ymd(d)) || 0) >= SEKO_STREAK_DAILY_MIN) streak++;
     else break;
   }
-  return { streak, today_active: setD.has(todayStr) };
+  const todayCorrect = byDate.get(todayStr) || 0;
+  return {
+    streak,
+    today_active: todayCorrect >= SEKO_STREAK_DAILY_MIN,
+    today_correct: todayCorrect,
+    daily_min: SEKO_STREAK_DAILY_MIN,
+  };
 }
 
 app.get("/api/seko/me", async (req, res) => {
