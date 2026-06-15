@@ -170,30 +170,49 @@ function isInternal() { return INTERNAL_EMAILS.has((currentUserEmail || "").toLo
 // ─── ユーザー別ランチャー設定 (Firestore: launcher_prefs/{uid} に保存) ───
 // uid をキーにすれば Firebase Auth 1本でユーザー識別できて、メアド変更にも追従する。
 // 並びは MRU (最近開いた順) で自動、ユーザーは hide だけコントロールできる。
-let prefs = { mru: {}, hidden: [] };
+// 初期 prefs は localStorage から先に拾う → Firestore ロード前でも MRU 並びが出る
+let prefs = (() => {
+  try {
+    const cached = localStorage.getItem("launcher_mru_cache");
+    return { mru: cached ? (JSON.parse(cached) || {}) : {}, hidden: [] };
+  } catch (_) { return { mru: {}, hidden: [] }; }
+})();
 let editMode = false;
 let prefsSaveTimer = null;
 let fsDb = null;
 
 async function loadPrefs(user) {
+  // localStorage に直近の MRU を残してるので、Firestore の遅延でも取りこぼさない
+  // 両ソースを取って app id ごとに新しい timestamp 採用 (= last-write-wins merge)
+  let localMru = {};
   try {
-    if (!fsDb || !user) return;
-    const snap = await getDoc(doc(fsDb, "launcher_prefs", user.uid));
-    if (snap.exists()) {
-      const p = snap.data() || {};
-      const mru = (p.mru && typeof p.mru === "object") ? { ...p.mru } : {};
-      // 旧 prefs.order からの後方互換: order があれば最後尾を最古として並べる
-      if (Object.keys(mru).length === 0 && Array.isArray(p.order) && p.order.length) {
-        const base = Date.now() - p.order.length * 1000;
-        p.order.forEach((id, i) => { mru[id] = base + (p.order.length - i) * 1000; });
-      }
-      prefs = {
-        mru,
-        hidden: Array.isArray(p.hidden) ? p.hidden : [],
-      };
-      renderGrid();
+    const cached = localStorage.getItem("launcher_mru_cache");
+    if (cached) localMru = JSON.parse(cached) || {};
+  } catch (_) {}
+  let remote = null;
+  try {
+    if (fsDb && user) {
+      const snap = await getDoc(doc(fsDb, "launcher_prefs", user.uid));
+      if (snap.exists()) remote = snap.data() || {};
     }
   } catch (e) { console.warn("loadPrefs:", e?.message || e); }
+
+  const remoteMru = (remote?.mru && typeof remote.mru === "object") ? { ...remote.mru } : {};
+  // 旧 prefs.order からの後方互換: order があれば最後尾を最古として並べる
+  if (Object.keys(remoteMru).length === 0 && Array.isArray(remote?.order) && remote.order.length) {
+    const base = Date.now() - remote.order.length * 1000;
+    remote.order.forEach((id, i) => { remoteMru[id] = base + (remote.order.length - i) * 1000; });
+  }
+  // localStorage と remote を merge: app ごとに新しい方を採用
+  const merged = { ...remoteMru };
+  for (const [id, ts] of Object.entries(localMru)) {
+    if (!merged[id] || ts > merged[id]) merged[id] = ts;
+  }
+  prefs = {
+    mru: merged,
+    hidden: Array.isArray(remote?.hidden) ? remote.hidden : [],
+  };
+  renderGrid();
 }
 
 function savePrefs() {
@@ -211,19 +230,22 @@ function savePrefs() {
   }, 600); // debounce
 }
 
-// アプリタップ時に呼ぶ: mru を即時更新 + Firestore に直書きしてから navigate。
-// debounce 待ちの間にページ遷移するとローカル変更が消えるので、ここだけ即時 flush。
+// アプリタップ時に呼ぶ: mru を即時更新 + Firestore に書きつつ navigate。
+// localStorage を「真のソース」として扱い、Firestore は best-effort sync。
+// loadPrefs 側で localStorage と Firestore を merge するので、Firestore 書込が
+// navigation で消えてもローカル分は次回確実に反映される。
 async function bumpMru(appId) {
-  prefs.mru = { ...(prefs.mru || {}), [appId]: Date.now() };
-  // ローカルも一応書いておく (Firestore 失敗時のフォールバック / 次回 load 前の即時反映)
+  const ts = Date.now();
+  prefs.mru = { ...(prefs.mru || {}), [appId]: ts };
+  // ローカルに先に書く (これが効いてれば次回必ず反映される)
   try { localStorage.setItem("launcher_mru_cache", JSON.stringify(prefs.mru)); } catch (_) {}
+  // Firestore は best-effort で fire-and-forget
   try {
     const user = fbAuth?.currentUser;
     if (user && fsDb) {
-      // 待たずに fire (Firestore SDK は offline queue するので navigate 後でも完了する)
       setDoc(doc(fsDb, "launcher_prefs", user.uid), {
         mru: prefs.mru,
-        updatedAt: Date.now(),
+        updatedAt: ts,
       }, { merge: true }).catch(() => {});
     }
   } catch (_) {}
