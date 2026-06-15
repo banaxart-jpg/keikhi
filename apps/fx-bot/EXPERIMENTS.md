@@ -310,6 +310,65 @@ random sampling で見えた「56%」は signals 数 100-200 の statistical art
 
 ---
 
+## 実験 10: lead-lag 相関分析 (USD 後追い通貨を探す)
+
+**日時**: 2026-06-15
+**user 仮説**: 「米ドルが先に動いて、後追いする通貨があったら、それに絞って取引すれば edge あるかも」
+**スクリプト**: `/tmp/fx_leadlag.mjs`
+**データ**: 11 通貨ペア (USD系・JPY系・cross) + DXY、H1 11559 candles (約 1.6 年、共通時刻のみ)
+**手法**: H1 log return の Pearson 相関、lag 0/1/2/3/6/12 時間でクロス計算
+
+### 結果 1: 同時刻 (lag 0) は極めて強相関 (= 市場効率的)
+
+| target | DXY との lag 0 相関 |
+|---|---|
+| EUR/USD | -0.956 (ほぼ完全反相関) |
+| GBP/USD | -0.824 |
+| USD/CHF | +0.794 |
+| NZD/USD | -0.694 |
+| USD/JPY | +0.648 |
+| AUD/USD | -0.629 |
+| USD/CAD | +0.613 |
+| CAD/JPY | +0.300 |
+
+= DXY 動くと **同じバー** で全 USD ペアが完全反応済み
+
+### 結果 2: lag 1〜12 ではほぼゼロ
+
+DXY → 全 USD ペアの lag 1+ 時間相関は **すべて |0.03| 以下** = ノイズと区別不可能。
+
+| pair | lag 1 | lag 2 | lag 3 | lag 6 | lag 12 |
+|---|---|---|---|---|---|
+| EUR/USD | +0.015 | +0.006 | +0.006 | +0.003 | -0.005 |
+| USD/JPY | +0.014 | +0.001 | -0.000 | +0.001 | +0.002 |
+| GBP/USD | +0.009 | +0.008 | +0.010 | +0.001 | +0.001 |
+
+11 × 11 マトリクス全部 lag 1 で |相関| 最大値 +0.034 (audusd→eurjpy)。
+**0.05 以上の lead-lag ペアは 1 つも存在しない**。
+
+### 解釈
+- DXY/USD の動きは **1 時間後には完全に price in** されてる
+- = retail tier の H1 粒度ではアービトラージ済み
+- HFT (microsecond レベル) なら lead-lag 取れるが retail 不可能
+- 「**米ドル後追い通貨**」は存在しない (少なくとも H1 粒度では)
+
+### 副次的な観察
+- USD/CAD の lag 0 相関が +0.613 と JPY 系よりは弱め (CAD は原油の影響受ける)
+- AUD/USD と NZD/USD は cross-correlation 高め (= コモディティ通貨セット)
+- これら使ったペアトレード (cointegration) は可能性あり、ただし実装複雑
+
+### 結論
+**lead-lag アプローチでの edge は無い**。市場が予想以上に効率的。
+
+### 残ってる選択肢
+- F. ML approach (まだ未試)
+- G. ペアトレード / cointegration (例: AUD/USD と NZD/USD の比率乖離) — 実装複雑だが retail で edge 残ってると言われる領域
+- I. 凍結
+
+→ user 判断待ち
+
+---
+
 ## メモ: バックテストの作法 (失敗から学んだこと)
 
 1. **look-ahead bias check**: entry 価格は signal 算出後に取得可能な価格か?
