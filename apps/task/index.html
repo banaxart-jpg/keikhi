@@ -172,6 +172,8 @@ body { font-family: 'Outfit', -apple-system, sans-serif; font-weight: 400; backg
 .row-top { display: flex; align-items: center; gap: 7px; }
 .card-title { font-size: 14px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1; min-width: 0; }
 .card-meta { font-size: 10px; color: var(--text3); font-weight: 700; margin-top: 2px; display: flex; gap: 8px; align-items: center; }
+.site-tag { display: inline-flex; align-items: center; gap: 2px; color: var(--text3); font-weight: 600; opacity: 0.78; }
+.site-tag .icon { font-size: 12px; color: var(--text3); }
 .deadline { color: var(--accent); font-weight: 800; }
 .deadline.soon { color: var(--mid); }
 .deadline.over { color: var(--hi); }
@@ -369,8 +371,9 @@ const TEMPLATE = `
               <div class="card-title">{{ t.title || '(無題)' }}</div>
               <div v-if="isUnread(t)" class="unread-dot"></div>
             </div>
-            <div v-if="t.deadline" class="card-meta">
-              <span class="deadline" :class="deadlineClass(t.deadline)"><span class="icon">schedule</span> {{ fmtDate(t.deadline) }}</span>
+            <div v-if="t.deadline || currentSite === ALL_KEY" class="card-meta">
+              <span v-if="t.deadline" class="deadline" :class="deadlineClass(t.deadline)"><span class="icon">schedule</span> {{ fmtDate(t.deadline) }}</span>
+              <span v-if="currentSite === ALL_KEY" class="site-tag"><span class="icon">place</span> {{ t.site || '雑務' }}</span>
             </div>
           </div>
         </div>
@@ -1131,6 +1134,7 @@ const App = {
     });
 
     return {
+      ALL_KEY,
       signedIn, authChecked, signinErr, me, partner, tasks, sites, currentSite,
       pickerOpenId, expandedId, modalOpen, editingId, form, saving, migrating,
       titleInput, swipe,

@@ -51,6 +51,8 @@ body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); 
 .item-name { flex: 1; font-size: 14px; font-weight: 600; min-width: 0; word-break: break-word; color: var(--text); }
 .item-card.checked .item-name { text-decoration: line-through; color: var(--text2); }
 .item-name .qty { color: var(--text2); font-weight: 600; margin-left: 6px; font-size: 12px; }
+.item-name .site-tag { display: inline-flex; align-items: center; gap: 2px; margin-left: 8px; font-size: 11px; font-weight: 600; color: var(--text3); opacity: 0.78; vertical-align: middle; }
+.item-name .site-tag .icon { font-size: 13px; color: var(--text3); }
 .chev { width: 22px; height: 22px; display: flex; align-items: center; justify-content: center; color: var(--text3); font-family: 'Material Symbols Outlined'; font-size: 20px; flex-shrink: 0; transition: transform 200ms ease; }
 .item-card.open .chev { transform: rotate(180deg); color: var(--text2); }
 
@@ -240,11 +242,11 @@ const TEMPLATE = `
 
     <div class="tabs">
       <button
-        v-for="s in sortedSites" :key="s"
+        v-for="s in tabKeys" :key="s"
         class="tab" :class="{ on: activeSite === s }"
         @click="selectSite(s)"
       >
-        {{ s }}<span class="count" v-if="countBySite[s]">{{ countBySite[s] }}</span>
+        {{ s === ALL_KEY ? "すべて" : s }}<span class="count" v-if="countBySite[s]">{{ countBySite[s] }}</span>
       </button>
     </div>
   </div>
@@ -254,13 +256,14 @@ const TEMPLATE = `
   <template v-else>
     <div class="list">
       <div v-if="sortedSites.length === 0" class="empty">現場がまだ登録されていません。<a href="/genba/?return=/kaimono/" style="color:var(--accent); font-weight:700;">現場アプリで追加 →</a></div>
-      <div v-else-if="filteredItems.length === 0" class="empty">「{{ activeSite }}」に追加するものはまだ無し</div>
+      <div v-else-if="filteredItems.length === 0" class="empty">「{{ activeSite === ALL_KEY ? 'すべて' : activeSite }}」に追加するものはまだ無し</div>
       <div v-for="item in filteredItems" :key="item.id" class="item-card" :class="{ checked: item.checked, open: expandedId === item.id }">
         <!-- collapsed row: 最小限の情報だけ -->
         <div class="item-row" @click="toggleDetail(item)">
           <button class="check" @click.stop="toggle(item)" :style="item.checked ? { background: colorForEmail(item.checkedBy), color: 'white', boxShadow: '3px 3px 8px ' + colorForEmail(item.checkedBy) + '55' } : null">{{ item.checked ? 'check' : '' }}</button>
           <div class="item-name">
             {{ displayName(item) }}<span v-if="item.qty" class="qty">× {{ item.qty }} {{ item.unit || '' }}</span>
+            <span v-if="activeSite === ALL_KEY && item.site" class="site-tag"><span class="icon">place</span>{{ item.site }}</span>
           </div>
           <span class="chev">expand_more</span>
         </div>
@@ -287,7 +290,7 @@ const TEMPLATE = `
               <option value="">タスクなし</option>
               <option v-for="t in tasksForCurrentSite" :key="t.id" :value="t.id">{{ t.title }}</option>
             </select>
-            <a v-else-if="activeSite" :href="'/task/?site=' + encodeURIComponent(activeSite)" class="detail-task-link">+ この現場のタスクを作成</a>
+            <a v-else-if="item.site" :href="'/task/?site=' + encodeURIComponent(item.site)" class="detail-task-link">+ この現場のタスクを作成</a>
             <label class="detail-filepick">
               <input type="file" accept="image/*" @change="onFilePick">
               <span v-if="!editFile"><span class="icon" style="vertical-align:-0.18em;">photo_camera</span> 画像を選ぶ</span>
@@ -329,15 +332,15 @@ const TEMPLATE = `
   <div class="err" v-if="err">{{ err }}</div>
 
   <!-- FAB: 常時表示、タップで入力モーダル開閉 -->
-  <button class="fab" :class="{ open: showInput }" @click="showInput = !showInput" :disabled="!ready || !activeSite">+</button>
+  <button class="fab" :class="{ open: showInput }" @click="showInput = !showInput" :disabled="!ready || !canAdd">+</button>
 
   <!-- 入力モーダル: 共通 BottomSheet (drag-to-close + 上ドラッグで詳細展開) -->
   <bottom-sheet v-model="showInput" expandable v-model:expanded="inputExpanded">
     <form @submit.prevent="add" class="input-form">
       <div class="input-row">
-        <input class="name" v-model="newName" :placeholder="inputPlaceholder" :disabled="adding || !activeSite" autocomplete="off" ref="nameInput">
-        <input class="qty" v-model="newQty" type="number" min="1" placeholder="数" :disabled="adding || !activeSite">
-        <select class="unit" v-model="newUnit" :disabled="adding || !activeSite">
+        <input class="name" v-model="newName" :placeholder="inputPlaceholder" :disabled="adding || !canAdd" autocomplete="off" ref="nameInput">
+        <input class="qty" v-model="newQty" type="number" min="1" placeholder="数" :disabled="adding || !canAdd">
+        <select class="unit" v-model="newUnit" :disabled="adding || !canAdd">
           <option>個</option>
           <option>箱</option>
           <option>セット</option>
@@ -367,7 +370,7 @@ const TEMPLATE = `
           <option v-for="t in tasksForCurrentSite" :key="t.id" :value="t.id">{{ t.title }}</option>
         </select>
         <a v-else-if="activeSite" :href="'/task/?site=' + encodeURIComponent(activeSite)" class="add-task-link">+ タスク作成</a>
-        <button class="add" type="submit" :disabled="!newName.trim() || adding || !activeSite">{{ adding ? "追加中…" : "+ 追加" }}</button>
+        <button class="add" type="submit" :disabled="!newName.trim() || adding || !canAdd">{{ adding ? "追加中…" : "+ 追加" }}</button>
       </div>
     </form>
   </bottom-sheet>
@@ -410,6 +413,7 @@ const TEMPLATE = `
 const App = {
   template: TEMPLATE,
   setup() {
+    const ALL_KEY = "__all__";              // タブの「すべて」(全現場横断ビュー) 識別子
     const sites = ref([]);                  // 表示順 (activity desc)
     const activeSite = ref(null);
     const items = ref([]);
@@ -468,6 +472,7 @@ const App = {
     }
     function selectSite(s) {
       activeSite.value = s;
+      if (s === ALL_KEY) return;   // 「すべて」は現場じゃないので MRU 加算しない
       mru.value = { ...mru.value, [s]: Date.now() };
       try { localStorage.setItem(mruKey.value, JSON.stringify(mru.value)); } catch (_) {}
     }
@@ -479,6 +484,8 @@ const App = {
         return idx.get(a) - idx.get(b);
       });
     });
+    // タブ列: 「すべて」を先頭固定 + 現場 (MRU 順)
+    const tabKeys = computed(() => [ALL_KEY, ...sortedSites.value]);
 
     // チェックして 1 時間経過したらアーカイブ扱い (= 一覧から消す)。
     // cron/Cloud Functions 使わず、誰かが画面を見たタイミングで判定。
@@ -497,6 +504,7 @@ const App = {
       items.value
         .filter((i) => {
           if (isArchived(i)) return false;
+          if (activeSite.value === ALL_KEY) return true;   // 「すべて」: 現場で絞らない
           return i.site === activeSite.value;
         })
         // 未チェック先、済みを下に。同じ状態内は createdAt desc (新しい順)。
@@ -509,19 +517,23 @@ const App = {
     );
 
     const countBySite = computed(() => {
-      const m = {};
+      const m = { [ALL_KEY]: 0 };
       for (const s of sites.value) m[s] = 0;
       for (const it of items.value) {
         if (it.checked) continue;
         if (isArchived(it)) continue;
+        m[ALL_KEY]++;
         if (it.site in m) m[it.site]++;
       }
       return m;
     });
 
-    const inputPlaceholder = computed(() =>
-      activeSite.value ? `「${activeSite.value}」に追加…` : "現場なし"
-    );
+    const inputPlaceholder = computed(() => {
+      if (activeSite.value === ALL_KEY) return "現場を選んで追加…";
+      return activeSite.value ? `「${activeSite.value}」に追加…` : "現場なし";
+    });
+    // 「すべて」タブ中は現場が決まらないので追加 UI は全部ロック
+    const canAdd = computed(() => !!activeSite.value && activeSite.value !== ALL_KEY);
     // hasChecked / checkedCount は「まだアーカイブされてない済み」のみ対象
     const hasChecked = computed(() =>
       items.value.some((i) => !isArchived(i) && i.checked && i.site === activeSite.value)
@@ -922,6 +934,7 @@ const App = {
     });
 
     return {
+      ALL_KEY, tabKeys, canAdd,
       sites, sortedSites, activeSite, items, ready, err,
       newName, newQty, newUnit, newCategory, newTaskId,
       selectSite,
