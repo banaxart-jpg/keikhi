@@ -1446,9 +1446,9 @@ function showSession() {
 }
 window.showHome = showHome;
 
-// Enter で自由記述送信
+// 記述は複数行なので Enter は改行用、送信は Cmd/Ctrl+Enter のみ
 $("freeInput").addEventListener("keydown", (e) => {
-  if (e.key === "Enter" && !e.isComposing) {
+  if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && !e.isComposing) {
     e.preventDefault();
     submitFree();
   }

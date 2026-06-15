@@ -5099,49 +5099,72 @@ try {
   console.warn("[seko] genres.json load failed:", e.message);
 }
 
-// 起動時 seed ロード: seko_questions が空のときだけ手書きの seed を投入。
-// AI 生成が遅延・失敗してもセッションが即始まるよう、最低 20 問は seed で確保。
-async function loadSekoSeedIfEmpty() {
+// 起動時 seed sync: seko-seed.json の各問について、同じ question 文の seed が
+// DB に既にあれば keywords/answer/explanation を UPDATE、無ければ INSERT する。
+// → seed の編集 (keywords 追加・解説修正) がデプロイ毎に反映される。
+// 既存ユーザーの progress (question_id への FK) は壊さない (id を維持)。
+async function syncSekoSeed() {
   const p = getPool();
   if (!p) return;
   try {
-    const { rows } = await p.query(`SELECT count(*)::int AS n FROM seko_questions`);
-    if ((rows[0]?.n || 0) > 0) return;
     const raw = fs.readFileSync(path.join(__dirname, "seko-seed.json"), "utf8");
     const seed = JSON.parse(raw);
-    let inserted = 0;
+    let updated = 0, inserted = 0;
     for (const q of seed.questions || []) {
+      const qText = String(q.question || "").trim();
+      if (!qText) continue;
       try {
-        await p.query(
-          `INSERT INTO seko_questions
-             (category, difficulty, type, question, options, answer, keywords, explanation,
-              claude_example, genre, group_id, exam_level, source)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'seed')`,
+        const upd = await p.query(
+          `UPDATE seko_questions SET
+             options = $1, answer = $2, keywords = $3, explanation = $4,
+             genre = $5, group_id = $6, exam_level = $7, type = $8, difficulty = $9
+           WHERE source = 'seed' AND question = $10`,
           [
-            q.group_id || "uncategorized",
-            Number(q.difficulty) || 3,
-            q.type === "free" ? "free" : "choice",
-            String(q.question || "").trim(),
             JSON.stringify(q.options || []),
             String(q.answer || "").trim(),
             JSON.stringify(q.keywords || []),
             String(q.explanation || "").trim(),
-            q.claude_example || "",
             q.genre,
             q.group_id,
             q.exam_level === "2ji" ? "2ji" : "1ji",
+            q.type === "free" ? "free" : "choice",
+            Number(q.difficulty) || 3,
+            qText,
           ]
         );
-        inserted++;
-      } catch (e) { console.warn("[seko-seed] insert failed:", e.message); }
+        if (upd.rowCount > 0) {
+          updated++;
+        } else {
+          await p.query(
+            `INSERT INTO seko_questions
+               (category, difficulty, type, question, options, answer, keywords, explanation,
+                claude_example, genre, group_id, exam_level, source)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'seed')`,
+            [
+              q.group_id || "uncategorized",
+              Number(q.difficulty) || 3,
+              q.type === "free" ? "free" : "choice",
+              qText,
+              JSON.stringify(q.options || []),
+              String(q.answer || "").trim(),
+              JSON.stringify(q.keywords || []),
+              String(q.explanation || "").trim(),
+              q.claude_example || "",
+              q.genre,
+              q.group_id,
+              q.exam_level === "2ji" ? "2ji" : "1ji",
+            ]
+          );
+          inserted++;
+        }
+      } catch (e) { console.warn("[seko-seed] upsert failed:", e.message); }
     }
-    console.log(`[seko-seed] +${inserted} questions inserted from seed`);
+    console.log(`[seko-seed] sync done: +${inserted} new, ${updated} updated`);
   } catch (e) {
     console.warn("[seko-seed] load failed:", e.message);
   }
 }
-// schema 起動完了後に seed を流し込む (FK 等に依存しない構造なので並列で OK)
-setTimeout(() => { loadSekoSeedIfEmpty().catch(() => {}); }, 3000);
+setTimeout(() => { syncSekoSeed().catch(() => {}); }, 3000);
 
 // exam_target + shubetsu でユーザーに出題して良い group 一覧を返す。
 // - exam_target='first_full' → 全 group (一次 + 二次)
@@ -5705,12 +5728,33 @@ app.post("/api/seko/answer", async (req, res) => {
         }
       }
     } else {
-      const norm = (s) => String(s || "").trim().toLowerCase().replace(/\s+/g, "");
-      if (norm(ua) === norm(q.answer)) {
+      // 正規化: 全角空白除去 + 小文字化 + カタカナ揺れ吸収 (ヴァ→バ, ヴィ→ビ, ヴ→ブ等) + 半角化
+      const norm = (s) => {
+        let t = String(s || "").trim().toLowerCase();
+        // 全角英数→半角
+        t = t.replace(/[!-~]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xFEE0));
+        // 空白除去
+        t = t.replace(/\s+/g, "");
+        // 句読点・記号除去
+        t = t.replace(/[、。,.()()「」『』:;・]/g, "");
+        // カタカナのヴ揺れ: ヴァヴィヴェヴォヴュ → バビベボビュ、ヴ→ブ
+        t = t.replace(/ヴァ/g, "バ").replace(/ヴィ/g, "ビ").replace(/ヴェ/g, "ベ").replace(/ヴォ/g, "ボ").replace(/ヴュ/g, "ビュ").replace(/ヴ/g, "ブ");
+        return t;
+      };
+      const normUa = norm(ua);
+      if (normUa === norm(q.answer)) {
         isCorrect = true;
-      } else if (Array.isArray(q.keywords) && q.keywords.some((k) => norm(ua).includes(norm(k)) || norm(k).includes(norm(ua)))) {
-        isCorrect = true;
-      } else if (genAI && ua) {
+      } else if (Array.isArray(q.keywords) && q.keywords.length) {
+        // キーワード hits: 2 個以上 or 25% 以上含めば正解扱い (部分得点で合格)。
+        let hit = 0;
+        for (const k of q.keywords) {
+          const nk = norm(k);
+          if (nk && normUa.includes(nk)) hit++;
+        }
+        const threshold = Math.max(2, Math.ceil(q.keywords.length * 0.25));
+        if (hit >= threshold) isCorrect = true;
+      }
+      if (!isCorrect && genAI && ua) {
         try {
           const judgePrompt = `次のユーザー回答が、正解と意味的に同じか判定してください。
 建築施工管理の文脈で、用語のゆらぎ・言い換えは正解として認めます。
