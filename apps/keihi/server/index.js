@@ -5442,10 +5442,11 @@ async function generateSekoQuestionsBatch(p, items, shubetsu) {
     return `[${i + 1}] 分野: ${grp?.name || it.groupId} / ジャンル: ${it.genre} / 試験: ${lvl} / 出題形式: ${typeLabel}`;
   }).join("\n");
   const shubetsuBlock = shubetsuLabel ? `
-■ 受検種別 (重要): ${shubetsuLabel}
-- 受験生はこの種別で受けるため、出題は ${shubetsuLabel} の業務に直結する論点に絞ること。
-- ${shubetsu === "shiage" ? "防水・タイル・塗装・内装ボード・壁紙・床・建具・断熱・改修・軽量鉄骨下地・内装木工 を中心に。鉄筋径や鉄骨高力ボルトの細かい数値など、仕上技術者が現場で扱わない論点は避ける。実際の二次5-C の頻出論点 (改質アスファルトシート防水トーチ工法・改良圧着張り・吹付け塗り・軽量鉄骨天井下地のハンガー間隔・グリッパー工法・塩化ビニル床シート熱溶接) を意識する。" : ""}${shubetsu === "kutai" ? "鉄筋・型枠・コンクリート・鉄骨建方・木造軸組 を中心に。" : ""}${shubetsu === "kenchiku" ? "建築一式の総合管理 (複数工種の関連・工程・仮設) を中心に。" : ""}
-- 解説の最後に「【${shubetsuLabel} の現場で】」と添えて、当該種別の現場でのリアルな運用注意を 1 文加える。` : "";
+■ 受検種別: ${shubetsuLabel}
+- 受験生はこの種別で受験する。ただし「分野: ...」「ジャンル: ...」で指定された論点を絶対に外してはいけない。
+  指定が「建築学 (一般) / 採光・照明」なら採光・照明の問題を作る。「法規 / 建築基準法」なら建築基準法の問題を作る。
+- 受検種別の情報は「現場での運用注意」と「解説末尾の一言コメント」だけに使う (= 出題論点を種別寄りに歪めない)。
+- 解説の最後に「【${shubetsuLabel} の現場で】」と添えて、当該種別の現場での運用注意を 1 文加える。` : "";
   const prompt = `あなたは ${subject} の出題者。
 ${shubetsuBlock}
 次の ${items.length} 件、それぞれ別の問題を作って:
@@ -5734,24 +5735,51 @@ app.post("/api/seko/sessions/start", async (req, res) => {
     // 集中セッション (genre 指定)
     const focus = (req.body?.genre || "").trim();
     const focusValid = focus && allowedGenres.includes(focus);
+
+    // 達成度に基づくジャンル選択: 未習得 group / genre を優先サンプリング
+    // → どの group も均等に伸びる (= 仕上ばかり出る現象を防ぐ)
+    const shuffle = (a) => { const c = a.slice(); for (let i = c.length-1; i>0; i--) { const j = Math.floor(Math.random()*(i+1)); [c[i],c[j]]=[c[j],c[i]]; } return c; };
     let targetGenres;
     if (focusValid) {
       targetGenres = [focus];
-    } else if (examTarget === "second_only" && reviewGroups.length) {
-      // 二次のみ受験でも一次の復習を 30% 混ぜる (二次解答に必要な基礎知識のため)
-      const primaryGenres = primaryGroups.flatMap((g) => (g.genres || []).map((x) => x.name));
-      const reviewGenres = reviewGroups.flatMap((g) => (g.genres || []).map((x) => x.name));
-      const wantPrimary = Math.ceil(SESSION_SIZE * 0.7);
-      const wantReview = SESSION_SIZE - wantPrimary;
-      const shuffle = (a) => { const c = a.slice(); for (let i = c.length-1; i>0; i--) { const j = Math.floor(Math.random()*(i+1)); [c[i],c[j]]=[c[j],c[i]]; } return c; };
-      targetGenres = [
-        ...shuffle(primaryGenres).slice(0, wantPrimary),
-        ...shuffle(reviewGenres).slice(0, wantReview),
-      ];
-      // 万一スライスで足りなければ全 allowed から補充
-      if (!targetGenres.length) targetGenres = allowedGenres;
     } else {
-      targetGenres = allowedGenres;
+      // 現在の達成数を group / genre 毎に集計
+      const { rows: corRows } = await p.query(
+        `SELECT q.group_id, q.genre, COUNT(DISTINCT q.id)::int AS n
+           FROM seko_progress pr JOIN seko_questions q ON q.id = pr.question_id
+          WHERE pr.user_email = $1 AND pr.is_correct
+          GROUP BY q.group_id, q.genre`,
+        [req.user.email]
+      );
+      const corMap = new Map();
+      for (const r of corRows) corMap.set(`${r.group_id}::${r.genre}`, r.n);
+      // セッション内で出題 group のバランスを取る:
+      // 各 group から最大 ceil(SESSION_SIZE / グループ数) ジャンルだけ選ぶ。
+      // group 内ではターゲット target 未達のジャンル優先 (= 完全未習得を最優先)。
+      const allGroups = examTarget === "second_only"
+        ? [...primaryGroups, ...reviewGroups]
+        : primaryGroups;
+      // shubetsu フィルタはすでに sekoGroupsForUser で適用済
+      const wantPerGroup = Math.max(1, Math.ceil(SESSION_SIZE / Math.max(1, allGroups.length)));
+      const pool = [];
+      for (const g of allGroups) {
+        const sortable = (g.genres || []).map((x) => ({
+          name: x.name,
+          target: x.target_count || 10,
+          got: corMap.get(`${g.id}::${x.name}`) || 0,
+        }));
+        // 未達順 (got/target が小さい順)、tie ブレークは random
+        sortable.sort((a, b) => {
+          const ra = a.target > 0 ? a.got / a.target : 1;
+          const rb = b.target > 0 ? b.got / b.target : 1;
+          if (ra !== rb) return ra - rb;
+          return Math.random() - 0.5;
+        });
+        for (const x of sortable.slice(0, wantPerGroup)) pool.push(x.name);
+      }
+      // 二次のみ受験は復習比率を維持 (元 30% 一次復習を踏襲したいが今は均等扱い)
+      targetGenres = shuffle(pool);
+      if (!targetGenres.length) targetGenres = allowedGenres;
     }
 
     // 直近 出題済の質問 ID (再出題を避けるため 50 件)
