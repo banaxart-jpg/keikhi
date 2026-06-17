@@ -5736,13 +5736,23 @@ app.post("/api/seko/sessions/start", async (req, res) => {
     const focus = (req.body?.genre || "").trim();
     const focusValid = focus && allowedGenres.includes(focus);
 
-    // 達成度に基づくジャンル選択: 未習得 group / genre を優先サンプリング
-    // → どの group も均等に伸びる (= 仕上ばかり出る現象を防ぐ)
     const shuffle = (a) => { const c = a.slice(); for (let i = c.length-1; i>0; i--) { const j = Math.floor(Math.random()*(i+1)); [c[i],c[j]]=[c[j],c[i]]; } return c; };
+
     let targetGenres;
     if (focusValid) {
       targetGenres = [focus];
     } else {
+      // ───── group 横断 均等配分アルゴリズム ─────
+      // sessionSize を全 group に決定的に振り分ける quota 方式。
+      // 1. baseQuota = floor(SESSION_SIZE / groupCount)
+      // 2. 余り = SESSION_SIZE - baseQuota * groupCount
+      // 3. group を達成度 (group_correct/group_target) 昇順でソート
+      // 4. 上位「余り」個の group が +1 quota 獲得 → 達成度低い group が優先的に出る
+      // 5. 各 group から quota 数だけ「target 未達順」のジャンルを pick
+      // 合計が必ず SESSION_SIZE。group 数が SESSION_SIZE より多い場合は
+      // 余り分の上位 group だけが quota=1 を貰い、下位は quota=0 (= 出題されない)。
+      // = どんな group 数でも各セッションが「未達 group 中心に均等」に分散する。
+
       // 現在の達成数を group / genre 毎に集計
       const { rows: corRows } = await p.query(
         `SELECT q.group_id, q.genre, COUNT(DISTINCT q.id)::int AS n
@@ -5753,31 +5763,55 @@ app.post("/api/seko/sessions/start", async (req, res) => {
       );
       const corMap = new Map();
       for (const r of corRows) corMap.set(`${r.group_id}::${r.genre}`, r.n);
-      // セッション内で出題 group のバランスを取る:
-      // 各 group から最大 ceil(SESSION_SIZE / グループ数) ジャンルだけ選ぶ。
-      // group 内ではターゲット target 未達のジャンル優先 (= 完全未習得を最優先)。
+
       const allGroups = examTarget === "second_only"
         ? [...primaryGroups, ...reviewGroups]
         : primaryGroups;
-      // shubetsu フィルタはすでに sekoGroupsForUser で適用済
-      const wantPerGroup = Math.max(1, Math.ceil(SESSION_SIZE / Math.max(1, allGroups.length)));
-      const pool = [];
-      for (const g of allGroups) {
-        const sortable = (g.genres || []).map((x) => ({
+
+      // 各 group の達成度を計算
+      const groupStats = allGroups.map((g) => {
+        const genres = (g.genres || []).map((x) => ({
           name: x.name,
           target: x.target_count || 10,
           got: corMap.get(`${g.id}::${x.name}`) || 0,
         }));
-        // 未達順 (got/target が小さい順)、tie ブレークは random
-        sortable.sort((a, b) => {
+        const totT = genres.reduce((s, x) => s + x.target, 0);
+        const totG = genres.reduce((s, x) => s + x.got, 0);
+        const ratio = totT > 0 ? totG / totT : 1; // 全完了済は 1、未達は 0
+        return { id: g.id, ratio, genres };
+      });
+
+      // 達成度昇順ソート (= 未達 group 優先)、tie ブレークは random
+      groupStats.sort((a, b) => {
+        if (a.ratio !== b.ratio) return a.ratio - b.ratio;
+        return Math.random() - 0.5;
+      });
+
+      // 完全達成済 (ratio >= 1.0) は除外 → 残ったセッション枠を未達 group で使う
+      // 全 group 達成済の場合のみフォールバックとして全 group を残す (= 復習モード)
+      let activeStats = groupStats.filter((g) => g.ratio < 1.0);
+      if (!activeStats.length) activeStats = groupStats;
+
+      // quota 計算
+      const N = activeStats.length;
+      const baseQuota = Math.floor(SESSION_SIZE / N);
+      const extra = SESSION_SIZE - baseQuota * N;
+
+      // 各 group から quota 数だけジャンル取得 (group 内では target 未達順、tie は random)
+      const pool = [];
+      activeStats.forEach((g, idx) => {
+        const quota = baseQuota + (idx < extra ? 1 : 0);
+        if (quota <= 0) return;
+        const sorted = g.genres.slice().sort((a, b) => {
           const ra = a.target > 0 ? a.got / a.target : 1;
           const rb = b.target > 0 ? b.got / b.target : 1;
           if (ra !== rb) return ra - rb;
           return Math.random() - 0.5;
         });
-        for (const x of sortable.slice(0, wantPerGroup)) pool.push(x.name);
-      }
-      // 二次のみ受験は復習比率を維持 (元 30% 一次復習を踏襲したいが今は均等扱い)
+        for (const x of sorted.slice(0, quota)) pool.push(x.name);
+      });
+
+      // 順番もシャッフル (group 順だと体感「ブロックごとに出る」になるので)
       targetGenres = shuffle(pool);
       if (!targetGenres.length) targetGenres = allowedGenres;
     }
