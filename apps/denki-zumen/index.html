@@ -109,33 +109,7 @@ import { createApp, ref, computed, onMounted, nextTick } from "https://unpkg.com
 import { initAuthBoot, api } from "/api-auth.js";
 import { BottomSheet } from "/bottom-sheet.js";
 
-// PDF.js を必要時だけ動的 import (PDF 受けたら 1ページ目を JPEG 化して /api/zumen/scan へ)
-let pdfjsLib = null;
-async function ensurePdfJs() {
-  if (pdfjsLib) return pdfjsLib;
-  pdfjsLib = await import("https://cdn.jsdelivr.net/npm/pdfjs-dist@4.4.168/build/pdf.min.mjs");
-  pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdn.jsdelivr.net/npm/pdfjs-dist@4.4.168/build/pdf.worker.min.mjs";
-  return pdfjsLib;
-}
-async function pdfFirstPageToJpegBlob(file, maxW = 1800) {
-  const lib = await ensurePdfJs();
-  const buf = await file.arrayBuffer();
-  const doc = await lib.getDocument({ data: buf, useSystemFonts: true }).promise;
-  const page = await doc.getPage(1);
-  const v0 = page.getViewport({ scale: 1 });
-  const scale = Math.min(2.5, maxW / v0.width);
-  const viewport = page.getViewport({ scale });
-  const canvas = document.createElement("canvas");
-  canvas.width = viewport.width;
-  canvas.height = viewport.height;
-  const ctx = canvas.getContext("2d");
-  ctx.fillStyle = "#fff";
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
-  await page.render({ canvasContext: ctx, viewport }).promise;
-  return await new Promise((r) => canvas.toBlob((b) => r(b), "image/jpeg", 0.88));
-}
-
-// 画像をリサイズ + JPEG 化 (細かい文字を残したいので幅 1800)
+// 画像をリサイズ + JPEG 化 (細かい文字を残したいので幅 1800)。PDF は加工せず直接 Gemini へ送る。
 function resizeImage(file, maxSize = 1800) {
   return new Promise((resolve, reject) => {
     const img = new Image();
@@ -334,18 +308,21 @@ const App = {
       e.target.value = "";   // 同じファイルを連続選択できるように
       if (!file) return;
       scanning.value = true;
-      scanProgress.value = "画像を準備…";
+      scanProgress.value = "ファイルを準備…";
       try {
-        let blob;
+        let blob, mimeType;
         if (file.type === "application/pdf") {
-          scanProgress.value = "PDF を画像化…";
-          blob = await pdfFirstPageToJpegBlob(file);
+          // Gemini は PDF をネイティブで受けられる (全ページ一括で見てくれる)。
+          // 画像化を挟まず、原本そのまま送る。
+          blob = file;
+          mimeType = "application/pdf";
         } else {
           blob = await resizeImage(file);
+          mimeType = "image/jpeg";
         }
         scanProgress.value = "AI に送信…";
         const base64 = await blobToBase64(blob);
-        const resp = await api("POST", "/api/zumen/scan", { image: base64, mimeType: "image/jpeg" });
+        const resp = await api("POST", "/api/zumen/scan", { image: base64, mimeType });
         const incoming = Array.isArray(resp?.items) ? resp.items : [];
         if (incoming.length === 0) {
           showToast("品番を検出できませんでした。図面のアップ写真を試してください", true);
