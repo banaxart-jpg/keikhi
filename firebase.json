@@ -17,8 +17,7 @@
       "**/cloudbuild.yaml",
       "**/app.yaml",
       "**/*.md",
-      "admin/**",
-      "denki-zumen/**"
+      "admin/**"
     ],
     "headers": [
       {

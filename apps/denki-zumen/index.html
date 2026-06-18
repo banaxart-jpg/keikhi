@@ -1,0 +1,456 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="電気積算">
+<link rel="apple-touch-icon" href="/icon.png">
+<title>電気積算</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@40,400,0,0">
+<style>
+.icon { font-family: 'Material Symbols Outlined'; font-weight: normal; font-style: normal; display: inline-block; line-height: 1; white-space: nowrap; -webkit-font-feature-settings: 'liga'; -webkit-font-smoothing: antialiased; font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24; color: var(--text); vertical-align: -3px; }
+* { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+:root {
+  --bg: #e4e6ee; --bg2: #d8dae4; --bg3: #ededf3;
+  --sl: rgba(255,255,255,1); --sd: rgba(168,172,192,0.75); --sd2: rgba(148,152,176,0.55);
+  --text: #42455e; --text2: rgba(66,69,94,0.55); --text3: rgba(66,69,94,0.32);
+  --accent: #eab308; --accent2: #ca8a04; --danger: #b04040;
+}
+body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; overflow-x: hidden; padding-bottom: 80px; }
+.top { display: flex; justify-content: space-between; align-items: center; padding: 50px 18px 14px; gap: 8px; }
+.title { font-size: 22px; font-weight: 800; }
+.title .icon { font-size: 26px; vertical-align: -5px; color: var(--accent); }
+.pill { padding: 9px 14px; border-radius: 24px; font-size: 12px; font-weight: 700; cursor: pointer; border: none; color: var(--text2); font-family: inherit; background: var(--bg); box-shadow: 4px 4px 10px var(--sd), -4px -4px 10px var(--sl); }
+.pill:active { box-shadow: inset 3px 3px 8px var(--sd), inset -3px -3px 8px var(--sl); transform: scale(0.96); }
+
+.upload-wrap { padding: 4px 18px 18px; }
+.upload-btn { width: 100%; padding: 22px 14px; border-radius: 20px; border: none; background: var(--bg); cursor: pointer; font-family: inherit; color: var(--text); font-size: 15px; font-weight: 700; box-shadow: 8px 8px 18px var(--sd), -6px -6px 16px var(--sl); display: flex; flex-direction: column; align-items: center; gap: 8px; }
+.upload-btn:active { box-shadow: inset 5px 5px 12px var(--sd), inset -4px -4px 10px var(--sl); transform: scale(0.98); }
+.upload-btn .icon { font-size: 36px; color: var(--accent); }
+.upload-btn:disabled { opacity: 0.5; cursor: wait; }
+.upload-btn .sub { font-size: 11px; color: var(--text2); font-weight: 600; }
+
+.scanning { padding: 14px 18px; text-align: center; font-size: 13px; font-weight: 600; color: var(--text2); }
+.scanning .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); margin: 0 3px; animation: blink 1.2s infinite both; }
+.scanning .dot:nth-child(2) { animation-delay: 0.2s; }
+.scanning .dot:nth-child(3) { animation-delay: 0.4s; }
+@keyframes blink { 0%, 80%, 100% { opacity: 0.3; } 40% { opacity: 1; } }
+
+.summary { padding: 4px 22px 8px; font-size: 12px; color: var(--text2); font-weight: 700; display: flex; gap: 14px; }
+.summary b { color: var(--text); font-weight: 800; }
+
+.items { padding: 0 14px; display: flex; flex-direction: column; gap: 10px; }
+.item-card { background: var(--bg); border-radius: 16px; box-shadow: 4px 4px 10px var(--sd), -4px -4px 10px var(--sl); padding: 12px 14px; display: flex; flex-direction: column; gap: 6px; }
+.item-row { display: flex; align-items: center; gap: 8px; }
+.item-row .qty { flex-shrink: 0; }
+.qty-input { width: 56px; padding: 6px 8px; border-radius: 8px; border: 1px solid var(--text3); background: var(--bg3); font-family: inherit; font-size: 16px; font-weight: 800; text-align: right; color: var(--text); }
+.qty-unit { font-size: 12px; color: var(--text2); font-weight: 700; }
+.name-line { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.name { font-size: 14px; font-weight: 700; word-break: break-word; }
+.partno { font-size: 11px; color: var(--text2); font-weight: 700; font-family: ui-monospace, Menlo, monospace; }
+.meta-line { display: flex; gap: 6px; flex-wrap: wrap; font-size: 11px; color: var(--text2); font-weight: 600; }
+.meta-line .cat { padding: 2px 8px; border-radius: 10px; background: var(--bg3); font-weight: 700; }
+.meta-line .maker { padding: 2px 8px; border-radius: 10px; background: var(--bg3); }
+.meta-line .note { color: var(--text3); }
+.row-actions { display: flex; gap: 4px; flex-shrink: 0; }
+.icon-btn { width: 32px; height: 32px; border-radius: 50%; border: none; background: var(--bg); cursor: pointer; color: var(--text2); display: flex; align-items: center; justify-content: center; box-shadow: 3px 3px 6px var(--sd), -3px -3px 6px var(--sl); }
+.icon-btn:active { box-shadow: inset 2px 2px 5px var(--sd), inset -2px -2px 5px var(--sl); }
+.icon-btn .icon { font-size: 18px; vertical-align: 0; color: var(--text2); }
+.icon-btn.del .icon { color: var(--danger); }
+
+.empty { text-align: center; padding: 40px 20px; color: var(--text2); font-size: 13px; font-weight: 600; }
+.empty .icon { font-size: 38px; color: var(--text3); display: block; margin-bottom: 10px; vertical-align: 0; }
+
+.add-row { padding: 6px 18px 4px; }
+.add-btn { width: 100%; padding: 10px; border-radius: 14px; border: 1px dashed var(--text3); background: none; cursor: pointer; font-family: inherit; font-size: 12px; font-weight: 700; color: var(--text3); }
+.add-btn:hover { color: var(--accent); border-color: var(--accent); }
+
+.bottom-bar { position: fixed; bottom: 0; left: 0; right: 0; padding: 12px 14px calc(14px + env(safe-area-inset-bottom)); background: var(--bg); box-shadow: 0 -8px 20px var(--sd); display: flex; gap: 8px; }
+.bar-btn { flex: 1; padding: 11px; border-radius: 14px; border: none; background: var(--bg); cursor: pointer; font-family: inherit; font-size: 13px; font-weight: 700; color: var(--text); box-shadow: 4px 4px 10px var(--sd), -4px -4px 10px var(--sl); }
+.bar-btn:active { box-shadow: inset 3px 3px 8px var(--sd), inset -3px -3px 8px var(--sl); transform: scale(0.96); }
+.bar-btn.danger { color: var(--danger); }
+.bar-btn:disabled { opacity: 0.5; }
+.bar-btn .icon { font-size: 18px; color: inherit; }
+
+.toast { position: fixed; bottom: 90px; left: 50%; transform: translateX(-50%); background: var(--text); color: white; padding: 10px 18px; border-radius: 14px; font-size: 13px; font-weight: 600; max-width: 320px; text-align: center; z-index: 200; box-shadow: 0 8px 24px rgba(0,0,0,0.18); }
+.toast.err { background: var(--danger); }
+
+.explain-content { padding: 8px 4px; }
+.explain-content .h { font-size: 18px; font-weight: 800; margin-bottom: 4px; }
+.explain-content .sub { font-size: 12px; color: var(--text2); font-weight: 700; margin-bottom: 12px; }
+.explain-content .summary-line { font-size: 14px; line-height: 1.6; margin-bottom: 12px; }
+.explain-content pre.spec { background: var(--bg3); padding: 10px 12px; border-radius: 10px; font-size: 12px; line-height: 1.7; white-space: pre-wrap; word-break: break-word; font-family: inherit; color: var(--text); }
+.explain-content .confidence { font-size: 11px; color: var(--text3); font-weight: 700; margin-top: 8px; }
+.explain-content .alt { margin-top: 12px; }
+.explain-content .alt b { font-size: 12px; color: var(--text2); }
+.explain-content .alt-list { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
+.explain-content .alt-list span { padding: 4px 10px; border-radius: 10px; background: var(--bg3); font-size: 11px; font-family: ui-monospace, Menlo, monospace; font-weight: 700; }
+
+#signinOverlay { display: none; position: fixed; inset: 0; z-index: 400; background: var(--bg); flex-direction: column; align-items: center; justify-content: center; padding: 32px; text-align: center; gap: 18px; }
+</style>
+</head>
+<body>
+<div id="signinOverlay">
+  <div style="font-size:24px;font-weight:800;">電気積算</div>
+  <a class="pill" href="/" style="text-decoration:none;">トップに戻る</a>
+  <div id="signinErr" style="font-size:11px;color:#b04040;font-family:monospace;"></div>
+</div>
+
+<div id="app" style="display:none;"></div>
+
+<script src="/config.js"></script>
+<script type="module">
+import { createApp, ref, computed, onMounted, nextTick } from "https://unpkg.com/vue@3.4.27/dist/vue.esm-browser.prod.js";
+import { initAuthBoot, api } from "/api-auth.js";
+import { BottomSheet } from "/bottom-sheet.js";
+
+// PDF.js を必要時だけ動的 import (PDF 受けたら 1ページ目を JPEG 化して /api/zumen/scan へ)
+let pdfjsLib = null;
+async function ensurePdfJs() {
+  if (pdfjsLib) return pdfjsLib;
+  pdfjsLib = await import("https://cdn.jsdelivr.net/npm/pdfjs-dist@4.4.168/build/pdf.min.mjs");
+  pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdn.jsdelivr.net/npm/pdfjs-dist@4.4.168/build/pdf.worker.min.mjs";
+  return pdfjsLib;
+}
+async function pdfFirstPageToJpegBlob(file, maxW = 1800) {
+  const lib = await ensurePdfJs();
+  const buf = await file.arrayBuffer();
+  const doc = await lib.getDocument({ data: buf, useSystemFonts: true }).promise;
+  const page = await doc.getPage(1);
+  const v0 = page.getViewport({ scale: 1 });
+  const scale = Math.min(2.5, maxW / v0.width);
+  const viewport = page.getViewport({ scale });
+  const canvas = document.createElement("canvas");
+  canvas.width = viewport.width;
+  canvas.height = viewport.height;
+  const ctx = canvas.getContext("2d");
+  ctx.fillStyle = "#fff";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  await page.render({ canvasContext: ctx, viewport }).promise;
+  return await new Promise((r) => canvas.toBlob((b) => r(b), "image/jpeg", 0.88));
+}
+
+// 画像をリサイズ + JPEG 化 (細かい文字を残したいので幅 1800)
+function resizeImage(file, maxSize = 1800) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+    img.onload = () => {
+      const ratio = Math.min(maxSize / img.width, maxSize / img.height, 1);
+      const w = Math.round(img.width * ratio);
+      const h = Math.round(img.height * ratio);
+      const canvas = document.createElement("canvas");
+      canvas.width = w; canvas.height = h;
+      const ctx = canvas.getContext("2d");
+      ctx.fillStyle = "#fff";
+      ctx.fillRect(0, 0, w, h);
+      ctx.drawImage(img, 0, 0, w, h);
+      canvas.toBlob((b) => { URL.revokeObjectURL(url); resolve(b); }, "image/jpeg", 0.9);
+    };
+    img.onerror = (e) => { URL.revokeObjectURL(url); reject(e); };
+    img.src = url;
+  });
+}
+
+function blobToBase64(blob) {
+  return new Promise((resolve, reject) => {
+    const fr = new FileReader();
+    fr.onload = () => resolve(String(fr.result).split(",")[1]);
+    fr.onerror = reject;
+    fr.readAsDataURL(blob);
+  });
+}
+
+const STORAGE_KEY = "denki_zumen_items_v1";
+
+const TEMPLATE = `
+<div>
+  <div class="top">
+    <span class="title"><span class="icon">bolt</span> 電気積算</span>
+    <a class="pill" href="/" style="text-decoration:none;">← 戻る</a>
+  </div>
+
+  <div class="upload-wrap">
+    <label class="upload-btn">
+      <span v-if="!scanning">
+        <span class="icon">photo_camera</span>
+      </span>
+      <span v-else class="scanning" style="padding:0;">
+        <span class="dot"></span><span class="dot"></span><span class="dot"></span>
+      </span>
+      <span v-if="!scanning">図面を読み込む (写真 / PDF / 画像)</span>
+      <span v-else>解析中… {{ scanProgress }}</span>
+      <span class="sub" v-if="!scanning">タップしてカメラ / アルバム / ファイル選択</span>
+      <input type="file" accept="image/*,application/pdf" style="display:none;" @change="onPick" :disabled="scanning">
+    </label>
+  </div>
+
+  <div class="summary" v-if="items.length">
+    <span>{{ items.length }} <b>種</b></span>
+    <span>合計 {{ totalQty }} <b>点</b></span>
+  </div>
+
+  <div class="items" v-if="items.length">
+    <div v-for="(it, idx) in items" :key="it.id" class="item-card">
+      <div class="item-row">
+        <input class="qty-input" type="number" min="0" v-model.number="it.qty" @change="save">
+        <span class="qty-unit">点</span>
+        <div class="name-line">
+          <div class="name">{{ it.name || '(名称なし)' }}</div>
+          <div class="partno" v-if="it.part_no">{{ it.part_no }}</div>
+        </div>
+        <div class="row-actions">
+          <button class="icon-btn" @click="explain(it)" :title="'詳細'"><span class="icon">info</span></button>
+          <button class="icon-btn del" @click="removeItem(idx)" :title="'削除'"><span class="icon">close</span></button>
+        </div>
+      </div>
+      <div class="meta-line">
+        <span v-if="it.category" class="cat">{{ it.category }}</span>
+        <span v-if="it.maker" class="maker">{{ it.maker }}</span>
+        <span v-if="it.note" class="note">{{ it.note }}</span>
+      </div>
+    </div>
+  </div>
+
+  <div v-else-if="!scanning" class="empty">
+    <span class="icon">draw</span>
+    まだ何もありません。<br>図面を読み込むと品番と数量が並びます。
+  </div>
+
+  <div class="add-row" v-if="items.length">
+    <button class="add-btn" @click="addBlank">+ 行を追加 (手入力)</button>
+  </div>
+
+  <div class="bottom-bar">
+    <button class="bar-btn" @click="copyText" :disabled="!items.length"><span class="icon">content_copy</span> コピー</button>
+    <button class="bar-btn" @click="downloadCsv" :disabled="!items.length"><span class="icon">download</span> CSV</button>
+    <button class="bar-btn danger" @click="clearAll" :disabled="!items.length"><span class="icon">delete</span> 全削除</button>
+  </div>
+
+  <bottom-sheet v-model="explainOpen" title="この器具">
+    <div class="explain-content" v-if="explainResult">
+      <div class="h">{{ explainResult.name || explainTarget?.name || '(不明)' }}</div>
+      <div class="sub">
+        <span v-if="explainResult.maker">{{ explainResult.maker }}</span>
+        <span v-if="explainTarget?.part_no"> / {{ explainTarget.part_no }}</span>
+      </div>
+      <div class="summary-line">{{ explainResult.summary || '情報なし' }}</div>
+      <pre class="spec" v-if="explainResult.spec">{{ explainResult.spec }}</pre>
+      <div class="alt" v-if="explainResult.alt_parts && explainResult.alt_parts.length">
+        <b>互換 / 同等品:</b>
+        <div class="alt-list"><span v-for="a in explainResult.alt_parts" :key="a">{{ a }}</span></div>
+      </div>
+      <div class="confidence">信頼度: {{ explainResult.confidence || '?' }}{{ explainResult.exists === false ? ' (推定品)' : '' }}</div>
+    </div>
+    <div class="explain-content" v-else>
+      <div class="scanning" style="padding:18px 0;">
+        <span class="dot"></span><span class="dot"></span><span class="dot"></span>
+      </div>
+    </div>
+  </bottom-sheet>
+
+  <div v-if="toast" class="toast" :class="{ err: toastErr }">{{ toast }}</div>
+</div>
+`;
+
+const App = {
+  template: TEMPLATE,
+  setup() {
+    const items = ref([]);
+    const scanning = ref(false);
+    const scanProgress = ref("");
+    const explainOpen = ref(false);
+    const explainTarget = ref(null);
+    const explainResult = ref(null);
+    const toast = ref("");
+    const toastErr = ref(false);
+    let toastTimer = null;
+
+    function showToast(msg, err = false) {
+      toast.value = msg;
+      toastErr.value = err;
+      clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => { toast.value = ""; }, err ? 5000 : 2200);
+    }
+
+    function load() {
+      try { items.value = JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]"); }
+      catch { items.value = []; }
+    }
+    function save() {
+      try { localStorage.setItem(STORAGE_KEY, JSON.stringify(items.value)); } catch (_) {}
+    }
+
+    const totalQty = computed(() => items.value.reduce((s, it) => s + (Number(it.qty) || 0), 0));
+
+    // 既存 items と新着 incoming をマージ: 同じ part_no があれば qty 加算、無ければ新規追加。
+    // part_no が空のものは名前で合算、それも被らなければ末尾に append。
+    function mergeIncoming(incoming) {
+      const idxByPart = new Map();
+      const idxByName = new Map();
+      items.value.forEach((it, i) => {
+        if (it.part_no) idxByPart.set(it.part_no.trim().toLowerCase(), i);
+        else if (it.name) idxByName.set(it.name.trim().toLowerCase(), i);
+      });
+      let added = 0, merged = 0;
+      for (const x of incoming) {
+        const qty = Number(x.qty) || 0;
+        if (qty === 0 && !x.part_no && !x.name) continue;
+        const key = (x.part_no || "").trim().toLowerCase();
+        const nkey = (x.name || "").trim().toLowerCase();
+        const target = key ? idxByPart.get(key) : (nkey ? idxByName.get(nkey) : undefined);
+        if (target !== undefined) {
+          items.value[target].qty = (Number(items.value[target].qty) || 0) + qty;
+          // 既存に欠けてた情報があれば補完 (上書きはしない)
+          for (const f of ["maker", "category", "note", "symbol"]) {
+            if (!items.value[target][f] && x[f]) items.value[target][f] = x[f];
+          }
+          merged++;
+        } else {
+          items.value.push({
+            id: crypto.randomUUID(),
+            part_no: x.part_no || "",
+            name: x.name || "",
+            maker: x.maker || "",
+            qty,
+            category: x.category || "",
+            symbol: x.symbol || "",
+            note: x.note || "",
+          });
+          added++;
+        }
+      }
+      save();
+      return { added, merged };
+    }
+
+    async function onPick(e) {
+      const file = e.target.files?.[0];
+      e.target.value = "";   // 同じファイルを連続選択できるように
+      if (!file) return;
+      scanning.value = true;
+      scanProgress.value = "画像を準備…";
+      try {
+        let blob;
+        if (file.type === "application/pdf") {
+          scanProgress.value = "PDF を画像化…";
+          blob = await pdfFirstPageToJpegBlob(file);
+        } else {
+          blob = await resizeImage(file);
+        }
+        scanProgress.value = "AI に送信…";
+        const base64 = await blobToBase64(blob);
+        const resp = await api("POST", "/api/zumen/scan", { image: base64, mimeType: "image/jpeg" });
+        const incoming = Array.isArray(resp?.items) ? resp.items : [];
+        if (incoming.length === 0) {
+          showToast("品番を検出できませんでした。図面のアップ写真を試してください", true);
+        } else {
+          const { added, merged } = mergeIncoming(incoming);
+          showToast(`${added} 件追加、${merged} 件加算`);
+        }
+      } catch (err) {
+        console.warn("[zumen] scan failed:", err);
+        showToast("解析失敗: " + (err.message || err), true);
+      } finally {
+        scanning.value = false;
+        scanProgress.value = "";
+      }
+    }
+
+    function addBlank() {
+      items.value.push({
+        id: crypto.randomUUID(),
+        part_no: "", name: "", maker: "", qty: 1,
+        category: "", symbol: "", note: "",
+      });
+      save();
+    }
+
+    function removeItem(idx) {
+      if (!confirm("この行を削除しますか?")) return;
+      items.value.splice(idx, 1);
+      save();
+    }
+
+    function clearAll() {
+      if (!confirm(`${items.value.length} 件まとめて削除しますか?`)) return;
+      items.value = [];
+      save();
+    }
+
+    async function explain(it) {
+      explainTarget.value = it;
+      explainResult.value = null;
+      explainOpen.value = true;
+      try {
+        const r = await api("POST", "/api/zumen/explain", {
+          partNo: it.part_no || "",
+          name: it.name || "",
+        });
+        explainResult.value = r || { exists: false };
+      } catch (err) {
+        explainResult.value = { exists: false, summary: "取得失敗: " + (err.message || err), confidence: "?" };
+      }
+    }
+
+    function copyText() {
+      // 発注向けにテキスト整形 (1 行: 数量 x 品番 名称 メーカー)
+      const lines = items.value.map((it) => {
+        const parts = [];
+        parts.push(`${it.qty || 0}`);
+        if (it.part_no) parts.push(it.part_no);
+        if (it.name) parts.push(it.name);
+        if (it.maker) parts.push(`(${it.maker})`);
+        return parts.join("\t");
+      });
+      const text = lines.join("\n");
+      navigator.clipboard?.writeText(text).then(
+        () => showToast("コピーしました"),
+        () => showToast("コピー失敗", true)
+      );
+    }
+
+    function downloadCsv() {
+      const header = ["数量", "品番", "名称", "メーカー", "カテゴリ", "記号", "備考"];
+      const csvCell = (v) => {
+        const s = String(v ?? "");
+        return /[,"\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+      };
+      const rows = items.value.map((it) =>
+        [it.qty, it.part_no, it.name, it.maker, it.category, it.symbol, it.note].map(csvCell).join(",")
+      );
+      const blob = new Blob(["﻿" + [header.join(","), ...rows].join("\n")], { type: "text/csv" });
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = `denki_${new Date().toISOString().slice(0, 10)}.csv`;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+    }
+
+    onMounted(() => { load(); });
+
+    return {
+      items, scanning, scanProgress, totalQty,
+      onPick, addBlank, removeItem, clearAll, save,
+      explain, explainOpen, explainTarget, explainResult,
+      copyText, downloadCsv,
+      toast, toastErr,
+    };
+  },
+};
+
+initAuthBoot({
+  returnPath: "/denki-zumen/",
+  onReady: () => {
+    document.getElementById("app").style.display = "";
+    createApp(App).component("bottom-sheet", BottomSheet).mount("#app");
+  },
+});
+</script>
+</body>
+</html>

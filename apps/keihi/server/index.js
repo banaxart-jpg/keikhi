@@ -2837,6 +2837,83 @@ app.post("/api/scan", async (req, res) => {
 });
 
 // ─────────────────────────────
+// Denki Zumen (電気図面 → 品番・数量 抽出)
+// Phase 1: 図面画像を投げて、品番 / 名称 / 数量 / カテゴリ / メーカー を JSON で返す。
+// 既存の /api/scan と同じ Gemini Vision + jsonMode パターン。
+// ─────────────────────────────
+app.post("/api/zumen/scan", async (req, res) => {
+  try {
+    if (!genAI) return res.status(503).json({ error: "GEMINI_API_KEY not configured" });
+    const { image, mimeType = "image/jpeg" } = req.body || {};
+    if (!image) return res.status(400).json({ error: "image (base64) is required" });
+
+    const prompt = `この電気設備図面を解析して、必要な器具・材料を JSON のみで返してください。
+凡例表・記号 (シンボル) と本図の両方を見て、図中に出てくる器具を全て拾い出します。
+同じ品番がいくつ図中に出てくるかを数えて qty に入れてください。品番が読めなければ part_no は空文字。
+記号 (◯, ▲, スイッチ記号, コンセント記号 等) と凡例の対応も読み取ること。
+形式:
+{"items":[{
+  "part_no":"品番 / 型番 (Panasonic WTC1031 等。読めなければ空文字)",
+  "name":"器具名 (シングル片切スイッチ / コンセント / ダウンライト 等)",
+  "maker":"メーカー (Panasonic / 神保電器 / 大光電機 等。読めなければ空文字)",
+  "qty":数量の整数,
+  "category":"照明器具 or スイッチ・コンセント or 分電盤 or 配線資材 or 弱電 or その他",
+  "symbol":"図面上の記号があれば短文 (例: 〇 + 数字、片切スイッチ記号)。無ければ空文字",
+  "note":"特記 (200V 専用 / 防雨 / 接地極付 / WHITE 等。無ければ空文字)"
+}]}`;
+    const { result, modelUsed } = await callGeminiWithFallback([
+      prompt,
+      { inlineData: { data: image, mimeType } },
+    ], { jsonMode: true, maxOutputTokens: 8192 });
+    const text = result.response.text();
+    const raw = parseLooseJson(text);
+    if (!raw) throw new Error("AI のJSON 出力を解析できませんでした (画像が不鮮明 / 文字認識失敗の可能性)");
+    const items = Array.isArray(raw?.items) ? raw.items : [];
+    res.json({ items, modelUsed });
+  } catch (err) {
+    console.error("zumen scan error", err);
+    const msg = String(err?.message || err);
+    const isTransient = /\b(503|429|500)\b|UNAVAILABLE|overload|high demand/i.test(msg);
+    res.status(isTransient ? 503 : 500).json({
+      error: isTransient ? `Gemini が混雑中です。少し待って再実行してください: ${msg.slice(0, 200)}` : msg,
+    });
+  }
+});
+
+// 品番 → 製品情報 (これ何？)
+// 既存の Gemini にメーカー・用途・仕様を聞くだけ。製品 DB は持たない。
+app.post("/api/zumen/explain", async (req, res) => {
+  try {
+    if (!genAI) return res.status(503).json({ error: "GEMINI_API_KEY not configured" });
+    const { partNo = "", name = "" } = req.body || {};
+    const query = (partNo || name).trim();
+    if (!query) return res.status(400).json({ error: "partNo or name is required" });
+    const prompt = `電気設備の品番「${query}」について、現場の職人が発注前に確認したい情報を JSON のみで返してください。
+推測になる項目は confidence を "low" にすること。実在しなければ exists=false。
+形式:
+{
+  "exists": true|false,
+  "maker": "メーカー名 (推測ならその旨)",
+  "name": "正式品名",
+  "category": "照明 / スイッチ / コンセント / 分電盤 / 配線資材 / 弱電 / その他",
+  "summary": "1-2行で何の器具か",
+  "spec": "電圧・電流・口数・色・防水等の主要スペックを箇条書き風に",
+  "alt_parts": ["互換 or 同等品の型番があれば 0-3 個"],
+  "confidence": "high|medium|low"
+}`;
+    const { result } = await callGeminiWithFallback(prompt, {
+      jsonMode: true, maxOutputTokens: 1024, primaryModel: "gemini-2.5-flash",
+    });
+    const text = result.response.text();
+    const parsed = parseLooseJson(text, { logErr: false }) || { exists: false };
+    res.json(parsed);
+  } catch (err) {
+    console.error("zumen explain error", err);
+    res.status(500).json({ error: String(err?.message || err) });
+  }
+});
+
+// ─────────────────────────────
 // AI 3人議論 (giron)
 // ─────────────────────────────
 // speakers: [{ name: "Gemini", provider: "gemini" }, { name: "Claude", provider: "claude" }, ...]
