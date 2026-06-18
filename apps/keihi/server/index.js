@@ -2848,9 +2848,11 @@ app.post("/api/zumen/scan", async (req, res) => {
     if (!image) return res.status(400).json({ error: "image (base64) is required" });
 
     const prompt = `この電気設備図面を解析して、必要な器具・材料を JSON のみで返してください。
+**JSON 以外のテキスト (説明文・前置き・コードフェンス等) を一切出力しないこと。**
 凡例表・記号 (シンボル) と本図の両方を見て、図中に出てくる器具を全て拾い出します。
 同じ品番がいくつ図中に出てくるかを数えて qty に入れてください。品番が読めなければ part_no は空文字。
 記号 (◯, ▲, スイッチ記号, コンセント記号 等) と凡例の対応も読み取ること。
+**もし図面が不鮮明・部分的・電気図面でない場合でも、エラー文ではなく {"items":[]} (空配列) を返すこと。**
 形式:
 {"items":[{
   "part_no":"品番 / 型番 (Panasonic WTC1031 等。読めなければ空文字)",
@@ -2864,10 +2866,15 @@ app.post("/api/zumen/scan", async (req, res) => {
     const { result, modelUsed } = await callGeminiWithFallback([
       prompt,
       { inlineData: { data: image, mimeType } },
-    ], { jsonMode: true, maxOutputTokens: 8192 });
+    ], { jsonMode: true, maxOutputTokens: 16384 });
     const text = result.response.text();
+    console.log(`[zumen/scan] model=${modelUsed} text.len=${text.length} head="${text.slice(0, 200).replace(/\s+/g, " ")}"`);
     const raw = parseLooseJson(text);
-    if (!raw) throw new Error("AI のJSON 出力を解析できませんでした (画像が不鮮明 / 文字認識失敗の可能性)");
+    if (!raw) {
+      // raw text の頭をエラーに含めて、フロントで何が返ってきたか見えるようにする
+      const head = text.slice(0, 200).replace(/\s+/g, " ");
+      throw new Error(`AI の出力を解析できませんでした (text.len=${text.length}, head="${head}")`);
+    }
     const items = Array.isArray(raw?.items) ? raw.items : [];
     res.json({ items, modelUsed });
   } catch (err) {
