@@ -35,13 +35,51 @@ TP/SL 判定にも流用する。本コードの backtest engine では:
 - ML / ニューラル系へ移行
 あたり。
 
-## 内蔵戦略 (4 種、apps/keihi/server/fx-lib/strategies.js)
+## キャリートレード戦略について (= 唯一見つかった本物の edge)
+
+実験 1-12 で「retail simple TA に edge 無し」を実証した後、実験 13 で
+**キャリートレード (= 金利差を取る構造的 edge)** を検証。
+
+### バックテスト結果 (1.25 年、6 JPY クロス buy & hold)
+- 6 ペア合算 **+14754 pips ≒ +147 yen / 1 通貨**
+- **Max DD: -5134 pips ≒ -51 yen / 1 通貨 × 6 ペア**
+- 学術コンセンサスでも「currency carry premium」は実在の edge
+
+### 「ヤバい」点 (= 必ず理解しておく)
+- 1 ペア当たり 1 通貨運用なら DD ≒ 8.5 yen、しかし証拠金 6 yen (レバ 25x) → **強制ロスカット圏内**
+- 月 1500-2000 pips のドローダウン局面が普通にある (2024-11、2025-02、2025-04 等)
+- 2024-07 BOJ 介入級のクラッシュで DD さらに 2-3 倍の可能性 (= 数日で口座蒸発)
+
+### 安全に運用する条件
+- 証拠金バッファを **naive 計算の 10 倍以上** 確保 (= 1 ペア 6 yen → 60-80 yen)
+- 実質レバ 2-3 倍に抑える
+- 必ず **practice 環境で 3 ヶ月以上観察** してから本番
+- 「数ヶ月かけて利益、1 日で半年分の利益が消える」可能性を受け入れる
+
+### fx-bot での運用方法
+1. 設定モーダルで **戦略 = キャリー保有** を選択
+2. **granularity = D (日足)** に変更
+3. **TP = 500 pips、SL = 200 pips** くらいに広めに (キャリーは長期保有が前提)
+4. **units_per_trade = 1**、**confidence_threshold = 0.7**
+5. **OANDA_ENV = practice** で 1-3 ヶ月観察
+6. JPY クロス (USDJPY / AUDJPY / NZDJPY / GBPJPY / CADJPY) のみ対象
+
+### 推奨ペア (年スワップ概算)
+- USD/JPY: ~+4.5% (中央値 swap 1.8 pips/day)
+- GBP/JPY: ~+4.2% (2.3 pips/day、ボラ高め)
+- AUD/JPY: ~+3.8% (1.0 pips/day)
+- NZD/JPY: ~+4.0% (1.1 pips/day)
+
+スワップ値は broker と日々変動するので OANDA の Account Summary で実値確認。
+
+## 内蔵戦略 (5 種、apps/keihi/server/fx-lib/strategies.js)
 
 | ID | 名前 | 中身 |
 |---|---|---|
 | `ema_crossover` | EMA クロス | EMA 短期/長期 のクロスでトレンドフォロー (デフォルト) |
 | `rsi_mean_revert` | RSI 逆張り | RSI 30 切で LONG、70 超で SHORT (レンジ向け) |
 | `bb_breakout` | BB ブレイク | ボリンジャー上下抜けで順張りモメンタム |
+| `carry_hold` | キャリー保有 | JPY クロスの上昇トレンド中だけ LONG、スワップ累積狙い (日足推奨) |
 | `ai_vision` | AI 判断 | Gemini にチャート渡して決める旧式 (重い、参考用) |
 
 各戦略は paramSchema を持ち、UI に自動的にスライダー入力が生える。

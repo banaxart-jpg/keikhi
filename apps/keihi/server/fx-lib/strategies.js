@@ -150,6 +150,45 @@ const ai_vision = {
   },
 };
 
+// ─── 戦略 5: キャリー保有 (構造的 yield 狙い、TA じゃない edge) ───
+// 高金利通貨ペアの上昇トレンド中だけ LONG 保有。スワップ累積を狙う長期戦略。
+// JPY クロス (USDJPY、AUDJPY 等) でレバ 25 倍想定。
+// ★ TA で edge 出ず、キャリーは構造的 (金利差) で唯一見つかった edge。
+//   1.25 年 backtest で 6 JPY クロス buy & hold 合算 +14754 pips、ただし
+//   Max DD -5134 pips → 証拠金バッファ ≥10x 必須。granularity=D 推奨。
+// SHORT は出さない (低金利通貨買い = 逆スワップで負ける)。
+const carry_hold = {
+  name: "キャリー保有",
+  description: "JPY クロスの上昇トレンド中だけ LONG 保有、スワップ累積狙い。日足推奨。SL 余裕 + 大きい証拠金バッファ必須。",
+  defaultParams: { fast: 20, slow: 50, min_sep_pips: 3 },
+  paramSchema: [
+    { key: "fast", label: "EMA 短期", min: 5, max: 100, step: 1 },
+    { key: "slow", label: "EMA 長期", min: 20, max: 200, step: 1 },
+    { key: "min_sep_pips", label: "最小 EMA 乖離 (pips)", min: 0, max: 100, step: 1 },
+  ],
+  decide(candles, params, instrument) {
+    const p = { ...carry_hold.defaultParams, ...params };
+    const closes = candles.map((c) => c.c);
+    const fastA = ema(closes, p.fast);
+    const slowA = ema(closes, p.slow);
+    const lf = last(fastA);
+    const ls = last(slowA);
+    if (lf == null || ls == null) return pass("EMA 初期化中");
+    const pip = String(instrument || "").endsWith("_JPY") ? 0.01 : 0.0001;
+    const sepPips = (lf - ls) / pip;
+    // EMA 上昇トレンドで一定以上の乖離があれば LONG
+    if (sepPips > p.min_sep_pips) {
+      const conf = Math.min(0.95, 0.7 + Math.min(0.25, sepPips / 50));
+      return {
+        decision: "LONG",
+        confidence: conf,
+        reasoning: `EMA${p.fast} が EMA${p.slow} の +${sepPips.toFixed(1)} pips、上昇トレンド継続中。スワップ累積を狙って LONG 保有。`,
+      };
+    }
+    return pass(`EMA 乖離 ${sepPips.toFixed(1)} pips ≤ ${p.min_sep_pips}、trend 弱・反転リスク → 保有見送り`);
+  },
+};
+
 function pass(reason) {
   return { decision: "PASS", confidence: 0, reasoning: reason || "" };
 }
@@ -158,6 +197,7 @@ export const STRATEGIES = {
   ema_crossover,
   rsi_mean_revert,
   bb_breakout,
+  carry_hold,
   ai_vision,
 };
 

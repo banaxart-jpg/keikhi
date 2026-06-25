@@ -528,6 +528,93 @@ cointegration ベース統計裁定も **retail H1 粒度では edge 無し**。
 
 ---
 
+## 実験 13: キャリートレード (= TA じゃない構造的 edge)
+
+**日時**: 2026-06-16
+**user 判断**: 「TA で edge 出ないなら、キャリー方向で再挑戦」
+**スクリプト**: `/tmp/fx_carry.mjs`、`/tmp/fx_carry_dd.mjs`
+**データ**: 6 JPY クロス (USD/JPY、AUD/JPY、NZD/JPY、GBP/JPY、EUR/JPY、CAD/JPY) の日足
+**期間**: 2024-09-16 〜 2026-06-22 (450 日 ≒ 1.25 年)
+
+### 概算 swap (LONG side、broker 中央値 pips/day)
+- USD/JPY: +1.8
+- AUD/JPY: +1.0
+- NZD/JPY: +1.1
+- GBP/JPY: +2.3
+- EUR/JPY: +0.6
+- CAD/JPY: +1.2
+
+### 戦略 A: trend filter (D1 EMA20/50 cross で出入り)
+| pair | trades | wr | sum total pips |
+|---|---|---|---|
+| usdjpy | 4 | 100% | +1308 |
+| audjpy | 2 | 50% | +1841 |
+| nzdjpy | 6 | 33% | +47 |
+| gbpjpy | 4 | 25% | +1283 |
+| eurjpy | 4 | 25% | +1106 |
+| cadjpy | 5 | 40% | +602 |
+
+**6 ペア合算: 25 trades、通算 +6187 pips (うち swap +2483、cap +3729)**
+
+### 戦略 B: 純 buy & hold (始点から終点までずっと LONG)
+| pair | days | total pips |
+|---|---|---|
+| usdjpy | 450 | +2898 |
+| audjpy | 453 | +2150 |
+| nzdjpy | 453 | +936 |
+| gbpjpy | 453 | +3780 |
+| eurjpy | 453 | +2997 |
+| cadjpy | 453 | +1576 |
+
+**6 ペア合算: 通算 +14337 pips ≒ +147 yen / 1 通貨**
+
+trend filter (+6187) を pure buy & hold (+14337) が圧倒。
+理由: trend filter は調整局面で逃げ、トレンド再開で reentry 遅れ。
+コスト + reentry 遅れで前半 -1327 pips 負ける。
+
+### 重大: 最大ドローダウン (DD)
+6 ペア合算 buy & hold:
+- 最終 +14754 pips
+- ピーク +15275 pips
+- **Max DD: -5134 pips (= 51 yen / 1 通貨 × 6 ペア)**
+- DD 発生: 2025-04-09 (米国相互関税ショック)
+
+1 ペア当たり DD ≒ 8.5 yen。証拠金 6 yen (1 通貨、レバ 25x) → **強制ロスカット圏内**。
+
+### 月次 PnL の荒さ
+```
+2024-11: -1947 pips
+2025-02: -2045 pips
+2025-04: -1088 pips
+```
+**月 1500-2000 pips 飛ぶ月が複数回**。年トータルでプラスでも途中で証拠金枯渇するパターン。
+
+### 在/不在検証 (in/out split)
+- buy & hold: 前半 +4862、後半 +9315 → 両方プラス、後半が大きい
+- trend filter: **前半 -1327**、後半 +7880 → 前半が負け = 不安定
+
+### キャリークラッシュ局面 (2024-07 BOJ 介入) は dataset 外
+Yahoo H1 上限 720 日のため 2024-07 入らず。あの月 USD/JPY 8% 下落 → 追加 DD 10000+ pips の可能性。
+
+### 結論
+
+**初めての本物の edge 候補発見**:
+- 純 buy & hold で年換算 +118 円 / 6 ペア
+- 「金利差」という構造的要因が効いてる (= TA じゃない)
+- 学術コンセンサスでも「キャリーには edge ある (= currency carry premium)」が認められてる領域
+
+**でも単純運用は危険**:
+- Max DD 51 円 vs 証拠金 36 円 = レバ過大、強制ロスカット必至
+- 「証拠金 1 ペア 6 円」想定だと爆死する
+- 実運用は **ペア当たり 60-80 円以上のバッファ** が要る (= 実質レバ 2-3 倍)
+
+### 次の action
+1. fx-bot に `carry_hold` 戦略を追加 (= 「上昇トレンド中だけ LONG 保有」)
+2. ドキュメントに「証拠金バッファ ≥10x 推奨」「2024-07 級のクラッシュで DD 倍増」明記
+3. 実運用は practice 口座で数ヶ月観察してから本番
+
+---
+
 ## メモ: バックテストの作法 (失敗から学んだこと)
 
 1. **look-ahead bias check**: entry 価格は signal 算出後に取得可能な価格か?
