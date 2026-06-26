@@ -73,6 +73,29 @@ body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); 
 .result-actions .pill { padding: 12px 22px; font-size: 13px; font-weight: 800; color: var(--text); }
 .result-actions .primary { background: var(--accent); color: white; }
 
+/* ホーム画面 (モード選択) */
+.home-stat { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; padding: 6px 0 18px; }
+.home-stat .num { font-size: 28px; font-weight: 900; color: var(--accent); line-height: 1; letter-spacing: -0.02em; text-align: center; }
+.home-stat .lbl { font-size: 10px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase; color: var(--text2); margin-top: 4px; text-align: center; }
+.mode-btn { display: flex; align-items: center; gap: 14px; padding: 18px; border-radius: 18px; border: none; background: var(--bg); cursor: pointer; font-family: inherit; text-align: left; box-shadow: 6px 6px 14px var(--sd), -4px -4px 12px var(--sl); margin-bottom: 12px; width: 100%; color: var(--text); }
+.mode-btn:active { transform: scale(0.98); box-shadow: inset 4px 4px 10px var(--sd), inset -3px -3px 8px var(--sl); }
+.mode-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.mode-btn .micon { width: 44px; height: 44px; border-radius: 14px; display: flex; align-items: center; justify-content: center; background: rgba(176,137,104,0.18); flex-shrink: 0; }
+.mode-btn .micon .icon { font-size: 24px; color: var(--accent); vertical-align: 0; }
+.mode-btn .mlbl { flex: 1; min-width: 0; }
+.mode-btn .mname { font-size: 15px; font-weight: 800; }
+.mode-btn .msub { font-size: 11px; color: var(--text2); font-weight: 600; margin-top: 2px; }
+
+/* 成績画面 */
+.stats-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; padding: 6px 0 16px; }
+.stats-cell { padding: 14px; border-radius: 14px; background: rgba(154,160,184,0.1); box-shadow: inset 2px 2px 6px var(--sd), inset -2px -2px 6px var(--sl); }
+.stats-cell .num { font-size: 26px; font-weight: 900; color: var(--accent); line-height: 1; letter-spacing: -0.02em; }
+.stats-cell .lbl { font-size: 10px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase; color: var(--text2); margin-top: 4px; }
+.weak-list { display: flex; flex-direction: column; gap: 6px; }
+.weak-row { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 10px; background: rgba(154,160,184,0.08); font-size: 12px; }
+.weak-q { font-weight: 700; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.weak-rate { font-size: 11px; font-weight: 800; color: var(--incorrect); white-space: nowrap; }
+
 #signinOverlay { display: none; position: fixed; inset: 0; z-index: 400; background: var(--bg); flex-direction: column; align-items: center; justify-content: center; padding: 32px; text-align: center; gap: 18px; }
 </style>
 </head>
@@ -87,12 +110,12 @@ body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); 
   <div class="bar">
     <a class="pill" href="/"><span class="icon">arrow_back</span> 戻る</a>
     <span style="font-size:11px;letter-spacing:0.22em;color:var(--text3);font-weight:700;text-transform:uppercase;">FUNGI QUIZ</span>
-    <button class="pill" id="restartBtn" type="button"><span class="icon">refresh</span> やり直し</button>
+    <button class="pill" id="homeBtn" type="button"><span class="icon">home</span> ホーム</button>
   </div>
 
   <div class="wrap">
     <div class="title">菌学</div>
-    <div class="subtitle">4 択クイズ。間違えた問題は同じセッション内でもう一度出ます。</div>
+    <div class="subtitle" id="subtitle">4 択クイズ。10 問 1 セッション。</div>
 
     <div id="quizArea"></div>
   </div>
@@ -100,7 +123,10 @@ body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); 
 
 <script src="/config.js"></script>
 <script type="module">
-import { initAuthBoot } from "/api-auth.js";
+import { initAuthBoot, getFbAuth } from "/api-auth.js";
+import {
+  getFirestore, doc, setDoc, onSnapshot, serverTimestamp,
+} from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
 
 // ─────────────────────────────
 // 問題プール
@@ -471,17 +497,24 @@ const QUESTIONS = [
 // ─────────────────────────────
 // セッション設定
 // ─────────────────────────────
-const SESSION_LEN = 10;   // 1 セッションあたりの出題数 (不正解で再出題された分も含めて N 回回答したら終了)
+const SESSION_LEN = 10;   // 1 セッション当たりの出題数
 
 // ─────────────────────────────
 // State
 // ─────────────────────────────
-let queue = [];           // 残りの出題順 (QUESTIONS の index)。先頭が次に出す問題。
-let wrongOnceSet = null;  // このセッション中に 1 回でも間違えた問題の index 集合 → 出題時に RETRY バッジ
-let attempts = 0;         // 今までに回答した回数
-let correct = 0;          // 正解数
-let curIdx = null;        // 現在出題中の問題 index
+let currentScreen = "home";   // "home" | "quiz" | "result" | "stats"
+let currentMode = "normal";   // "normal" | "review"
+let queue = [];
+let wrongOnceSet = null;
+let attempts = 0;
+let correct = 0;
+let curIdx = null;
+let curShuffle = null;        // { choices, answerIdx } — 表示用にシャッフルした選択肢
 let answered = false;
+let sessionResults = [];      // [{ id, correct }]
+// 累積進捗 (Firestore と同期)
+let progress = { totalSessions: 0, totalCorrect: 0, totalAttempts: 0, perQuestion: {} };
+let db = null, progressDocRef = null, unsubscribeProgress = null;
 
 const $ = (id) => document.getElementById(id);
 
@@ -494,17 +527,204 @@ function shuffle(arr) {
   return a;
 }
 
-function startSession() {
+function shuffleChoices(q) {
+  // 表示順をランダムにして、新しい順序での正解 index を返す
+  const order = shuffle(q.choices.map((_, i) => i));
+  return {
+    choices: order.map((i) => q.choices[i]),
+    answerIdx: order.indexOf(q.answer),
+  };
+}
+
+// 問題に安定 id を付与 (q + choices のハッシュ)。Firestore キーとして使用。
+// 問題文を編集すると新しい id になる (= 旧成績が引き継がれない) ので注意。
+async function ensureQuestionIds() {
+  for (const q of QUESTIONS) {
+    if (q.id) continue;
+    const buf = new TextEncoder().encode(q.q + "|" + q.choices.join("|"));
+    const hash = await crypto.subtle.digest("SHA-1", buf);
+    q.id = Array.from(new Uint8Array(hash)).slice(0, 5)
+      .map((b) => b.toString(16).padStart(2, "0")).join("");
+  }
+}
+
+// ─────────────────────────────
+// Firestore: 進捗保存
+// ─────────────────────────────
+async function setupFirestoreProgress() {
+  const auth = getFbAuth();
+  if (!auth?.currentUser) return;
+  if (db) return;
+  try {
+    db = getFirestore(auth.app);
+    progressDocRef = doc(db, "fungi_progress", auth.currentUser.uid);
+    unsubscribeProgress = onSnapshot(progressDocRef, (snap) => {
+      if (snap.exists()) {
+        const d = snap.data();
+        progress = {
+          totalSessions: d.totalSessions || 0,
+          totalCorrect: d.totalCorrect || 0,
+          totalAttempts: d.totalAttempts || 0,
+          perQuestion: d.perQuestion || {},
+        };
+      }
+      // ホームが表示中なら統計を再描画
+      if (currentScreen === "home") showHome();
+      else if (currentScreen === "stats") showStats();
+    }, (err) => console.warn("[fungi] subscription error:", err?.message || err));
+  } catch (e) {
+    console.warn("[fungi] setupFirestoreProgress failed:", e?.message || e);
+  }
+}
+
+async function saveSessionResult() {
+  // ローカル先反映 (snapshot 待ちで UI が古いまま見えるのを防ぐ)
+  const newPerQ = { ...progress.perQuestion };
+  for (const r of sessionResults) {
+    const pq = newPerQ[r.id] || { tries: 0, correct: 0 };
+    pq.tries += 1;
+    if (r.correct) pq.correct += 1;
+    else pq.lastWrong = Date.now();
+    newPerQ[r.id] = pq;
+  }
+  progress = {
+    totalSessions: progress.totalSessions + 1,
+    totalCorrect: progress.totalCorrect + correct,
+    totalAttempts: progress.totalAttempts + attempts,
+    perQuestion: newPerQ,
+  };
+  if (!progressDocRef) return;
+  try {
+    await setDoc(progressDocRef, {
+      totalSessions: progress.totalSessions,
+      totalCorrect: progress.totalCorrect,
+      totalAttempts: progress.totalAttempts,
+      perQuestion: progress.perQuestion,
+      lastUpdated: serverTimestamp(),
+    }, { merge: true });
+  } catch (e) {
+    console.warn("[fungi] save failed:", e?.message || e);
+  }
+}
+
+function getReviewPool() {
+  const out = [];
+  for (let i = 0; i < QUESTIONS.length; i++) {
+    const pq = progress.perQuestion[QUESTIONS[i].id];
+    if (pq && pq.correct < pq.tries) out.push(i);
+  }
+  return out;
+}
+
+// ─────────────────────────────
+// 画面: ホーム / クイズ / 結果 / 成績
+// ─────────────────────────────
+function showHome() {
+  currentScreen = "home";
+  const pct = progress.totalAttempts > 0
+    ? Math.round((progress.totalCorrect / progress.totalAttempts) * 100) : 0;
+  const reviewPool = getReviewPool();
+  $("subtitle").textContent = "モードを選んでスタート。";
+  $("quizArea").innerHTML = `
+    <div class="card">
+      <div class="home-stat">
+        <div><div class="num">${progress.totalSessions}</div><div class="lbl">SESSION</div></div>
+        <div><div class="num">${pct}%</div><div class="lbl">ACCURACY</div></div>
+        <div><div class="num">${QUESTIONS.length}</div><div class="lbl">QUESTIONS</div></div>
+      </div>
+      <button class="mode-btn" data-mode="normal" type="button">
+        <span class="micon"><span class="icon">school</span></span>
+        <span class="mlbl">
+          <div class="mname">通常モード</div>
+          <div class="msub">全 ${QUESTIONS.length} 問からランダムに ${SESSION_LEN} 問</div>
+        </span>
+      </button>
+      <button class="mode-btn" data-mode="review" type="button" ${reviewPool.length === 0 ? "disabled" : ""}>
+        <span class="micon"><span class="icon">replay</span></span>
+        <span class="mlbl">
+          <div class="mname">復習モード</div>
+          <div class="msub">${reviewPool.length === 0 ? "まだ間違えた問題はありません" : `過去に間違えた ${reviewPool.length} 問から出題`}</div>
+        </span>
+      </button>
+      <button class="mode-btn" data-mode="stats" type="button">
+        <span class="micon"><span class="icon">leaderboard</span></span>
+        <span class="mlbl">
+          <div class="mname">成績</div>
+          <div class="msub">累計正答率 / 苦手問題リスト</div>
+        </span>
+      </button>
+    </div>
+  `;
+  document.querySelectorAll(".mode-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const m = btn.dataset.mode;
+      if (m === "stats") showStats();
+      else startSession(m);
+    });
+  });
+}
+
+function showStats() {
+  currentScreen = "stats";
+  const pct = progress.totalAttempts > 0
+    ? Math.round((progress.totalCorrect / progress.totalAttempts) * 100) : 0;
+  // 苦手 top 10: tries > 0 で誤答率の高い順
+  const weak = QUESTIONS.map((q) => {
+    const pq = progress.perQuestion[q.id] || { tries: 0, correct: 0 };
+    if (pq.tries === 0) return null;
+    return { q, pq, errRate: 1 - (pq.correct / pq.tries) };
+  }).filter(Boolean).sort((a, b) => b.errRate - a.errRate || b.pq.tries - a.pq.tries).slice(0, 10);
+  $("subtitle").textContent = "これまでの成績。端末をまたいで同期します。";
+  $("quizArea").innerHTML = `
+    <div class="card">
+      <div class="stats-grid">
+        <div class="stats-cell"><div class="num">${progress.totalSessions}</div><div class="lbl">セッション</div></div>
+        <div class="stats-cell"><div class="num">${pct}%</div><div class="lbl">累計正答率</div></div>
+        <div class="stats-cell"><div class="num">${progress.totalCorrect}</div><div class="lbl">正解</div></div>
+        <div class="stats-cell"><div class="num">${progress.totalAttempts}</div><div class="lbl">回答数</div></div>
+      </div>
+      ${weak.length > 0 ? `
+        <div style="font-size:11px;font-weight:800;letter-spacing:0.14em;text-transform:uppercase;color:var(--text2);margin:8px 0;">苦手な問題</div>
+        <div class="weak-list">
+          ${weak.map((w) => `
+            <div class="weak-row">
+              <div class="weak-q">${escapeHtml(w.q.q)}</div>
+              <div class="weak-rate">${w.pq.correct}/${w.pq.tries}</div>
+            </div>
+          `).join("")}
+        </div>
+      ` : `<div style="text-align:center;color:var(--text2);padding:24px;font-size:13px;font-weight:600;">まだ回答履歴がありません</div>`}
+      <div style="margin-top:18px;text-align:center;">
+        <button class="pill" id="statsHomeBtn" type="button"><span class="icon">arrow_back</span> ホームへ</button>
+      </div>
+    </div>
+  `;
+  $("statsHomeBtn").addEventListener("click", showHome);
+}
+
+function startSession(mode = "normal") {
+  currentMode = mode;
+  const sourcePool = mode === "review" ? getReviewPool() : QUESTIONS.map((_, i) => i);
+  if (sourcePool.length === 0) {
+    showHome();
+    return;
+  }
   // SESSION_LEN を満たすまでサンプリング (プールが少なければ繰り返し)
-  const pool = shuffle(QUESTIONS.map((_, i) => i));
+  const shuffled = shuffle(sourcePool);
   queue = [];
-  while (queue.length < SESSION_LEN) queue.push(...pool);
+  while (queue.length < SESSION_LEN) queue.push(...shuffled);
   queue = queue.slice(0, SESSION_LEN);
   wrongOnceSet = new Set();
   attempts = 0;
   correct = 0;
   curIdx = null;
+  curShuffle = null;
   answered = false;
+  sessionResults = [];
+  currentScreen = "quiz";
+  $("subtitle").textContent = mode === "review"
+    ? "復習モード: 間違えた問題だけ。"
+    : "4 択クイズ。10 問 1 セッション。";
   nextQuestion();
 }
 
@@ -514,18 +734,20 @@ function nextQuestion() {
     return;
   }
   curIdx = queue.shift();
+  curShuffle = shuffleChoices(QUESTIONS[curIdx]);
   answered = false;
   render();
 }
 
 function render() {
   const q = QUESTIONS[curIdx];
-  const progress = Math.round((attempts / SESSION_LEN) * 100);
+  const sh = curShuffle;
+  const progressPct = Math.round((attempts / SESSION_LEN) * 100);
   const isRetry = wrongOnceSet.has(curIdx);
-  const html = `
+  $("quizArea").innerHTML = `
     <div class="progress-row">
       <span>${attempts} / ${SESSION_LEN}</span>
-      <div class="progress-bar"><div class="progress-fill" style="width:${progress}%"></div></div>
+      <div class="progress-bar"><div class="progress-fill" style="width:${progressPct}%"></div></div>
       <span>正解 ${correct}</span>
     </div>
     <div class="card">
@@ -533,7 +755,7 @@ function render() {
       ${q.img ? `<div class="q-img-wrap"><img class="q-img" src="${q.img}" alt=""></div>` : ""}
       <div class="q-text">${escapeHtml(q.q)}</div>
       <div class="choices">
-        ${q.choices.map((c, i) => `<button class="choice" data-i="${i}" type="button">${escapeHtml(c)}</button>`).join("")}
+        ${sh.choices.map((c, i) => `<button class="choice" data-i="${i}" type="button">${escapeHtml(c)}</button>`).join("")}
       </div>
       <div id="explainSlot"></div>
       <div class="next-row" id="nextRow" style="display:none;">
@@ -541,7 +763,6 @@ function render() {
       </div>
     </div>
   `;
-  $("quizArea").innerHTML = html;
   document.querySelectorAll(".choice").forEach((btn) => {
     btn.addEventListener("click", () => onAnswer(Number(btn.dataset.i)));
   });
@@ -553,22 +774,21 @@ function onAnswer(picked) {
   answered = true;
   attempts++;
   const q = QUESTIONS[curIdx];
-  const isCorrect = picked === q.answer;
+  const sh = curShuffle;
+  const isCorrect = picked === sh.answerIdx;
   if (isCorrect) correct++;
-  // ボタンの色付け
+  sessionResults.push({ id: q.id, correct: isCorrect });
+  // ボタンの色付け (シャッフル後の index で比較)
   document.querySelectorAll(".choice").forEach((btn) => {
     const i = Number(btn.dataset.i);
     btn.disabled = true;
-    if (i === q.answer) btn.classList.add("correct");
+    if (i === sh.answerIdx) btn.classList.add("correct");
     else if (i === picked) btn.classList.add("incorrect");
     else btn.classList.add("dim");
   });
-  // 解説
   if (q.explain) {
     $("explainSlot").innerHTML = `<div class="explain">${q.explain}</div>`;
   }
-  // 不正解なら、queue の 2 つ先に再挿入 (= 次の問題の後にもう一度出る)。
-  // ただしセッション残り回数を超えるなら入れない (どうせ出題されない)。
   if (!isCorrect) {
     wrongOnceSet.add(curIdx);
     const remaining = SESSION_LEN - attempts;
@@ -580,11 +800,14 @@ function onAnswer(picked) {
   $("nextRow").style.display = "flex";
 }
 
-function showResult() {
+async function showResult() {
+  currentScreen = "result";
+  await saveSessionResult();
   const pct = Math.round((correct / SESSION_LEN) * 100);
-  const msg = pct >= 80 ? "上出来。次のレベル行ける。"
-            : pct >= 50 ? "半分以上。間違えたとこ復習。"
+  const msg = pct >= 80 ? "上出来。"
+            : pct >= 50 ? "半分以上。間違えたとこ復習しよう。"
             : "また回そう。間違えてる方が脳に残る。";
+  const reviewPool = getReviewPool();
   $("quizArea").innerHTML = `
     <div class="card result">
       <div class="result-score">${correct}<span class="total"> / ${SESSION_LEN}</span></div>
@@ -592,23 +815,26 @@ function showResult() {
       <div class="result-msg">${msg}</div>
       <div class="result-actions">
         <button class="pill primary" id="againBtn" type="button"><span class="icon">replay</span> もう一回</button>
-        <a class="pill" href="/"><span class="icon">home</span> 戻る</a>
+        ${reviewPool.length > 0 ? `<button class="pill" id="reviewBtn" type="button"><span class="icon">school</span> 復習へ</button>` : ""}
+        <button class="pill" id="resultHomeBtn" type="button"><span class="icon">home</span> ホーム</button>
       </div>
     </div>
   `;
-  $("againBtn").addEventListener("click", startSession);
+  $("againBtn").addEventListener("click", () => startSession(currentMode));
+  $("reviewBtn")?.addEventListener("click", () => startSession("review"));
+  $("resultHomeBtn").addEventListener("click", showHome);
 }
 
 function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 }
 
-// やり直しボタン
-$("restartBtn").addEventListener("click", () => {
-  if (confirm("最初からやり直しますか?")) startSession();
+// ホームボタン (クイズ中なら確認)
+$("homeBtn").addEventListener("click", () => {
+  if (currentScreen === "quiz" && !confirm("途中で抜けますか? 結果は記録されません。")) return;
+  showHome();
 });
 
-// Wikipedia REST API で記事のサムネ画像 URL を取る。失敗・タイムアウトしたら null。
 async function fetchWikiThumb(title, timeoutMs = 5000) {
   try {
     const ctrl = new AbortController();
@@ -622,7 +848,6 @@ async function fetchWikiThumb(title, timeoutMs = 5000) {
   } catch { return null; }
 }
 
-// 各問題の wikiTitle から img を埋める。全問題を並列で取得。
 async function preloadWikiThumbs() {
   const tasks = QUESTIONS.filter((q) => !q.img && q.wikiTitle).map(async (q) => {
     const url = await fetchWikiThumb(q.wikiTitle);
@@ -635,9 +860,13 @@ initAuthBoot({
   returnPath: "/fungi/",
   onReady: async () => {
     $("app").style.display = "";
-    $("quizArea").innerHTML = '<div class="card" style="text-align:center;padding:50px;color:var(--text2);font-weight:700;">画像読み込み中…</div>';
-    await preloadWikiThumbs();
-    startSession();
+    $("quizArea").innerHTML = '<div class="card" style="text-align:center;padding:50px;color:var(--text2);font-weight:700;">読み込み中…</div>';
+    await Promise.all([
+      ensureQuestionIds(),
+      preloadWikiThumbs(),
+      setupFirestoreProgress(),
+    ]);
+    showHome();
   },
 });
 </script>
