@@ -2808,7 +2808,7 @@ app.post("/api/scan", async (req, res) => {
       }
     } else {
       prompt = `画像内の領収書を全て検出してJSONのみ返してください。複数並んでいる場合は全部を要素にした配列にする。1枚しか無くても要素1の配列。形式:
-{"receipts":[{"date":"YYYY-MM-DD(無ければ${today})","store":"店舗名","total":合計金額の数値,"category":"材料費 or 接待交際費 or ガソリン代 or 駐車場代 or 工具・備品 or 外注費 or その他","workType":"水道 or 電気 or 木工 or 塗装 or 左官 or 内装 or 外構 or 解体 or 設備 or その他","site":"${sites.join(" or ") || "(空文字でOK)"}から最も近いものまたは空文字"}]}`;
+{"receipts":[{"date":"YYYY-MM-DD(無ければ${today})","store":"店舗名","total":合計金額の数値,"category":"材料費 or 接待交際費 or ガソリン代 or 駐車場代 or 工具・備品 or 外注費 or その他","workType":"水道 or 電気 or 木工 or 塗装 or 左官 or 内装 or 外構 or 解体 or 設備 or その他","site":"${sites.join(" or ") || "(空文字でOK)"}から最も近いものまたは空文字","payment":"現金 or カード or 電子マネー or 振込 (レシート上の支払欄から判定。CASH/現金/キャッシュ=現金、クレジット/CREDIT/カード名 (VISA/JCB/AMEX/楽天/三井住友 等)=カード、PayPay/Suica/iD/QUICPay/d払い/楽天Pay/メルペイ=電子マネー、銀行振込=振込。読めない / 不明なら空文字)"}]}`;
     }
     const { result, modelUsed } = await callGeminiWithFallback([
       prompt,

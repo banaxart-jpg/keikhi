@@ -236,6 +236,7 @@ select.nm-field option { background: #e4e6ee; color: #42455e; }
         <div class="pay-row">
           <button class="pay-btn active" data-pay="現金" type="button">現金</button>
           <button class="pay-btn" data-pay="カード" type="button">カード</button>
+          <button class="pay-btn" data-pay="電子マネー" type="button">電子マネー</button>
           <button class="pay-btn" data-pay="振込" type="button">振込</button>
         </div>
       </div>
@@ -748,7 +749,8 @@ function showConfirm(parsed, errMsg) {
   $("fCat").value = parsed.category || "材料費";
   $("fWork").value = parsed.workType || "その他";
   $("fMemo").value = "";
-  setPay("現金");
+  // AI が支払方法を拾えてればそれを採用、ダメなら「現金」
+  setPay(["現金", "カード", "電子マネー", "振込"].includes(parsed.payment) ? parsed.payment : "現金");
   selectedSite = (parsed.site && sites.some((s) => s.name === parsed.site)) ? parsed.site : "";
   renderSiteGrid();
 

@@ -457,7 +457,8 @@ async function processQueue() {
         total: Number(parsed.total) || 0,
         category: parsed.category || "材料費",
         workType: parsed.workType || "その他",
-        payment: "現金",
+        // AI が現金/カード/電子マネー/振込 のいずれかを返したらそれを採用、無ければ「現金」
+        payment: ["現金", "カード", "電子マネー", "振込"].includes(parsed.payment) ? parsed.payment : "現金",
         buyer,
         site: "", // 未仕分け
         memo: "",
@@ -683,14 +684,14 @@ function createSwipeCard(r, isBack) {
     card.appendChild(editBtn);
   }
 
-  // 支払方法 (現金 / カード / 振込)
+  // 支払方法 (現金 / カード / 電子マネー / 振込)
   const payRow = document.createElement("div");
   payRow.className = "sw-pay";
-  for (const p of ["現金", "カード", "振込"]) {
+  for (const p of ["現金", "カード", "電子マネー", "振込"]) {
     const pb = document.createElement("button");
     pb.type = "button"; pb.dataset.pay = p;
     pb.className = "sw-pay-btn" + (currentPay === p ? " active" : "");
-    pb.textContent = (p === "現金" ? "💵 " : p === "カード" ? "💳 " : "🏦 ") + p;
+    pb.textContent = (p === "現金" ? "💵 " : p === "カード" ? "💳 " : p === "電子マネー" ? "📱 " : "🏦 ") + p;
     pb.addEventListener("click", (e) => {
       e.stopPropagation();
       currentPay = p;
