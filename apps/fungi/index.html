@@ -103,31 +103,27 @@ body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); 
 import { initAuthBoot } from "/api-auth.js";
 
 // ─────────────────────────────
-// 問題プール (ここに問題を増やしていく。img は任意。)
-// 形式: { q, choices, answer (0-3), cat, img?, explain? }
-// 画像は Wikimedia Commons の Special:FilePath を使うとリンクが安定。
-//   例: https://commons.wikimedia.org/wiki/Special:FilePath/<ファイル名>.jpg?width=600
+// 問題プール
+// 形式: { q, choices, answer (0-3), cat, wikiTitle?, img?, explain? }
+// wikiTitle: 英語 Wikipedia の記事タイトル (学名)。preloadWikiThumbs() でその記事のサムネ画像
+//   が自動で q.img に入る。手動で URL を貼りたい場合は wikiTitle ではなく img を指定。
 // ─────────────────────────────
 const QUESTIONS = [
+  // ─── 知識問題 ───
   {
     q: "ベニテングタケに含まれる主な毒成分は?",
     choices: ["イボテン酸", "アマトキシン", "ファロイジン", "オレラニン"],
     answer: 0,
     cat: "毒性",
+    wikiTitle: "Amanita_muscaria",
     explain: "<b>イボテン酸</b>とその脱炭酸物 <b>ムシモール</b> が主成分。中枢神経を撹乱して興奮 / 錯乱を起こす。アマトキシンはドクツルタケ系の致死毒で別物。",
-  },
-  {
-    q: "「死の天使」とも呼ばれる、純白で致死性の高いキノコは?",
-    choices: ["タマゴタケ", "シロタマゴテングタケ", "ドクツルタケ", "シャグマアミガサタケ"],
-    answer: 2,
-    cat: "毒性",
-    explain: "<b>ドクツルタケ</b> (Amanita virosa)。アマトキシンを含み、1 本食べるだけで致死量に達する。タマゴタケと似てるので要注意。",
   },
   {
     q: "シイタケに特徴的に含まれる、コレステロール低下作用で知られる成分は?",
     choices: ["β-グルカン", "エリタデニン", "レンチナン", "エルゴステロール"],
     answer: 1,
     cat: "成分",
+    wikiTitle: "Lentinula_edodes",
     explain: "<b>エリタデニン</b>。血中コレステロールを下げる作用が報告されている。β-グルカンや<b>レンチナン</b>は免疫系、エルゴステロールはビタミン D2 の前駆体。",
   },
   {
@@ -135,6 +131,7 @@ const QUESTIONS = [
     choices: ["抗血栓作用", "神経成長因子 (NGF) 様作用", "降圧作用", "抗ヒスタミン作用"],
     answer: 1,
     cat: "薬理",
+    wikiTitle: "Hericium_erinaceus",
     explain: "ヘリセノン / エリナシンが <b>NGF 産生</b> を誘導する報告があり、認知機能サポート系で研究されている。",
   },
   {
@@ -145,12 +142,166 @@ const QUESTIONS = [
     explain: "<b>菌根 (Mycorrhiza)</b>。樹木の細根に菌糸が共生してミネラル吸収を助け、見返りに光合成産物をもらう。マツタケ・ハナビラタケ等は外生菌根菌。",
   },
   {
-    q: "この写真のキノコは?",
+    q: "マンネンタケ (霊芝) の主な薬理活性成分グループは?",
+    choices: ["アルカロイド", "ガノデリン酸 (トリテルペノイド)", "カフェイン", "サポニン"],
+    answer: 1,
+    cat: "薬理",
+    wikiTitle: "Ganoderma_lingzhi",
+    explain: "<b>ガノデリン酸</b> 系トリテルペノイド + β-グルカン。免疫調節 / 抗腫瘍系で多数の研究。",
+  },
+
+  // ─── 同定問題 (写真ベース) ───
+  {
+    q: "この赤い傘に白い疣 (いぼ) のキノコは?",
     choices: ["タマゴタケ", "ベニテングタケ", "シイタケ", "ドクツルタケ"],
     answer: 1,
     cat: "形態",
-    img: "https://commons.wikimedia.org/wiki/Special:FilePath/Amanita_muscaria_3_vliegenzwammen_op_rij.jpg?width=600",
-    explain: "<b>ベニテングタケ</b> (Amanita muscaria)。赤い傘に白い疣 (いぼ) が典型。童話のキノコのモデル。",
+    wikiTitle: "Amanita_muscaria",
+    explain: "<b>ベニテングタケ</b> (Amanita muscaria)。童話のキノコのモデル。イボテン酸を含む毒キノコ。",
+  },
+  {
+    q: "この純白のキノコは? (※ 1 本で致死量)",
+    choices: ["マッシュルーム", "シロタマゴテングタケ", "ドクツルタケ", "タマゴタケ"],
+    answer: 2,
+    cat: "毒性",
+    wikiTitle: "Amanita_virosa",
+    explain: "<b>ドクツルタケ</b>。アマトキシン (主に α-アマニチン) を含み、1 本で致死量。「死の天使 (Destroying Angel)」とも。",
+  },
+  {
+    q: "卵の殻のような白いツボから赤橙の傘が出るこのキノコは?",
+    choices: ["タマゴタケ", "ベニテングタケ", "シイタケ", "マツタケ"],
+    answer: 0,
+    cat: "形態",
+    wikiTitle: "Amanita_caesareoides",
+    explain: "<b>タマゴタケ</b>。食用だがベニテングタケ・テングタケ類と混同しやすいので要注意。",
+  },
+  {
+    q: "緑〜オリーブ色の傘で、世界のキノコ中毒死の大半を占めるこのキノコは?",
+    choices: ["タマゴテングタケ", "シメジ", "ベニテングタケ", "アンズタケ"],
+    answer: 0,
+    cat: "毒性",
+    wikiTitle: "Amanita_phalloides",
+    explain: "<b>タマゴテングタケ</b> (Amanita phalloides)。アマトキシン含、肝壊死を起こす。世界のキノコ死亡事例の 90% 以上。",
+  },
+  {
+    q: "土と松林の象徴、芳香で知られるこのキノコは?",
+    choices: ["マツタケ", "エノキタケ", "シメジ", "マイタケ"],
+    answer: 0,
+    cat: "形態",
+    wikiTitle: "Tricholoma_matsutake",
+    explain: "<b>マツタケ</b> (Tricholoma matsutake)。アカマツの根と外生菌根を作る共生菌。香りの主成分はマツタケオール (1-Octen-3-ol)。",
+  },
+  {
+    q: "ステーキ感覚で食べられる、太く白い柄のこのキノコは?",
+    choices: ["エリンギ", "シメジ", "マイタケ", "シイタケ"],
+    answer: 0,
+    cat: "形態",
+    wikiTitle: "Pleurotus_eryngii",
+    explain: "<b>エリンギ</b> (Pleurotus eryngii)。地中海原産だが日本で広く栽培。ヒラタケ属。",
+  },
+  {
+    q: "貝のような形で重なって生えるこのキノコは?",
+    choices: ["ヒラタケ", "マイタケ", "マッシュルーム", "シメジ"],
+    answer: 0,
+    cat: "形態",
+    wikiTitle: "Pleurotus_ostreatus",
+    explain: "<b>ヒラタケ</b> (Pleurotus ostreatus)。Oyster mushroom とも。木材腐朽菌。",
+  },
+  {
+    q: "細長い柄が束に生えるこの食用キノコは? (※ 栽培品は白く長い)",
+    choices: ["エノキタケ", "シメジ", "エリンギ", "マイタケ"],
+    answer: 0,
+    cat: "形態",
+    wikiTitle: "Flammulina_velutipes",
+    explain: "<b>エノキタケ</b> (Flammulina velutipes)。栽培品は遮光で白く長く育てる。野生は茶褐色。",
+  },
+  {
+    q: "重なる扇形の傘が密集する、この大型キノコは?",
+    choices: ["マイタケ", "ヒラタケ", "シメジ", "ヤマブシタケ"],
+    answer: 0,
+    cat: "形態",
+    wikiTitle: "Grifola_frondosa",
+    explain: "<b>マイタケ</b> (Grifola frondosa)。ナラ・ミズナラの根元に発生。β-グルカン豊富で免疫系で研究多数。",
+  },
+  {
+    q: "西洋料理で最も一般的なこの白いキノコは?",
+    choices: ["マッシュルーム", "シメジ", "エリンギ", "エノキタケ"],
+    answer: 0,
+    cat: "形態",
+    wikiTitle: "Agaricus_bisporus",
+    explain: "<b>マッシュルーム</b> (Agaricus bisporus)。世界で最も生産量の多い栽培キノコ。",
+  },
+  {
+    q: "黄金色のラッパ型で、フランス料理で「シャントレル」と呼ばれるこのキノコは?",
+    choices: ["アンズタケ", "タマゴタケ", "エリンギ", "マツタケ"],
+    answer: 0,
+    cat: "形態",
+    wikiTitle: "Cantharellus_cibarius",
+    explain: "<b>アンズタケ</b> (Cantharellus cibarius)。アプリコット様の香り。ヒダではなく偽ヒダ (襞の段差) を持つ。",
+  },
+  {
+    q: "ハニカム状の網目傘で春に出るこのキノコは?",
+    choices: ["アミガサタケ", "シャグマアミガサタケ", "マッシュルーム", "シメジ"],
+    answer: 0,
+    cat: "形態",
+    wikiTitle: "Morchella_esculenta",
+    explain: "<b>アミガサタケ</b> (Morchella esculenta)。子嚢菌類。フランス語で Morille (モリーユ)。十分加熱が必須。",
+  },
+  {
+    q: "脳のようなしわのある傘を持ち、加熱不十分だと猛毒のこのキノコは?",
+    choices: ["シャグマアミガサタケ", "アミガサタケ", "タマゴテングタケ", "ヤマブシタケ"],
+    answer: 0,
+    cat: "毒性",
+    wikiTitle: "Gyromitra_esculenta",
+    explain: "<b>シャグマアミガサタケ</b>。ジロミトリン (体内でモノメチルヒドラジンに変換) を含む。北欧では伝統食 (要徹底加熱)。",
+  },
+  {
+    q: "イタリア料理で「ポルチーニ」と呼ばれる、太い柄の食用イグチ類は?",
+    choices: ["ヤマドリタケ", "シメジ", "マッシュルーム", "マイタケ"],
+    answer: 0,
+    cat: "形態",
+    wikiTitle: "Boletus_edulis",
+    explain: "<b>ヤマドリタケ</b> (Boletus edulis)。ポルチーニ。傘の裏がヒダではなく管孔。",
+  },
+  {
+    q: "立木の根を侵し、束生するこの寄生 / 腐生菌は?",
+    choices: ["ナラタケ", "マイタケ", "シメジ", "マツタケ"],
+    answer: 0,
+    cat: "生態",
+    wikiTitle: "Armillaria_mellea",
+    explain: "<b>ナラタケ</b> (Armillaria mellea)。リゾモルフ (根状菌糸束) で広く繁殖。森林の木材腐朽病原。",
+  },
+  {
+    q: "鱗で覆われた円柱形の傘が、自身の酵素で黒く溶けるこのキノコは?",
+    choices: ["ササクレヒトヨタケ", "マッシュルーム", "シメジ", "マイタケ"],
+    answer: 0,
+    cat: "生態",
+    wikiTitle: "Coprinus_comatus",
+    explain: "<b>ササクレヒトヨタケ</b> (Coprinus comatus)。成熟すると自己消化 (オートライシス) で液化し胞子を散布。",
+  },
+  {
+    q: "鮮赤の傘を持ち、嘔吐の毒を含むこのベニタケ属は?",
+    choices: ["ドクベニタケ", "タマゴタケ", "ベニテングタケ", "シイタケ"],
+    answer: 0,
+    cat: "毒性",
+    wikiTitle: "Russula_emetica",
+    explain: "<b>ドクベニタケ</b> (Russula emetica)。生で食べると胃腸毒で激しい嘔吐。",
+  },
+  {
+    q: "東洋で「霊芝」とも呼ばれる、漆塗りのような艶を持つこのキノコは?",
+    choices: ["マンネンタケ", "マイタケ", "ナラタケ", "シメジ"],
+    answer: 0,
+    cat: "薬理",
+    wikiTitle: "Ganoderma_lingzhi",
+    explain: "<b>マンネンタケ (霊芝)</b>。多年生硬質菌。漢方では古くから扱われ、現代でも免疫調節作用が研究されている。",
+  },
+  {
+    q: "白いサンゴ / 髭のような形が特徴的なこの食用 + 薬用キノコは?",
+    choices: ["ヤマブシタケ", "マイタケ", "シメジ", "ヒラタケ"],
+    answer: 0,
+    cat: "形態",
+    wikiTitle: "Hericium_erinaceus",
+    explain: "<b>ヤマブシタケ</b> (Hericium erinaceus)。針状の子実層托。Lion's Mane mushroom とも。",
   },
 ];
 
@@ -294,10 +445,35 @@ $("restartBtn").addEventListener("click", () => {
   if (confirm("最初からやり直しますか?")) startSession();
 });
 
+// Wikipedia REST API で記事のサムネ画像 URL を取る。失敗・タイムアウトしたら null。
+async function fetchWikiThumb(title, timeoutMs = 5000) {
+  try {
+    const ctrl = new AbortController();
+    const tid = setTimeout(() => ctrl.abort(), timeoutMs);
+    const url = `https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(title)}`;
+    const r = await fetch(url, { signal: ctrl.signal });
+    clearTimeout(tid);
+    if (!r.ok) return null;
+    const j = await r.json();
+    return j.thumbnail?.source || j.originalimage?.source || null;
+  } catch { return null; }
+}
+
+// 各問題の wikiTitle から img を埋める。全問題を並列で取得。
+async function preloadWikiThumbs() {
+  const tasks = QUESTIONS.filter((q) => !q.img && q.wikiTitle).map(async (q) => {
+    const url = await fetchWikiThumb(q.wikiTitle);
+    if (url) q.img = url;
+  });
+  await Promise.all(tasks);
+}
+
 initAuthBoot({
   returnPath: "/fungi/",
-  onReady: () => {
+  onReady: async () => {
     $("app").style.display = "";
+    $("quizArea").innerHTML = '<div class="card" style="text-align:center;padding:50px;color:var(--text2);font-weight:700;">画像読み込み中…</div>';
+    await preloadWikiThumbs();
     startSession();
   },
 });
