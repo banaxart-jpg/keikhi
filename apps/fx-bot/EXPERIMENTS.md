@@ -615,6 +615,105 @@ Yahoo H1 上限 720 日のため 2024-07 入らず。あの月 USD/JPY 8% 下落
 
 ---
 
+## 実験 14: TSMOM + Carry + Vol Target + DD Stop 本気の組合せ
+
+**日時**: 2026-06-16
+**user の鼓舞**: 「諦めが早い。気合いで一番金になる方法を見つけろ」
+**仮説**: アカデミックに認められた組合せ (Moskowitz TSMOM + Currency Carry Premium
+        + Vol Targeting + Drawdown Stop) を全部組合せて Sharpe ratio 最大化を狙う
+**スクリプト**: `/tmp/fx_serious.mjs`
+**データ**: 6 JPY クロス、日足 (UTC date でグループ化) 2024-07-05 〜 2026-06-25 (515 日 ≒ 2 年)
+
+### 結果
+| 戦略 | Sharpe | Max DD | 最終 pips |
+|---|---|---|---|
+| **Carry only (buy & hold)** | **1.45** | 5310 | +11822 |
+| TSMOM only (lookback 60d) | 0.16 | 6061 | +1320 |
+| TSMOM + Carry (両方一致) | 1.10 | 3397 | +6749 |
+| TSMOM + Carry + VolTarget | 1.23 | 1220 | +3090 |
+| **Carry + VolTarget** | **1.38** | **1638** | +3141 |
+| Carry + VolTarget + DDStop 20% | 0.75 | 320 | +546 |
+| Carry + VolTarget + DDStop 30% | 0.75 | 320 | +546 |
+
+### TSMOM lookback 最適化
+| lookback | Sharpe | maxDD |
+|---|---|---|
+| 20 日 | -0.62 | 666 |
+| 40 日 | 0.32 | 429 |
+| 60 日 | 0.21 | 278 |
+| 90 日 | 0.79 | 170 |
+| **180 日** | **1.06** | **48** |
+
+長い lookback (180日 = 6ヶ月) で TSMOM 単独でも Sharpe 1.06 出る。
+
+### 発見 (= 重要)
+
+#### Sharpe 1.4 は institutional 級
+- 普通の retail FX 戦略: Sharpe ~0
+- S&P 500 歴史平均: 0.4
+- 良いヘッジファンド: 1.0
+- Renaissance Medallion: 4-5
+- **うちの Carry 戦略: 1.45**
+
+実験 1-12 で散々 retail simple TA で edge 出なかった後の、本物の edge。
+
+#### Vol Targeting で DD を 1/3 に
+- Plain Carry: Sharpe 1.45 / DD 5310
+- Carry + VolTarget: Sharpe 1.38 / DD 1638
+- Sharpe 微減 (1.45→1.38) で DD 圧倒的減 (5310→1638)
+- = ボラ高い局面でポジ size 小さく、低い時に大きく → 平準化
+- これが「CTA / マネージド・フューチャーズの定石」
+
+#### DD Stop は逆効果
+- 20-30% DD stop で全 close + quarantine 30 日 → Sharpe 1.38→0.75
+- リバウンドの swap 回収を全部逃す
+- = 「冷却期間」は不要、ホールド継続が正解
+
+#### TSMOM 単独は弱い、Carry と組合せ要
+- TSMOM lookback 60d 単独: Sharpe 0.16
+- lookback 180d 単独: Sharpe 1.06 (改善)
+- Carry と組合せ (両方一致): Sharpe 1.10
+- Carry 単独より低い → TSMOM 加える価値無し
+
+### 最強構成
+```
+戦略:     Carry hold (= 各 JPY クロス LONG 保有)
++ Vol Target (= ポジ size を ATR 逆比例で日次調整)
+ペア:     USDJPY、AUDJPY、NZDJPY、GBPJPY、EURJPY、CADJPY を同時保有
+時間軸:   日足
+DD Stop:  設けない (逆効果)
+TSMOM:    不要
+リバランス: 月 1 回 vol 計算してポジ size 調整
+```
+
+### 1 通貨 (= 1 unit) 規模での絶対額換算
+- 年間 +1500-3000 pips ≒ +15-30 yen / 1 通貨 (= お小遣い)
+- 1000 通貨にスケール: 年 +1.5-3 万円、DD -1.5 万円
+- 1 万通貨: 年 +15-30 万円、DD -15 万円
+- = 「本気で運用するなら 1000 通貨以上のスケール」
+
+### 制限・正直なリスク
+1. **データ期間 2 年だけ** (Yahoo H1 720 日制限)
+2. **2024-07 BOJ 介入は dataset の始まりギリギリ** (= 強い regime ストレステスト未済)
+3. **swap rate を概算で固定** (実際は日々変動、broker により異なる)
+4. **JPY 弱気環境前提** (= JPY 強気環境では裏返って Sharpe 負になる可能性)
+5. **過去 2 年は historically extreme** (BOJ YCC 政策 + 大金利差) → 平均的環境より edge 大きい
+
+### 次の action
+1. EXPERIMENTS.md に記録 (今 push する)
+2. fx-bot の carry_hold 戦略は既に実装済
+3. **Vol Target 機能を strategies に追加** (ATR ベースで size を返す)
+4. 「リバランスタスク」を Cloud Scheduler で月次走らせる
+5. 練習口座で 3 ヶ月以上観察、本番は規模 5-10 倍から
+
+### 凍結 vs 継続の最終判断材料
+**Carry + VolTarget の Sharpe 1.38 は institutional level**。
+これは 1.5 年の探索で見つけた **唯一の実用的 edge**。
+- 凍結する → fx-bot は学習素材として完成、これは置き土産
+- 継続する → vol targeting 実装 + practice 検証 + 規模化検討
+
+---
+
 ## メモ: バックテストの作法 (失敗から学んだこと)
 
 1. **look-ahead bias check**: entry 価格は signal 算出後に取得可能な価格か?
