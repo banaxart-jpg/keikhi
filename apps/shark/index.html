@@ -96,6 +96,46 @@ body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); 
 .weak-q { font-weight: 700; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .weak-rate { font-size: 11px; font-weight: 800; color: var(--incorrect); white-space: nowrap; }
 
+/* 図鑑 (コレクション) */
+.zukan-head { margin-bottom: 16px; }
+.zukan-progress-num { font-size: 30px; font-weight: 900; color: var(--accent); line-height: 1; letter-spacing: -0.02em; }
+.zukan-progress-num .total { font-size: 15px; color: var(--text2); font-weight: 700; }
+.zukan-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+@media (max-width: 380px) { .zukan-grid { grid-template-columns: repeat(2, 1fr); } }
+.zukan-card { position: relative; aspect-ratio: 1; border-radius: 16px; border: none; padding: 0; overflow: hidden; cursor: pointer; font-family: inherit; background: var(--bg); box-shadow: 4px 4px 10px var(--sd), -4px -4px 10px var(--sl); }
+.zukan-card:active { transform: scale(0.97); }
+.zukan-card .zk-img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.zukan-card .zk-noimg { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; }
+.zukan-card .zk-noimg .icon { font-size: 34px; color: var(--text3); vertical-align: 0; }
+.zukan-card .zk-name { position: absolute; left: 0; right: 0; bottom: 0; z-index: 2; padding: 16px 6px 6px; font-size: 11px; font-weight: 800; color: #fff; text-shadow: 0 1px 4px rgba(0,0,0,0.7); background: linear-gradient(transparent, rgba(0,0,0,0.6)); text-align: center; line-height: 1.2; }
+.zukan-card.locked { box-shadow: inset 3px 3px 8px var(--sd), inset -3px -3px 8px var(--sl); }
+.zukan-card.locked .zk-q { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-size: 30px; font-weight: 900; color: var(--text3); }
+.zukan-card.seen .zk-img { filter: grayscale(1); opacity: 0.55; }
+.zukan-card.seen .zk-noimg .icon { opacity: 0.5; }
+.zukan-card .zk-badge { position: absolute; top: 6px; right: 6px; z-index: 3; width: 24px; height: 24px; border-radius: 50%; display: flex; align-items: center; justify-content: center; background: var(--accent); color: #fff; box-shadow: 0 1px 4px rgba(0,0,0,0.35); }
+.zukan-card .zk-badge .icon { font-size: 16px; vertical-align: 0; }
+.zukan-card .zk-hint { position: absolute; top: 6px; left: 6px; z-index: 3; font-size: 9px; font-weight: 800; padding: 2px 7px; border-radius: 8px; background: rgba(176,71,64,0.92); color: #fff; letter-spacing: 0.04em; }
+
+/* 図鑑 詳細シート */
+.zk-modal { position: fixed; inset: 0; z-index: 300; display: flex; align-items: flex-end; justify-content: center; background: rgba(180,184,205,0); visibility: hidden; opacity: 0; transition: background .2s, opacity .2s, visibility 0s linear .2s; }
+.zk-modal.open { background: rgba(180,184,205,0.42); visibility: visible; opacity: 1; transition: background .2s, opacity .2s; }
+.zk-sheet { background: var(--bg); border-radius: 28px 28px 0 0; width: 100%; max-width: 600px; max-height: 88vh; overflow-y: auto; padding: 6px 18px calc(28px + env(safe-area-inset-bottom)); transform: translateY(100%); transition: transform .2s cubic-bezier(.2,.8,.2,1); box-shadow: -2px -10px 30px rgba(148,152,176,0.35); }
+.zk-modal.open .zk-sheet { transform: translateY(0); }
+.zk-grab { padding: 14px 18px 6px; margin: 0 -18px 4px; touch-action: none; user-select: none; -webkit-user-select: none; cursor: grab; }
+.zk-handle { width: 46px; height: 5px; border-radius: 3px; background: rgba(168,172,192,0.45); margin: 0 auto; }
+.zk-detail-img { display: block; width: 100%; max-height: 240px; object-fit: contain; border-radius: 14px; background: #f0f1f6; margin-bottom: 14px; }
+.zk-detail-name { font-size: 21px; font-weight: 900; }
+.zk-detail-cat { display: inline-block; font-size: 10px; font-weight: 800; letter-spacing: 0.12em; text-transform: uppercase; padding: 4px 10px; border-radius: 10px; background: rgba(14,116,144,0.18); color: var(--accent); margin: 8px 0; }
+.zk-detail-explain { font-size: 13px; line-height: 1.65; margin-top: 6px; }
+.zk-detail-explain b { color: var(--accent); }
+.zk-status { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 800; margin-top: 14px; padding: 8px 12px; border-radius: 12px; }
+.zk-status .icon { font-size: 17px; vertical-align: 0; }
+.zk-status.mastered { color: var(--correct); background: color-mix(in srgb, var(--correct) 12%, var(--bg) 88%); }
+.zk-status.seen { color: var(--incorrect); background: color-mix(in srgb, var(--incorrect) 12%, var(--bg) 88%); }
+/* 結果画面の制覇バナー */
+.master-banner { display: flex; align-items: center; justify-content: center; gap: 6px; margin: 16px 0; padding: 12px; border-radius: 14px; font-weight: 800; font-size: 13px; color: var(--correct); background: color-mix(in srgb, var(--correct) 14%, var(--bg) 86%); box-shadow: inset 2px 2px 6px var(--sd), inset -2px -2px 6px var(--sl); }
+.master-banner .icon { vertical-align: 0; }
+
 #signinOverlay { display: none; position: fixed; inset: 0; z-index: 400; background: var(--bg); flex-direction: column; align-items: center; justify-content: center; padding: 32px; text-align: center; gap: 18px; }
 </style>
 </head>
@@ -118,6 +158,13 @@ body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); 
     <div class="subtitle" id="subtitle">4 択クイズ。10 問 1 セッション。</div>
 
     <div id="quizArea"></div>
+  </div>
+</div>
+
+<div class="zk-modal" id="zkModal">
+  <div class="zk-sheet" id="zkSheet">
+    <div class="zk-grab" id="zkGrab"><div class="zk-handle"></div></div>
+    <div id="zkDetail"></div>
   </div>
 </div>
 
@@ -374,6 +421,7 @@ const QUESTIONS = [
 // セッション設定
 // ─────────────────────────────
 const SESSION_LEN = 10;   // 1 セッション当たりの出題数
+const MASTER_STREAK = 2;  // この回数連続で正解すると図鑑で「制覇」点灯。誤答で 0 に戻る
 
 // ─────────────────────────────
 // State
@@ -388,6 +436,7 @@ let curIdx = null;
 let curShuffle = null;        // { choices, answerIdx } — 表示用にシャッフルした選択肢
 let answered = false;
 let sessionResults = [];      // [{ id, correct }]
+let newlyMastered = [];       // 直前セッションで新たに制覇した問題 id (結果画面で表示)
 // 累積進捗 (Firestore と同期)
 let progress = { totalSessions: 0, totalCorrect: 0, totalAttempts: 0, perQuestion: {} };
 let db = null, progressDocRef = null, unsubscribeProgress = null;
@@ -454,15 +503,26 @@ async function setupFirestoreProgress() {
 }
 
 async function saveSessionResult() {
+  // 制覇判定の前後比較用に、保存前の「制覇済み id」を控える
+  const beforeMastered = new Set(masteredIds());
   // ローカル先反映 (snapshot 待ちで UI が古いまま見えるのを防ぐ)
   const newPerQ = { ...progress.perQuestion };
   for (const r of sessionResults) {
-    const pq = newPerQ[r.id] || { tries: 0, correct: 0 };
+    const pq = { ...(newPerQ[r.id] || { tries: 0, correct: 0, streak: 0 }) };
     pq.tries += 1;
-    if (r.correct) pq.correct += 1;
-    else pq.lastWrong = Date.now();
+    if (r.correct) {
+      pq.correct += 1;
+      pq.streak = (pq.streak || 0) + 1;   // 連続正解を伸ばす
+    } else {
+      pq.lastWrong = Date.now();
+      pq.streak = 0;                       // 誤答で連続記録リセット (= 制覇が外れる)
+    }
     newPerQ[r.id] = pq;
   }
+  // 今セッションで新たに MASTER_STREAK に到達した問題を抽出
+  newlyMastered = QUESTIONS
+    .filter((q) => !beforeMastered.has(q.id) && (newPerQ[q.id]?.streak || 0) >= MASTER_STREAK)
+    .map((q) => q.id);
   progress = {
     totalSessions: progress.totalSessions + 1,
     totalCorrect: progress.totalCorrect + correct,
@@ -493,6 +553,27 @@ function getReviewPool() {
 }
 
 // ─────────────────────────────
+// 図鑑 (制覇) ロジック
+// ─────────────────────────────
+function isMastered(id) {
+  const pq = progress.perQuestion[id];
+  return !!(pq && (pq.streak || 0) >= MASTER_STREAK);
+}
+function masteredIds() {
+  return QUESTIONS.filter((q) => isMastered(q.id)).map((q) => q.id);
+}
+function masteredCount() {
+  return masteredIds().length;
+}
+// カテゴリ → 画像が無い問題カード用のアイコン
+function catIcon(cat) {
+  return ({
+    "種同定": "pets", "繁殖": "egg", "進化": "history", "解剖": "biotech",
+    "系統": "account_tree", "生態": "public", "人間": "groups",
+  })[cat] || "quiz";
+}
+
+// ─────────────────────────────
 // 画面: ホーム / クイズ / 結果 / 成績
 // ─────────────────────────────
 function showHome() {
@@ -506,13 +587,20 @@ function showHome() {
       <div class="home-stat">
         <div><div class="num">${progress.totalSessions}</div><div class="lbl">SESSION</div></div>
         <div><div class="num">${pct}%</div><div class="lbl">ACCURACY</div></div>
-        <div><div class="num">${QUESTIONS.length}</div><div class="lbl">QUESTIONS</div></div>
+        <div><div class="num">${masteredCount()}<span style="font-size:15px;color:var(--text2);font-weight:700;">/${QUESTIONS.length}</span></div><div class="lbl">制覇</div></div>
       </div>
       <button class="mode-btn" data-mode="normal" type="button">
         <span class="micon"><span class="icon">school</span></span>
         <span class="mlbl">
           <div class="mname">通常モード</div>
           <div class="msub">全 ${QUESTIONS.length} 問からランダムに ${SESSION_LEN} 問</div>
+        </span>
+      </button>
+      <button class="mode-btn" data-mode="zukan" type="button">
+        <span class="micon"><span class="icon">menu_book</span></span>
+        <span class="mlbl">
+          <div class="mname">図鑑</div>
+          <div class="msub">${masteredCount()} / ${QUESTIONS.length} 種を制覇 — ${MASTER_STREAK} 連続正解で点灯</div>
         </span>
       </button>
       <button class="mode-btn" data-mode="review" type="button" ${reviewPool.length === 0 ? "disabled" : ""}>
@@ -535,6 +623,7 @@ function showHome() {
     btn.addEventListener("click", () => {
       const m = btn.dataset.mode;
       if (m === "stats") showStats();
+      else if (m === "zukan") showZukan();
       else startSession(m);
     });
   });
@@ -577,6 +666,117 @@ function showStats() {
   `;
   $("statsHomeBtn").addEventListener("click", showHome);
 }
+
+function zukanCardInner(q) {
+  return q.img
+    ? `<img class="zk-img" src="${q.img}" alt="">`
+    : `<div class="zk-noimg"><span class="icon">${catIcon(q.cat)}</span></div>`;
+}
+
+function showZukan() {
+  currentScreen = "zukan";
+  const total = QUESTIONS.length;
+  const mastered = masteredCount();
+  const pct = total > 0 ? Math.round((mastered / total) * 100) : 0;
+  $("subtitle").textContent = "図鑑。正解を重ねて全種そろえよう。";
+  const cards = QUESTIONS.map((q, idx) => {
+    const pq = progress.perQuestion[q.id] || { tries: 0, correct: 0, streak: 0 };
+    const seen = pq.tries > 0;
+    const mast = (pq.streak || 0) >= MASTER_STREAK;
+    const name = q.choices[q.answer];
+    let cls, inner;
+    if (mast) {
+      cls = "mastered";
+      inner = `${zukanCardInner(q)}<div class="zk-badge"><span class="icon">check</span></div><div class="zk-name">${escapeHtml(name)}</div>`;
+    } else if (seen) {
+      cls = "seen";
+      const hint = (pq.streak || 0) === MASTER_STREAK - 1 ? "あと1" : "挑戦中";
+      inner = `${zukanCardInner(q)}<div class="zk-hint">${hint}</div><div class="zk-name">${escapeHtml(name)}</div>`;
+    } else {
+      cls = "locked";
+      inner = `<div class="zk-q">?</div>`;
+    }
+    return `<button class="zukan-card ${cls}" data-idx="${idx}" type="button">${inner}</button>`;
+  }).join("");
+  $("quizArea").innerHTML = `
+    <div class="card">
+      <div class="zukan-head">
+        <div class="zukan-progress-num">${mastered}<span class="total"> / ${total} 種 制覇</span></div>
+        <div class="progress-row" style="margin-top:10px;margin-bottom:0;">
+          <div class="progress-bar"><div class="progress-fill" style="width:${pct}%"></div></div>
+          <span>${pct}%</span>
+        </div>
+      </div>
+      <div class="zukan-grid">${cards}</div>
+      <div style="margin-top:18px;text-align:center;">
+        <button class="pill" id="zukanHomeBtn" type="button"><span class="icon">arrow_back</span> ホームへ</button>
+      </div>
+    </div>
+  `;
+  $("zukanHomeBtn").addEventListener("click", showHome);
+  document.querySelectorAll(".zukan-card").forEach((btn) => {
+    btn.addEventListener("click", () => openZukanDetail(Number(btn.dataset.idx)));
+  });
+}
+
+function openZukanDetail(idx) {
+  const q = QUESTIONS[idx];
+  const pq = progress.perQuestion[q.id] || { tries: 0, correct: 0, streak: 0 };
+  const seen = pq.tries > 0;
+  const mast = (pq.streak || 0) >= MASTER_STREAK;
+  if (!seen) {
+    $("zkDetail").innerHTML = `
+      <div style="text-align:center;padding:24px 10px 10px;">
+        <div style="font-size:52px;font-weight:900;color:var(--text3);line-height:1;">?</div>
+        <div style="margin-top:16px;font-size:15px;font-weight:800;color:var(--text);">まだ捕まえてないサメ</div>
+        <div style="margin-top:8px;font-size:12px;color:var(--text2);font-weight:600;">クイズで正解すると図鑑に載るよ</div>
+      </div>`;
+  } else {
+    const name = q.choices[q.answer];
+    const streak = pq.streak || 0;
+    const statusHtml = mast
+      ? `<div class="zk-status mastered"><span class="icon">check_circle</span>制覇済み（通算 ${pq.correct}/${pq.tries} 正解）</div>`
+      : `<div class="zk-status seen"><span class="icon">bolt</span>挑戦中 — ${MASTER_STREAK} 連続正解で制覇（今 ${streak} 連続）</div>`;
+    $("zkDetail").innerHTML = `
+      ${q.img ? `<img class="zk-detail-img" src="${q.img}" alt="">` : ""}
+      <div class="zk-detail-name">${escapeHtml(name)}</div>
+      ${q.cat ? `<span class="zk-detail-cat">${q.cat}</span>` : ""}
+      ${q.explain ? `<div class="zk-detail-explain">${q.explain}</div>` : ""}
+      ${statusHtml}`;
+  }
+  openZkModal();
+}
+
+// 図鑑 詳細シート: 開閉 + 下ドラッグで閉じる
+let zkStartY = null, zkRawDy = 0;
+function openZkModal() { $("zkModal").classList.add("open"); }
+function closeZkModal() {
+  $("zkModal").classList.remove("open");
+  $("zkSheet").style.transition = "";
+  $("zkSheet").style.transform = "";
+}
+$("zkModal").addEventListener("click", (e) => { if (e.target === $("zkModal")) closeZkModal(); });
+(() => {
+  const grab = $("zkGrab"), sheet = $("zkSheet");
+  grab.addEventListener("pointerdown", (e) => {
+    zkStartY = e.clientY; zkRawDy = 0; sheet.style.transition = "none";
+    try { grab.setPointerCapture(e.pointerId); } catch (_) {}
+  });
+  grab.addEventListener("pointermove", (e) => {
+    if (zkStartY === null) return;
+    zkRawDy = e.clientY - zkStartY;
+    if (zkRawDy > 0) sheet.style.transform = `translateY(${zkRawDy}px)`;
+  });
+  const end = () => {
+    if (zkStartY === null) return;
+    zkStartY = null; sheet.style.transition = "";
+    if (zkRawDy > 100) closeZkModal();
+    else sheet.style.transform = "";
+    zkRawDy = 0;
+  };
+  grab.addEventListener("pointerup", end);
+  grab.addEventListener("pointercancel", end);
+})();
 
 function startSession(mode = "normal") {
   currentMode = mode;
@@ -684,20 +884,26 @@ async function showResult() {
             : pct >= 50 ? "半分以上。間違えたとこ復習しよう。"
             : "また回そう。間違えてる方が脳に残る。";
   const reviewPool = getReviewPool();
+  const masterBanner = newlyMastered.length > 0
+    ? `<div class="master-banner"><span class="icon">auto_awesome</span>新たに ${newlyMastered.length} 種 制覇！</div>`
+    : "";
   $("quizArea").innerHTML = `
     <div class="card result">
       <div class="result-score">${correct}<span class="total"> / ${SESSION_LEN}</span></div>
       <div class="result-lbl">SCORE</div>
+      ${masterBanner}
       <div class="result-msg">${msg}</div>
       <div class="result-actions">
         <button class="pill primary" id="againBtn" type="button"><span class="icon">replay</span> もう一回</button>
         ${reviewPool.length > 0 ? `<button class="pill" id="reviewBtn" type="button"><span class="icon">school</span> 復習へ</button>` : ""}
+        <button class="pill" id="resultZukanBtn" type="button"><span class="icon">menu_book</span> 図鑑</button>
         <button class="pill" id="resultHomeBtn" type="button"><span class="icon">home</span> ホーム</button>
       </div>
     </div>
   `;
   $("againBtn").addEventListener("click", () => startSession(currentMode));
   $("reviewBtn")?.addEventListener("click", () => startSession("review"));
+  $("resultZukanBtn").addEventListener("click", showZukan);
   $("resultHomeBtn").addEventListener("click", showHome);
 }
 
