@@ -47,7 +47,13 @@ ${missingBlock}
 - キャラクターの見た目は identityTokens (識別子) を毎回一貫させるよう助言する。
 - ユーザーが素材を確定したら、次のステートへ進める提案をする。
 - タイムライン編集の最終判断はユーザー。配置案の提案はしてよいが決定はしない。
-- 日本語・簡潔・具体的な次の一手で答える。前置きの相槌は最小限に。`;
+- 日本語・簡潔・具体的な次の一手で答える。前置きの相槌は最小限に。
+
+キャラクター登録を手伝うとき:
+- 原作が青空文庫等で公開されている著作権切れ作品の場合、Web 検索で人物像・容姿・
+  関係性を調べて description / identityTokens / appearancePrompt の草案を提案してよい。
+- 検索結果は自分の言葉で要約して提示する (原文の長い引用はしない)。出典が分かれば
+  一言添える。最終確認と確定操作は必ずユーザーに委ねる。`;
 }
 
 export async function chatOnce(callGemini, systemPrompt, history, userMessage) {
@@ -55,6 +61,10 @@ export async function chatOnce(callGemini, systemPrompt, history, userMessage) {
     .map((h) => `${h.role === "assistant" ? "アシスタント" : "ユーザー"}: ${h.content}`)
     .join("\n\n");
   const prompt = `${systemPrompt}\n\n${historyText ? `これまでの会話:\n${historyText}\n\n` : ""}ユーザー: ${userMessage}\n\nアシスタント:`;
-  const { result } = await callGemini(prompt, { maxOutputTokens: 1500 });
+  const { result } = await callGemini(prompt, {
+    primaryModel: "gemini-2.5-flash",
+    maxOutputTokens: 1500,
+    useGoogleSearch: true,
+  });
   return (result.response.text() || "").trim();
 }
