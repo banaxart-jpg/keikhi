@@ -28,9 +28,18 @@ body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); 
 .pill-btn { padding: 9px 18px; border-radius: 30px; font-size: 12px; font-weight: 700; cursor: pointer; border: none; color: var(--text2); font-family: 'Outfit', sans-serif; background: var(--bg); box-shadow: 5px 5px 12px var(--sd), -5px -5px 12px var(--sl); transition: all 0.12s; }
 .pill-btn:active { box-shadow: inset 3px 3px 8px var(--sd), inset -3px -3px 8px var(--sl); transform: scale(0.96); }
 
-.wrap { padding: 40px 22px 60px; }
+.wrap { padding: 40px 22px 4px; }
 .title { font-size: 30px; font-weight: 800; margin-bottom: 6px; }
-.subtitle { font-size: 13px; color: var(--text2); font-weight: 600; margin-bottom: 32px; }
+.subtitle { font-size: 13px; color: var(--text2); font-weight: 600; margin-bottom: 8px; }
+
+/* ───── カテゴリー別ページ (左右スワイプ、iPhone ホーム画面風) ───── */
+.pager-scroll { display: flex; overflow-x: auto; scroll-snap-type: x mandatory; -webkit-overflow-scrolling: touch; scrollbar-width: none; }
+.pager-scroll::-webkit-scrollbar { display: none; }
+.page { flex: 0 0 100%; min-width: 0; scroll-snap-align: start; padding: 22px 22px 30px; }
+.page-label { font-size: 12px; font-weight: 700; color: var(--text3); letter-spacing: 0.08em; text-transform: uppercase; margin-bottom: 16px; }
+.dots { display: flex; justify-content: center; align-items: center; gap: 8px; padding: 6px 0 26px; }
+.dot { width: 8px; height: 8px; border-radius: 5px; background: var(--sd2); border: none; padding: 0; cursor: pointer; transition: width 0.2s, background 0.2s; }
+.dot.active { width: 22px; background: var(--text2); }
 
 .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
 .app-card { position: relative; overflow: visible; border-radius: 24px; padding: 26px 18px; background: var(--bg); cursor: pointer; text-align: center; border: none; font-family: 'Outfit', sans-serif; color: var(--text); box-shadow: 10px 10px 24px var(--sd), -8px -8px 20px var(--sl); transition: box-shadow 0.18s, transform 0.14s; }
@@ -46,7 +55,7 @@ body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); 
 .app-desc { font-size: 11px; color: var(--text2); font-weight: 600; line-height: 1.5; }
 .app-badge { position: absolute; top: 12px; right: 12px; font-size: 9px; font-weight: 800; letter-spacing: 0.1em; color: var(--text3); }
 
-/* ───── 編集モード (iOS 風 jiggle + × で非表示。並び替えは MRU 自動) ───── */
+/* ───── 編集モード (iOS 風 jiggle + × で非表示、‹ › でカテゴリー内手動並べ替え) ───── */
 body.edit-mode .app-card { animation: jiggle 0.25s ease-in-out infinite alternate; cursor: default; }
 body.edit-mode .app-card.hidden-tile { opacity: 0.42; filter: grayscale(0.6); animation-delay: 0.12s; }
 @keyframes jiggle {
@@ -64,6 +73,20 @@ body.edit-mode .app-card.hidden-tile { opacity: 0.42; filter: grayscale(0.6); an
 body.edit-mode .app-card .hide-btn { display: flex; }
 body.edit-mode .app-card { user-select: none; -webkit-user-select: none; }
 body.edit-mode #editBtn { background: var(--bulb2); color: white; box-shadow: inset 3px 3px 8px rgba(0,0,0,0.15); }
+
+/* 並べ替え (カテゴリーページ内のみ・手動順序。ホームページは常に MRU 自動) */
+.app-card .order-btn {
+  position: absolute; bottom: -6px; width: 26px; height: 26px; border-radius: 13px;
+  background: var(--bg); color: var(--text2); border: 2px solid var(--bg);
+  display: none; align-items: center; justify-content: center;
+  box-shadow: 3px 3px 8px var(--sd), -3px -3px 8px var(--sl);
+  font-size: 16px; font-weight: 900; line-height: 1; padding: 0; cursor: pointer; z-index: 3;
+  font-family: -apple-system, sans-serif;
+}
+.app-card .order-btn.order-prev { left: -6px; }
+.app-card .order-btn.order-next { right: -6px; }
+.app-card .order-btn:disabled { opacity: 0.28; cursor: default; }
+body.edit-mode .app-card .order-btn { display: flex; }
 
 #signinOverlay { display: none; position: fixed; inset: 0; z-index: 400; background: var(--bg); flex-direction: column; align-items: center; justify-content: center; padding: 32px; text-align: center; gap: 18px; }
 #signinOverlay .title { font-size: 26px; }
@@ -88,8 +111,9 @@ body.edit-mode #editBtn { background: var(--bulb2); color: white; box-shadow: in
   <div class="wrap">
     <div class="title">アプリ</div>
     <div class="subtitle" id="who">サインイン済み</div>
-    <div class="grid" id="grid"></div>
   </div>
+  <div class="pager-scroll" id="pagerScroll"></div>
+  <div class="dots" id="dots"></div>
 </div>
 
 <div id="signinOverlay">
@@ -122,29 +146,41 @@ import { registerPushForUser } from "/push-register.js";
 const APPS = [
   // icon: Material Symbols (Outlined) のアイコン名。https://fonts.google.com/icons から選ぶ。
   // accent: アイコン円形背景の色（カードのテーマカラー）。
-  { id: "genba",   name: "現場",         icon: "domain",         accent: "#0891b2", desc: "現場の登録・住所・キーボックス管理", path: "/genba/" },
-  { id: "genba-memo", name: "現場メモ",   icon: "edit_note",      accent: "#b08968", desc: "現場×日ごとに realtime 同期メモ", path: "/genba-memo/" },
-  { id: "keihi",  name: "経費",         icon: "receipt_long",  accent: "#2a8c3a", desc: "領収書をAIで読取・記録",      path: "/keihi/" },
-  { id: "keihi2", name: "領収書",       icon: "add_a_photo",   accent: "#10b981", desc: "撮影連発→後でまとめて仕分け",  path: "/keihi2/" },
-  { id: "seikyu", name: "請求書",       icon: "request_quote", accent: "#d97706", desc: "光熱費・税金の未払い管理",    path: "/seikyu/" },
-  { id: "task",    name: "タスク",       icon: "checklist",      accent: "#4961ff", desc: "",                             path: "/task/" },
-  { id: "kaimono", name: "手配リスト",   icon: "inventory_2",    accent: "#2a8c3a", desc: "現場ごとに必要な工具・材料を共有", path: "/kaimono/" },
-  { id: "yado",    name: "宿",           icon: "hotel",          accent: "#b45309", desc: "満竹華庵の予約・売上・戦略",     path: "/yado/" },
-  { id: "koteihi", name: "固定費",       icon: "event_repeat",   accent: "#3949ab", desc: "毎月の固定費を1タップで取引に登録", path: "/koteihi/" },
+  // category: CATEGORIES のどのページに出すか。gyomu=業務 / manabi=学習 / tool=ツール / toshi=投資
+  { id: "genba",   name: "現場",         icon: "domain",         accent: "#0891b2", desc: "現場の登録・住所・キーボックス管理", path: "/genba/", category: "gyomu" },
+  { id: "genba-memo", name: "現場メモ",   icon: "edit_note",      accent: "#b08968", desc: "現場×日ごとに realtime 同期メモ", path: "/genba-memo/", category: "gyomu" },
+  { id: "keihi",  name: "経費",         icon: "receipt_long",  accent: "#2a8c3a", desc: "領収書をAIで読取・記録",      path: "/keihi/", category: "gyomu" },
+  { id: "keihi2", name: "領収書",       icon: "add_a_photo",   accent: "#10b981", desc: "撮影連発→後でまとめて仕分け",  path: "/keihi2/", category: "gyomu" },
+  { id: "seikyu", name: "請求書",       icon: "request_quote", accent: "#d97706", desc: "光熱費・税金の未払い管理",    path: "/seikyu/", category: "gyomu" },
+  { id: "task",    name: "タスク",       icon: "checklist",      accent: "#4961ff", desc: "",                             path: "/task/", category: "gyomu" },
+  { id: "kaimono", name: "手配リスト",   icon: "inventory_2",    accent: "#2a8c3a", desc: "現場ごとに必要な工具・材料を共有", path: "/kaimono/", category: "gyomu" },
+  { id: "yado",    name: "宿",           icon: "hotel",          accent: "#b45309", desc: "満竹華庵の予約・売上・戦略",     path: "/yado/", category: "toshi" },
+  { id: "koteihi", name: "固定費",       icon: "event_repeat",   accent: "#3949ab", desc: "毎月の固定費を1タップで取引に登録", path: "/koteihi/", category: "gyomu" },
   // 銀行 (ginko) は固定費・請求書・宿・領収書アプリと二重計上になるため、ランチャー
   // からは外す。コードは apps/ginko/ と /api/ginko/parse に残置。差分検出モード等に
   // 作り変える時は APPS 配列に戻すだけで復活する。
-  // { id: "ginko",   name: "銀行",         icon: "account_balance",accent: "#0d9488", desc: "PayPay銀行CSVから取引を一括取込", path: "/ginko/" },
-  { id: "keiri",   name: "経理",         icon: "analytics",      accent: "#4338ca", desc: "売上・支出・現場別の集計ダッシュボード", path: "/keiri/" },
-  { id: "cost",    name: "AIコスト計算", icon: "calculate",      accent: "#7c3aed", desc: "Gemini/GPT/Claude の費用見積", path: "/cost/" },
-  { id: "kaigi",  name: "AI会議",       icon: "forum",         accent: "#4961ff", desc: "3者AIで検討して結論を出す",    path: "/kaigi/" },
-  { id: "techstudy", name: "techstudy", icon: "school",        accent: "#6d28d9", desc: "ITまわりの用語・仕組みを身につける", path: "/techstudy/" },
-  { id: "seko-kanri", name: "施工管理2級", icon: "engineering", accent: "#b08968", desc: "2級建築施工管理技士 (一次・二次) 対策", path: "/seko-kanri/" },
-  { id: "fx-bot", name: "FX bot", icon: "smart_toy", accent: "#0f766e", desc: "OANDA × Gemini で 1 通貨単位の自動売買", path: "/fx-bot/" },
-  { id: "denki-zumen", name: "電気積算",  icon: "bolt",         accent: "#eab308", desc: "図面をAIで読取→品番・数量・発注リスト", path: "/denki-zumen/" },
-  { id: "fungi",   name: "菌学",         icon: "psychiatry",     accent: "#b08968", desc: "キノコ・菌類の 4 択クイズ",         path: "/fungi/" },
-  { id: "shark",   name: "鮫学",         icon: "phishing",       accent: "#0e7490", desc: "サメ (鮫) の 4 択クイズ",            path: "/shark/" },
-  { id: "calendar", name: "カレンダー",   icon: "calendar_month", accent: "#4f46e5", desc: "Googleカレンダーを見やすく表示",     path: "/calendar/" },
+  // { id: "ginko",   name: "銀行",         icon: "account_balance",accent: "#0d9488", desc: "PayPay銀行CSVから取引を一括取込", path: "/ginko/", category: "gyomu" },
+  { id: "keiri",   name: "経理",         icon: "analytics",      accent: "#4338ca", desc: "売上・支出・現場別の集計ダッシュボード", path: "/keiri/", category: "gyomu" },
+  { id: "cost",    name: "AIコスト計算", icon: "calculate",      accent: "#7c3aed", desc: "Gemini/GPT/Claude の費用見積", path: "/cost/", category: "tool" },
+  { id: "kaigi",  name: "AI会議",       icon: "forum",         accent: "#4961ff", desc: "3者AIで検討して結論を出す",    path: "/kaigi/", category: "tool" },
+  { id: "techstudy", name: "techstudy", icon: "school",        accent: "#6d28d9", desc: "ITまわりの用語・仕組みを身につける", path: "/techstudy/", category: "manabi" },
+  { id: "seko-kanri", name: "施工管理2級", icon: "engineering", accent: "#b08968", desc: "2級建築施工管理技士 (一次・二次) 対策", path: "/seko-kanri/", category: "manabi" },
+  { id: "fx-bot", name: "FX bot", icon: "smart_toy", accent: "#0f766e", desc: "OANDA × Gemini で 1 通貨単位の自動売買", path: "/fx-bot/", category: "toshi" },
+  { id: "denki-zumen", name: "電気積算",  icon: "bolt",         accent: "#eab308", desc: "図面をAIで読取→品番・数量・発注リスト", path: "/denki-zumen/", category: "tool" },
+  { id: "fungi",   name: "菌学",         icon: "psychiatry",     accent: "#b08968", desc: "キノコ・菌類の 4 択クイズ",         path: "/fungi/", category: "manabi" },
+  { id: "shark",   name: "鮫学",         icon: "phishing",       accent: "#0e7490", desc: "サメ (鮫) の 4 択クイズ",            path: "/shark/", category: "manabi" },
+  { id: "calendar", name: "カレンダー",   icon: "calendar_month", accent: "#4f46e5", desc: "Googleカレンダーを見やすく表示",     path: "/calendar/", category: "tool" },
+];
+
+// カテゴリーページの順序と表示名。先頭は MRU 上位 8 件を横断表示する「よく使う」。
+// 各カテゴリー内の並びは MRU 自動 → 編集モードの ‹ › ボタンで手動調整すると
+// それ以降そのカテゴリーは手動順優先になる (launcher_prefs.catOrder に保存)。
+const CATEGORIES = [
+  { id: "home",   name: "よく使う" },
+  { id: "gyomu",  name: "業務" },
+  { id: "manabi", name: "学習" },
+  { id: "tool",   name: "ツール" },
+  { id: "toshi",  name: "投資" },
 ];
 
 // ───── アプリ毎のバッジ取得 (今日未活動の警告など) ─────
@@ -178,8 +214,8 @@ function isInternal() { return INTERNAL_EMAILS.has((currentUserEmail || "").toLo
 let prefs = (() => {
   try {
     const cached = localStorage.getItem("launcher_mru_cache");
-    return { mru: cached ? (JSON.parse(cached) || {}) : {}, hidden: [] };
-  } catch (_) { return { mru: {}, hidden: [] }; }
+    return { mru: cached ? (JSON.parse(cached) || {}) : {}, hidden: [], catOrder: {} };
+  } catch (_) { return { mru: {}, hidden: [], catOrder: {} }; }
 })();
 let editMode = false;
 let prefsSaveTimer = null;
@@ -212,9 +248,15 @@ async function loadPrefs(user) {
   for (const [id, ts] of Object.entries(localMru)) {
     if (!merged[id] || ts > merged[id]) merged[id] = ts;
   }
+  // catOrder: カテゴリー内の手動並べ替え結果 ({ [catId]: [appId, ...] })。
+  // 編集モードの ‹ › ボタンを押したカテゴリーだけ入る。触ってないカテゴリーは
+  // 引き続き MRU 自動並び。
+  const remoteCatOrder = (remote?.catOrder && typeof remote.catOrder === "object" && !Array.isArray(remote.catOrder))
+    ? remote.catOrder : {};
   prefs = {
     mru: merged,
     hidden: Array.isArray(remote?.hidden) ? remote.hidden : [],
+    catOrder: remoteCatOrder,
   };
   renderGrid();
 }
@@ -228,6 +270,7 @@ function savePrefs() {
       await setDoc(doc(fsDb, "launcher_prefs", user.uid), {
         mru: prefs.mru || {},
         hidden: prefs.hidden || [],
+        catOrder: prefs.catOrder || {},
         updatedAt: Date.now(),
       }, { merge: true });
     } catch (e) { console.warn("savePrefs:", e?.message || e); }
@@ -255,51 +298,142 @@ async function bumpMru(appId) {
   } catch (_) {}
 }
 
-function orderedApps() {
-  // techstudy / 手配リスト (kaimono) / タスク (task) は社外 auth ユーザーにも公開
-  const PUBLIC_APPS = new Set(["techstudy", "kaimono", "task"]);
-  const visible = APPS.filter((a) => isInternal() || PUBLIC_APPS.has(a.id));
+// techstudy / 手配リスト (kaimono) / タスク (task) は社外 auth ユーザーにも公開
+const PUBLIC_APPS = new Set(["techstudy", "kaimono", "task"]);
+function visibleApps() {
+  return APPS.filter((a) => isInternal() || PUBLIC_APPS.has(a.id));
+}
+
+// MRU (最近開いた順) で並べる。同点は APPS 配列内の順序 (先頭ほど優先) で解決。
+function mruSort(list) {
   const mru = prefs.mru || {};
-  // APPS 配列内の順序を未開封のフォールバック (先頭ほど優先) として保持
   const fallback = new Map(APPS.map((a, i) => [a.id, i]));
-  return visible.slice().sort((a, b) => {
+  return list.slice().sort((a, b) => {
     const ra = mru[a.id] || 0, rb = mru[b.id] || 0;
-    if (ra !== rb) return rb - ra;  // 最近開いた順
+    if (ra !== rb) return rb - ra;
     return fallback.get(a.id) - fallback.get(b.id);
   });
 }
 
+// カテゴリー内で手動並べ替え (catOrder) が保存されていればそれを優先。
+// まだ登録されていないアプリ (新規追加分) は MRU 順のまま末尾に足す。
+function manualSort(catId, list) {
+  const order = prefs.catOrder && prefs.catOrder[catId];
+  if (!order || !order.length) return list;
+  const idx = new Map(order.map((id, i) => [id, i]));
+  const known = list.filter((a) => idx.has(a.id)).sort((a, b) => idx.get(a.id) - idx.get(b.id));
+  const rest = list.filter((a) => !idx.has(a.id));
+  return [...known, ...rest];
+}
+
+function categoryOrderedApps(catId) {
+  const inCat = visibleApps().filter((a) => a.category === catId);
+  return manualSort(catId, mruSort(inCat));
+}
+
 function isHidden(id) { return prefs.hidden.includes(id); }
 
+let currentPageIdx = 0; // 現在表示中のページ (スワイプ/ドットタップで更新)
+
+function scrollToPage(idx) {
+  const scroller = document.getElementById("pagerScroll");
+  if (!scroller) return;
+  currentPageIdx = idx;
+  scroller.scrollTo({ left: idx * scroller.clientWidth, behavior: "smooth" });
+  document.querySelectorAll("#dots .dot").forEach((d, i) => d.classList.toggle("active", i === idx));
+}
+
+function initPagerScrollListener() {
+  const scroller = document.getElementById("pagerScroll");
+  if (!scroller || scroller.dataset.listenerAttached) return;
+  scroller.dataset.listenerAttached = "1";
+  let ticking = false;
+  scroller.addEventListener("scroll", () => {
+    if (ticking) return;
+    ticking = true;
+    requestAnimationFrame(() => {
+      const idx = Math.round(scroller.scrollLeft / (scroller.clientWidth || 1));
+      if (idx !== currentPageIdx) {
+        currentPageIdx = idx;
+        document.querySelectorAll("#dots .dot").forEach((d, i) => d.classList.toggle("active", i === idx));
+      }
+      ticking = false;
+    });
+  }, { passive: true });
+}
+
 function renderGrid() {
-  const g = document.getElementById("grid");
-  g.innerHTML = "";
-  // 通常: 非表示はスキップ。
-  // 編集モード: 非表示は薄く出すが、画面下のほうに固める (visible が先)。
-  let ordered = orderedApps();
-  if (editMode) {
-    const vis = ordered.filter((a) => !isHidden(a.id));
-    const hid = ordered.filter((a) => isHidden(a.id));
-    ordered = [...vis, ...hid];
-  }
-  for (const a of ordered) {
-    if (!editMode && isHidden(a.id)) continue;
-    const card = document.createElement("button");
-    card.className = "app-card" + (a.soon ? " soon" : "") + (isHidden(a.id) ? " hidden-tile" : "");
-    card.dataset.appId = a.id;
-    if (a.accent) card.style.setProperty("--accent", a.accent);
-    const badge = appBadges[a.id];
-    const hidden = isHidden(a.id);
-    card.innerHTML =
-      `<button class="hide-btn${hidden ? " show-btn" : ""}" onclick="event.stopPropagation();toggleHidden('${a.id}')">${hidden ? "+" : "−"}</button>` +
-      `<div class="app-icon">${a.icon}</div>` +
-      `<div class="app-name">${a.name}</div>` +
-      `<div class="app-desc">${a.desc}</div>` +
-      (a.soon ? `<div class="app-badge">SOON</div>` : "") +
-      (badge ? `<div class="warn-badge">${badge}</div>` : "");
-    attachCardHandlers(card, a);
-    g.appendChild(card);
-  }
+  const scroller = document.getElementById("pagerScroll");
+  const dotsEl = document.getElementById("dots");
+  if (!scroller || !dotsEl) return;
+  scroller.innerHTML = "";
+  dotsEl.innerHTML = "";
+
+  CATEGORIES.forEach((cat, pageIdx) => {
+    let list;
+    if (cat.id === "home") {
+      // ホーム = 全カテゴリー横断の MRU 上位 8 件。並べ替え不可、常に自動。
+      list = mruSort(visibleApps()).filter((a) => !isHidden(a.id)).slice(0, 8);
+    } else {
+      list = categoryOrderedApps(cat.id);
+      if (editMode) {
+        // 編集モード: 非表示は薄く出すが画面下のほうに固める (visible が先)
+        const vis = list.filter((a) => !isHidden(a.id));
+        const hid = list.filter((a) => isHidden(a.id));
+        list = [...vis, ...hid];
+      } else {
+        list = list.filter((a) => !isHidden(a.id));
+      }
+    }
+
+    const page = document.createElement("section");
+    page.className = "page";
+    page.dataset.cat = cat.id;
+    const label = document.createElement("div");
+    label.className = "page-label";
+    label.textContent = cat.name;
+    page.appendChild(label);
+
+    const grid = document.createElement("div");
+    grid.className = "grid";
+    const visibleIds = list.filter((a) => !isHidden(a.id)).map((a) => a.id);
+    for (const a of list) {
+      const hidden = isHidden(a.id);
+      const card = document.createElement("button");
+      card.className = "app-card" + (a.soon ? " soon" : "") + (hidden ? " hidden-tile" : "");
+      card.dataset.appId = a.id;
+      if (a.accent) card.style.setProperty("--accent", a.accent);
+      const badge = appBadges[a.id];
+      let orderHtml = "";
+      if (!hidden && cat.id !== "home") {
+        const vIdx = visibleIds.indexOf(a.id);
+        orderHtml =
+          `<button class="order-btn order-prev" ${vIdx <= 0 ? "disabled" : ""} onclick="event.stopPropagation();moveApp('${cat.id}','${a.id}',-1)">‹</button>` +
+          `<button class="order-btn order-next" ${vIdx >= visibleIds.length - 1 ? "disabled" : ""} onclick="event.stopPropagation();moveApp('${cat.id}','${a.id}',1)">›</button>`;
+      }
+      card.innerHTML =
+        `<button class="hide-btn${hidden ? " show-btn" : ""}" onclick="event.stopPropagation();toggleHidden('${a.id}')">${hidden ? "+" : "−"}</button>` +
+        orderHtml +
+        `<div class="app-icon">${a.icon}</div>` +
+        `<div class="app-name">${a.name}</div>` +
+        `<div class="app-desc">${a.desc}</div>` +
+        (a.soon ? `<div class="app-badge">SOON</div>` : "") +
+        (badge ? `<div class="warn-badge">${badge}</div>` : "");
+      attachCardHandlers(card, a);
+      grid.appendChild(card);
+    }
+    page.appendChild(grid);
+    scroller.appendChild(page);
+
+    const dot = document.createElement("button");
+    dot.className = "dot" + (pageIdx === currentPageIdx ? " active" : "");
+    dot.setAttribute("aria-label", cat.name);
+    dot.addEventListener("click", () => scrollToPage(pageIdx));
+    dotsEl.appendChild(dot);
+  });
+
+  initPagerScrollListener();
+  if (scroller.clientWidth) scroller.scrollLeft = currentPageIdx * scroller.clientWidth;
 }
 
 function toggleHidden(id) {
@@ -309,6 +443,20 @@ function toggleHidden(id) {
   savePrefs();
 }
 window.toggleHidden = toggleHidden;
+
+// カテゴリー内で1つ前/後ろに手動移動 (‹ ›)。一度動かしたカテゴリーは
+// 以後 catOrder が優先され、MRU による自動並べ替えは行われなくなる。
+function moveApp(catId, appId, dir) {
+  const ids = categoryOrderedApps(catId).filter((a) => !isHidden(a.id)).map((a) => a.id);
+  const i = ids.indexOf(appId);
+  const j = i + dir;
+  if (i < 0 || j < 0 || j >= ids.length) return;
+  [ids[i], ids[j]] = [ids[j], ids[i]];
+  prefs.catOrder = { ...(prefs.catOrder || {}), [catId]: ids };
+  renderGrid();
+  savePrefs();
+}
+window.moveApp = moveApp;
 
 function toggleEditMode() {
   editMode = !editMode;
@@ -321,8 +469,7 @@ window.toggleEditMode = toggleEditMode;
 // ───── 長押し → 編集モード突入 (iPhone 風) ─────
 // 通常モードでは:
 //   - 短いタップ → アプリ起動 (= MRU タイムスタンプ更新 → 並びが先頭へ)
-//   - 長押し (450ms 静止) → 編集モード突入 (hide ボタンで非表示にできるだけ)
-// 並び順はユーザーが直接いじれない (= 最近開いた順に自動で前に出る)。
+//   - 長押し (450ms 静止) → 編集モード突入 (hide ボタン / ‹ › で並べ替え)
 const LONGPRESS_MS = 450;
 const TAP_MAX_MOVE = 8;
 
@@ -334,7 +481,7 @@ function attachCardHandlers(card, app) {
 
   card.addEventListener("pointerdown", (e) => {
     if (app.soon) return;
-    if (e.target.closest(".hide-btn")) return;
+    if (e.target.closest(".hide-btn") || e.target.closest(".order-btn")) return;
     pressX = e.clientX; pressY = e.clientY;
     moved = false;
     if (!editMode) {
