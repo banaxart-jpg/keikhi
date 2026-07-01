@@ -14,6 +14,9 @@ import { buildChartSummary as fxBuildChart } from "./fx-lib/chart.js";
 import { decideFromChart as fxDecide } from "./fx-lib/ai.js";
 import { parseCandlesCsv as fxParseCsv } from "./fx-lib/csv.js";
 import { runStrategy as fxRunStrategy, strategyList as fxStrategyList } from "./fx-lib/strategies.js";
+import { recomputeEpisodeState, computeMissingInfo, cutIsReadyForGeneration } from "./drama-lib/state.js";
+import { buildSystemPrompt as dramaBuildSystemPrompt, chatOnce as dramaChatOnce } from "./drama-lib/gemini.js";
+import { generateCutVideo as dramaGenerateCutVideo } from "./drama-lib/videoGen.js";
 import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -924,8 +927,93 @@ async function ensureSchema() {
     // スプレッド + スリッページの想定コスト (round-trip pips)。デフォルト 1 pip
     await p.query(`ALTER TABLE fx_backtests ADD COLUMN IF NOT EXISTS cost_pips NUMERIC NOT NULL DEFAULT 1.0`);
 
+    // 自動ドラマ作成 (auto-drama): 著作権切れ小説 → AI協調 → Seedance 動画生成のミニ制作アプリ
+    await p.query(`
+      CREATE TABLE IF NOT EXISTS drama_projects (
+        id                  BIGSERIAL PRIMARY KEY,
+        title               TEXT NOT NULL,
+        author              TEXT,
+        source_text         TEXT,
+        world_setting       TEXT,
+        style_guide         TEXT,
+        default_video_model TEXT NOT NULL DEFAULT 'seedance-2.0-fast',
+        created_by          TEXT,
+        created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+        updated_at          TIMESTAMPTZ NOT NULL DEFAULT now()
+      )
+    `);
+    await p.query(`
+      CREATE TABLE IF NOT EXISTS drama_characters (
+        id                BIGSERIAL PRIMARY KEY,
+        project_id        BIGINT NOT NULL REFERENCES drama_projects(id) ON DELETE CASCADE,
+        name              TEXT NOT NULL,
+        reading           TEXT,
+        description       TEXT,
+        appearance_prompt TEXT,
+        identity_tokens   JSONB NOT NULL DEFAULT '[]'::jsonb,
+        reference_images  JSONB NOT NULL DEFAULT '[]'::jsonb,
+        status            TEXT NOT NULL DEFAULT 'draft',
+        created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+        updated_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+      )
+    `);
+    await p.query("CREATE INDEX IF NOT EXISTS drama_char_project_idx ON drama_characters (project_id)");
+    await p.query(`
+      CREATE TABLE IF NOT EXISTS drama_episodes (
+        id                      BIGSERIAL PRIMARY KEY,
+        project_id              BIGINT NOT NULL REFERENCES drama_projects(id) ON DELETE CASCADE,
+        number                  INTEGER NOT NULL,
+        title                   TEXT,
+        source_range_start      INTEGER,
+        source_range_end        INTEGER,
+        target_duration_sec     INTEGER NOT NULL DEFAULT 60,
+        key_visual              JSONB NOT NULL DEFAULT '{}'::jsonb,
+        state                   TEXT NOT NULL DEFAULT 'key_visual',
+        appearing_character_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
+        created_at              TIMESTAMPTZ NOT NULL DEFAULT now(),
+        updated_at              TIMESTAMPTZ NOT NULL DEFAULT now()
+      )
+    `);
+    await p.query("CREATE INDEX IF NOT EXISTS drama_ep_project_idx ON drama_episodes (project_id)");
+    await p.query(`
+      CREATE TABLE IF NOT EXISTS drama_cuts (
+        id                        BIGSERIAL PRIMARY KEY,
+        episode_id                BIGINT NOT NULL REFERENCES drama_episodes(id) ON DELETE CASCADE,
+        "order"                   INTEGER NOT NULL,
+        duration_sec              INTEGER NOT NULL DEFAULT 8,
+        prompt                    TEXT,
+        character_ids             JSONB NOT NULL DEFAULT '[]'::jsonb,
+        generations               JSONB NOT NULL DEFAULT '[]'::jsonb,
+        selected_generation_index INTEGER NOT NULL DEFAULT -1,
+        narration                 TEXT,
+        subtitle                  TEXT,
+        created_at                TIMESTAMPTZ NOT NULL DEFAULT now(),
+        updated_at                TIMESTAMPTZ NOT NULL DEFAULT now()
+      )
+    `);
+    await p.query(`CREATE INDEX IF NOT EXISTS drama_cut_ep_idx ON drama_cuts (episode_id, "order")`);
+    await p.query(`
+      CREATE TABLE IF NOT EXISTS drama_timelines (
+        episode_id         BIGINT PRIMARY KEY REFERENCES drama_episodes(id) ON DELETE CASCADE,
+        items               JSONB NOT NULL DEFAULT '[]'::jsonb,
+        exported_video_url  TEXT,
+        updated_at          TIMESTAMPTZ NOT NULL DEFAULT now()
+      )
+    `);
+    await p.query(`
+      CREATE TABLE IF NOT EXISTS drama_chat_messages (
+        id         BIGSERIAL PRIMARY KEY,
+        project_id BIGINT NOT NULL REFERENCES drama_projects(id) ON DELETE CASCADE,
+        episode_id BIGINT REFERENCES drama_episodes(id) ON DELETE SET NULL,
+        role       TEXT NOT NULL,
+        content    TEXT NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+      )
+    `);
+    await p.query("CREATE INDEX IF NOT EXISTS drama_chat_project_idx ON drama_chat_messages (project_id, created_at)");
+
     schemaMigrated = true;
-    console.log("[schema] migration ok: records.drive_url + tasks + yado_bookings + seko_* + fx_* ensured");
+    console.log("[schema] migration ok: records.drive_url + tasks + yado_bookings + seko_* + fx_* + drama_* ensured");
   } catch (e) {
     console.warn(`[schema] migration warning: ${e.message}`);
   }
@@ -7196,6 +7284,508 @@ app.get("/api/records/:id/image", async (req, res) => {
     res.json({ url });
   } catch (err) {
     console.error("image url error", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─────────────────────────────
+// 自動ドラマ作成 (auto-drama)
+// ─────────────────────────────
+// 状態は毎回 DB の実データから再計算して保存する (episode.state はキャッシュ扱い)。
+async function dramaRecomputeState(p, episodeId) {
+  const { rows } = await p.query(`SELECT key_visual AS "keyVisual" FROM drama_episodes WHERE id=$1`, [episodeId]);
+  if (!rows.length) return;
+  const { rows: cuts } = await p.query(
+    `SELECT generations, selected_generation_index AS "selectedGenerationIndex" FROM drama_cuts WHERE episode_id=$1`,
+    [episodeId]
+  );
+  const { rows: tl } = await p.query(
+    `SELECT exported_video_url AS "exportedVideoUrl" FROM drama_timelines WHERE episode_id=$1`, [episodeId]
+  );
+  const newState = recomputeEpisodeState(rows[0], cuts, tl[0]);
+  await p.query(`UPDATE drama_episodes SET state=$1 WHERE id=$2`, [newState, episodeId]);
+}
+
+app.get("/api/drama/projects", async (req, res) => {
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  try {
+    await ensureSchema();
+    const { rows } = await p.query(
+      `SELECT id, title, author, world_setting AS "worldSetting", style_guide AS "styleGuide",
+              default_video_model AS "defaultVideoModel", created_by AS "createdBy",
+              created_at AS "createdAt", updated_at AS "updatedAt"
+         FROM drama_projects ORDER BY updated_at DESC`
+    );
+    res.json(rows);
+  } catch (err) {
+    console.error("[drama] projects list", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post("/api/drama/projects", async (req, res) => {
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  try {
+    await ensureSchema();
+    const b = req.body || {};
+    if (!b.title) return res.status(400).json({ error: "title is required" });
+    const { rows } = await p.query(
+      `INSERT INTO drama_projects (title, author, source_text, world_setting, style_guide, default_video_model, created_by)
+       VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id`,
+      [b.title, b.author || null, b.sourceText || null, b.worldSetting || null, b.styleGuide || null,
+       b.defaultVideoModel || "seedance-2.0-fast", req.user?.email || null]
+    );
+    res.status(201).json({ id: rows[0].id });
+  } catch (err) {
+    console.error("[drama] project create", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get("/api/drama/projects/:id", async (req, res) => {
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  try {
+    const { rows } = await p.query(
+      `SELECT id, title, author, source_text AS "sourceText", world_setting AS "worldSetting",
+              style_guide AS "styleGuide", default_video_model AS "defaultVideoModel",
+              created_by AS "createdBy", created_at AS "createdAt", updated_at AS "updatedAt"
+         FROM drama_projects WHERE id=$1`,
+      [req.params.id]
+    );
+    if (!rows.length) return res.status(404).json({ error: "not found" });
+    const { rows: characters } = await p.query(
+      `SELECT id, name, reading, description, appearance_prompt AS "appearancePrompt",
+              identity_tokens AS "identityTokens", reference_images AS "referenceImages", status
+         FROM drama_characters WHERE project_id=$1 ORDER BY id`,
+      [req.params.id]
+    );
+    const { rows: episodes } = await p.query(
+      `SELECT id, number, title, source_range_start AS "sourceRangeStart", source_range_end AS "sourceRangeEnd",
+              target_duration_sec AS "targetDurationSec", key_visual AS "keyVisual", state,
+              appearing_character_ids AS "appearingCharacterIds", updated_at AS "updatedAt"
+         FROM drama_episodes WHERE project_id=$1 ORDER BY number`,
+      [req.params.id]
+    );
+    res.json({ ...rows[0], characters, episodes });
+  } catch (err) {
+    console.error("[drama] project detail", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.patch("/api/drama/projects/:id", async (req, res) => {
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  try {
+    const b = req.body || {};
+    const { rowCount } = await p.query(
+      `UPDATE drama_projects SET
+         title=COALESCE($1,title), author=COALESCE($2,author), source_text=COALESCE($3,source_text),
+         world_setting=COALESCE($4,world_setting), style_guide=COALESCE($5,style_guide),
+         default_video_model=COALESCE($6,default_video_model), updated_at=now()
+       WHERE id=$7`,
+      [b.title, b.author, b.sourceText, b.worldSetting, b.styleGuide, b.defaultVideoModel, req.params.id]
+    );
+    if (!rowCount) return res.status(404).json({ error: "not found" });
+    res.json({ ok: true });
+  } catch (err) {
+    console.error("[drama] project update", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post("/api/drama/projects/:id/characters", async (req, res) => {
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  try {
+    const b = req.body || {};
+    if (!b.name) return res.status(400).json({ error: "name is required" });
+    const { rows } = await p.query(
+      `INSERT INTO drama_characters (project_id, name, reading, description, appearance_prompt, identity_tokens, status)
+       VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id`,
+      [req.params.id, b.name, b.reading || null, b.description || null, b.appearancePrompt || null,
+       JSON.stringify(b.identityTokens || []), b.status || "draft"]
+    );
+    res.status(201).json({ id: rows[0].id });
+  } catch (err) {
+    console.error("[drama] character create", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.patch("/api/drama/characters/:id", async (req, res) => {
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  try {
+    const b = req.body || {};
+    const fields = [];
+    const values = [];
+    let i = 1;
+    const set = (col, val) => { fields.push(`${col}=$${i++}`); values.push(val); };
+    if (b.name !== undefined) set("name", b.name);
+    if (b.reading !== undefined) set("reading", b.reading);
+    if (b.description !== undefined) set("description", b.description);
+    if (b.appearancePrompt !== undefined) set("appearance_prompt", b.appearancePrompt);
+    if (b.identityTokens !== undefined) set("identity_tokens", JSON.stringify(b.identityTokens));
+    if (b.referenceImages !== undefined) set("reference_images", JSON.stringify(b.referenceImages));
+    if (b.status !== undefined) set("status", b.status);
+    if (!fields.length) return res.status(400).json({ error: "no fields to update" });
+    fields.push("updated_at=now()");
+    values.push(req.params.id);
+    const { rowCount } = await p.query(`UPDATE drama_characters SET ${fields.join(", ")} WHERE id=$${i}`, values);
+    if (!rowCount) return res.status(404).json({ error: "not found" });
+    res.json({ ok: true });
+  } catch (err) {
+    console.error("[drama] character update", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete("/api/drama/characters/:id", async (req, res) => {
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  try {
+    await p.query("DELETE FROM drama_characters WHERE id=$1", [req.params.id]);
+    res.status(204).end();
+  } catch (err) {
+    console.error("[drama] character delete", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post("/api/drama/projects/:id/episodes", async (req, res) => {
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  try {
+    const b = req.body || {};
+    if (!b.number) return res.status(400).json({ error: "number is required" });
+    const { rows } = await p.query(
+      `INSERT INTO drama_episodes (project_id, number, title, source_range_start, source_range_end, target_duration_sec, appearing_character_ids)
+       VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id`,
+      [req.params.id, b.number, b.title || null, b.sourceRangeStart ?? null, b.sourceRangeEnd ?? null,
+       b.targetDurationSec || 60, JSON.stringify(b.appearingCharacterIds || [])]
+    );
+    res.status(201).json({ id: rows[0].id });
+  } catch (err) {
+    console.error("[drama] episode create", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get("/api/drama/episodes/:id", async (req, res) => {
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  try {
+    const { rows } = await p.query(
+      `SELECT id, project_id AS "projectId", number, title,
+              source_range_start AS "sourceRangeStart", source_range_end AS "sourceRangeEnd",
+              target_duration_sec AS "targetDurationSec", key_visual AS "keyVisual", state,
+              appearing_character_ids AS "appearingCharacterIds", created_at AS "createdAt", updated_at AS "updatedAt"
+         FROM drama_episodes WHERE id=$1`,
+      [req.params.id]
+    );
+    if (!rows.length) return res.status(404).json({ error: "not found" });
+    const episode = rows[0];
+    const { rows: cuts } = await p.query(
+      `SELECT id, "order", duration_sec AS "durationSec", prompt, character_ids AS "characterIds",
+              generations, selected_generation_index AS "selectedGenerationIndex", narration, subtitle
+         FROM drama_cuts WHERE episode_id=$1 ORDER BY "order"`,
+      [req.params.id]
+    );
+    const { rows: timelineRows } = await p.query(
+      `SELECT items, exported_video_url AS "exportedVideoUrl" FROM drama_timelines WHERE episode_id=$1`,
+      [req.params.id]
+    );
+    const timeline = timelineRows[0] || { items: [], exportedVideoUrl: null };
+    const { rows: projRows } = await p.query(
+      `SELECT id, title, author, style_guide AS "styleGuide", world_setting AS "worldSetting" FROM drama_projects WHERE id=$1`,
+      [episode.projectId]
+    );
+    const { rows: characters } = await p.query(
+      `SELECT id, name, reading, status, identity_tokens AS "identityTokens", reference_images AS "referenceImages"
+         FROM drama_characters WHERE project_id=$1`,
+      [episode.projectId]
+    );
+    const missingInfo = computeMissingInfo({ project: projRows[0] || {}, characters, episode, cuts });
+    res.json({ ...episode, cuts, timeline, missingInfo });
+  } catch (err) {
+    console.error("[drama] episode detail", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.patch("/api/drama/episodes/:id", async (req, res) => {
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  try {
+    const b = req.body || {};
+    const fields = [];
+    const values = [];
+    let i = 1;
+    const set = (col, val) => { fields.push(`${col}=$${i++}`); values.push(val); };
+    if (b.title !== undefined) set("title", b.title);
+    if (b.sourceRangeStart !== undefined) set("source_range_start", b.sourceRangeStart);
+    if (b.sourceRangeEnd !== undefined) set("source_range_end", b.sourceRangeEnd);
+    if (b.targetDurationSec !== undefined) set("target_duration_sec", b.targetDurationSec);
+    if (b.keyVisual !== undefined) set("key_visual", JSON.stringify(b.keyVisual));
+    if (b.appearingCharacterIds !== undefined) set("appearing_character_ids", JSON.stringify(b.appearingCharacterIds));
+    if (!fields.length) return res.status(400).json({ error: "no fields to update" });
+    fields.push("updated_at=now()");
+    values.push(req.params.id);
+    const { rowCount } = await p.query(`UPDATE drama_episodes SET ${fields.join(", ")} WHERE id=$${i}`, values);
+    if (!rowCount) return res.status(404).json({ error: "not found" });
+    await dramaRecomputeState(p, req.params.id);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error("[drama] episode update", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post("/api/drama/episodes/:id/cuts", async (req, res) => {
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  try {
+    const b = req.body || {};
+    const { rows: existing } = await p.query(`SELECT COALESCE(MAX("order"),0) AS m FROM drama_cuts WHERE episode_id=$1`, [req.params.id]);
+    const order = b.order ?? (Number(existing[0].m) + 1);
+    const { rows } = await p.query(
+      `INSERT INTO drama_cuts (episode_id, "order", duration_sec, prompt, character_ids, narration, subtitle)
+       VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id`,
+      [req.params.id, order, b.durationSec || 8, b.prompt || null, JSON.stringify(b.characterIds || []),
+       b.narration || null, b.subtitle || null]
+    );
+    await dramaRecomputeState(p, req.params.id);
+    res.status(201).json({ id: rows[0].id, order });
+  } catch (err) {
+    console.error("[drama] cut create", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.patch("/api/drama/cuts/:id", async (req, res) => {
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  try {
+    const b = req.body || {};
+    const fields = [];
+    const values = [];
+    let i = 1;
+    const set = (col, val) => { fields.push(`${col}=$${i++}`); values.push(val); };
+    if (b.order !== undefined) set(`"order"`, b.order);
+    if (b.durationSec !== undefined) set("duration_sec", b.durationSec);
+    if (b.prompt !== undefined) set("prompt", b.prompt);
+    if (b.characterIds !== undefined) set("character_ids", JSON.stringify(b.characterIds));
+    if (b.narration !== undefined) set("narration", b.narration);
+    if (b.subtitle !== undefined) set("subtitle", b.subtitle);
+    if (b.selectedGenerationIndex !== undefined) set("selected_generation_index", b.selectedGenerationIndex);
+    if (!fields.length) return res.status(400).json({ error: "no fields to update" });
+    fields.push("updated_at=now()");
+    values.push(req.params.id);
+    const { rows } = await p.query(
+      `UPDATE drama_cuts SET ${fields.join(", ")} WHERE id=$${i} RETURNING episode_id AS "episodeId"`,
+      values
+    );
+    if (!rows.length) return res.status(404).json({ error: "not found" });
+    await dramaRecomputeState(p, rows[0].episodeId);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error("[drama] cut update", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete("/api/drama/cuts/:id", async (req, res) => {
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  try {
+    const { rows } = await p.query(`DELETE FROM drama_cuts WHERE id=$1 RETURNING episode_id AS "episodeId"`, [req.params.id]);
+    if (rows.length) await dramaRecomputeState(p, rows[0].episodeId);
+    res.status(204).end();
+  } catch (err) {
+    console.error("[drama] cut delete", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// カットの動画生成をトリガー。登場キャラが確定 + 参照画像ありでない限り 409 で拒否する
+// (「素材が揃うまで動画生成に進ませない」を実際にゲートする箇所)。
+app.post("/api/drama/cuts/:id/generate", async (req, res) => {
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  try {
+    const { rows } = await p.query(
+      `SELECT id, episode_id AS "episodeId", duration_sec AS "durationSec", prompt,
+              character_ids AS "characterIds", generations, selected_generation_index AS "selectedGenerationIndex"
+         FROM drama_cuts WHERE id=$1`,
+      [req.params.id]
+    );
+    if (!rows.length) return res.status(404).json({ error: "not found" });
+    const cut = rows[0];
+    const { rows: epRows } = await p.query(`SELECT project_id AS "projectId" FROM drama_episodes WHERE id=$1`, [cut.episodeId]);
+    if (!epRows.length) return res.status(404).json({ error: "episode not found" });
+    const { rows: characters } = await p.query(
+      `SELECT id, name, status, reference_images AS "referenceImages" FROM drama_characters WHERE project_id=$1`,
+      [epRows[0].projectId]
+    );
+    const { ready, reasons } = cutIsReadyForGeneration(cut, characters);
+    if (!ready) return res.status(409).json({ error: "素材が揃っていません", reasons });
+
+    const { rows: projRows } = await p.query(
+      `SELECT default_video_model AS "defaultVideoModel" FROM drama_projects WHERE id=$1`, [epRows[0].projectId]
+    );
+    const model = req.body?.model || projRows[0]?.defaultVideoModel || "seedance-2.0-fast";
+    const referenceImageUrls = (cut.characterIds || [])
+      .flatMap((cid) => characters.find((c) => String(c.id) === String(cid))?.referenceImages || [])
+      .map((r) => r.url).filter(Boolean);
+
+    const genResult = await dramaGenerateCutVideo({ prompt: cut.prompt, referenceImageUrls, durationSec: cut.durationSec, model });
+    const generation = {
+      videoUrl: genResult.videoUrl, prompt: cut.prompt, revisionNote: req.body?.revisionNote || "",
+      model, status: genResult.status, note: genResult.note, createdAt: new Date().toISOString(),
+    };
+    const generations = [...(cut.generations || []), generation];
+    const newIndex = (genResult.status === "done" && cut.selectedGenerationIndex === -1)
+      ? generations.length - 1 : cut.selectedGenerationIndex;
+    await p.query(
+      `UPDATE drama_cuts SET generations=$1, selected_generation_index=$2, updated_at=now() WHERE id=$3`,
+      [JSON.stringify(generations), newIndex, req.params.id]
+    );
+    await dramaRecomputeState(p, cut.episodeId);
+    res.json({ ok: true, generation, generations });
+  } catch (err) {
+    console.error("[drama] cut generate", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.put("/api/drama/episodes/:id/timeline", async (req, res) => {
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  try {
+    const items = req.body?.items || [];
+    await p.query(
+      `INSERT INTO drama_timelines (episode_id, items, updated_at) VALUES ($1,$2,now())
+       ON CONFLICT (episode_id) DO UPDATE SET items=EXCLUDED.items, updated_at=now()`,
+      [req.params.id, JSON.stringify(items)]
+    );
+    await dramaRecomputeState(p, req.params.id);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error("[drama] timeline save", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Phase1: 実際のカット結合 (ffmpeg 等) は未実装。採用テイクが全カット揃っていることを
+// 確認した上で、代表カットの動画 URL を「書き出し結果」のプレースホルダーとして保存する。
+app.post("/api/drama/episodes/:id/export", async (req, res) => {
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  try {
+    const { rows: cuts } = await p.query(
+      `SELECT "order", generations, selected_generation_index AS "selectedGenerationIndex"
+         FROM drama_cuts WHERE episode_id=$1 ORDER BY "order"`,
+      [req.params.id]
+    );
+    const missing = cuts.filter((c) => c.selectedGenerationIndex < 0 || !c.generations?.[c.selectedGenerationIndex]);
+    if (!cuts.length || missing.length) {
+      return res.status(409).json({ error: "採用テイクが未選択のカットがあります", missingCount: missing.length });
+    }
+    const placeholderUrl = cuts[0].generations[cuts[0].selectedGenerationIndex].videoUrl;
+    await p.query(
+      `INSERT INTO drama_timelines (episode_id, exported_video_url, updated_at) VALUES ($1,$2,now())
+       ON CONFLICT (episode_id) DO UPDATE SET exported_video_url=EXCLUDED.exported_video_url, updated_at=now()`,
+      [req.params.id, placeholderUrl]
+    );
+    await dramaRecomputeState(p, req.params.id);
+    res.json({ ok: true, exportedVideoUrl: placeholderUrl, note: "mock: 実結合パイプライン未実装のため代表カットの動画を書き出し結果としています" });
+  } catch (err) {
+    console.error("[drama] export", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get("/api/drama/projects/:id/chat", async (req, res) => {
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  try {
+    const episodeId = req.query.episodeId || null;
+    const { rows } = await p.query(
+      episodeId
+        ? `SELECT id, role, content, created_at AS "createdAt" FROM drama_chat_messages WHERE project_id=$1 AND episode_id=$2 ORDER BY id`
+        : `SELECT id, role, content, created_at AS "createdAt" FROM drama_chat_messages WHERE project_id=$1 AND episode_id IS NULL ORDER BY id`,
+      episodeId ? [req.params.id, episodeId] : [req.params.id]
+    );
+    res.json(rows);
+  } catch (err) {
+    console.error("[drama] chat history", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// AI チャット: 現在の制作状態 (キャラ/エピソード/カット/不足情報) を毎回組み立てて渡す。
+app.post("/api/drama/projects/:id/chat", async (req, res) => {
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  if (!genAI) return res.status(503).json({ error: "Gemini not configured" });
+  try {
+    const { message, episodeId } = req.body || {};
+    if (!message) return res.status(400).json({ error: "message is required" });
+
+    const { rows: projRows } = await p.query(
+      `SELECT id, title, author, style_guide AS "styleGuide", world_setting AS "worldSetting" FROM drama_projects WHERE id=$1`,
+      [req.params.id]
+    );
+    if (!projRows.length) return res.status(404).json({ error: "project not found" });
+    const { rows: characters } = await p.query(
+      `SELECT id, name, reading, status, identity_tokens AS "identityTokens", reference_images AS "referenceImages"
+         FROM drama_characters WHERE project_id=$1`,
+      [req.params.id]
+    );
+    let episode = null, cuts = [];
+    if (episodeId) {
+      const { rows: epRows } = await p.query(
+        `SELECT id, number, title, key_visual AS "keyVisual", state, appearing_character_ids AS "appearingCharacterIds"
+           FROM drama_episodes WHERE id=$1 AND project_id=$2`,
+        [episodeId, req.params.id]
+      );
+      episode = epRows[0] || null;
+      if (episode) {
+        const { rows: cutRows } = await p.query(
+          `SELECT id, "order", prompt, character_ids AS "characterIds", generations FROM drama_cuts WHERE episode_id=$1 ORDER BY "order"`,
+          [episodeId]
+        );
+        cuts = cutRows;
+      }
+    }
+    const missingInfo = computeMissingInfo({ project: projRows[0], characters, episode, cuts });
+    const systemPrompt = dramaBuildSystemPrompt({ project: projRows[0], characters, episode, cuts, missingInfo });
+
+    const { rows: history } = await p.query(
+      episodeId
+        ? `SELECT role, content FROM drama_chat_messages WHERE project_id=$1 AND episode_id=$2 ORDER BY id DESC LIMIT 20`
+        : `SELECT role, content FROM drama_chat_messages WHERE project_id=$1 AND episode_id IS NULL ORDER BY id DESC LIMIT 20`,
+      episodeId ? [req.params.id, episodeId] : [req.params.id]
+    );
+    history.reverse();
+
+    const reply = await dramaChatOnce(callGeminiWithFallback, systemPrompt, history, message);
+
+    await p.query(
+      `INSERT INTO drama_chat_messages (project_id, episode_id, role, content) VALUES ($1,$2,'user',$3)`,
+      [req.params.id, episodeId || null, message]
+    );
+    await p.query(
+      `INSERT INTO drama_chat_messages (project_id, episode_id, role, content) VALUES ($1,$2,'assistant',$3)`,
+      [req.params.id, episodeId || null, reply]
+    );
+    res.json({ reply, missingInfo });
+  } catch (err) {
+    console.error("[drama] chat", err);
     res.status(500).json({ error: err.message });
   }
 });
