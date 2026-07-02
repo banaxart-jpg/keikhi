@@ -8842,11 +8842,13 @@ app.get("/api/drama/projects/:id/chat", async (req, res) => {
     const { rows } = await p.query(
       episodeId
         ? `SELECT m.id, m.role, m.content, m.images, m.status, m.created_at AS "createdAt",
+                  m.quoted_message_id AS "quotedMessageId",
                   q.content AS "quotedContent", q.images AS "quotedImages"
              FROM drama_chat_messages m
              LEFT JOIN drama_chat_messages q ON q.id = m.quoted_message_id
             WHERE m.project_id=$1 AND m.episode_id=$2 ORDER BY m.id`
         : `SELECT m.id, m.role, m.content, m.images, m.status, m.created_at AS "createdAt",
+                  m.quoted_message_id AS "quotedMessageId",
                   q.content AS "quotedContent", q.images AS "quotedImages"
              FROM drama_chat_messages m
              LEFT JOIN drama_chat_messages q ON q.id = m.quoted_message_id
@@ -9383,6 +9385,20 @@ async function dramaProcessChat(p, { projectId, episodeId, message, imageUrls = 
   reply = reply.replace(/[（(]会話の画像\s*(\d+)[）)]/g, (m, k) => {
     const n = attachReshow(k);
     return n ? `(添付${n}枚目)` : m;
+  });
+  // [登録画像: 名前 k] = キャラ/場所の参照画像 (画面の並び・1始まり、番号省略で最後の1枚)、
+  // [資料画像: 名前] = 登録済み資料。会話の添付ウィンドウより古い確定済み画像を
+  // 「もう一度見せて」に応えられるようにする (こちらも再生成なし)
+  const attachUrl = (url) => { if (url && !generatedImages.includes(url)) generatedImages.push(url); return !!url; };
+  reply = reply.replace(/\[登録画像:\s*([^\]]+?)(?:[\s　]+(\d+))?\s*\]/g, (m, name, k) => {
+    const ent = [...characters, ...locations].find((x) => x.name === name.trim());
+    const refs = ent?.referenceImages || [];
+    const url = k ? refs[Number(k) - 1]?.url : refs[refs.length - 1]?.url;
+    return attachUrl(url) ? "" : m;
+  });
+  reply = reply.replace(/\[資料画像:\s*([^\]]+?)\s*\]/g, (m, name) => {
+    const a = assets.find((x) => x.name === name.trim());
+    return attachUrl(a?.url) ? "" : m;
   });
   // [画像生成: ...] = 新規生成 / [画像編集: ...] = 直前の画像 (引用 > 添付 > 会話の最後の画像) を編集
   let markers = [...reply.matchAll(/\[画像(生成|編集):\s*([\s\S]*?)\]/g)].slice(0, 2);

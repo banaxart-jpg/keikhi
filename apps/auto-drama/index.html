@@ -161,6 +161,10 @@ textarea.field-input { min-height: 70px; resize: vertical; }
 .lb-nav.prev { left: 12px; }
 .lb-nav.next { right: 12px; }
 .lb-counter { position: absolute; bottom: calc(18px + env(safe-area-inset-bottom)); left: 50%; transform: translateX(-50%); color: rgba(255,255,255,0.8); font-size: 12px; font-weight: 700; z-index: 2; }
+.lb-quote { position: absolute; bottom: calc(44px + env(safe-area-inset-bottom)); left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 6px; padding: 10px 16px; border-radius: 21px; border: none; background: rgba(255,255,255,0.18); color: white; font-size: 12px; font-weight: 700; cursor: pointer; z-index: 2; }
+.quote-box.jumpable { cursor: pointer; }
+.msg-flash { animation: msgFlash 1.4s ease; }
+@keyframes msgFlash { 0%, 55% { outline: 3px solid var(--accent); outline-offset: 2px; } 100% { outline: 3px solid transparent; outline-offset: 2px; } }
 .zoomable { cursor: zoom-in; }
 .chat-input-row { display: flex; gap: 8px; padding-top: 6px; }
 .chat-input-row textarea { flex: 1; min-height: 42px; max-height: 120px; }
@@ -705,6 +709,7 @@ const TEMPLATE = `
     <button v-if="viewer.index > 0" class="lb-nav prev" @click.stop="lbGo(-1)">‹</button>
     <button v-if="viewer.index < viewer.list.length - 1" class="lb-nav next" @click.stop="lbGo(1)">›</button>
     <div class="lb-counter" v-if="viewer.list.length > 1">{{ viewer.index + 1 }} / {{ viewer.list.length }}</div>
+    <button v-if="viewerQuoteTarget" class="lb-quote" @click.stop="quoteFromViewer"><span class="icon" style="font-size:15px;">reply</span>この画像を引用して話す</button>
   </div>
 
   <!-- ───────── AI チャット (モバイル: 下から + 上スワイプ全画面 / PC: 右サイドバー) ───────── -->
@@ -717,8 +722,9 @@ const TEMPLATE = `
           <button v-for="s in chatStarters" :key="s" class="chip" style="border:none; cursor:pointer; font-family:inherit; padding:10px 14px; text-align:left; justify-content:flex-start;"
             @click="sendStarter(s)">{{ s }}</button>
         </div>
-        <div v-for="m in chatMessages" :key="m.id || m.content" class="msg" :class="m.role">
-          <div v-if="m.quotedContent || (m.quotedImages || []).length" class="quote-box">
+        <div v-for="m in chatMessages" :key="m.id || m.content" class="msg" :class="m.role" :data-mid="m.id">
+          <div v-if="m.quotedContent || (m.quotedImages || []).length" class="quote-box" :class="{ jumpable: m.quotedMessageId }"
+            @click="jumpToMessage(m.quotedMessageId)">
             <img v-if="(m.quotedImages || []).length" :src="m.quotedImages[0]">
             <span class="qtext">{{ m.quotedContent || '(画像)' }}</span>
           </div>
@@ -821,11 +827,23 @@ const App = {
       transform: `translate(${vX.value}px, ${vY.value}px) scale(${vScale.value})`,
       transition: vDragging.value ? "none" : "transform 160ms ease",
     }));
-    function openViewer(list, index = 0) {
+    function openViewer(list, index = 0, msgByUrl = null) {
       const clean = (list || []).filter(Boolean);
       if (!clean.length) return;
-      viewer.value = { list: clean, index: Math.max(0, Math.min(index, clean.length - 1)) };
+      // msgByUrl: URL → チャットメッセージ (チャットから開いた時だけ。引用ボタン用)
+      viewer.value = { list: clean, index: Math.max(0, Math.min(index, clean.length - 1)), msgByUrl };
       lbReset();
+    }
+    // 表示中の画像がチャット由来なら、その元メッセージ (引用対象)
+    const viewerQuoteTarget = computed(() => {
+      const v = viewer.value;
+      return (v && v.msgByUrl && v.msgByUrl[v.list[v.index]]) || null;
+    });
+    function quoteFromViewer() {
+      const m = viewerQuoteTarget.value;
+      if (!m) return;
+      quoteMsg(m);
+      closeViewer();
     }
     function closeViewer() { viewer.value = null; }
     function lbReset() { vScale.value = 1; vX.value = 0; vY.value = 0; }
@@ -900,10 +918,29 @@ const App = {
       }
     }
     const chatMessages = ref([]);
-    // チャット内の画像タップ → 会話中の全画像を横断できるギャラリーで開く
+    // チャット内の画像タップ → 会話中の全画像を横断できるギャラリーで開く。
+    // どの画像がどのメッセージ由来かを添えて「この画像を引用」をビューアから出せるようにする
     function openChatImage(url) {
-      const all = chatMessages.value.flatMap((m) => m.images || []);
-      openViewer(all, Math.max(0, all.indexOf(url)));
+      const all = [];
+      const msgByUrl = {};
+      for (const m of chatMessages.value) {
+        for (const u of (m.images || [])) {
+          all.push(u);
+          if (m.id && !msgByUrl[u]) msgByUrl[u] = m;
+        }
+      }
+      openViewer(all, Math.max(0, all.indexOf(url)), msgByUrl);
+    }
+    // 引用ボックスをタップ → 引用元メッセージへスクロール (ページ内リンク)
+    function jumpToMessage(mid) {
+      if (!mid || !chatLogEl.value) return;
+      const el = chatLogEl.value.querySelector(`[data-mid="${mid}"]`);
+      if (!el) return;
+      el.scrollIntoView({ behavior: "smooth", block: "center" });
+      el.classList.remove("msg-flash");
+      void el.offsetWidth; // 連続タップでもアニメーションを再発火させる
+      el.classList.add("msg-flash");
+      setTimeout(() => el.classList.remove("msg-flash"), 1400);
     }
     const chatInput = ref("");
     const chatSending = ref(false);
@@ -1751,6 +1788,7 @@ const App = {
       isAppearing, toggleAppearing, onKeyVisualPick,
       exporting, exportErr, exportEpisode,
       chatOpen, chatExpanded, viewer, lbStyle, openViewer, closeViewer, lbGo, lbDown, lbMove, lbUp, openChatImage, chatMessages, chatInput, chatSending, chatLogEl, chatAttach, quoting, quoteMsg, openChat, sendChat, onChatImagePick,
+      viewerQuoteTarget, quoteFromViewer, jumpToMessage,
       chapters, chapterOpenId, chapterContent, aozoraUrl, importing, analyzing, analyzeProgress,
       setupAnalyzing, runSetupAnalysis, settingsEdit, settingsSaving, usage, openSettingsTab, saveSettings,
       newAssetName, onStyleRefPick, clearStyleRef, onAssetPick, deleteAsset,
