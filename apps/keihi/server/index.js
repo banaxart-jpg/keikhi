@@ -25,6 +25,7 @@ import { fetchAozoraText as dramaFetchAozora, splitChapters as dramaSplitChapter
 import { analyzeWorkSetup as dramaAnalyzeWorkSetup, searchAozora as dramaSearchAozora } from "./drama-lib/gemini.js";
 import { composeSeries as dramaComposeSeries, writeScript as dramaWriteScript, composeCuts as dramaComposeCuts } from "./drama-lib/gemini.js";
 import { reviewGeneratedImage as dramaReviewImage } from "./drama-lib/gemini.js";
+import { searchWebImages as dramaSearchWebImages } from "./drama-lib/websearch.js";
 import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -9400,6 +9401,25 @@ async function dramaProcessChat(p, { projectId, episodeId, message, imageUrls = 
     const a = assets.find((x) => x.name === name.trim());
     return attachUrl(a?.url) ? "" : m;
   });
+  // [画像検索: 検索語1 / 検索語2 ...] = web (Wikimedia Commons / Openverse) から
+  // 参考画像を探して出典付きで貼る。API キー不要・無料。1 返答 1 回まで
+  const webSearchM = reply.match(/\[画像検索:\s*([\s\S]*?)\]/);
+  if (webSearchM) {
+    reply = reply.replace(/\[画像検索:\s*[\s\S]*?\]/g, "").trim();
+    const queries = webSearchM[1].split(/[/／]/).map((s) => s.trim().slice(0, 80)).filter(Boolean);
+    try {
+      const found = await dramaSearchWebImages(queries, 4);
+      if (found.length) {
+        for (const f of found) attachUrl(f.imageUrl);
+        reply += `\n\n画像検索「${queries[0]}」: ${found.length}件 (画像の並び順)\n` +
+          found.map((f, i) => `${i + 1}. ${(f.title || "無題").slice(0, 60)} — ${f.source}\n   ${f.pageUrl}`).join("\n");
+      } else {
+        reply += `\n\n(画像検索「${queries.join(" / ")}」: 見つかりませんでした。言い方を変えてもう一度どうぞ)`;
+      }
+    } catch (e) {
+      reply += `\n\n(画像検索に失敗: ${String(e.message).slice(0, 80)})`;
+    }
+  }
   // [画像生成: ...] = 新規生成 / [画像編集: ...] = 直前の画像 (引用 > 添付 > 会話の最後の画像) を編集
   let markers = [...reply.matchAll(/\[画像(生成|編集):\s*([\s\S]*?)\]/g)].slice(0, 2);
   const markerInfo = markers.map((m) => ({ mode: m[1], prompt: m[2].trim().slice(0, 300) }));
