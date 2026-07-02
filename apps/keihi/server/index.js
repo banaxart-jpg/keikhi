@@ -9136,12 +9136,16 @@ async function dramaExecuteActions(p, projectId, actions, ctx = {}) {
         if (a.index === "all") {
           next = [];
         } else {
-          const idx = Number(a.index);
-          if (!Number.isInteger(idx) || idx < 1 || idx > refs.length) {
-            applied.push(`${label}「${a.name}」の参照画像 ${a.index} 枚目が見つかりません (現在 ${refs.length}枚・1始まり)`);
+          // 複数枚は "index":[1,2] の配列で受ける (別アクションに分けると 1 枚消すたびに
+          // 番号がズレて意図しない画像を消すため)
+          const idxs = (Array.isArray(a.index) ? a.index : [a.index]).map(Number);
+          const bad = idxs.find((n) => !Number.isInteger(n) || n < 1 || n > refs.length);
+          if (bad !== undefined || !idxs.length) {
+            applied.push(`${label}「${a.name}」の参照画像 ${JSON.stringify(a.index)} 枚目が見つかりません (現在 ${refs.length}枚・1始まり)`);
             continue;
           }
-          next = refs.filter((_, i) => i !== idx - 1);
+          const drop = new Set(idxs.map((n) => n - 1));
+          next = refs.filter((_, i) => !drop.has(i));
         }
         await p.query(`UPDATE ${table} SET reference_images=$1, updated_at=now() WHERE id=$2`,
           [JSON.stringify(next), found[0].id]);
