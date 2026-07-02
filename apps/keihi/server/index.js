@@ -7552,7 +7552,7 @@ const DRAMA_GEMINI_IMAGE_YEN = 6; // 1 枚 ≈ $0.039
 async function dramaGenerateImage(prompt, refParts = [], opts = {}) {
   if (!GEMINI_API_KEY) throw new Error("Gemini not configured");
   const refNote = opts.refNote
-    || "添付画像は絵柄・キャラデザインの基準。新しい絵柄を発明せず、添付のキャラクター・タッチ・線の質感・塗りをそのまま使って、指示のシーンに描き直すこと";
+    || "添付画像は絵柄・キャラデザインの基準。新しい絵柄を発明せず、添付のキャラクター・タッチ・線の質感・塗りをそのまま使って、指示のシーンに描き直すこと。ただし参照がキャラクターシートや資料の場合、そのレイアウト・枠・注釈文字・指示に関係ない他のキャラクターを画面に入れてはいけない (シートを作れという指示の場合を除く)。出力は指示された 1 シーンの画のみ";
   const text = refParts.length ? `${prompt}\n\n(${refNote})` : prompt;
   const generationConfig = { responseModalities: ["TEXT", "IMAGE"] };
   if (opts.aspectRatio) generationConfig.imageConfig = { aspectRatio: opts.aspectRatio };
@@ -9109,7 +9109,8 @@ async function dramaProcessChat(p, { projectId, episodeId, message, imageUrls = 
   // [画像生成: プロンプト] マーカーを検出したら実際に画像を作って返す (最大2枚)。
   // 生成後に AI 自身が意図どおりか審査し、NG なら修正プロンプトで作り直す (最大2回まで)。
   const generatedImages = [];
-  const markers = [...reply.matchAll(/\[画像生成:\s*([\s\S]*?)\]/g)].slice(0, 2);
+  // [画像生成: ...] = 新規生成 / [画像編集: ...] = 直前の画像 (引用 > 添付 > 会話の最後の画像) を編集
+  const markers = [...reply.matchAll(/\[画像(生成|編集):\s*([\s\S]*?)\]/g)].slice(0, 2);
   // 参照画像 (絵柄を寄せる): 作画基準画像 → 今回の添付 → 名前が一致する資料/キャラ参照 (最大4枚)
   let styleRefParts = [];
   if (markers.length) {
@@ -9117,17 +9118,30 @@ async function dramaProcessChat(p, { projectId, episodeId, message, imageUrls = 
   }
   for (const mk of markers) {
     try {
-      let imgPrompt = mk[1].trim();
-      // 引用画像が最優先 (「この画像の感じで作って」)、次に基準画像・今回の添付
-      const refParts = [...quoted.parts, ...styleRefParts, ...imageParts.slice(0, 2)];
-      for (const a of assets) {
-        if (refParts.length >= 4) break;
-        if (a.name && imgPrompt.includes(a.name)) refParts.push(...await dramaFetchImagePartsSafe([a.url], 1));
+      const isEdit = mk[1] === "編集";
+      let imgPrompt = mk[2].trim();
+      // 編集対象:「これ」が指すもの = 引用画像 > 今回の添付 > 会話の最後の画像 (直前の生成物含む)
+      let editBaseParts = [];
+      if (isEdit) {
+        const baseUrl = quoted.imageUrls[0] || imageUrls[0]
+          || generatedImages[generatedImages.length - 1]
+          || historyImageUrls[historyImageUrls.length - 1];
+        if (baseUrl) editBaseParts = await dramaFetchImagePartsSafe([baseUrl], 1);
       }
-      for (const c of characters) {
-        if (refParts.length >= 4) break;
-        if (c.name && imgPrompt.includes(c.name) && (c.referenceImages || []).length) {
-          refParts.push(...await dramaFetchImagePartsSafe([c.referenceImages[0].url], 1));
+      // 引用画像が最優先 (「この画像の感じで作って」)、次に基準画像・今回の添付
+      const refParts = isEdit
+        ? [...editBaseParts, ...styleRefParts]
+        : [...quoted.parts, ...styleRefParts, ...imageParts.slice(0, 2)];
+      if (!isEdit) {
+        for (const a of assets) {
+          if (refParts.length >= 4) break;
+          if (a.name && imgPrompt.includes(a.name)) refParts.push(...await dramaFetchImagePartsSafe([a.url], 1));
+        }
+        for (const c of characters) {
+          if (refParts.length >= 4) break;
+          if (c.name && imgPrompt.includes(c.name) && (c.referenceImages || []).length) {
+            refParts.push(...await dramaFetchImagePartsSafe([c.referenceImages[0].url], 1));
+          }
         }
       }
       let img = null;
@@ -9139,7 +9153,13 @@ async function dramaProcessChat(p, { projectId, episodeId, message, imageUrls = 
           img = await dramaGenerateImage(
             `添付の 1 枚目の画像を修正してください。キャラクター・絵柄・構図は保ったまま、次の問題だけ直す: ${editInstruction}\n(元の意図: ${imgPrompt})`,
             [{ inlineData: { data: img.data, mimeType: img.mimeType } }, ...refParts.slice(0, 3)],
-            { refNote: "1枚目が修正対象の画像。2枚目以降は絵柄・キャラデザインの基準" }
+            { refNote: "1枚目が修正対象の画像。2枚目以降は絵柄・キャラデザインの基準。レイアウト・注釈文字・関係ない他キャラを持ち込まない" }
+          );
+        } else if (isEdit && editBaseParts.length) {
+          img = await dramaGenerateImage(
+            `添付の 1 枚目の画像を編集してください。キャラクター・絵柄・構図は保ったまま、次の指示だけ反映する: ${imgPrompt}`,
+            refParts.slice(0, 4),
+            { refNote: "1枚目が編集対象の画像。2枚目以降は絵柄の基準。編集対象のデザインを保ち、指示された変更だけ行う。レイアウト・注釈文字・関係ない他キャラを持ち込まない" }
           );
         } else {
           img = await dramaGenerateImage(imgPrompt, refParts.slice(0, 4));
@@ -9177,7 +9197,7 @@ async function dramaProcessChat(p, { projectId, episodeId, message, imageUrls = 
       reply += `\n(画像生成に失敗: ${e.message})`;
     }
   }
-  if (markers.length) reply = reply.replace(/\[画像生成:\s*[\s\S]*?\]/g, "").trim();
+  if (markers.length) reply = reply.replace(/\[画像(生成|編集):\s*[\s\S]*?\]/g, "").trim();
 
   // <<<ACTIONS [...] ACTIONS>>> ブロック = AI による設定の CRUD。実行して結果を通知
   let applied = [];
