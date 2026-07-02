@@ -256,8 +256,8 @@ select.edit-input { background: var(--bg2) url("data:image/svg+xml,%3Csvg xmlns=
     <button class="fab-action" id="photoBtn" type="button" title="写真ライブラリ"><span class="icon">photo_library</span></button>
     <button class="fab-action primary" id="shootBtn" type="button" title="カメラで撮影"><span class="icon">photo_camera</span></button>
   </div>
-  <input type="file" id="fileInput" accept="image/*,application/pdf" style="display:none">
-  <input type="file" id="photoInput" accept="image/*" style="display:none">
+  <input type="file" id="fileInput" accept="image/*,application/pdf" multiple style="display:none">
+  <input type="file" id="photoInput" accept="image/*" multiple style="display:none">
   <input type="file" id="cameraInput" accept="image/*" capture="environment" style="display:none">
 </div>
 
@@ -373,10 +373,12 @@ $("shootBtn").addEventListener("click", () => $("cameraInput").click());
 $("photoBtn").addEventListener("click", () => $("photoInput").click());
 $("fileBtn").addEventListener("click", () => $("fileInput").click());
 const makeHandler = (source) => (ev) => {
-  const file = ev.target.files?.[0];
-  if (!file) return;
+  const files = Array.from(ev.target.files || []);
   ev.target.value = "";
-  enqueueShot(file, source);
+  if (files.length === 0) return;
+  // 複数選択に対応: 選んだ分だけ順にキューへ (PDF / 画像混在OK)
+  for (const file of files) enqueueShot(file, source);
+  if (files.length > 1) toast(`${files.length} 件を読み込み中…`);
 };
 $("cameraInput").addEventListener("change", makeHandler("camera"));
 $("photoInput").addEventListener("change", makeHandler("library"));
@@ -443,7 +445,14 @@ async function processQueue() {
     next.status = "scanning";
     renderQueue();
     try {
-      const b64 = await resizeImage(next.file, 1200);
+      // PDF は <img> で読めないので、先に 1 ページ目を JPEG 化してから縮小・base64 化する。
+      // (プレビュー用に enqueueShot で作った previewJpegBlob があれば流用、無ければここで生成)
+      let toEncode = next.file;
+      if (next.file.type === "application/pdf") {
+        toEncode = next.previewJpegBlob || await pdfFirstPageToJpegBlob(next.file);
+        if (!toEncode) throw new Error("PDFの読み取りに失敗");
+      }
+      const b64 = await resizeImage(toEncode, 1200);
       const resp = await api("POST", "/api/scan", {
         image: b64, mimeType: "image/jpeg", kind: "receipt",
         sites: sites.map((s) => s.name),
