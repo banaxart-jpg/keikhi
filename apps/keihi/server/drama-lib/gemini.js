@@ -22,7 +22,7 @@ const SOURCE_TEXT_CAP = 60000;
 // 制作アシスタントのシステムプロンプトを毎回組み立てる。
 // missingInfo (state.js の computeMissingInfo) を埋め込むことで、
 // 「素材が揃うまで動画生成に進ませない」を AI にも徹底させる。
-export function buildSystemPrompt({ project, characters, episode, cuts, missingInfo, chapters = [], locations = [], aiNotes = "" }) {
+export function buildSystemPrompt({ project, characters, episode, cuts, missingInfo, chapters = [], locations = [], aiNotes = "", styleRefCount = 0, assets = [] }) {
   const charLines = characters.length
     ? characters.map((c) => {
         const tokens = (c.identityTokens || []).join("、");
@@ -90,6 +90,11 @@ export function buildSystemPrompt({ project, characters, episode, cuts, missingI
 制作メモ (あなたが管理する長期記憶。細かい設定・作画の趣向・決定済みの方向性):
 ${aiNotes || "(まだ何も記録されていません)"}
 
+作画基準画像: ${styleRefCount ? `${styleRefCount} 枚登録済み (すべての画像生成に自動で同梱され、絵柄がこれに寄る)` : "未登録。ユーザーが見本画像を添付して「これを基準に」と言ったら set_style_reference で登録すること (文章だけで絵柄を再現しようとしない)"}
+
+制作資料・小物 (名前がプロンプトに含まれると画像生成時に自動で参照される):
+${assets.length ? assets.map((a) => `- ${a.name}${a.note ? `: ${a.note}` : ""}`).join("\n") : "(まだ資料がありません。人物対比図・小物・美術ボード等はユーザーが添付した時に save_asset で保存できる)"}
+
 登録済みキャラクター:
 ${charLines}
 
@@ -150,7 +155,11 @@ ${missingBlock}
   {"action":"update_episode","number":5,"title":"変更したいフィールドだけ","pacing":"stretch","focus":"...","script":"脚本全文","chapterNumbers":[7]},
   {"action":"delete_episode","number":5},
   {"action":"generate_script","episodeNumber":5},
-  {"action":"generate_cuts","episodeNumber":5}
+  {"action":"generate_cuts","episodeNumber":5},
+  {"action":"set_style_reference"},
+  {"action":"clear_style_reference"},
+  {"action":"save_asset","name":"人物対比図","note":"全キャラのサイズ確認用"},
+  {"action":"delete_asset","name":"人物対比図"}
 ]
 ACTIONS>>>
 
@@ -163,16 +172,33 @@ ACTIONS>>>
   トーンの決定・やらないと決めたこと、を残す。
 - generate_script / generate_cuts は AI 生成を実行する重い操作 (数十秒・数円かかる)。
   1 メッセージにつきどちらか 1 件まで。既に脚本/カットがある話への再生成は、
-  ユーザーが作り直しを明示した時だけ (既存の内容は上書き/削除される)。`;
+  ユーザーが作り直しを明示した時だけ (既存の内容は上書き/削除される)。
+- set_style_reference / save_asset は「今回のメッセージに添付された画像」を保存する。
+  ユーザーが見本や資料 (対比図・小物・美術ボード等) を添付してきたら保存を提案し、
+  同意があれば (または保存の意図が明確なら) 実行する。
+
+会話の作法 (重要):
+- 画像生成 ([画像生成:] マーカー) はユーザーが明示的に画像を求めた時だけ。
+  方針の相談・まとめの返答で勝手に生成しない。
+- 謝罪や同じ前置きを繰り返さない。1 回の返答に謝罪は最大 1 回・一言まで。要点から書く。
+- 直近の会話の画像はあなたに見えている。画像の比較・差分の指摘・「前の画像のここを直す」
+  ができる。見えていないふりをしない。`;
 }
 
-// userMessage: string、imageParts: [{ inlineData: { data(base64), mimeType } }]
-export async function chatOnce(callGemini, systemPrompt, history, userMessage, imageParts = []) {
+// userMessage: string
+// imageParts: 今回のメッセージの添付 [{ inlineData }]
+// historyImageParts: 直近の会話に出た画像 (ユーザー添付 + AI 生成)。過去の画像と
+// 比較しながら答えたり作り直したりできるように毎回渡す。
+export async function chatOnce(callGemini, systemPrompt, history, userMessage, imageParts = [], historyImageParts = []) {
   const historyText = (history || [])
-    .map((h) => `${h.role === "assistant" ? "アシスタント" : "ユーザー"}: ${h.content}${(h.images || []).length ? ` (画像${h.images.length}枚添付)` : ""}`)
+    .map((h) => `${h.role === "assistant" ? "アシスタント" : "ユーザー"}: ${h.content}${(h.images || []).length ? ` (画像${h.images.length}枚)` : ""}`)
     .join("\n\n");
-  const prompt = `${systemPrompt}\n\n${historyText ? `これまでの会話:\n${historyText}\n\n` : ""}ユーザー: ${userMessage}${imageParts.length ? "\n(このメッセージには画像が添付されています。内容を確認して答えてください)" : ""}\n\nアシスタント:`;
-  const content = imageParts.length ? [prompt, ...imageParts] : prompt;
+  const imgNote = (historyImageParts.length || imageParts.length)
+    ? `\n(この後に画像が付いている: 先頭 ${historyImageParts.length} 枚は直近の会話に出た画像 (古い順)、その後の ${imageParts.length} 枚が今回のメッセージの添付。比較・差分の指摘に使ってよい)`
+    : "";
+  const prompt = `${systemPrompt}\n\n${historyText ? `これまでの会話:\n${historyText}\n\n` : ""}ユーザー: ${userMessage}${imgNote}\n\nアシスタント:`;
+  const allParts = [...historyImageParts, ...imageParts];
+  const content = allParts.length ? [prompt, ...allParts] : prompt;
   const { result } = await callGemini(content, {
     primaryModel: "gemini-2.5-flash",
     // 2.5 系は thinking トークンも上限に含まれるため、少ないと本文が途中で切れる
@@ -412,13 +438,14 @@ JSON のみで返す (前置き禁止):
 
 // 生成画像のセルフレビュー: 意図 (プロンプト・絵柄) と合っているか AI 自身が見て判定。
 // NG なら修正版プロンプトを返す (呼び出し側が最大2回まで作り直す)。
-export async function reviewGeneratedImage(callGemini, { prompt, styleGuide, imageBase64, mimeType }) {
-  const ask = `この画像は次の指示で生成されました。意図どおりか審査してください。
+export async function reviewGeneratedImage(callGemini, { prompt, styleGuide, imageBase64, mimeType, styleRefParts = [] }) {
+  const ask = `${styleRefParts.length ? `最初の ${styleRefParts.length} 枚は「作画基準画像」(目指すべき絵柄の見本)。最後の 1 枚が今回の生成結果です。` : "添付は今回の生成結果です。"}
+この生成結果が次の指示と意図どおりか審査してください。
 
 生成指示: ${prompt}
 ${styleGuide ? `絵柄方針: ${styleGuide}` : ""}
 
-チェック観点: 指示した内容が描けているか / 絵柄方針と合っているか / 破綻 (手・顔・文字化け等) がないか / 縦 9:16 のショート動画素材として使えるか。
+チェック観点: 指示した内容が描けているか / ${styleRefParts.length ? "基準画像の絵柄・タッチ・線の質感に寄っているか / " : ""}絵柄方針と合っているか / 破綻 (手・顔・文字化け等) がないか / 縦 9:16 のショート動画素材として使えるか。
 
 JSON のみで返す (前置き禁止):
 {
@@ -428,7 +455,7 @@ JSON のみで返す (前置き禁止):
 }
 軽微な違いは ok=true でよい。明らかに意図とズレている・破綻している時だけ false。`;
   const { result } = await callGemini(
-    [ask, { inlineData: { data: imageBase64, mimeType: mimeType || "image/png" } }],
+    [ask, ...styleRefParts, { inlineData: { data: imageBase64, mimeType: mimeType || "image/png" } }],
     { primaryModel: "gemini-2.5-flash", maxOutputTokens: 4000, jsonMode: true }
   );
   const j = parseJsonLoose((result.response.text() || "").trim());

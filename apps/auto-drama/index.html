@@ -366,6 +366,30 @@ const TEMPLATE = `
         <button class="primary" @click="saveSettings" :disabled="settingsSaving">{{ settingsSaving ? '保存中…' : '保存' }}</button>
       </div>
 
+      <div class="section-title" style="padding-left:0;">作画基準画像 (すべての画像生成に自動同梱され、絵柄がこれに寄る)</div>
+      <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+        <img v-for="(u,i) in (currentProject.styleRefImages || [])" :key="i" :src="u" class="thumb zoomable" style="width:96px; height:96px;" @click="viewerUrl = u">
+        <span v-if="!(currentProject.styleRefImages || []).length" class="card-sub">未登録。チャットで見本画像を添付して「これを基準に」と言うか、ここからアップロード</span>
+        <label class="filepick"><input type="file" accept="image/*" @change="onStyleRefPick"><span class="icon">add_photo_alternate</span>登録</label>
+        <button v-if="(currentProject.styleRefImages || []).length" class="pill" style="padding:6px 14px; font-size:11px; color:var(--danger);" @click="clearStyleRef">解除</button>
+      </div>
+
+      <div class="section-title" style="padding-left:0;">制作資料・小物 (対比図・護符などの参考画像。名前がプロンプトに出ると生成時に自動参照)</div>
+      <div style="display:flex; flex-direction:column; gap:8px;">
+        <div v-for="a in (currentProject.assets || [])" :key="a.id" class="card" style="padding:10px 12px; display:flex; align-items:center; gap:10px;">
+          <img :src="a.url" class="thumb zoomable" style="width:56px; height:56px; flex-shrink:0;" @click="viewerUrl = a.url">
+          <div style="flex:1; min-width:0;">
+            <div style="font-size:13px; font-weight:700;">{{ a.name }}</div>
+            <div class="card-sub" v-if="a.note">{{ a.note }}</div>
+          </div>
+          <button class="cut-order-btn" style="color:var(--danger);" @click="deleteAsset(a)"><span class="icon" style="font-size:15px;">delete</span></button>
+        </div>
+        <div class="field-row">
+          <input class="field-input" v-model="newAssetName" placeholder="資料名 (例: 人物対比図 / 摩利信乃法師の護符)">
+          <label class="filepick" style="flex:0 0 auto;"><input type="file" accept="image/*" @change="onAssetPick" :disabled="!newAssetName.trim()"><span class="icon">add_photo_alternate</span>追加</label>
+        </div>
+      </div>
+
       <div class="section-title" style="padding-left:0;">API 費用 (概算)</div>
       <div class="card" style="padding:14px 16px;">
         <div v-if="!usage" class="card-sub">読み込み中…</div>
@@ -980,6 +1004,46 @@ const App = {
       } catch (e) { err.value = e.message; } finally { setupAnalyzing.value = false; }
     }
 
+    // ── 作画基準画像・制作資料 ──
+    const newAssetName = ref("");
+    async function onStyleRefPick(e) {
+      const file = e.target.files?.[0];
+      if (!file) return;
+      try {
+        const url = await uploadImage(file, `auto-drama/${currentProject.value.id}/styleref`);
+        const next = [...(currentProject.value.styleRefImages || []), url].slice(-2); // 最新2枚
+        await apiFetch(`/api/drama/projects/${currentProject.value.id}`, { method: "PATCH", body: { styleRefImages: next } });
+        currentProject.value.styleRefImages = next;
+      } catch (e2) { err.value = e2.message; }
+      e.target.value = "";
+    }
+    async function clearStyleRef() {
+      try {
+        await apiFetch(`/api/drama/projects/${currentProject.value.id}`, { method: "PATCH", body: { styleRefImages: [] } });
+        currentProject.value.styleRefImages = [];
+      } catch (e) { err.value = e.message; }
+    }
+    async function onAssetPick(e) {
+      const file = e.target.files?.[0];
+      if (!file || !newAssetName.value.trim()) return;
+      try {
+        const url = await uploadImage(file, `auto-drama/${currentProject.value.id}/assets`);
+        await apiFetch(`/api/drama/projects/${currentProject.value.id}/assets`, {
+          method: "POST", body: { name: newAssetName.value.trim(), url },
+        });
+        newAssetName.value = "";
+        currentProject.value = await apiFetch(`/api/drama/projects/${currentProject.value.id}`);
+      } catch (e2) { err.value = e2.message; }
+      e.target.value = "";
+    }
+    async function deleteAsset(a) {
+      if (!confirm(`資料「${a.name}」を削除しますか？`)) return;
+      try {
+        await apiFetch(`/api/drama/assets/${a.id}`, { method: "DELETE" });
+        currentProject.value.assets = (currentProject.value.assets || []).filter((x) => x.id !== a.id);
+      } catch (e) { err.value = e.message; }
+    }
+
     // ── 設定タブ ──
     function openSettingsTab() {
       projectTab.value = "settings";
@@ -1484,6 +1548,7 @@ const App = {
       chatOpen, chatExpanded, viewerUrl, chatMessages, chatInput, chatSending, chatLogEl, chatAttach, openChat, sendChat, onChatImagePick,
       chapters, chapterOpenId, chapterContent, aozoraUrl, importing, analyzing, analyzeProgress,
       setupAnalyzing, runSetupAnalysis, settingsEdit, settingsSaving, usage, openSettingsTab, saveSettings,
+      newAssetName, onStyleRefPick, clearStyleRef, onAssetPick, deleteAsset,
       openSourceTab, importSource, analyzeChapters, toggleChapter, isRegisteredCharacter,
       aozoraQuery, aozoraResults, searching, aozoraCreateUrl,
       createStep, createTitle, createStages, chatStarters,

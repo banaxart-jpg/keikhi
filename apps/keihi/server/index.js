@@ -90,7 +90,7 @@ app.get("/api/drama/inspect/:id", async (req, res) => {
     await ensureSchema();
     const { rows: projRows } = await p.query(
       `SELECT id, title, author, world_setting AS "worldSetting", style_guide AS "styleGuide",
-              ai_notes AS "aiNotes",
+              ai_notes AS "aiNotes", jsonb_array_length(style_ref_images) AS "styleRefImageCount",
               length(COALESCE(source_text,'')) AS "sourceTextChars", created_at AS "createdAt"
          FROM drama_projects WHERE id=$1`,
       [req.params.id]
@@ -139,6 +139,9 @@ app.get("/api/drama/inspect/:id", async (req, res) => {
       );
       ep.cuts = cuts;
     }
+    const { rows: inspectAssets } = await p.query(
+      `SELECT id, name, note FROM drama_assets WHERE project_id=$1 ORDER BY id`, [req.params.id]
+    );
     const { rows: chatCount } = await p.query(
       `SELECT COUNT(*)::int AS n FROM drama_chat_messages WHERE project_id=$1`, [req.params.id]
     );
@@ -172,6 +175,7 @@ app.get("/api/drama/inspect/:id", async (req, res) => {
       usage,
       characters,
       locations,
+      assets: inspectAssets,
       chapters,
       chapterContent,
       episodes,
@@ -1110,6 +1114,20 @@ async function ensureSchema() {
     // AI の制作メモ (長期記憶)。チャットの update_notes 操作で AI 自身が維持し、
     // 毎回システムプロンプトに注入される (作画の趣向・細かい設定・決定した方向性)
     await p.query(`ALTER TABLE drama_projects ADD COLUMN IF NOT EXISTS ai_notes TEXT`);
+    // 作画基準画像 (URL 配列・最大2枚)。画像生成のたびに inlineData で渡して絵柄を寄せる
+    await p.query(`ALTER TABLE drama_projects ADD COLUMN IF NOT EXISTS style_ref_images JSONB NOT NULL DEFAULT '[]'::jsonb`);
+    // 制作資料 (人物対比図・美術ボード等)。名前で AI が参照し、画像生成時に同梱できる
+    await p.query(`
+      CREATE TABLE IF NOT EXISTS drama_assets (
+        id         BIGSERIAL PRIMARY KEY,
+        project_id BIGINT NOT NULL REFERENCES drama_projects(id) ON DELETE CASCADE,
+        name       TEXT NOT NULL,
+        note       TEXT,
+        url        TEXT NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+      )
+    `);
+    await p.query("CREATE INDEX IF NOT EXISTS drama_assets_project_idx ON drama_assets (project_id)");
     // アニメ制作工程対応: シリーズ構成 (章→話の割当・緩急) と脚本を話単位で持つ
     await p.query(`ALTER TABLE drama_episodes ADD COLUMN IF NOT EXISTS chapter_numbers JSONB NOT NULL DEFAULT '[]'::jsonb`);
     await p.query(`ALTER TABLE drama_episodes ADD COLUMN IF NOT EXISTS pacing TEXT`);   // 'compress'|'normal'|'stretch'
@@ -7525,15 +7543,20 @@ function dramaRecordSeedanceUsage(projectId, seconds, model) {
 // 旧 SDK が画像出力の generationConfig に対応していないため REST 直叩き。
 const DRAMA_GEMINI_IMAGE_MODEL = "gemini-2.5-flash-image";
 const DRAMA_GEMINI_IMAGE_YEN = 6; // 1 枚 ≈ $0.039
-async function dramaGenerateImage(prompt) {
+// refParts: 絵柄を寄せるための参照画像 (inlineData 配列)。作画基準画像・添付画像・
+// キャラ参照画像を渡す。文章だけで絵柄を再現させると毎回ガチャになるため必須。
+async function dramaGenerateImage(prompt, refParts = []) {
   if (!GEMINI_API_KEY) throw new Error("Gemini not configured");
+  const text = refParts.length
+    ? `${prompt}\n\n(添付画像は絵柄・キャラデザインの基準。この絵柄・タッチ・線の質感に忠実に合わせて描くこと)`
+    : prompt;
   const res = await fetch(
     `https://generativelanguage.googleapis.com/v1beta/models/${DRAMA_GEMINI_IMAGE_MODEL}:generateContent?key=${GEMINI_API_KEY}`,
     {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
-        contents: [{ parts: [{ text: prompt }] }],
+        contents: [{ parts: [{ text }, ...refParts] }],
         generationConfig: { responseModalities: ["TEXT", "IMAGE"] },
       }),
     }
@@ -7609,6 +7632,7 @@ app.get("/api/drama/projects/:id", async (req, res) => {
     const { rows } = await p.query(
       `SELECT id, title, author, source_text AS "sourceText", world_setting AS "worldSetting",
               style_guide AS "styleGuide", default_video_model AS "defaultVideoModel", ai_notes AS "aiNotes",
+              style_ref_images AS "styleRefImages",
               created_by AS "createdBy", created_at AS "createdAt", updated_at AS "updatedAt"
          FROM drama_projects WHERE id=$1`,
       [req.params.id]
@@ -7634,7 +7658,10 @@ app.get("/api/drama/projects/:id", async (req, res) => {
          FROM drama_episodes WHERE project_id=$1 ORDER BY number`,
       [req.params.id]
     );
-    res.json({ ...rows[0], characters, locations, episodes });
+    const { rows: assets } = await p.query(
+      `SELECT id, name, note, url FROM drama_assets WHERE project_id=$1 ORDER BY id`, [req.params.id]
+    );
+    res.json({ ...rows[0], characters, locations, episodes, assets });
   } catch (err) {
     console.error("[drama] project detail", err);
     res.status(500).json({ error: err.message });
@@ -7665,9 +7692,11 @@ app.patch("/api/drama/projects/:id", async (req, res) => {
       `UPDATE drama_projects SET
          title=COALESCE($1,title), author=COALESCE($2,author), source_text=COALESCE($3,source_text),
          world_setting=COALESCE($4,world_setting), style_guide=COALESCE($5,style_guide),
-         default_video_model=COALESCE($6,default_video_model), ai_notes=COALESCE($7,ai_notes), updated_at=now()
-       WHERE id=$8`,
-      [b.title, b.author, b.sourceText, b.worldSetting, b.styleGuide, b.defaultVideoModel, b.aiNotes, req.params.id]
+         default_video_model=COALESCE($6,default_video_model), ai_notes=COALESCE($7,ai_notes),
+         style_ref_images=COALESCE($8::jsonb,style_ref_images), updated_at=now()
+       WHERE id=$9`,
+      [b.title, b.author, b.sourceText, b.worldSetting, b.styleGuide, b.defaultVideoModel, b.aiNotes,
+       b.styleRefImages !== undefined ? JSON.stringify((b.styleRefImages || []).slice(0, 2)) : null, req.params.id]
     );
     if (!rowCount) return res.status(404).json({ error: "not found" });
     res.json({ ok: true });
@@ -8046,6 +8075,36 @@ app.delete("/api/drama/characters/:id", async (req, res) => {
   }
 });
 
+// 制作資料 (人物対比図・小物・美術ボード等)。手動アップロード用の CRUD
+app.post("/api/drama/projects/:id/assets", async (req, res) => {
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  try {
+    const b = req.body || {};
+    if (!b.name || !b.url) return res.status(400).json({ error: "name と url が必要です" });
+    const { rows } = await p.query(
+      `INSERT INTO drama_assets (project_id, name, note, url) VALUES ($1,$2,$3,$4) RETURNING id`,
+      [req.params.id, String(b.name).slice(0, 60), b.note ? String(b.note).slice(0, 300) : null, b.url]
+    );
+    res.status(201).json({ id: rows[0].id });
+  } catch (err) {
+    console.error("[drama] asset create", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete("/api/drama/assets/:id", async (req, res) => {
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  try {
+    await p.query("DELETE FROM drama_assets WHERE id=$1", [req.params.id]);
+    res.status(204).end();
+  } catch (err) {
+    console.error("[drama] asset delete", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // 場所 (キャラと同じ CRUD 形)
 app.post("/api/drama/projects/:id/locations", async (req, res) => {
   const p = getPool();
@@ -8201,23 +8260,33 @@ app.post("/api/drama/cuts/:id/storyboard", async (req, res) => {
     if (!rows.length) return res.status(404).json({ error: "not found" });
     const cut = rows[0];
     if (!cut.prompt) return res.status(400).json({ error: "プロンプトが未設定です" });
-    const { rows: projRows } = await p.query(`SELECT style_guide AS "styleGuide" FROM drama_projects WHERE id=$1`, [cut.projectId]);
+    const { rows: projRows } = await p.query(
+      `SELECT style_guide AS "styleGuide", style_ref_images AS "styleRefImages" FROM drama_projects WHERE id=$1`, [cut.projectId]
+    );
     const { rows: characters } = await p.query(
-      `SELECT id, name, identity_tokens AS "identityTokens" FROM drama_characters WHERE project_id=$1`, [cut.projectId]
+      `SELECT id, name, identity_tokens AS "identityTokens", reference_images AS "referenceImages"
+         FROM drama_characters WHERE project_id=$1`, [cut.projectId]
     );
     const { rows: locations } = await p.query(
-      `SELECT id, name, identity_tokens AS "identityTokens" FROM drama_locations WHERE project_id=$1`, [cut.projectId]
+      `SELECT id, name, identity_tokens AS "identityTokens", reference_images AS "referenceImages"
+         FROM drama_locations WHERE project_id=$1`, [cut.projectId]
     );
-    const charDesc = (cut.characterIds || [])
+    const cutChars = (cut.characterIds || [])
       .map((cid) => characters.find((c) => String(c.id) === String(cid)))
-      .filter(Boolean)
-      .map((c) => `${c.name} (${(c.identityTokens || []).join("、")})`).join(" / ");
+      .filter(Boolean);
+    const charDesc = cutChars.map((c) => `${c.name} (${(c.identityTokens || []).join("、")})`).join(" / ");
     const loc = locations.find((l) => String(l.id) === String(cut.locationId));
     const prompt = `縦 9:16 のアニメ絵コンテ用静止画を 1 枚。
 絵柄: ${projRows[0]?.styleGuide || "シネマティック"}
 ${charDesc ? `登場人物: ${charDesc}\n` : ""}${loc ? `場所: ${loc.name} (${(loc.identityTokens || []).join("、")})\n` : ""}シーン: ${cut.prompt}`;
 
-    const img = await dramaGenerateImage(prompt);
+    // 参照画像: 作画基準 → 登場キャラの参照 → 場所の参照 (最大4枚)
+    const refUrls = [...(projRows[0]?.styleRefImages || []).slice(0, 2)];
+    for (const c of cutChars) if ((c.referenceImages || []).length) refUrls.push(c.referenceImages[0].url);
+    if (loc && (loc.referenceImages || []).length) refUrls.push(loc.referenceImages[0].url);
+    const refParts = await dramaFetchImagePartsSafe(refUrls, 4);
+
+    const img = await dramaGenerateImage(prompt, refParts);
     dramaRecordUsage({ projectId: cut.projectId, provider: "gemini", kind: "storyboard", model: DRAMA_GEMINI_IMAGE_MODEL, costYen: DRAMA_GEMINI_IMAGE_YEN });
 
     let url;
@@ -8737,10 +8806,11 @@ function dramaEscapeCtrlInJsonStrings(s) {
   return out;
 }
 
-async function dramaExecuteActions(p, projectId, actions) {
+async function dramaExecuteActions(p, projectId, actions, ctx = {}) {
   const applied = [];
   const strOr = (v, max) => (v === undefined || v === null) ? undefined : String(v).slice(0, max);
   const tokensOr = (v) => Array.isArray(v) ? JSON.stringify(v.map((s) => String(s).slice(0, 30)).slice(0, 6)) : undefined;
+  const attached = ctx.attachedImageUrls || []; // 今回のメッセージの添付画像 URL
   for (const a of (actions || []).slice(0, 10)) {
     try {
       if (a.action === "update_project") {
@@ -8837,6 +8907,24 @@ async function dramaExecuteActions(p, projectId, actions) {
       } else if (a.action === "delete_episode" && a.number) {
         const { rowCount } = await p.query(`DELETE FROM drama_episodes WHERE project_id=$1 AND number=$2`, [projectId, Number(a.number)]);
         applied.push(rowCount ? `第${a.number}話を削除` : `第${a.number}話が見つからず削除失敗`);
+      } else if (a.action === "set_style_reference") {
+        if (!attached.length) { applied.push("基準画像の登録失敗 (このメッセージに画像が添付されていません)"); continue; }
+        await p.query(`UPDATE drama_projects SET style_ref_images=$1, updated_at=now() WHERE id=$2`,
+          [JSON.stringify(attached.slice(0, 2)), projectId]);
+        applied.push(`作画基準画像を登録 (${Math.min(attached.length, 2)}枚)`);
+      } else if (a.action === "clear_style_reference") {
+        await p.query(`UPDATE drama_projects SET style_ref_images='[]'::jsonb, updated_at=now() WHERE id=$1`, [projectId]);
+        applied.push("作画基準画像を解除");
+      } else if (a.action === "save_asset" && a.name) {
+        if (!attached.length) { applied.push(`資料「${a.name}」の保存失敗 (画像が添付されていません)`); continue; }
+        for (const url of attached.slice(0, 2)) {
+          await p.query(`INSERT INTO drama_assets (project_id, name, note, url) VALUES ($1,$2,$3,$4)`,
+            [projectId, strOr(a.name, 60), strOr(a.note, 300) || null, url]);
+        }
+        applied.push(`資料「${a.name}」を保存`);
+      } else if (a.action === "delete_asset" && a.name) {
+        const { rowCount } = await p.query(`DELETE FROM drama_assets WHERE project_id=$1 AND name=$2`, [projectId, strOr(a.name, 60)]);
+        applied.push(rowCount ? `資料「${a.name}」を削除` : `資料「${a.name}」が見つからず削除失敗`);
       } else if ((a.action === "generate_script" || a.action === "generate_cuts") && a.episodeNumber) {
         const { rows: epId } = await p.query(
           `SELECT id FROM drama_episodes WHERE project_id=$1 AND number=$2`, [projectId, Number(a.episodeNumber)]
@@ -8865,9 +8953,15 @@ async function dramaExecuteActions(p, projectId, actions) {
 // Gemini の inlineData に変換する。https 限定 + 枚数/サイズ上限。
 const DRAMA_CHAT_MAX_IMAGES = 4;
 const DRAMA_CHAT_MAX_IMAGE_BYTES = 8 * 1024 * 1024;
-async function dramaFetchImageParts(imageUrls) {
+async function dramaFetchImageParts(imageUrls, max = DRAMA_CHAT_MAX_IMAGES) {
   const parts = [];
-  for (const url of (imageUrls || []).slice(0, DRAMA_CHAT_MAX_IMAGES)) {
+  for (const url of (imageUrls || []).slice(0, max)) {
+    if (url.startsWith("data:")) {
+      // ローカル dev で生成した data URI もそのまま読めるように
+      const m = url.match(/^data:([^;]+);base64,(.+)$/);
+      if (m) parts.push({ inlineData: { data: m[2], mimeType: m[1] } });
+      continue;
+    }
     const u = new URL(url);
     if (u.protocol !== "https:") throw new Error("画像 URL は https のみ");
     const r = await fetch(url);
@@ -8880,16 +8974,30 @@ async function dramaFetchImageParts(imageUrls) {
   return parts;
 }
 
+// URL 群を inlineData に変換 (失敗した分は黙ってスキップ。参照画像用)
+async function dramaFetchImagePartsSafe(imageUrls, max) {
+  const parts = [];
+  for (const url of (imageUrls || []).slice(0, max)) {
+    try { parts.push(...await dramaFetchImageParts([url], 1)); } catch (e) {
+      console.warn("[drama] ref image fetch skipped:", e.message);
+    }
+  }
+  return parts;
+}
+
 // チャット処理の本体。同期ルートと Cloud Tasks ワーカーの両方から使う。
 // 処理結果は assistantMessageId の行に書き込む (status: pending → done)。
 async function dramaProcessChat(p, { projectId, episodeId, message, imageUrls = [], userMessageId, assistantMessageId }) {
   const { rows: projRows } = await p.query(
     `SELECT id, title, author, style_guide AS "styleGuide", world_setting AS "worldSetting",
-            source_text AS "sourceText", ai_notes AS "aiNotes"
+            source_text AS "sourceText", ai_notes AS "aiNotes", style_ref_images AS "styleRefImages"
        FROM drama_projects WHERE id=$1`,
     [projectId]
   );
   if (!projRows.length) { const e = new Error("project not found"); e.status = 404; throw e; }
+  const { rows: assets } = await p.query(
+    `SELECT id, name, note, url FROM drama_assets WHERE project_id=$1 ORDER BY id`, [projectId]
+  );
   const { rows: characters } = await p.query(
     `SELECT id, name, reading, status, identity_tokens AS "identityTokens", reference_images AS "referenceImages"
        FROM drama_characters WHERE project_id=$1`,
@@ -8926,6 +9034,8 @@ async function dramaProcessChat(p, { projectId, episodeId, message, imageUrls = 
   const systemPrompt = dramaBuildSystemPrompt({
     project: projRows[0], characters, episode, cuts, missingInfo, chapters, locations,
     aiNotes: projRows[0].aiNotes || "",
+    styleRefCount: (projRows[0].styleRefImages || []).length,
+    assets,
   });
 
   // 履歴: 今回の user メッセージ自身と pending 行は除外
@@ -8939,21 +9049,42 @@ async function dramaProcessChat(p, { projectId, episodeId, message, imageUrls = 
   );
   history.reverse();
 
+  // 直近の会話に出た画像 (ユーザー添付 + AI 生成) を古い順に最大 4 枚、AI に見せる。
+  // 「前の画像とどう違う?」「前のここを直して」が成立するようにする
+  const historyImageUrls = history.flatMap((h) => h.images || []).slice(-4);
+  const historyImageParts = await dramaFetchImagePartsSafe(historyImageUrls, 4);
+
   const imageParts = await dramaFetchImageParts(imageUrls);
-  let reply = await dramaChatOnce(dramaTrackedGemini(projectId, "chat"), systemPrompt, history, message || "(画像を確認して)", imageParts);
+  let reply = await dramaChatOnce(dramaTrackedGemini(projectId, "chat"), systemPrompt, history, message || "(画像を確認して)", imageParts, historyImageParts);
 
   // [画像生成: プロンプト] マーカーを検出したら実際に画像を作って返す (最大2枚)。
   // 生成後に AI 自身が意図どおりか審査し、NG なら修正プロンプトで作り直す (最大2回まで)。
   const generatedImages = [];
   const markers = [...reply.matchAll(/\[画像生成:\s*([\s\S]*?)\]/g)].slice(0, 2);
+  // 参照画像 (絵柄を寄せる): 作画基準画像 → 今回の添付 → 名前が一致する資料/キャラ参照 (最大4枚)
+  let styleRefParts = [];
+  if (markers.length) {
+    styleRefParts = await dramaFetchImagePartsSafe(projRows[0].styleRefImages || [], 2);
+  }
   for (const mk of markers) {
     try {
       let imgPrompt = mk[1].trim();
+      const refParts = [...styleRefParts, ...imageParts.slice(0, 2)];
+      for (const a of assets) {
+        if (refParts.length >= 4) break;
+        if (a.name && imgPrompt.includes(a.name)) refParts.push(...await dramaFetchImagePartsSafe([a.url], 1));
+      }
+      for (const c of characters) {
+        if (refParts.length >= 4) break;
+        if (c.name && imgPrompt.includes(c.name) && (c.referenceImages || []).length) {
+          refParts.push(...await dramaFetchImagePartsSafe([c.referenceImages[0].url], 1));
+        }
+      }
       let img = null;
       let attempts = 0;
       const MAX_REMAKES = 2; // 初回 + 作り直し2回 = 最大3生成
       while (true) {
-        img = await dramaGenerateImage(imgPrompt);
+        img = await dramaGenerateImage(imgPrompt, refParts.slice(0, 4));
         dramaRecordUsage({ projectId, provider: "gemini", kind: "chat_image", model: DRAMA_GEMINI_IMAGE_MODEL, costYen: DRAMA_GEMINI_IMAGE_YEN });
         attempts++;
         if (attempts > MAX_REMAKES) break;
@@ -8961,6 +9092,7 @@ async function dramaProcessChat(p, { projectId, episodeId, message, imageUrls = 
           const review = await dramaReviewImage(dramaTrackedGemini(projectId, "image_review"), {
             prompt: imgPrompt, styleGuide: projRows[0].styleGuide,
             imageBase64: img.data, mimeType: img.mimeType,
+            styleRefParts,
           });
           if (review.ok) break;
           console.log(`[drama] image self-review NG (attempt ${attempts}): ${review.problems}`);
@@ -8999,7 +9131,7 @@ async function dramaProcessChat(p, { projectId, episodeId, message, imageUrls = 
       const e = raw.lastIndexOf("]");
       const jsonText = dramaEscapeCtrlInJsonStrings(raw.slice(s, e + 1)).replace(/,(\s*[}\]])/g, "$1");
       const actions = JSON.parse(jsonText);
-      applied = await dramaExecuteActions(p, projectId, actions);
+      applied = await dramaExecuteActions(p, projectId, actions, { attachedImageUrls: imageUrls });
       if (applied.length) reply += `\n\n⚙ 実行: ${applied.join(" / ")}`;
     } catch (e) {
       console.warn("[drama] actions parse failed:", e.message);
