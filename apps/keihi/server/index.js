@@ -7585,6 +7585,21 @@ app.get("/api/drama/projects/:id", async (req, res) => {
   }
 });
 
+// プロジェクト削除: drama_* の子テーブルは全部 ON DELETE CASCADE なので 1 発で消える
+// (キャラ・場所・エピソード・カット・章・チャット・usage)
+app.delete("/api/drama/projects/:id", async (req, res) => {
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  try {
+    const { rowCount } = await p.query("DELETE FROM drama_projects WHERE id=$1", [req.params.id]);
+    if (!rowCount) return res.status(404).json({ error: "not found" });
+    res.status(204).end();
+  } catch (err) {
+    console.error("[drama] project delete", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.patch("/api/drama/projects/:id", async (req, res) => {
   const p = getPool();
   if (!p) return res.status(503).json({ error: "DB not configured" });

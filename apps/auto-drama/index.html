@@ -157,6 +157,10 @@ const TEMPLATE = `
               <div class="card-sub">{{ p.author || '作者不明' }}</div>
             </div>
             <span v-if="p.costYen >= 1" class="badge">API ¥{{ Math.round(p.costYen) }}</span>
+            <button class="cut-order-btn" style="color:var(--danger);" title="削除"
+              @click.stop="deleteProject(p)" :disabled="deletingProjectId === p.id">
+              <span class="icon" style="font-size:15px;">{{ deletingProjectId === p.id ? 'hourglass_top' : 'delete' }}</span>
+            </button>
             <span class="chev">chevron_right</span>
           </div>
         </div>
@@ -714,6 +718,18 @@ const App = {
 
     function backToProjects() { view.value = "projects"; currentProject.value = null; loadProjects(); }
 
+    const deletingProjectId = ref(null);
+    async function deleteProject(p) {
+      // 章・キャラ・エピソード・生成履歴・費用記録まで全部消える不可逆操作なので必ず確認
+      if (!confirm(`「${p.title}」を削除しますか？\nエピソード・キャラクター・生成した動画の記録もすべて消えます (元に戻せません)`)) return;
+      deletingProjectId.value = p.id;
+      err.value = "";
+      try {
+        await apiFetch(`/api/drama/projects/${p.id}`, { method: "DELETE" });
+        await loadProjects();
+      } catch (e) { err.value = e.message; } finally { deletingProjectId.value = null; }
+    }
+
     async function openEpisode(id) {
       err.value = "";
       try {
@@ -1218,7 +1234,7 @@ const App = {
       creating, showNewProject, newProject, createProject,
       showNewEpisode, newEpisode, createEpisode,
       showNewCharacter, newCharacter, createCharacter,
-      openProject, backToProjects, openEpisode, backToProject,
+      openProject, backToProjects, openEpisode, backToProject, deleteProject, deletingProjectId,
       charOpenId, charEdit, charSaving, toggleChar, onCharImagePick, saveCharacter, deleteCharacter,
       locOpenId, locEdit, locSaving, showNewLocation, newLocation, toggleLoc, createLocation, onLocImagePick, saveLocation, deleteLocation,
       cutOpenId, cutEdit, cutSaving, toggleCut, toggleCutChar, addCut, saveCut, deleteCut, moveCut,
