@@ -15,8 +15,10 @@ import { decideFromChart as fxDecide } from "./fx-lib/ai.js";
 import { parseCandlesCsv as fxParseCsv } from "./fx-lib/csv.js";
 import { runStrategy as fxRunStrategy, strategyList as fxStrategyList } from "./fx-lib/strategies.js";
 import { recomputeEpisodeState, computeMissingInfo, cutIsReadyForGeneration } from "./drama-lib/state.js";
-import { buildSystemPrompt as dramaBuildSystemPrompt, chatOnce as dramaChatOnce } from "./drama-lib/gemini.js";
+import { buildSystemPrompt as dramaBuildSystemPrompt, chatOnce as dramaChatOnce, analyzeChapter as dramaAnalyzeChapter } from "./drama-lib/gemini.js";
 import { generateCutVideo as dramaGenerateCutVideo } from "./drama-lib/videoGen.js";
+import { fetchAozoraText as dramaFetchAozora, splitChapters as dramaSplitChapters } from "./drama-lib/aozora.js";
+import { analyzeWorkSetup as dramaAnalyzeWorkSetup, searchAozora as dramaSearchAozora } from "./drama-lib/gemini.js";
 import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -1011,6 +1013,23 @@ async function ensureSchema() {
       )
     `);
     await p.query("CREATE INDEX IF NOT EXISTS drama_chat_project_idx ON drama_chat_messages (project_id, created_at)");
+    // チャットへの画像添付 (Firebase Storage の URL 配列)
+    await p.query(`ALTER TABLE drama_chat_messages ADD COLUMN IF NOT EXISTS images JSONB NOT NULL DEFAULT '[]'::jsonb`);
+    // 原作の章分割 (青空文庫 import で自動生成)。summary / character_names は AI 解析で埋まる
+    await p.query(`
+      CREATE TABLE IF NOT EXISTS drama_chapters (
+        id              BIGSERIAL PRIMARY KEY,
+        project_id      BIGINT NOT NULL REFERENCES drama_projects(id) ON DELETE CASCADE,
+        number          INTEGER NOT NULL,
+        title           TEXT,
+        content         TEXT NOT NULL,
+        summary         TEXT,
+        character_names JSONB NOT NULL DEFAULT '[]'::jsonb,
+        created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+        updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+      )
+    `);
+    await p.query("CREATE INDEX IF NOT EXISTS drama_chap_project_idx ON drama_chapters (project_id, number)");
 
     schemaMigrated = true;
     console.log("[schema] migration ok: records.drive_url + tasks + yado_bookings + seko_* + fx_* + drama_* ensured");
@@ -7397,6 +7416,250 @@ app.patch("/api/drama/projects/:id", async (req, res) => {
   }
 });
 
+// 青空文庫の作品検索 (Gemini + Google 検索グラウンディング)。
+// { query: "邪宗門" } → [{ title, author, cardUrl }]
+app.post("/api/drama/aozora-search", async (req, res) => {
+  if (!genAI) return res.status(503).json({ error: "Gemini not configured" });
+  try {
+    const { query } = req.body || {};
+    if (!query) return res.status(400).json({ error: "query is required" });
+    const results = await dramaSearchAozora(callGeminiWithFallback, String(query).slice(0, 100));
+    res.json({ results });
+  } catch (err) {
+    console.error("[drama] aozora-search", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 青空文庫 URL からプロジェクトを全自動作成:
+//   1. 本文取得 (図書カード URL でも可) → タイトル・作者はページから自動
+//   2. プロジェクト作成 + 全文保存 + 章分割
+//   3. AI が本文から初期構造化: 時代背景 (worldSetting)・絵柄提案 (styleGuide)・
+//      主要キャラを下書きとして一括登録 (identityTokens / appearancePrompt 込み)
+// 章ごとの要約・出演 index は別途 /chapters/analyze (クライアントが後追いで呼ぶ)。
+app.post("/api/drama/projects/from-aozora", async (req, res) => {
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  try {
+    const { url, skipSetup } = req.body || {};
+    if (!url) return res.status(400).json({ error: "url is required" });
+    await ensureSchema();
+
+    const { text, meta } = await dramaFetchAozora(url);
+    if (!text || text.length < 100) return res.status(400).json({ error: "本文が取得できませんでした" });
+
+    // AI 初期構造化 (Gemini 未設定でも取り込み自体は通す)。
+    // skipSetup=true なら取り込みだけ (クライアントが /analyze-setup を段階実行する用)。
+    let setup = { worldSetting: null, styleGuide: null, characters: [] };
+    let setupError = null;
+    if (genAI && !skipSetup) {
+      try {
+        setup = await dramaAnalyzeWorkSetup(callGeminiWithFallback, {
+          title: meta.title || "無題", author: meta.author, text,
+        });
+      } catch (e) {
+        console.warn("[drama] work setup analyze failed:", e.message);
+        setupError = e.message;
+      }
+    }
+
+    const { rows } = await p.query(
+      `INSERT INTO drama_projects (title, author, source_text, world_setting, style_guide, created_by)
+       VALUES ($1,$2,$3,$4,$5,$6) RETURNING id`,
+      [meta.title || "無題", meta.author || null, text, setup.worldSetting, setup.styleGuide, req.user?.email || null]
+    );
+    const projectId = rows[0].id;
+
+    const chapters = dramaSplitChapters(text);
+    for (const ch of chapters) {
+      await p.query(
+        `INSERT INTO drama_chapters (project_id, number, title, content) VALUES ($1,$2,$3,$4)`,
+        [projectId, ch.number, ch.title, ch.content]
+      );
+    }
+    for (const c of setup.characters) {
+      await p.query(
+        `INSERT INTO drama_characters (project_id, name, reading, description, appearance_prompt, identity_tokens, status)
+         VALUES ($1,$2,$3,$4,$5,$6,'draft')`,
+        [projectId, c.name, c.reading || null, c.description || null, c.appearancePrompt || null, JSON.stringify(c.identityTokens || [])]
+      );
+    }
+
+    res.status(201).json({
+      id: projectId,
+      title: meta.title, author: meta.author,
+      totalChars: text.length, chapterCount: chapters.length,
+      charactersCreated: setup.characters.map((c) => c.name),
+      worldSetting: setup.worldSetting, styleGuide: setup.styleGuide,
+      setupError,
+    });
+  } catch (err) {
+    console.error("[drama] from-aozora", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// AI 初期構造化を単体で実行: 保存済みの source_text から時代背景・絵柄・主要キャラを埋める。
+// worldSetting / styleGuide は空欄のときだけ埋める (force=true で上書き)。
+// キャラは同名が未登録のものだけ下書き追加。
+app.post("/api/drama/projects/:id/analyze-setup", async (req, res) => {
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  if (!genAI) return res.status(503).json({ error: "Gemini not configured" });
+  try {
+    const force = !!req.body?.force;
+    const { rows } = await p.query(
+      `SELECT title, author, source_text AS "sourceText", world_setting AS "worldSetting", style_guide AS "styleGuide"
+         FROM drama_projects WHERE id=$1`,
+      [req.params.id]
+    );
+    if (!rows.length) return res.status(404).json({ error: "not found" });
+    const proj = rows[0];
+    if (!proj.sourceText) return res.status(400).json({ error: "原作テキストが未取り込みです" });
+
+    const setup = await dramaAnalyzeWorkSetup(callGeminiWithFallback, {
+      title: proj.title, author: proj.author, text: proj.sourceText,
+    });
+    await p.query(
+      `UPDATE drama_projects SET
+         world_setting = CASE WHEN $1 OR world_setting IS NULL OR world_setting = '' THEN $2 ELSE world_setting END,
+         style_guide   = CASE WHEN $1 OR style_guide   IS NULL OR style_guide   = '' THEN $3 ELSE style_guide   END,
+         updated_at = now()
+       WHERE id=$4`,
+      [force, setup.worldSetting, setup.styleGuide, req.params.id]
+    );
+    const { rows: existing } = await p.query(`SELECT name FROM drama_characters WHERE project_id=$1`, [req.params.id]);
+    const known = new Set(existing.map((r) => r.name));
+    const created = [];
+    for (const c of setup.characters) {
+      if (known.has(c.name)) continue;
+      await p.query(
+        `INSERT INTO drama_characters (project_id, name, reading, description, appearance_prompt, identity_tokens, status)
+         VALUES ($1,$2,$3,$4,$5,$6,'draft')`,
+        [req.params.id, c.name, c.reading || null, c.description || null, c.appearancePrompt || null, JSON.stringify(c.identityTokens || [])]
+      );
+      created.push(c.name);
+    }
+    res.json({ ok: true, worldSetting: setup.worldSetting, styleGuide: setup.styleGuide, charactersCreated: created });
+  } catch (err) {
+    console.error("[drama] analyze-setup", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 原作テキストの取り込み: { url } (青空文庫) または { text } (直接貼り付け)。
+// 全文を drama_projects.source_text に保存しつつ、章に分割して drama_chapters を作り直す。
+app.post("/api/drama/projects/:id/import-source", async (req, res) => {
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  try {
+    const { url, text: rawText } = req.body || {};
+    let text = rawText;
+    if (!text && url) ({ text } = await dramaFetchAozora(url));
+    if (!text) return res.status(400).json({ error: "url か text のどちらかが必要です" });
+
+    const { rowCount } = await p.query(
+      `UPDATE drama_projects SET source_text=$1, updated_at=now() WHERE id=$2`,
+      [text, req.params.id]
+    );
+    if (!rowCount) return res.status(404).json({ error: "not found" });
+
+    const chapters = dramaSplitChapters(text);
+    await p.query(`DELETE FROM drama_chapters WHERE project_id=$1`, [req.params.id]);
+    for (const ch of chapters) {
+      await p.query(
+        `INSERT INTO drama_chapters (project_id, number, title, content) VALUES ($1,$2,$3,$4)`,
+        [req.params.id, ch.number, ch.title, ch.content]
+      );
+    }
+    res.json({
+      ok: true,
+      totalChars: text.length,
+      chapterCount: chapters.length,
+      chapters: chapters.map((c) => ({ number: c.number, title: c.title, charCount: c.content.length })),
+    });
+  } catch (err) {
+    console.error("[drama] import-source", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 章 index (content 抜き)。本文は GET /api/drama/chapters/:id で個別取得。
+app.get("/api/drama/projects/:id/chapters", async (req, res) => {
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  try {
+    const { rows } = await p.query(
+      `SELECT id, number, title, summary, character_names AS "characterNames", length(content) AS "charCount"
+         FROM drama_chapters WHERE project_id=$1 ORDER BY number`,
+      [req.params.id]
+    );
+    res.json(rows);
+  } catch (err) {
+    console.error("[drama] chapters list", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get("/api/drama/chapters/:id", async (req, res) => {
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  try {
+    const { rows } = await p.query(
+      `SELECT id, project_id AS "projectId", number, title, content, summary, character_names AS "characterNames"
+         FROM drama_chapters WHERE id=$1`,
+      [req.params.id]
+    );
+    if (!rows.length) return res.status(404).json({ error: "not found" });
+    res.json(rows[0]);
+  } catch (err) {
+    console.error("[drama] chapter detail", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 章の AI 解析: 各章の要約 + 出演キャラ名を Gemini で埋める (index 作成)。
+// 既に解析済みの章はスキップ (force=true で全再解析)。
+app.post("/api/drama/projects/:id/chapters/analyze", async (req, res) => {
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  if (!genAI) return res.status(503).json({ error: "Gemini not configured" });
+  try {
+    const force = !!req.body?.force;
+    const { rows: projRows } = await p.query(`SELECT title, author FROM drama_projects WHERE id=$1`, [req.params.id]);
+    if (!projRows.length) return res.status(404).json({ error: "not found" });
+    const { rows: charRows } = await p.query(`SELECT name FROM drama_characters WHERE project_id=$1`, [req.params.id]);
+    const knownCharacterNames = charRows.map((r) => r.name);
+    const { rows: chapters } = await p.query(
+      `SELECT id, number, title, content, summary FROM drama_chapters WHERE project_id=$1 ORDER BY number`,
+      [req.params.id]
+    );
+    if (!chapters.length) return res.status(400).json({ error: "章がありません。先に原作テキストを取り込んでください" });
+
+    const results = [];
+    for (const ch of chapters) {
+      if (ch.summary && !force) { results.push({ number: ch.number, skipped: true }); continue; }
+      try {
+        const a = await dramaAnalyzeChapter(callGeminiWithFallback, {
+          projectTitle: projRows[0].title, author: projRows[0].author, chapter: ch, knownCharacterNames,
+        });
+        await p.query(
+          `UPDATE drama_chapters SET summary=$1, character_names=$2, updated_at=now() WHERE id=$3`,
+          [a.summary, JSON.stringify(a.characterNames), ch.id]
+        );
+        results.push({ number: ch.number, summary: a.summary, characterNames: a.characterNames });
+      } catch (e) {
+        console.warn(`[drama] chapter ${ch.number} analyze failed: ${e.message}`);
+        results.push({ number: ch.number, error: e.message });
+      }
+    }
+    res.json({ ok: true, results });
+  } catch (err) {
+    console.error("[drama] chapters analyze", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.post("/api/drama/projects/:id/characters", async (req, res) => {
   const p = getPool();
   if (!p) return res.status(503).json({ error: "DB not configured" });
@@ -7716,8 +7979,8 @@ app.get("/api/drama/projects/:id/chat", async (req, res) => {
     const episodeId = req.query.episodeId || null;
     const { rows } = await p.query(
       episodeId
-        ? `SELECT id, role, content, created_at AS "createdAt" FROM drama_chat_messages WHERE project_id=$1 AND episode_id=$2 ORDER BY id`
-        : `SELECT id, role, content, created_at AS "createdAt" FROM drama_chat_messages WHERE project_id=$1 AND episode_id IS NULL ORDER BY id`,
+        ? `SELECT id, role, content, images, created_at AS "createdAt" FROM drama_chat_messages WHERE project_id=$1 AND episode_id=$2 ORDER BY id`
+        : `SELECT id, role, content, images, created_at AS "createdAt" FROM drama_chat_messages WHERE project_id=$1 AND episode_id IS NULL ORDER BY id`,
       episodeId ? [req.params.id, episodeId] : [req.params.id]
     );
     res.json(rows);
@@ -7727,23 +7990,49 @@ app.get("/api/drama/projects/:id/chat", async (req, res) => {
   }
 });
 
-// AI チャット: 現在の制作状態 (キャラ/エピソード/カット/不足情報) を毎回組み立てて渡す。
+// チャット添付画像: Firebase Storage の download URL からバイト列を取って
+// Gemini の inlineData に変換する。https 限定 + 枚数/サイズ上限。
+const DRAMA_CHAT_MAX_IMAGES = 4;
+const DRAMA_CHAT_MAX_IMAGE_BYTES = 8 * 1024 * 1024;
+async function dramaFetchImageParts(imageUrls) {
+  const parts = [];
+  for (const url of (imageUrls || []).slice(0, DRAMA_CHAT_MAX_IMAGES)) {
+    const u = new URL(url);
+    if (u.protocol !== "https:") throw new Error("画像 URL は https のみ");
+    const r = await fetch(url);
+    if (!r.ok) throw new Error(`画像の取得に失敗: HTTP ${r.status}`);
+    const buf = Buffer.from(await r.arrayBuffer());
+    if (buf.length > DRAMA_CHAT_MAX_IMAGE_BYTES) throw new Error("画像が大きすぎます (8MB まで)");
+    const mimeType = r.headers.get("content-type")?.split(";")[0] || "image/jpeg";
+    parts.push({ inlineData: { data: buf.toString("base64"), mimeType } });
+  }
+  return parts;
+}
+
+// AI チャット: 現在の制作状態 (キャラ/章/エピソード/カット/不足情報) を毎回組み立てて渡す。
+// 画像添付はクライアントが Firebase Storage に上げた URL を imageUrls で渡してくる。
 app.post("/api/drama/projects/:id/chat", async (req, res) => {
   const p = getPool();
   if (!p) return res.status(503).json({ error: "DB not configured" });
   if (!genAI) return res.status(503).json({ error: "Gemini not configured" });
   try {
-    const { message, episodeId } = req.body || {};
-    if (!message) return res.status(400).json({ error: "message is required" });
+    const { message, episodeId, imageUrls = [] } = req.body || {};
+    if (!message && !imageUrls.length) return res.status(400).json({ error: "message is required" });
 
     const { rows: projRows } = await p.query(
-      `SELECT id, title, author, style_guide AS "styleGuide", world_setting AS "worldSetting" FROM drama_projects WHERE id=$1`,
+      `SELECT id, title, author, style_guide AS "styleGuide", world_setting AS "worldSetting", source_text AS "sourceText"
+         FROM drama_projects WHERE id=$1`,
       [req.params.id]
     );
     if (!projRows.length) return res.status(404).json({ error: "project not found" });
     const { rows: characters } = await p.query(
       `SELECT id, name, reading, status, identity_tokens AS "identityTokens", reference_images AS "referenceImages"
          FROM drama_characters WHERE project_id=$1`,
+      [req.params.id]
+    );
+    const { rows: chapters } = await p.query(
+      `SELECT number, title, content, summary, character_names AS "characterNames", length(content) AS "charCount"
+         FROM drama_chapters WHERE project_id=$1 ORDER BY number`,
       [req.params.id]
     );
     let episode = null, cuts = [];
@@ -7763,21 +8052,22 @@ app.post("/api/drama/projects/:id/chat", async (req, res) => {
       }
     }
     const missingInfo = computeMissingInfo({ project: projRows[0], characters, episode, cuts });
-    const systemPrompt = dramaBuildSystemPrompt({ project: projRows[0], characters, episode, cuts, missingInfo });
+    const systemPrompt = dramaBuildSystemPrompt({ project: projRows[0], characters, episode, cuts, missingInfo, chapters });
 
     const { rows: history } = await p.query(
       episodeId
-        ? `SELECT role, content FROM drama_chat_messages WHERE project_id=$1 AND episode_id=$2 ORDER BY id DESC LIMIT 20`
-        : `SELECT role, content FROM drama_chat_messages WHERE project_id=$1 AND episode_id IS NULL ORDER BY id DESC LIMIT 20`,
+        ? `SELECT role, content, images FROM drama_chat_messages WHERE project_id=$1 AND episode_id=$2 ORDER BY id DESC LIMIT 20`
+        : `SELECT role, content, images FROM drama_chat_messages WHERE project_id=$1 AND episode_id IS NULL ORDER BY id DESC LIMIT 20`,
       episodeId ? [req.params.id, episodeId] : [req.params.id]
     );
     history.reverse();
 
-    const reply = await dramaChatOnce(callGeminiWithFallback, systemPrompt, history, message);
+    const imageParts = await dramaFetchImageParts(imageUrls);
+    const reply = await dramaChatOnce(callGeminiWithFallback, systemPrompt, history, message || "(画像を確認して)", imageParts);
 
     await p.query(
-      `INSERT INTO drama_chat_messages (project_id, episode_id, role, content) VALUES ($1,$2,'user',$3)`,
-      [req.params.id, episodeId || null, message]
+      `INSERT INTO drama_chat_messages (project_id, episode_id, role, content, images) VALUES ($1,$2,'user',$3,$4)`,
+      [req.params.id, episodeId || null, message || "", JSON.stringify(imageUrls.slice(0, DRAMA_CHAT_MAX_IMAGES))]
     );
     await p.query(
       `INSERT INTO drama_chat_messages (project_id, episode_id, role, content) VALUES ($1,$2,'assistant',$3)`,

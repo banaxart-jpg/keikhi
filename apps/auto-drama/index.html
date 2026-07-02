@@ -149,7 +149,7 @@ const TEMPLATE = `
     <div v-if="!ready" class="loading">接続中…</div>
     <template v-else>
       <div class="list">
-        <div v-if="projects.length === 0" class="empty">プロジェクトがまだありません</div>
+        <div v-if="projects.length === 0" class="empty">右下の + から作品を選んで始めてください</div>
         <div v-for="p in projects" :key="p.id" class="card" @click="openProject(p.id)">
           <div class="card-row">
             <div class="card-main">
@@ -160,29 +160,77 @@ const TEMPLATE = `
           </div>
         </div>
       </div>
-      <div class="seed-row" v-if="projects.length === 0">
-        <button class="seed-btn" @click="seedJashumon" :disabled="seeding">
-          <span v-if="seeding">投入中…</span>
-          <span v-else>邪宗門 (パイロット) を投入</span>
-        </button>
-      </div>
     </template>
     <div class="err" v-if="err">{{ err }}</div>
 
     <div class="fab-row">
-      <button class="fab add" @click="showNewProject = true" title="新規プロジェクト">+</button>
+      <button class="fab add" @click="startCreate" title="新規プロジェクト">+</button>
+    </div>
+  </template>
+
+  <!-- ───────── 作成ウィザード: 作品選択 → AI 構造化 → チャットへ ───────── -->
+  <template v-else-if="view === 'create'">
+    <div class="header-fix">
+      <div class="top">
+        <button class="pill" @click="view = 'projects'" :disabled="createStep === 'structuring'">← 戻る</button>
+        <span class="top-title">新規プロジェクト</span>
+      </div>
     </div>
 
-    <bottom-sheet v-model="showNewProject" title="新規プロジェクト">
-      <form @submit.prevent="createProject" class="card-detail" style="border:none; padding:0;">
-        <div><div class="field-label">タイトル</div><input class="field-input" v-model="newProject.title" required></div>
-        <div><div class="field-label">作者</div><input class="field-input" v-model="newProject.author"></div>
-        <div><div class="field-label">絵柄方針 (styleGuide)</div><input class="field-input" v-model="newProject.styleGuide" placeholder="例: 劇画・浮世絵×シネマティック"></div>
-        <div><div class="field-label">世界観・トーン</div><textarea class="field-input" v-model="newProject.worldSetting"></textarea></div>
-        <div><div class="field-label">原作テキスト (任意・後からでも可)</div><textarea class="field-input" v-model="newProject.sourceText" style="min-height:120px;"></textarea></div>
-        <div class="actions-row"><button type="submit" class="primary" :disabled="creating">{{ creating ? '作成中…' : '作成' }}</button></div>
-      </form>
-    </bottom-sheet>
+    <!-- Step 1: 青空文庫から作品を選ぶ -->
+    <template v-if="createStep === 'pick'">
+      <div class="list">
+        <div class="field-label">青空文庫から作品を選ぶ</div>
+        <div class="field-row">
+          <input class="field-input" v-model="aozoraQuery" placeholder="作品名や作者で検索 (例: 邪宗門)" style="flex:2;" @keydown.enter.prevent="searchAozora">
+          <button class="tab" @click="searchAozora" :disabled="searching" style="flex:1;">検索</button>
+        </div>
+        <div v-if="searching" class="loading" style="padding:20px 0;">青空文庫を検索中…</div>
+        <div v-for="r in aozoraResults" :key="r.cardUrl || r.title" class="card" @click="r.cardUrl && createFromAozora(r.cardUrl)">
+          <div class="card-row">
+            <div class="card-main">
+              <div class="card-title">{{ r.title }}</div>
+              <div class="card-sub">{{ r.author }}{{ r.cardUrl ? '' : ' (URL不明、下の欄に手動で)' }}</div>
+            </div>
+            <span class="chev">chevron_right</span>
+          </div>
+        </div>
+
+        <div class="field-label" style="margin-top:14px;">または URL 直接貼り付け (図書カード / 本文どちらでも)</div>
+        <div class="field-row">
+          <input class="field-input" v-model="aozoraCreateUrl" placeholder="https://www.aozora.gr.jp/cards/...">
+          <button class="tab" @click="createFromAozora(aozoraCreateUrl)" :disabled="!aozoraCreateUrl.trim()" style="flex:0 0 auto;">作成</button>
+        </div>
+
+        <button class="seed-btn" style="margin-top:16px; align-self:center;" @click="showNewProject = true">青空文庫を使わず手動で作る</button>
+      </div>
+
+      <bottom-sheet v-model="showNewProject" title="手動で作成">
+        <form @submit.prevent="createProject" class="card-detail" style="border:none; padding:0;">
+          <div><div class="field-label">タイトル</div><input class="field-input" v-model="newProject.title" required></div>
+          <div><div class="field-label">作者</div><input class="field-input" v-model="newProject.author"></div>
+          <div><div class="field-label">絵柄方針 (styleGuide)</div><input class="field-input" v-model="newProject.styleGuide" placeholder="例: 劇画・浮世絵×シネマティック"></div>
+          <div><div class="field-label">世界観・トーン</div><textarea class="field-input" v-model="newProject.worldSetting"></textarea></div>
+          <div class="actions-row"><button type="submit" class="primary" :disabled="creating">{{ creating ? '作成中…' : '作成' }}</button></div>
+        </form>
+      </bottom-sheet>
+    </template>
+
+    <!-- Step 2: AI 構造化の進行表示 -->
+    <template v-else>
+      <div class="list">
+        <div class="card" style="padding: 18px 16px;">
+          <div class="card-title" style="margin-bottom: 12px;">{{ createTitle || '作品' }} を構造化中…</div>
+          <div v-for="s in createStages" :key="s.key" style="display:flex; align-items:center; gap:10px; padding:7px 0;">
+            <span class="icon" :style="{ color: s.state === 'done' ? '#16a34a' : s.state === 'doing' ? 'var(--accent)' : 'var(--text3)' }">
+              {{ s.state === 'done' ? 'check_circle' : s.state === 'doing' ? 'progress_activity' : 'radio_button_unchecked' }}</span>
+            <span :style="{ fontSize: '13px', fontWeight: 600, color: s.state === 'wait' ? 'var(--text3)' : 'var(--text)' }">{{ s.label }}</span>
+          </div>
+          <div class="card-sub" style="margin-top:10px;">終わったらそのまま AI チャットが開きます。絵柄や画像の粒度をチャットで詰めてください。</div>
+        </div>
+      </div>
+    </template>
+    <div class="err" v-if="err">{{ err }}</div>
   </template>
 
   <!-- ───────── プロジェクト詳細 ───────── -->
@@ -195,6 +243,7 @@ const TEMPLATE = `
       <div class="tabs">
         <button class="tab" :class="{ on: projectTab === 'episodes' }" @click="projectTab = 'episodes'">エピソード</button>
         <button class="tab" :class="{ on: projectTab === 'characters' }" @click="projectTab = 'characters'">キャラクター ({{ currentProject.characters.length }})</button>
+        <button class="tab" :class="{ on: projectTab === 'source' }" @click="openSourceTab">原作 ({{ chapters.length }})</button>
       </div>
     </div>
 
@@ -208,6 +257,42 @@ const TEMPLATE = `
           </div>
           <span class="badge" :class="'state-' + ep.state">{{ STATE_LABEL[ep.state] || ep.state }}</span>
           <span class="chev">chevron_right</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- 原作 (章分割 + 出演 index) -->
+    <div class="list" v-else-if="projectTab === 'source'">
+      <div style="display:flex; flex-direction:column; gap:8px;">
+        <div class="field-label">青空文庫の本文 URL (…/files/xx_xxxxx.html) から取り込み</div>
+        <div class="field-row">
+          <input class="field-input" v-model="aozoraUrl" placeholder="https://www.aozora.gr.jp/cards/.../files/....html" style="flex:2.5;">
+          <button class="tab" @click="importSource" :disabled="importing" style="flex:1;">{{ importing ? '取込中…' : '取り込み' }}</button>
+        </div>
+        <div class="actions-row" v-if="chapters.length">
+          <button @click="analyzeChapters" :disabled="analyzing">{{ analyzing ? 'AI解析中… (章数分かかります)' : 'AIで章を解析 (要約 + 出演キャラindex)' }}</button>
+        </div>
+      </div>
+      <div v-if="chapters.length === 0" class="empty">原作テキストがまだ取り込まれていません</div>
+      <div v-for="ch in chapters" :key="ch.id" class="card" :class="{ open: chapterOpenId === ch.id }">
+        <div class="card-row" @click="toggleChapter(ch)">
+          <div class="card-main">
+            <div class="card-title">第{{ ch.number }}章 {{ ch.title }} <span style="font-weight:400; color:var(--text2); font-size:11px;">{{ ch.charCount }}字</span></div>
+            <div class="card-sub" v-if="ch.summary">{{ ch.summary }}</div>
+          </div>
+          <span class="chev">expand_more</span>
+        </div>
+        <div v-if="chapterOpenId === ch.id" class="card-detail">
+          <div v-if="(ch.characterNames || []).length">
+            <div class="field-label">この章に出る人物</div>
+            <div style="display:flex; flex-wrap:wrap; gap:6px;">
+              <span v-for="n in ch.characterNames" :key="n" class="chip"
+                :style="isRegisteredCharacter(n) ? { background: 'var(--accent)', color: 'white' } : {}">{{ n }}</span>
+            </div>
+            <div class="card-sub" style="margin-top:4px;">色付き = キャラクター登録済み</div>
+          </div>
+          <div v-if="chapterContent[ch.id]" class="field-value" style="max-height: 300px; overflow-y: auto;">{{ chapterContent[ch.id] }}</div>
+          <div v-else class="card-sub">本文読み込み中…</div>
         </div>
       </div>
     </div>
@@ -252,7 +337,7 @@ const TEMPLATE = `
 
     <div class="fab-row">
       <button class="fab chat" @click="openChat()" title="AIチャット"><span class="icon" style="font-size:24px;">forum</span></button>
-      <button class="fab add" @click="projectTab === 'episodes' ? (showNewEpisode = true) : (showNewCharacter = true)" title="追加">+</button>
+      <button class="fab add" v-if="projectTab !== 'source'" @click="projectTab === 'episodes' ? (showNewEpisode = true) : (showNewCharacter = true)" title="追加">+</button>
     </div>
 
     <bottom-sheet v-model="showNewEpisode" title="新しい話">
@@ -376,12 +461,29 @@ const TEMPLATE = `
   <bottom-sheet v-model="chatOpen" title="AI チャット">
     <div class="chat-sheet">
       <div class="chat-log" ref="chatLogEl">
-        <div v-if="chatMessages.length === 0" class="empty" style="padding:20px 0;">「今なにをすればいい?」と聞いてみてください</div>
-        <div v-for="m in chatMessages" :key="m.id || m.content" class="msg" :class="m.role">{{ m.content }}</div>
+        <div v-if="chatMessages.length === 0" style="display:flex; flex-direction:column; gap:8px; padding:12px 4px;">
+          <div class="card-sub">まずは方向性から。タップで聞けます:</div>
+          <button v-for="s in chatStarters" :key="s" class="chip" style="border:none; cursor:pointer; font-family:inherit; padding:10px 14px; text-align:left; justify-content:flex-start;"
+            @click="sendStarter(s)">{{ s }}</button>
+        </div>
+        <div v-for="m in chatMessages" :key="m.id || m.content" class="msg" :class="m.role">
+          <div v-if="(m.images || []).length" style="display:flex; gap:6px; flex-wrap:wrap; margin-bottom:6px;">
+            <img v-for="(u,i) in m.images" :key="i" :src="u" class="thumb" style="width:88px; height:88px;">
+          </div>{{ m.content }}</div>
+      </div>
+      <div v-if="chatAttach.length" style="display:flex; gap:6px; padding:4px 0; flex-wrap:wrap;">
+        <div v-for="(a,i) in chatAttach" :key="i" style="position:relative;">
+          <img :src="a.preview" class="thumb" style="width:56px; height:56px;">
+          <button @click="chatAttach.splice(i,1)" style="position:absolute; top:-6px; right:-6px; width:20px; height:20px; border-radius:10px; border:none; background:var(--danger); color:white; font-size:12px; cursor:pointer; line-height:1;">×</button>
+        </div>
       </div>
       <div class="chat-input-row">
+        <label class="chat-send" style="background:var(--bg); color:var(--text2); box-shadow:3px 3px 8px var(--sd), -2px -2px 6px var(--sl); display:flex; align-items:center; justify-content:center; cursor:pointer;">
+          <input type="file" accept="image/*" multiple style="display:none;" @change="onChatImagePick" :disabled="chatSending">
+          <span class="icon">add_photo_alternate</span>
+        </label>
         <textarea class="field-input" v-model="chatInput" placeholder="メッセージを入力…" @keydown.enter.exact.prevent="sendChat"></textarea>
-        <button class="chat-send" @click="sendChat" :disabled="chatSending || !chatInput.trim()"><span class="icon">send</span></button>
+        <button class="chat-send" @click="sendChat" :disabled="chatSending || (!chatInput.trim() && !chatAttach.length)"><span class="icon">{{ chatSending ? 'hourglass_top' : 'send' }}</span></button>
       </div>
     </div>
   </bottom-sheet>
@@ -403,9 +505,21 @@ const App = {
     const projectTab = ref("episodes");
 
     const creating = ref(false);
-    const seeding = ref(false);
     const showNewProject = ref(false);
     const newProject = ref({ title: "", author: "", styleGuide: "", worldSetting: "", sourceText: "" });
+    const aozoraQuery = ref("");
+    const aozoraResults = ref([]);
+    const searching = ref(false);
+    const aozoraCreateUrl = ref("");
+
+    const createStep = ref("pick"); // 'pick' | 'structuring'
+    const createTitle = ref("");
+    const createStages = ref([]);
+    const chatStarters = [
+      "絵柄と画像の粒度の方向性を決めたい。この作品に合う案を出して",
+      "キャラクターの見た目 (identityTokens) を一緒に詰めたい",
+      "第1話をどこからどこまで切り出すのがいいか提案して",
+    ];
     const showNewEpisode = ref(false);
     const newEpisode = ref({ number: "", title: "", targetDurationSec: 60, sourceRangeStart: null, sourceRangeEnd: null });
     const showNewCharacter = ref(false);
@@ -429,7 +543,15 @@ const App = {
     const chatInput = ref("");
     const chatSending = ref(false);
     const chatLogEl = ref(null);
+    const chatAttach = ref([]); // [{ file, preview }]
     let chatEpisodeId = null;
+
+    const chapters = ref([]);
+    const chapterOpenId = ref(null);
+    const chapterContent = ref({}); // id → 本文 (開いた時に遅延取得)
+    const aozoraUrl = ref("");
+    const importing = ref(false);
+    const analyzing = ref(false);
 
     async function apiFetch(path, opts = {}) {
       const token = await user.value.getIdToken();
@@ -472,9 +594,16 @@ const App = {
       err.value = "";
       try {
         currentProject.value = await apiFetch(`/api/drama/projects/${id}`);
-        projectTab.value = "episodes";
+        if (view.value !== "project") projectTab.value = "episodes";
         view.value = "project";
+        loadChapters(id); // タブの件数表示用に裏で取得 (待たない)
       } catch (e) { err.value = e.message; }
+    }
+
+    async function loadChapters(projectId) {
+      try {
+        chapters.value = await apiFetch(`/api/drama/projects/${projectId}/chapters`);
+      } catch (_) { chapters.value = []; }
     }
 
     function backToProjects() { view.value = "projects"; currentProject.value = null; loadProjects(); }
@@ -510,20 +639,107 @@ const App = {
       } catch (e) { err.value = e.message; } finally { creating.value = false; }
     }
 
-    async function seedJashumon() {
-      seeding.value = true;
+    // ── 作成ウィザード: 作品選択 → AI 構造化 → チャットへ ──
+    function startCreate() {
+      view.value = "create";
+      createStep.value = "pick";
+      aozoraQuery.value = ""; aozoraResults.value = []; aozoraCreateUrl.value = "";
+      err.value = "";
+    }
+    async function searchAozora() {
+      if (!aozoraQuery.value.trim() || searching.value) return;
+      searching.value = true;
+      aozoraResults.value = [];
+      err.value = "";
       try {
-        const { id } = await apiFetch("/api/drama/projects", {
-          method: "POST",
-          body: {
-            title: "邪宗門", author: "芥川龍之介",
-            styleGuide: "劇画・浮世絵×シネマティック",
-            worldSetting: "戦国時代末期、南蛮渡来の妖術と土着信仰が交錯する京。若殿と姫君、邪法師 摩利信乃法師が絡む因縁の物語。",
-          },
-        });
+        const r = await apiFetch("/api/drama/aozora-search", { method: "POST", body: { query: aozoraQuery.value.trim() } });
+        aozoraResults.value = r.results || [];
+        if (!aozoraResults.value.length) err.value = "見つかりませんでした。URL 直接貼り付けを試してください";
+      } catch (e) { err.value = e.message; } finally { searching.value = false; }
+    }
+    async function createFromAozora(url) {
+      if (!url || createStep.value === "structuring") return;
+      err.value = "";
+      createStep.value = "structuring";
+      createTitle.value = "";
+      createStages.value = [
+        { key: "fetch", label: "青空文庫から本文を取得・章に分割", state: "doing" },
+        { key: "setup", label: "AI が時代背景・絵柄・キャラクターを構造化", state: "wait" },
+        { key: "index", label: "章ごとの要約と出演キャラ index を作成", state: "wait" },
+      ];
+      const setStage = (key, state) => {
+        createStages.value = createStages.value.map((s) => s.key === key ? { ...s, state } : s);
+      };
+      try {
+        // 1. 取り込み (Gemini なしでも通る)
+        const r = await apiFetch("/api/drama/projects/from-aozora", { method: "POST", body: { url: url.trim(), skipSetup: true } });
+        createTitle.value = r.title || "";
+        setStage("fetch", "done");
+        // 2. AI 初期構造化 (失敗しても続行)
+        setStage("setup", "doing");
+        try {
+          await apiFetch(`/api/drama/projects/${r.id}/analyze-setup`, { method: "POST", body: {} });
+          setStage("setup", "done");
+        } catch (e) {
+          setStage("setup", "wait");
+          err.value = "AI 初期解析は失敗 (取り込みは成功、あとで原作タブから再実行可): " + e.message;
+        }
+        // 3. 章 index は裏で継続しつつ、先にチャットへ
+        setStage("index", "doing");
+        apiFetch(`/api/drama/projects/${r.id}/chapters/analyze`, { method: "POST", body: {} })
+          .then(() => { if (currentProject.value?.id === r.id) loadChapters(r.id); })
+          .catch(() => {});
         await loadProjects();
-        await openProject(id);
-      } catch (e) { err.value = e.message; } finally { seeding.value = false; }
+        await openProject(r.id);
+        openChat(); // 方向性詰めはチャットから
+      } catch (e) {
+        err.value = e.message;
+        createStep.value = "pick";
+      }
+    }
+    function sendStarter(text) {
+      chatInput.value = text;
+      sendChat();
+    }
+
+    // ── 原作 (章) ──
+    function openSourceTab() {
+      projectTab.value = "source";
+      loadChapters(currentProject.value.id);
+    }
+    async function importSource() {
+      if (!aozoraUrl.value.trim()) { err.value = "青空文庫の URL を入れてください"; return; }
+      importing.value = true;
+      err.value = "";
+      try {
+        const r = await apiFetch(`/api/drama/projects/${currentProject.value.id}/import-source`, {
+          method: "POST", body: { url: aozoraUrl.value.trim() },
+        });
+        aozoraUrl.value = "";
+        await loadChapters(currentProject.value.id);
+        chapterContent.value = {};
+      } catch (e) { err.value = e.message; } finally { importing.value = false; }
+    }
+    async function analyzeChapters() {
+      analyzing.value = true;
+      err.value = "";
+      try {
+        await apiFetch(`/api/drama/projects/${currentProject.value.id}/chapters/analyze`, { method: "POST", body: {} });
+        await loadChapters(currentProject.value.id);
+      } catch (e) { err.value = e.message; } finally { analyzing.value = false; }
+    }
+    async function toggleChapter(ch) {
+      if (chapterOpenId.value === ch.id) { chapterOpenId.value = null; return; }
+      chapterOpenId.value = ch.id;
+      if (!chapterContent.value[ch.id]) {
+        try {
+          const full = await apiFetch(`/api/drama/chapters/${ch.id}`);
+          chapterContent.value = { ...chapterContent.value, [ch.id]: full.content };
+        } catch (e) { err.value = e.message; }
+      }
+    }
+    function isRegisteredCharacter(name) {
+      return (currentProject.value?.characters || []).some((c) => c.name === name || (name && name.includes(c.name)) || (c.name && c.name.includes(name)));
     }
 
     // ── エピソード ──
@@ -701,16 +917,29 @@ const App = {
     function scrollChatToBottom() {
       if (chatLogEl.value) chatLogEl.value.scrollTop = chatLogEl.value.scrollHeight;
     }
+    function onChatImagePick(e) {
+      for (const file of e.target.files || []) {
+        chatAttach.value.push({ file, preview: URL.createObjectURL(file) });
+      }
+      e.target.value = "";
+    }
     async function sendChat() {
       const message = chatInput.value.trim();
-      if (!message || chatSending.value) return;
+      const attachments = [...chatAttach.value];
+      if ((!message && !attachments.length) || chatSending.value) return;
       chatSending.value = true;
-      chatMessages.value.push({ role: "user", content: message });
       chatInput.value = "";
+      chatAttach.value = [];
+      chatMessages.value.push({ role: "user", content: message, images: attachments.map((a) => a.preview) });
       nextTick(scrollChatToBottom);
       try {
+        // 添付画像を Firebase Storage に上げてから URL をサーバーへ (サーバーが Gemini に渡す)
+        const imageUrls = [];
+        for (const a of attachments) {
+          imageUrls.push(await uploadImage(a.file, `auto-drama/${currentProject.value.id}/chat`));
+        }
         const res = await apiFetch(`/api/drama/projects/${currentProject.value.id}/chat`, {
-          method: "POST", body: { message, episodeId: chatEpisodeId },
+          method: "POST", body: { message, episodeId: chatEpisodeId, imageUrls },
         });
         chatMessages.value.push({ role: "assistant", content: res.reply });
         nextTick(scrollChatToBottom);
@@ -741,7 +970,7 @@ const App = {
     return {
       STATE_LABEL, IMG_KIND_LABEL,
       view, ready, err, projects, currentProject, currentEpisode, projectTab,
-      creating, seeding, showNewProject, newProject, createProject, seedJashumon,
+      creating, showNewProject, newProject, createProject,
       showNewEpisode, newEpisode, createEpisode,
       showNewCharacter, newCharacter, createCharacter,
       openProject, backToProjects, openEpisode, backToProject,
@@ -750,7 +979,12 @@ const App = {
       generatingCutId, genError, genErrorFor, generateCut, selectGeneration,
       isAppearing, toggleAppearing, onKeyVisualPick,
       exporting, exportErr, exportEpisode,
-      chatOpen, chatMessages, chatInput, chatSending, chatLogEl, openChat, sendChat,
+      chatOpen, chatMessages, chatInput, chatSending, chatLogEl, chatAttach, openChat, sendChat, onChatImagePick,
+      chapters, chapterOpenId, chapterContent, aozoraUrl, importing, analyzing,
+      openSourceTab, importSource, analyzeChapters, toggleChapter, isRegisteredCharacter,
+      aozoraQuery, aozoraResults, searching, aozoraCreateUrl,
+      createStep, createTitle, createStages, chatStarters,
+      startCreate, searchAozora, createFromAozora, sendStarter,
     };
   },
 };
