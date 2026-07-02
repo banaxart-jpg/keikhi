@@ -444,7 +444,9 @@ async function appendRecordToSheet(r) {
       site: r.site,
       status: "確定",
       paymentMethod: r.payment || "",
-      memo: [r.buyer, r.workType, r.memo].filter(Boolean).join(" / "),
+      memo: r.memo || "",              // メモは本文だけ (購入者/工種は専用列へ分離)
+      buyer: r.buyer || "",            // → 「購入者」列
+      workType: r.workType || "",      // → 「工種」列
       photoCell,
       source: "領収書",
       refId: r.id || "",
@@ -559,6 +561,7 @@ const TX_TAB = "取引";
 const TX_HEADER = [
   "日付", "種別", "大分類", "小分類", "金額", "対象", "現場",
   "状態", "支払方法", "メモ", "写真", "ソース", "元ID", "登録日",
+  "購入者", "工種",
 ];
 // 列数が増えた時にヘッダー行を 1 回だけ書き直すためのフラグ (cold start ごと)
 let txHeaderEnsured = false;
@@ -589,7 +592,7 @@ async function appendTx(r) {
       try {
         await sheets.spreadsheets.values.update({
           spreadsheetId: TX_SHEET_ID,
-          range: `${TX_TAB}!A1:N1`,
+          range: `${TX_TAB}!A1:P1`,
           valueInputOption: "RAW",
           requestBody: { values: [TX_HEADER] },
         });
@@ -606,7 +609,7 @@ async function appendTx(r) {
     }
     await sheets.spreadsheets.values.append({
       spreadsheetId: TX_SHEET_ID,
-      range: `${TX_TAB}!A:N`,
+      range: `${TX_TAB}!A:P`,
       valueInputOption: "USER_ENTERED",
       insertDataOption: "INSERT_ROWS",
       requestBody: {
@@ -616,6 +619,7 @@ async function appendTx(r) {
           r.status || "確定", r.paymentMethod || "", r.memo || "",
           r.photoCell || "", r.source || "", r.refId || "",
           r.registeredAt || jstTodayStr(),    // 登録日 (JST)
+          r.buyer || "", r.workType || "",     // 購入者 / 工種 (メモから分離)
         ]],
       },
     });
