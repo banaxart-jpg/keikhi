@@ -79,6 +79,44 @@ app.get("/api/version", (req, res) => {
   res.json({ version: APP_VERSION, buildId: BUILD_ID, startedAt: SERVER_STARTED_AT });
 });
 
+// チャット挙動のデバッグ実行 (Claude Code 用)。Gemini を本当に呼ぶが:
+//  - 履歴に書き込まない / ACTIONS は解析のみで実行しない (本物のデータを汚さない)
+//  - 課金は kind debug_* で記録し、累計 ¥1000 でハードストップ (公開エンドポイントの保険)
+//  - body: { message, episodeId?, quotedMessageId?, imageUrls?, withImages? }
+const DRAMA_DEBUG_BUDGET_YEN = 1000;
+app.post("/api/drama/inspect/:id/debug-chat", async (req, res) => {
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  if (!genAI) return res.status(503).json({ error: "Gemini not configured" });
+  try {
+    await ensureSchema();
+    const { rows: spent } = await p.query(
+      `SELECT COALESCE(SUM(cost_yen),0)::float AS y FROM drama_api_usage WHERE kind LIKE 'debug%'`
+    );
+    if (spent[0].y >= DRAMA_DEBUG_BUDGET_YEN) {
+      return res.status(403).json({ error: `デバッグ予算 (¥${DRAMA_DEBUG_BUDGET_YEN}) を使い切りました`, spentYen: spent[0].y });
+    }
+    const b = req.body || {};
+    const result = await dramaProcessChat(p, {
+      projectId: req.params.id,
+      episodeId: b.episodeId || null,
+      message: String(b.message || ""),
+      imageUrls: Array.isArray(b.imageUrls) ? b.imageUrls.slice(0, 2) : [],
+      quotedMessageId: b.quotedMessageId || null,
+      userMessageId: 9007199254740991,
+      assistantMessageId: null,
+      debug: { withImages: !!b.withImages },
+    });
+    const { rows: spentAfter } = await p.query(
+      `SELECT COALESCE(SUM(cost_yen),0)::float AS y FROM drama_api_usage WHERE kind LIKE 'debug%'`
+    );
+    res.json({ ...result, debugBudget: { spentYen: spentAfter[0].y, capYen: DRAMA_DEBUG_BUDGET_YEN } });
+  } catch (err) {
+    console.error("[drama] debug-chat", err);
+    res.status(err.status || 500).json({ error: err.message });
+  }
+});
+
 // チャット配線の dry-run (公開・read-only・Gemini 課金なし)。
 // 「モデルに実際に何が渡るか」(画像枚数・基準画像・引用・メモ等) を返す。
 // Claude Code が本番の配線をプッシュ後に検証する用。DB への書き込みは一切しない。
@@ -8864,7 +8902,10 @@ async function dramaExecuteActions(p, projectId, actions, ctx = {}) {
         );
         applied.push("プロジェクト設定を更新");
       } else if (a.action === "update_notes") {
-        await p.query(`UPDATE drama_projects SET ai_notes=$1, updated_at=now() WHERE id=$2`, [strOr(a.notes, 4000) || "", projectId]);
+        // AI がヘッダー行 (「制作メモ (…):」) ごと書き込みがちで、システムプロンプト側の
+        // 見出しと二重になるため保存時に剥がす (本番の配線実測で発覚)
+        const notes = (strOr(a.notes, 4000) || "").replace(/^制作メモ[^\n]*:\s*\n?/, "").trim();
+        await p.query(`UPDATE drama_projects SET ai_notes=$1, updated_at=now() WHERE id=$2`, [notes, projectId]);
         applied.push("制作メモを更新");
       } else if (a.action === "create_character" && a.name) {
         await p.query(
@@ -9047,7 +9088,12 @@ async function dramaFetchImagePartsSafe(imageUrls, max) {
 
 // チャット処理の本体。同期ルートと Cloud Tasks ワーカーの両方から使う。
 // 処理結果は assistantMessageId の行に書き込む (status: pending → done)。
-async function dramaProcessChat(p, { projectId, episodeId, message, imageUrls = [], quotedMessageId, userMessageId, assistantMessageId, dryRun = false }) {
+// debug: { withImages: bool } を渡すと「本番同等の Gemini 呼び出しをするが、履歴に
+// 書き込まず ACTIONS も実行しない」挙動テストモードになる (課金 kind は debug_ 接頭)
+async function dramaProcessChat(p, { projectId, episodeId, message, imageUrls = [], quotedMessageId, userMessageId, assistantMessageId, dryRun = false, debug = null }) {
+  const K = debug ? "debug_" : ""; // usage 記録の kind 接頭辞
+  const timings = {};
+  const t0 = Date.now();
   const { rows: projRows } = await p.query(
     `SELECT id, title, author, style_guide AS "styleGuide", world_setting AS "worldSetting",
             source_text AS "sourceText", ai_notes AS "aiNotes", style_ref_images AS "styleRefImages"
@@ -9148,18 +9194,25 @@ async function dramaProcessChat(p, { projectId, episodeId, message, imageUrls = 
     };
   }
 
-  let reply = await dramaChatOnce(dramaTrackedGemini(projectId, "chat"), systemPrompt, history, message || "(画像を確認して)", imageParts, historyImageParts, quoted);
+  timings.contextMs = Date.now() - t0;
+  const tChat = Date.now();
+  let reply = await dramaChatOnce(dramaTrackedGemini(projectId, K + "chat"), systemPrompt, history, message || "(画像を確認して)", imageParts, historyImageParts, quoted);
+  timings.chatMs = Date.now() - tChat;
+  const tImages = Date.now();
 
   // [画像生成: プロンプト] マーカーを検出したら実際に画像を作って返す (最大2枚)。
   // 生成後に AI 自身が意図どおりか審査し、NG なら修正プロンプトで作り直す (最大2回まで)。
   const generatedImages = [];
   // [画像生成: ...] = 新規生成 / [画像編集: ...] = 直前の画像 (引用 > 添付 > 会話の最後の画像) を編集
-  const markers = [...reply.matchAll(/\[画像(生成|編集):\s*([\s\S]*?)\]/g)].slice(0, 2);
+  let markers = [...reply.matchAll(/\[画像(生成|編集):\s*([\s\S]*?)\]/g)].slice(0, 2);
+  const markerInfo = markers.map((m) => ({ mode: m[1], prompt: m[2].trim().slice(0, 300) }));
+  if (debug && !debug.withImages) markers = []; // debug で画像不要なら生成をスキップ (マーカー情報は返す)
   // 参照画像 (絵柄を寄せる): 作画基準画像 → 今回の添付 → 名前が一致する資料/キャラ参照 (最大4枚)
   let styleRefParts = [];
   if (markers.length) {
     styleRefParts = await dramaFetchImagePartsSafe(projRows[0].styleRefImages || [], 2);
   }
+  const imageRuns = []; // debug 用: 各マーカーの生成過程 (参照枚数・作り直し回数)
   for (const mk of markers) {
     try {
       const isEdit = mk[1] === "編集";
@@ -9208,11 +9261,11 @@ async function dramaProcessChat(p, { projectId, episodeId, message, imageUrls = 
         } else {
           img = await dramaGenerateImage(imgPrompt, refParts.slice(0, 4));
         }
-        dramaRecordUsage({ projectId, provider: "gemini", kind: "chat_image", model: DRAMA_GEMINI_IMAGE_MODEL, costYen: DRAMA_GEMINI_IMAGE_YEN });
+        dramaRecordUsage({ projectId, provider: "gemini", kind: K + "chat_image", model: DRAMA_GEMINI_IMAGE_MODEL, costYen: DRAMA_GEMINI_IMAGE_YEN });
         attempts++;
         if (attempts > MAX_REMAKES) break;
         try {
-          const review = await dramaReviewImage(dramaTrackedGemini(projectId, "image_review"), {
+          const review = await dramaReviewImage(dramaTrackedGemini(projectId, K + "image_review"), {
             prompt: imgPrompt, styleGuide: projRows[0].styleGuide,
             imageBase64: img.data, mimeType: img.mimeType,
             styleRefParts,
@@ -9226,6 +9279,7 @@ async function dramaProcessChat(p, { projectId, episodeId, message, imageUrls = 
         }
       }
       if (attempts > 1) reply += `\n(画像を自己チェックして ${attempts - 1} 回作り直しました)`;
+      imageRuns.push({ mode: isEdit ? "編集" : "生成", refImagesUsed: refParts.length, attempts, editBaseFound: !isEdit || editBaseParts.length > 0 });
       if (storage && RECEIPTS_BUCKET) {
         const ext = img.mimeType.includes("jpeg") ? "jpg" : "png";
         const key = `drama/chat/${projectId}/${Date.now()}_${generatedImages.length}.${ext}`;
@@ -9243,8 +9297,12 @@ async function dramaProcessChat(p, { projectId, episodeId, message, imageUrls = 
   }
   if (markers.length) reply = reply.replace(/\[画像(生成|編集):\s*[\s\S]*?\]/g, "").trim();
 
-  // <<<ACTIONS [...] ACTIONS>>> ブロック = AI による設定の CRUD。実行して結果を通知
+  timings.imagesMs = Date.now() - tImages;
+
+  // <<<ACTIONS [...] ACTIONS>>> ブロック = AI による設定の CRUD。実行して結果を通知。
+  // debug モードでは解析だけして実行しない (本物のデータを書き換えないため)
   let applied = [];
+  let actionsParsed = null;
   const actionsMatch = reply.match(/<<<ACTIONS([\s\S]*?)ACTIONS>>>/);
   if (actionsMatch) {
     reply = reply.replace(/<<<ACTIONS[\s\S]*?ACTIONS>>>/g, "").trim();
@@ -9254,16 +9312,29 @@ async function dramaProcessChat(p, { projectId, episodeId, message, imageUrls = 
       const e = raw.lastIndexOf("]");
       const jsonText = dramaEscapeCtrlInJsonStrings(raw.slice(s, e + 1)).replace(/,(\s*[}\]])/g, "$1");
       const actions = JSON.parse(jsonText);
-      applied = await dramaExecuteActions(p, projectId, actions, {
-        attachedImageUrls: imageUrls,
-        generatedImageUrls: generatedImages,
-        recentImageUrls: historyImageUrls,
-      });
-      if (applied.length) reply += `\n\n⚙ 実行: ${applied.join(" / ")}`;
+      actionsParsed = actions;
+      if (!debug) {
+        applied = await dramaExecuteActions(p, projectId, actions, {
+          attachedImageUrls: imageUrls,
+          generatedImageUrls: generatedImages,
+          recentImageUrls: historyImageUrls,
+        });
+        if (applied.length) reply += `\n\n⚙ 実行: ${applied.join(" / ")}`;
+      }
     } catch (e) {
       console.warn("[drama] actions parse failed:", e.message);
       reply += `\n(設定操作の解析に失敗: ${e.message.slice(0, 80)})`;
     }
+  }
+
+  if (debug) {
+    return {
+      reply, images: generatedImages, markers: markerInfo, imageRuns, actionsParsed,
+      timings, systemPromptChars: systemPrompt.length,
+      historyImagesSent: historyImageParts.length, currentImagesSent: imageParts.length,
+      quoted: { text: quoted.text, images: quoted.imageUrls.length },
+      styleRefImages: (projRows[0].styleRefImages || []).length,
+    };
   }
 
   await p.query(
