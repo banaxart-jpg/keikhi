@@ -101,6 +101,7 @@ textarea.field-input { min-height: 70px; resize: vertical; }
 
 /* チャット */
 .chat-sheet { display: flex; flex-direction: column; height: 60vh; }
+.chat-sheet.full { height: calc(100dvh - 150px); } /* 全画面時 (ハンドル+タイトル+padding 分を引く) */
 .chat-log { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; padding: 6px 2px 12px; }
 .msg { max-width: 84%; padding: 10px 14px; border-radius: 14px; font-size: 13px; line-height: 1.6; white-space: pre-wrap; word-break: break-word; }
 .msg.user { align-self: flex-end; background: linear-gradient(145deg, var(--accent2), var(--accent)); color: white; border-bottom-right-radius: 4px; }
@@ -588,9 +589,9 @@ const TEMPLATE = `
     </div>
   </template>
 
-  <!-- ───────── AI チャット ───────── -->
-  <bottom-sheet v-model="chatOpen" title="AI チャット">
-    <div class="chat-sheet">
+  <!-- ───────── AI チャット (ハンドル上スワイプで全画面) ───────── -->
+  <bottom-sheet v-model="chatOpen" title="AI チャット" expandable fullscreen-on-expand v-model:expanded="chatExpanded">
+    <div class="chat-sheet" :class="{ full: chatExpanded }">
       <div class="chat-log" ref="chatLogEl">
         <div v-if="chatMessages.length === 0" style="display:flex; flex-direction:column; gap:8px; padding:12px 4px;">
           <div class="card-sub">まずは方向性から。タップで聞けます:</div>
@@ -676,6 +677,7 @@ const App = {
     const exportErr = ref("");
 
     const chatOpen = ref(false);
+    const chatExpanded = ref(false);
     const chatMessages = ref([]);
     const chatInput = ref("");
     const chatSending = ref(false);
@@ -1260,6 +1262,7 @@ const App = {
     // ── チャット ──
     async function openChat(episodeId) {
       chatEpisodeId = episodeId || null;
+      chatExpanded.value = false; // 開くたびに通常サイズから
       chatOpen.value = true;
       try {
         const qs = chatEpisodeId ? `?episodeId=${chatEpisodeId}` : "";
@@ -1335,7 +1338,7 @@ const App = {
       composingCuts, composeCutsFn, storyboardingCutId, generateStoryboard,
       isAppearing, toggleAppearing, onKeyVisualPick,
       exporting, exportErr, exportEpisode,
-      chatOpen, chatMessages, chatInput, chatSending, chatLogEl, chatAttach, openChat, sendChat, onChatImagePick,
+      chatOpen, chatExpanded, chatMessages, chatInput, chatSending, chatLogEl, chatAttach, openChat, sendChat, onChatImagePick,
       chapters, chapterOpenId, chapterContent, aozoraUrl, importing, analyzing, analyzeProgress,
       setupAnalyzing, runSetupAnalysis, settingsEdit, settingsSaving, usage, openSettingsTab, saveSettings,
       openSourceTab, importSource, analyzeChapters, toggleChapter, isRegisteredCharacter,

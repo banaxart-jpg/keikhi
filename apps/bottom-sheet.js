@@ -29,8 +29,12 @@ const CSS = `
   box-shadow: -2px -10px 30px rgba(148,152,176,0.35);
   width: 100%; max-width: 600px; max-height: 88vh; overflow-y: auto;
   padding: 6px 18px calc(28px + env(safe-area-inset-bottom));
-  transform: translateY(100%); transition: transform 200ms cubic-bezier(.2,.8,.2,1); }
+  transform: translateY(100%);
+  transition: transform 200ms cubic-bezier(.2,.8,.2,1), max-height 200ms ease, border-radius 200ms ease; }
 .bs-modal.open .bs-sheet { transform: translateY(0); }
+/* fullscreenOnExpand: 上スワイプ展開で全画面化 (opt-in) */
+.bs-sheet.bs-full { height: 100dvh; max-height: 100dvh; border-radius: 0;
+  padding-top: calc(6px + env(safe-area-inset-top)); }
 /* grab area: handle + (あれば) title をまとめて掴める広い領域に。
    margin: 0 -18px で .bs-sheet の左右 padding を打ち消し、端まで掴める。 */
 .bs-grab { padding: 14px 18px 10px; margin: 0 -18px 8px; cursor: grab;
@@ -58,11 +62,14 @@ export const BottomSheet = {
     expanded: { type: Boolean, default: false },
     // 展開しきい値 (px、上方向の生の指移動量)。
     expandThreshold: { type: Number, default: 40 },
+    // true のとき、expanded で sheet 自体を全画面化する (チャット等の没入 UI 用)。
+    // kaimono の「展開で追加フォームを出す」用途は false のままで挙動不変。
+    fullscreenOnExpand: { type: Boolean, default: false },
   },
   emits: ["update:modelValue", "update:expanded"],
   template: `
     <div class="bs-modal" :class="{ open: modelValue }" @click="onBgClick">
-      <div class="bs-sheet" :style="sheetStyle" @click.stop>
+      <div class="bs-sheet" :class="{ 'bs-full': fullscreenOnExpand && expandable && expanded }" :style="sheetStyle" @click.stop>
         <div class="bs-grab"
              @pointerdown="onDown"
              @pointermove="onMove"
