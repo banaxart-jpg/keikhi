@@ -79,6 +79,31 @@ app.get("/api/version", (req, res) => {
   res.json({ version: APP_VERSION, buildId: BUILD_ID, startedAt: SERVER_STARTED_AT });
 });
 
+// チャット配線の dry-run (公開・read-only・Gemini 課金なし)。
+// 「モデルに実際に何が渡るか」(画像枚数・基準画像・引用・メモ等) を返す。
+// Claude Code が本番の配線をプッシュ後に検証する用。DB への書き込みは一切しない。
+app.get("/api/drama/inspect/:id/chat-wiring", async (req, res) => {
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  try {
+    await ensureSchema();
+    const wiring = await dramaProcessChat(p, {
+      projectId: req.params.id,
+      episodeId: req.query.episodeId || null,
+      message: String(req.query.message || "(配線確認)"),
+      imageUrls: [],
+      quotedMessageId: req.query.quotedMessageId || null,
+      userMessageId: 9007199254740991, // 全履歴を対象に (実メッセージは挿入しない)
+      assistantMessageId: null,
+      dryRun: true,
+    });
+    res.json(wiring);
+  } catch (err) {
+    console.error("[drama] chat-wiring", err);
+    res.status(err.status || 500).json({ error: err.message });
+  }
+});
+
 // auto-drama のデータ点検用 (Claude Code が curl で構造・粒度を確認する用の read-only JSON)。
 // 認証なしで公開する代わりに: 原文 (著作権切れ) と制作メタデータのみ。
 // チャットは件数だけ、参照画像は枚数だけ (URL は出さない)。
@@ -9022,7 +9047,7 @@ async function dramaFetchImagePartsSafe(imageUrls, max) {
 
 // チャット処理の本体。同期ルートと Cloud Tasks ワーカーの両方から使う。
 // 処理結果は assistantMessageId の行に書き込む (status: pending → done)。
-async function dramaProcessChat(p, { projectId, episodeId, message, imageUrls = [], quotedMessageId, userMessageId, assistantMessageId }) {
+async function dramaProcessChat(p, { projectId, episodeId, message, imageUrls = [], quotedMessageId, userMessageId, assistantMessageId, dryRun = false }) {
   const { rows: projRows } = await p.query(
     `SELECT id, title, author, style_guide AS "styleGuide", world_setting AS "worldSetting",
             source_text AS "sourceText", ai_notes AS "aiNotes", style_ref_images AS "styleRefImages"
@@ -9104,6 +9129,25 @@ async function dramaProcessChat(p, { projectId, episodeId, message, imageUrls = 
   }
 
   const imageParts = await dramaFetchImageParts(imageUrls);
+
+  // dryRun: Gemini を呼ばず「モデルに実際に何が渡るか」の配線を返す。
+  // プッシュ前の検証・本番の配線確認用 (参照画像の未配線みたいなバグを出荷前に潰す)。
+  if (dryRun) {
+    return {
+      dryRun: true,
+      systemPromptChars: systemPrompt.length,
+      systemPromptHead: systemPrompt.slice(0, 400),
+      historyMessages: history.length,
+      historyImagesSent: historyImageParts.length,
+      historyImageUrls,
+      currentImagesSent: imageParts.length,
+      quoted: { text: quoted.text, images: quoted.imageUrls.length },
+      styleRefImages: (projRows[0].styleRefImages || []).length,
+      assets: assets.map((a) => a.name),
+      aiNotesChars: (projRows[0].aiNotes || "").length,
+    };
+  }
+
   let reply = await dramaChatOnce(dramaTrackedGemini(projectId, "chat"), systemPrompt, history, message || "(画像を確認して)", imageParts, historyImageParts, quoted);
 
   // [画像生成: プロンプト] マーカーを検出したら実際に画像を作って返す (最大2枚)。
