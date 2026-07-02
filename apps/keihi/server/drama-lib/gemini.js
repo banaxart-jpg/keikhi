@@ -68,14 +68,24 @@ export function buildSystemPrompt({ project, characters, episode, cuts, missingI
   }
 
   // 原文全文 (上限内なら)。章見出し付きで並べて「章ごとに確認」できる形にする。
+  // 上限超過時は「先頭だけ」ではなく章ごとに比例配分で刈り込み、後半の章や結末も
+  // 文脈に残す (人間失格 74k 字で後半が丸ごと消えていた対策)。
   let sourceBlock = "";
   const total = chapters.reduce((s, ch) => s + (ch.content ? ch.content.length : 0), 0);
-  if (chapters.length && total > 0 && total <= SOURCE_TEXT_CAP) {
-    const body = chapters
-      .filter((ch) => ch.content)
-      .map((ch) => `【第${ch.number}章 ${ch.title}】\n${ch.content}`)
-      .join("\n\n");
-    sourceBlock = `\n原作本文 (全${total}字):\n---\n${body}\n---\n`;
+  if (chapters.length && total > 0) {
+    const withContent = chapters.filter((ch) => ch.content);
+    let body;
+    if (total <= SOURCE_TEXT_CAP) {
+      body = withContent.map((ch) => `【第${ch.number}章 ${ch.title}】\n${ch.content}`).join("\n\n");
+      sourceBlock = `\n原作本文 (全${total}字):\n---\n${body}\n---\n`;
+    } else {
+      body = withContent.map((ch) => {
+        const budget = Math.max(400, Math.floor(ch.content.length * SOURCE_TEXT_CAP / total));
+        const trimmed = ch.content.length > budget ? ch.content.slice(0, budget) + "\n…(この章の以降は要約参照)" : ch.content;
+        return `【第${ch.number}章 ${ch.title}】\n${trimmed}`;
+      }).join("\n\n");
+      sourceBlock = `\n原作本文 (全${total}字を章ごとに比例配分で抜粋。各章の全文が必要な時は章番号を挙げてユーザーに原作タブを案内):\n---\n${body}\n---\n`;
+    }
   } else if (project.sourceText) {
     const t = project.sourceText.slice(0, SOURCE_TEXT_CAP);
     sourceBlock = `\n原作本文 (先頭${t.length}字${project.sourceText.length > SOURCE_TEXT_CAP ? "、以降省略" : ""}):\n---\n${t}\n---\n`;
