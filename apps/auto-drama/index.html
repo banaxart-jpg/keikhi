@@ -980,6 +980,36 @@ const App = {
       } catch (_) { chapters.value = []; }
     }
 
+    // チャットの AI が CRUD を実行した後などに画面データを追従させる。
+    // 開いている編集フォーム (キャラ/場所/設定/脚本) はスナップショットなので、
+    // サーバー側が変わった時だけ再スナップショット (入力途中を不用意に消さない)
+    async function refreshProjectData() {
+      if (!currentProject.value) return;
+      try {
+        const proj = await apiFetch(`/api/drama/projects/${currentProject.value.id}`);
+        currentProject.value = proj;
+        if (charOpenId.value) {
+          const c = (proj.characters || []).find((x) => x.id === charOpenId.value);
+          if (!c) charOpenId.value = null;                       // AI が削除した
+          else if (charSnapshotOf(c) !== charEditBase) snapshotChar(c); // AI が更新した
+        }
+        if (locOpenId.value) {
+          const l = (proj.locations || []).find((x) => x.id === locOpenId.value);
+          if (!l) locOpenId.value = null;
+          else if (locSnapshotOf(l) !== locEditBase) snapshotLoc(l);
+        }
+        if (projectTab.value === "settings" && settingsSnapshotOf(proj) !== settingsEditBase) {
+          snapshotSettings(proj);
+        }
+        if (view.value === "episode" && currentEpisode.value) {
+          const prevScript = currentEpisode.value.script || "";
+          await refreshEpisode();
+          // 脚本エディタはユーザーが書き換え中でなければ追従
+          if (scriptEdit.value === prevScript) scriptEdit.value = currentEpisode.value.script || "";
+        }
+      } catch (_) { /* 次の機会に追従 */ }
+    }
+
     function backToProjects() { view.value = "projects"; currentProject.value = null; loadProjects(); }
 
     const deletingProjectId = ref(null);
@@ -1183,13 +1213,19 @@ const App = {
     }
 
     // ── 設定タブ ──
+    const settingsSnapshotOf = (p) => JSON.stringify([p.worldSetting, p.styleGuide, p.aiNotes]);
+    let settingsEditBase = "";
+    function snapshotSettings(p) {
+      settingsEditBase = settingsSnapshotOf(p);
+      settingsEdit.value = {
+        worldSetting: p.worldSetting || "",
+        styleGuide: p.styleGuide || "",
+        aiNotes: p.aiNotes || "",
+      };
+    }
     function openSettingsTab() {
       projectTab.value = "settings";
-      settingsEdit.value = {
-        worldSetting: currentProject.value.worldSetting || "",
-        styleGuide: currentProject.value.styleGuide || "",
-        aiNotes: currentProject.value.aiNotes || "",
-      };
+      snapshotSettings(currentProject.value);
       usage.value = null;
       apiFetch(`/api/drama/projects/${currentProject.value.id}/usage`)
         .then((u) => { usage.value = u; })
@@ -1206,6 +1242,7 @@ const App = {
         currentProject.value.worldSetting = settingsEdit.value.worldSetting;
         currentProject.value.styleGuide = settingsEdit.value.styleGuide;
         currentProject.value.aiNotes = settingsEdit.value.aiNotes;
+        settingsEditBase = settingsSnapshotOf(currentProject.value);
       } catch (e) { err.value = e.message; } finally { settingsSaving.value = false; }
     }
     async function toggleChapter(ch) {
@@ -1255,9 +1292,13 @@ const App = {
     }
 
     // ── キャラクター ──
-    function toggleChar(c) {
-      if (charOpenId.value === c.id) { charOpenId.value = null; return; }
-      charOpenId.value = c.id;
+    // 編集フォームはスナップショット。チャットの AI が裏で CRUD した時に追従できるよう
+    // 開いた時点のサーバー状態 (base) を控えて、base が変わったら再スナップショットする
+    // (base が同じ = 変更はユーザーの入力途中だけ → 温存)
+    const charSnapshotOf = (c) => JSON.stringify([c.name, c.reading, c.description, c.appearancePrompt, c.status, c.identityTokens, c.referenceImages]);
+    let charEditBase = "";
+    function snapshotChar(c) {
+      charEditBase = charSnapshotOf(c);
       charEdit.value = {
         name: c.name, reading: c.reading || "", description: c.description || "",
         appearancePrompt: c.appearancePrompt || "", status: c.status,
@@ -1265,6 +1306,11 @@ const App = {
         // 元データと配列を共有すると × で外した時に保存前から一覧側まで変わってしまう
         referenceImages: [...(c.referenceImages || [])],
       };
+    }
+    function toggleChar(c) {
+      if (charOpenId.value === c.id) { charOpenId.value = null; return; }
+      charOpenId.value = c.id;
+      snapshotChar(c);
     }
     async function createCharacter() {
       creating.value = true;
@@ -1309,15 +1355,21 @@ const App = {
     }
 
     // ── 場所 ──
-    function toggleLoc(l) {
-      if (locOpenId.value === l.id) { locOpenId.value = null; return; }
-      locOpenId.value = l.id;
+    const locSnapshotOf = (l) => JSON.stringify([l.name, l.description, l.appearancePrompt, l.status, l.identityTokens, l.referenceImages]);
+    let locEditBase = "";
+    function snapshotLoc(l) {
+      locEditBase = locSnapshotOf(l);
       locEdit.value = {
         name: l.name, description: l.description || "",
         appearancePrompt: l.appearancePrompt || "", status: l.status,
         identityTokensText: (l.identityTokens || []).join("、"),
         referenceImages: [...(l.referenceImages || [])],
       };
+    }
+    function toggleLoc(l) {
+      if (locOpenId.value === l.id) { locOpenId.value = null; return; }
+      locOpenId.value = l.id;
+      snapshotLoc(l);
     }
     async function createLocation() {
       creating.value = true;
@@ -1576,30 +1628,39 @@ const App = {
       } catch (e) { err.value = e.message; }
     }
 
-    // pending の assistant 行が done になるまでポーリング (2.5秒間隔・最大3分)
-    async function pollForReply(pendingId) {
-      const startedAt = Date.now();
-      const qs = chatEpisodeId ? `?episodeId=${chatEpisodeId}` : "";
-      while (Date.now() - startedAt < 180000) {
-        await new Promise((r) => setTimeout(r, 2500));
-        if (!chatOpen.value) return; // シートを閉じたら中断 (開き直しで再開する)
-        try {
-          const msgs = await apiFetch(`/api/drama/projects/${currentProject.value.id}/chat${qs}`);
-          const row = msgs.find((m) => String(m.id) === String(pendingId));
-          if (row && row.status !== "pending") {
-            chatMessages.value = msgs.filter((m) => m.status !== "pending");
-            nextTick(scrollChatToBottom);
-            // 設定操作が実行された可能性があるので画面データを追従
-            apiFetch(`/api/drama/projects/${currentProject.value.id}`)
-              .then((proj) => { currentProject.value = proj; }).catch(() => {});
-            if (view.value === "episode" && currentEpisode.value) {
-              refreshEpisode().then(() => { scriptEdit.value = currentEpisode.value.script || ""; }).catch(() => {});
+    // pending の assistant 行が done になるまでポーリング (2.5秒間隔・最大3分)。
+    // シートを閉じても完走させる (AI の CRUD を画面に追従させるため)。
+    // 同じ pending は 1 本だけ追いかけ、開き直した時は同じ Promise を待つ
+    const activePolls = new Map();
+    function pollForReply(pendingId) {
+      const key = String(pendingId);
+      if (activePolls.has(key)) return activePolls.get(key);
+      const pr = (async () => {
+        const startedAt = Date.now();
+        const projectId = currentProject.value.id;
+        const qs = chatEpisodeId ? `?episodeId=${chatEpisodeId}` : "";
+        while (Date.now() - startedAt < 180000) {
+          await new Promise((r) => setTimeout(r, 2500));
+          try {
+            const msgs = await apiFetch(`/api/drama/projects/${projectId}/chat${qs}`);
+            const row = msgs.find((m) => String(m.id) === String(pendingId));
+            if (row && row.status !== "pending") {
+              if (chatOpen.value) {
+                chatMessages.value = msgs.filter((m) => m.status !== "pending");
+                nextTick(scrollChatToBottom);
+              }
+              // 設定操作が実行された可能性があるので画面データを追従
+              refreshProjectData();
+              return;
             }
-            return;
-          }
-        } catch (_) { /* 次の周回で再試行 */ }
-      }
-      chatMessages.value.push({ role: "assistant", content: "(まだ処理中です。しばらくしてチャットを開き直すと反映されています)" });
+          } catch (_) { /* 次の周回で再試行 */ }
+        }
+        if (chatOpen.value) {
+          chatMessages.value.push({ role: "assistant", content: "(まだ処理中です。しばらくしてチャットを開き直すと反映されています)" });
+        }
+      })().finally(() => activePolls.delete(key));
+      activePolls.set(key, pr);
+      return pr;
     }
     function scrollChatToBottom() {
       if (chatLogEl.value) chatLogEl.value.scrollTop = chatLogEl.value.scrollHeight;
@@ -1648,14 +1709,7 @@ const App = {
         chatMessages.value.push({ role: "assistant", content: res.reply, images: res.images || [] });
         nextTick(scrollChatToBottom);
         // AI が設定を書き換えた場合、画面のデータも追従させる (ビューは動かさない)
-        if ((res.applied || []).length && currentProject.value) {
-          apiFetch(`/api/drama/projects/${currentProject.value.id}`)
-            .then((proj) => { currentProject.value = proj; })
-            .catch(() => {});
-          if (view.value === "episode" && currentEpisode.value) {
-            refreshEpisode().then(() => { scriptEdit.value = currentEpisode.value.script || ""; }).catch(() => {});
-          }
-        }
+        if ((res.applied || []).length) refreshProjectData();
       } catch (e) {
         chatMessages.value.push({ role: "assistant", content: "(エラー: " + e.message + ")" });
       } finally { chatSending.value = false; }
