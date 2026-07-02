@@ -73,6 +73,10 @@ textarea.field-input { min-height: 70px; resize: vertical; }
 
 .thumb-row { display: flex; gap: 8px; flex-wrap: wrap; }
 .thumb { width: 64px; height: 64px; border-radius: 10px; object-fit: cover; background: var(--bg2); box-shadow: inset 2px 2px 5px var(--sd); }
+.thumb-wrap { position: relative; }
+.thumb-wrap .thumb { display: block; }
+.thumb-del { position: absolute; top: -6px; right: -6px; width: 22px; height: 22px; border-radius: 50%; border: none; padding: 0; background: var(--danger); color: #fff; display: flex; align-items: center; justify-content: center; cursor: pointer; box-shadow: 2px 2px 6px var(--sd); }
+.thumb-del .icon { font-size: 14px; }
 .filepick { display: inline-flex; align-items: center; gap: 6px; padding: 9px 14px; border-radius: 10px; background: var(--bg); box-shadow: 3px 3px 8px var(--sd), -2px -2px 6px var(--sl); cursor: pointer; font-size: 12px; font-weight: 700; color: var(--text2); }
 .filepick input { display: none; }
 
@@ -350,9 +354,12 @@ const TEMPLATE = `
           <div><div class="field-label">識別子 (背景の統一要素・読点区切り)</div><input class="field-input" v-model="locEdit.identityTokensText" placeholder="例: 朱塗りの門、篝火、砂利の前庭"></div>
           <div><div class="field-label">背景画像生成用プロンプト</div><textarea class="field-input" v-model="locEdit.appearancePrompt"></textarea></div>
           <div>
-            <div class="field-label">参照画像</div>
+            <div class="field-label">参照画像 (×で外して保存)</div>
             <div class="thumb-row">
-              <img v-for="(img,i) in locEdit.referenceImages" :key="i" :src="img.url" class="thumb zoomable" @click="openViewer(locEdit.referenceImages.map(x => x.url), i)">
+              <div class="thumb-wrap" v-for="(img,i) in locEdit.referenceImages" :key="i">
+                <img :src="img.url" class="thumb zoomable" @click="openViewer(locEdit.referenceImages.map(x => x.url), i)">
+                <button type="button" class="thumb-del" @click.stop="locEdit.referenceImages.splice(i,1)" title="この画像を外す"><span class="icon">close</span></button>
+              </div>
               <label class="filepick"><input type="file" accept="image/*" @change="e => onLocImagePick(e, l)"><span class="icon">add_photo_alternate</span>追加</label>
             </div>
           </div>
@@ -489,9 +496,12 @@ const TEMPLATE = `
           <div><div class="field-label">識別子 (identityTokens・読点区切り)</div><input class="field-input" v-model="charEdit.identityTokensText" placeholder="例: 渦巻く長髪、十字架の護符、ボロ法衣"></div>
           <div><div class="field-label">画像生成用プロンプト</div><textarea class="field-input" v-model="charEdit.appearancePrompt"></textarea></div>
           <div>
-            <div class="field-label">参照画像</div>
+            <div class="field-label">参照画像 (×で外して保存)</div>
             <div class="thumb-row">
-              <img v-for="(img,i) in charEdit.referenceImages" :key="i" :src="img.url" class="thumb zoomable" @click="openViewer(charEdit.referenceImages.map(x => x.url), i)">
+              <div class="thumb-wrap" v-for="(img,i) in charEdit.referenceImages" :key="i">
+                <img :src="img.url" class="thumb zoomable" @click="openViewer(charEdit.referenceImages.map(x => x.url), i)">
+                <button type="button" class="thumb-del" @click.stop="charEdit.referenceImages.splice(i,1)" title="この画像を外す"><span class="icon">close</span></button>
+              </div>
               <label class="filepick"><input type="file" accept="image/*" @change="e => onCharImagePick(e, c)"><span class="icon">add_photo_alternate</span>追加</label>
             </div>
           </div>
@@ -1252,7 +1262,8 @@ const App = {
         name: c.name, reading: c.reading || "", description: c.description || "",
         appearancePrompt: c.appearancePrompt || "", status: c.status,
         identityTokensText: (c.identityTokens || []).join("、"),
-        referenceImages: c.referenceImages || [],
+        // 元データと配列を共有すると × で外した時に保存前から一覧側まで変わってしまう
+        referenceImages: [...(c.referenceImages || [])],
       };
     }
     async function createCharacter() {
@@ -1305,7 +1316,7 @@ const App = {
         name: l.name, description: l.description || "",
         appearancePrompt: l.appearancePrompt || "", status: l.status,
         identityTokensText: (l.identityTokens || []).join("、"),
-        referenceImages: l.referenceImages || [],
+        referenceImages: [...(l.referenceImages || [])],
       };
     }
     async function createLocation() {

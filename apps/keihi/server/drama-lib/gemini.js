@@ -170,8 +170,10 @@ ${missingBlock}
   {"action":"delete_episode","number":5},
   {"action":"generate_script","episodeNumber":5},
   {"action":"generate_cuts","episodeNumber":5},
-  {"action":"confirm_character","name":"キャラ名"},
+  {"action":"confirm_character","name":"キャラ名","source":"quoted"},
   {"action":"confirm_location","name":"場所名"},
+  {"action":"remove_character_image","name":"キャラ名","index":1},
+  {"action":"remove_location_image","name":"場所名","index":"all"},
   {"action":"set_style_reference"},
   {"action":"clear_style_reference"},
   {"action":"save_asset","name":"人物対比図","note":"全キャラのサイズ確認用"},
@@ -193,9 +195,17 @@ ACTIONS>>>
   ユーザーが見本や資料 (対比図・小物・美術ボード等) を添付してきたら保存を提案し、
   同意があれば (または保存の意図が明確なら) 実行する。
 - confirm_character / confirm_location: ユーザーが「これで確定」と言ったら実行する。
-  対象の画像 (この返答で生成した画像 > 今回の添付 > 直近の会話の画像 の優先順) が
-  そのキャラ/場所の参照画像として保存され、status が確定になる。
+  どの画像を確定するかは "source" で明示する:
+  "generated" = この返答で生成した画像 / "quoted" = ユーザーが引用したメッセージの画像 /
+  "attached" = 今回の添付 / "recent" = 直近の会話の最後の画像。
+  引用付きで「これ確定して」と言われたら必ず "source":"quoted"。
+  省略時は 生成 > 引用 > 添付 > 直近 の順で自動選択される。
+  その画像がキャラ/場所の参照画像に追加され、status が確定になる。
   確定の解除やステータス変更は update_character / update_location の status で行う。
+- remove_character_image / remove_location_image: 参照画像を外す。index は画面の並び順で
+  1 始まり。"index":"all" で全部外す。間違って確定した画像を消したい時に使う。
+  何枚あるかは前提情報の「参照画像 N枚」で分かる。どれが何枚目か不明なら
+  ユーザーに「左から何枚目?」と聞いてから実行する。
 
 会話の作法 (重要):
 - 画像生成 ([画像生成:] マーカー) はユーザーが明示的に画像を求めた時だけ。

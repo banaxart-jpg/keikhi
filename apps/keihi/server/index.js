@@ -9086,14 +9086,31 @@ async function dramaExecuteActions(p, projectId, actions, ctx = {}) {
         const { rowCount } = await p.query(`DELETE FROM drama_episodes WHERE project_id=$1 AND number=$2`, [projectId, Number(a.number)]);
         applied.push(rowCount ? `第${a.number}話を削除` : `第${a.number}話が見つからず削除失敗`);
       } else if ((a.action === "confirm_character" || a.action === "confirm_location") && a.name) {
-        // 「これで確定」: 対象の画像 (優先: この返答で生成 > 今回の添付 > 直近の会話の画像) を
-        // 参照画像として保存し、status を confirmed にする
+        // 「これで確定」: 対象の画像を参照画像として保存し、status を confirmed にする。
+        // AI が "source" で対象を明示できる (引用画像を確定したい時に「最新の画像」を
+        // 拾ってしまう事故の防止)。省略時は 生成 > 引用 > 添付 > 直近の会話 の優先順。
         const table = a.action === "confirm_character" ? "drama_characters" : "drama_locations";
         const label = a.action === "confirm_character" ? "キャラ" : "場所";
         const gen = ctx.generatedImageUrls || [];
         const recent = ctx.recentImageUrls || [];
-        const url = gen[gen.length - 1] || attached[0] || recent[recent.length - 1];
+        const quotedUrls = ctx.quotedImageUrls || [];
+        const bySource = {
+          generated: gen[gen.length - 1],
+          quoted: quotedUrls[quotedUrls.length - 1],
+          attached: attached[0],
+          recent: recent[recent.length - 1],
+        };
+        const source = Object.hasOwn(bySource, a.source || "") ? a.source : null;
+        if (source && !bySource[source]) {
+          // source を明示したのに該当画像が無い → 別の画像を黙って拾わず失敗にする
+          applied.push(`${label}「${a.name}」の確定失敗 (${source} の画像が見つかりません)`);
+          continue;
+        }
+        const chosen = source
+          || ["generated", "quoted", "attached", "recent"].find((k) => bySource[k]);
+        const url = chosen && bySource[chosen];
         if (!url) { applied.push(`${label}「${a.name}」の確定失敗 (対象の画像が見つかりません)`); continue; }
+        const srcLabel = { generated: "生成画像", quoted: "引用画像", attached: "添付画像", recent: "直近の画像" }[chosen];
         const { rows: found } = await p.query(
           `SELECT id, reference_images AS "referenceImages" FROM ${table} WHERE project_id=$1 AND name=$2`,
           [projectId, strOr(a.name, 60)]
@@ -9104,7 +9121,31 @@ async function dramaExecuteActions(p, projectId, actions, ctx = {}) {
           `UPDATE ${table} SET reference_images=$1, status='confirmed', updated_at=now() WHERE id=$2`,
           [JSON.stringify(refs), found[0].id]
         );
-        applied.push(`${label}「${a.name}」を確定 (参照画像 ${refs.length}枚)`);
+        applied.push(`${label}「${a.name}」を確定 (${srcLabel}を追加・参照画像 ${refs.length}枚)`);
+      } else if ((a.action === "remove_character_image" || a.action === "remove_location_image") && a.name) {
+        // 間違って確定した参照画像を外す。index は UI の並び順 (1 始まり)、"all" で全部
+        const table = a.action === "remove_character_image" ? "drama_characters" : "drama_locations";
+        const label = a.action === "remove_character_image" ? "キャラ" : "場所";
+        const { rows: found } = await p.query(
+          `SELECT id, reference_images AS "referenceImages" FROM ${table} WHERE project_id=$1 AND name=$2`,
+          [projectId, strOr(a.name, 60)]
+        );
+        if (!found.length) { applied.push(`${label}「${a.name}」が見つからず画像削除失敗`); continue; }
+        const refs = found[0].referenceImages || [];
+        let next;
+        if (a.index === "all") {
+          next = [];
+        } else {
+          const idx = Number(a.index);
+          if (!Number.isInteger(idx) || idx < 1 || idx > refs.length) {
+            applied.push(`${label}「${a.name}」の参照画像 ${a.index} 枚目が見つかりません (現在 ${refs.length}枚・1始まり)`);
+            continue;
+          }
+          next = refs.filter((_, i) => i !== idx - 1);
+        }
+        await p.query(`UPDATE ${table} SET reference_images=$1, updated_at=now() WHERE id=$2`,
+          [JSON.stringify(next), found[0].id]);
+        applied.push(`${label}「${a.name}」の参照画像を削除 (残り ${next.length}枚)`);
       } else if (a.action === "set_style_reference") {
         if (!attached.length) { applied.push("基準画像の登録失敗 (このメッセージに画像が添付されていません)"); continue; }
         await p.query(`UPDATE drama_projects SET style_ref_images=$1, updated_at=now() WHERE id=$2`,
@@ -9415,6 +9456,7 @@ async function dramaProcessChat(p, { projectId, episodeId, message, imageUrls = 
           attachedImageUrls: imageUrls,
           generatedImageUrls: generatedImages,
           recentImageUrls: historyImageUrls,
+          quotedImageUrls: quoted.imageUrls,
         });
         if (applied.length) reply += `\n\n⚙ 実行: ${applied.join(" / ")}`;
       }
