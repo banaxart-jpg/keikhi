@@ -142,6 +142,11 @@ ${missingBlock}
   [画像編集: 変更指示] を使う。編集対象はシステムが「引用画像 > 今回の添付 >
   会話の最後の画像」の順で自動解決する。ゼロから作り直すより編集の方が
   デザインが保たれるので、既存画像への修正は必ずこちら。
+- 過去の画像 (ユーザーが送った / あなたが生成した) を「もう一度見せて」「あの画像出して」
+  「〇〇の画像わかる?」と言われたら、再生成せず [画像再掲: 番号] と書く。番号は添付の
+  「(会話の画像k)」ラベルの k。その画像がどれか判別できたら迷わず再掲する。
+  添付の中に該当が見当たらない時は正直にそう言い、その画像の引用か再添付を頼む
+  (それらしい別画像を勝手に再掲しない)。
 
 キャラクター登録を手伝うとき:
 - 原作本文が与えられていればまずそれを根拠にする。青空文庫等で公開されている作品は
@@ -234,10 +239,12 @@ export async function chatOnce(callGemini, systemPrompt, history, userMessage, i
     ? `\n(ユーザーは過去のメッセージを引用している${quoted.text ? `: 「${quoted.text}」` : ""}${quotedParts.length ? `。引用メッセージの画像 ${quotedParts.length} 枚を添付の最初に付けてある — 今回の指示はこの画像が対象。画像生成する場合もこの画像が最優先の参照になる` : ""})`
     : "";
   const imgNote = (historyImageParts.length || imageParts.length)
-    ? `\n(添付画像の並び: ${quotedParts.length ? `引用 ${quotedParts.length} 枚 → ` : ""}直近の会話の画像 ${historyImageParts.length} 枚 (古い順) → 今回の添付 ${imageParts.length} 枚)`
+    ? `\n(添付画像の並び: ${quotedParts.length ? `引用 ${quotedParts.length} 枚 → ` : ""}直近の会話の画像 ${historyImageParts.length} 枚 (古い順・各画像の直前に「(会話の画像k)」ラベル付き。[画像再掲: k] でその画像をそのまま返信に貼れる) → 今回の添付 ${imageParts.length} 枚)`
     : "";
   const prompt = `${systemPrompt}\n\n${historyText ? `これまでの会話:\n${historyText}\n\n` : ""}ユーザー: ${userMessage}${quotedNote}${imgNote}\n\nアシスタント:`;
-  const allParts = [...quotedParts, ...historyImageParts, ...imageParts];
+  // 履歴画像は番号ラベルを直前に挟む ([画像再掲: k] の k がどれを指すか一意にするため)
+  const labeledHistory = historyImageParts.flatMap((p, i) => [{ text: `(会話の画像${i + 1})` }, p]);
+  const allParts = [...quotedParts, ...labeledHistory, ...imageParts];
   const content = allParts.length ? [prompt, ...allParts] : prompt;
   const { result } = await callGemini(content, {
     primaryModel: "gemini-2.5-flash",

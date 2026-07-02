@@ -9305,10 +9305,25 @@ async function dramaProcessChat(p, { projectId, episodeId, message, imageUrls = 
   );
   history.reverse();
 
-  // 直近の会話に出た画像 (ユーザー添付 + AI 生成) を古い順に最大 4 枚、AI に見せる。
-  // 「前の画像とどう違う?」「前のここを直して」が成立するようにする
-  const historyImageUrls = history.flatMap((h) => h.images || []).slice(-4);
-  const historyImageParts = await dramaFetchImagePartsSafe(historyImageUrls, 4);
+  // 直近の会話に出た画像 (ユーザー添付 + AI 生成) を古い順に最大 8 枚、AI に見せる。
+  // 「前の画像とどう違う?」「前のここを直して」に加えて [画像再掲: k] で過去の画像を
+  // そのまま返信に貼れるよう、URL と parts の並びを揃える (fetch 失敗分は両方から落とす)。
+  // 新しい画像を優先しつつ合計 base64 ~12MB に抑える
+  const recentChatImageUrls = history.flatMap((h) => h.images || []).slice(-8);
+  const pickedHistory = [];
+  let histB64 = 0;
+  for (const url of [...recentChatImageUrls].reverse()) {
+    try {
+      const p = (await dramaFetchImageParts([url], 1))[0];
+      if (!p) continue;
+      if (histB64 + p.inlineData.data.length > 12_000_000) continue;
+      histB64 += p.inlineData.data.length;
+      pickedHistory.push({ url, part: p });
+    } catch (e) { console.warn("[drama] history image fetch skipped:", e.message); }
+  }
+  pickedHistory.reverse(); // 古い順に戻す (番号ラベルと ctx の「最後の画像」判定を揃える)
+  const historyImageUrls = pickedHistory.map((x) => x.url);
+  const historyImageParts = pickedHistory.map((x) => x.part);
 
   // 引用返信: 引用先のメッセージ本文 + 画像は「この画像の感じで」の最優先参照
   let quoted = { text: "", parts: [], imageUrls: [] };
@@ -9353,6 +9368,14 @@ async function dramaProcessChat(p, { projectId, episodeId, message, imageUrls = 
   // [画像生成: プロンプト] マーカーを検出したら実際に画像を作って返す (最大2枚)。
   // 生成後に AI 自身が意図どおりか審査し、NG なら修正プロンプトで作り直す (最大2回まで)。
   const generatedImages = [];
+  // [画像再掲: k] = 会話の画像 k をそのまま返信に貼る (再生成しない・無料・劣化なし)。
+  // 番号が範囲外ならマーカーを残す (それらしい別画像を勝手に出さないため)
+  reply = reply.replace(/\[画像再掲:\s*(?:会話の画像)?\s*(\d+)\s*\]/g, (m, k) => {
+    const url = historyImageUrls[Number(k) - 1];
+    if (!url) return m;
+    if (!generatedImages.includes(url)) generatedImages.push(url);
+    return "";
+  });
   // [画像生成: ...] = 新規生成 / [画像編集: ...] = 直前の画像 (引用 > 添付 > 会話の最後の画像) を編集
   let markers = [...reply.matchAll(/\[画像(生成|編集):\s*([\s\S]*?)\]/g)].slice(0, 2);
   const markerInfo = markers.map((m) => ({ mode: m[1], prompt: m[2].trim().slice(0, 300) }));
