@@ -9416,45 +9416,61 @@ async function dramaProcessChat(p, { projectId, episodeId, message, imageUrls = 
     return attachUrl(a?.url) ? "" : m;
   });
   // [画像検索: 検索語1 / 検索語2 ...] = web (Wikimedia Commons / Openverse) から
-  // 参考画像を探して出典付きで貼る。API キー不要・無料。1 返答 1 回まで
-  const runWebImageSearch = async (queries) => {
-    try {
-      const found = await dramaSearchWebImages(queries, 4);
-      if (found.length) {
-        for (const f of found) attachUrl(f.imageUrl);
-        reply += `\n\n画像検索「${queries[0]}」: ${found.length}件 (画像の並び順)\n` +
-          found.map((f, i) => `${i + 1}. ${(f.title || "無題").slice(0, 60)} — ${f.source}\n   ${f.pageUrl}`).join("\n");
-      } else {
-        reply += `\n\n(画像検索「${queries.join(" / ")}」: 見つかりませんでした。言い方を変えてもう一度どうぞ)`;
-      }
-    } catch (e) {
-      reply += `\n\n(画像検索に失敗: ${String(e.message).slice(0, 80)})`;
+  // 参考画像を探して出典付きで貼る。API キー不要・無料。1 返答 1 回まで。
+  // 実測で分かっているモデルの癖への対策を全部ここに集約:
+  //  - マーカーを書かず文章要約や [画像生成] で代用する → 依頼文から意図判定して検索
+  //  - 検索語を日本語で書いて 0 件 → 英語クエリを起こして再検索
+  const trySearch = async (queries) => {
+    try { return await dramaSearchWebImages(queries, 4); } catch (e) {
+      console.warn("[drama] web image search failed:", e.message);
+      return [];
     }
   };
-  const webSearchM = reply.match(/\[画像検索:\s*([\s\S]*?)\]/);
-  if (webSearchM) {
-    reply = reply.replace(/\[画像検索:\s*[\s\S]*?\]/g, "").trim();
-    await runWebImageSearch(webSearchM[1].split(/[/／]/).map((s) => s.trim().slice(0, 80)).filter(Boolean));
-  } else if (
-    // 保険: 「画像探して」系の依頼なのにモデルがマーカーを書かず、Google 検索の
-    // 文章要約や [画像生成] で代用してしまうことがある (両方実測)。その時は
-    // 返答内容から検索クエリを起こして web 画像検索も実行する
-    /(画像|写真).{0,15}(探|検索)|(探|検索).{0,15}(画像|写真)/.test(message || "") &&
-    !generatedImages.length
-  ) {
+  const appendSearchResults = (queries, found) => {
+    for (const f of found) attachUrl(f.imageUrl);
+    reply += `\n\n画像検索「${queries[0]}」: ${found.length}件 (画像の並び順)\n` +
+      found.map((f, i) => `${i + 1}. ${(f.title || "無題").slice(0, 60)} — ${f.source}\n   ${f.pageUrl}`).join("\n");
+  };
+  // flash-lite で英語検索クエリを起こす。judgeIntent=true なら「画像を探す依頼か」の
+  // 判定込み (違えば空配列が返る)
+  const genSearchQueries = async (context) => {
     try {
       const { result } = await dramaTrackedGemini(projectId, K + "imgquery")(
-        `ユーザーの依頼: ${(message || "").slice(0, 300)}\nアシスタントの回答: ${reply.slice(0, 1500)}\n\n` +
-        `この依頼の参考画像を Wikimedia Commons / Openverse で探すための検索クエリを、` +
-        `具体的→広い の順で3案。英語推奨・各2〜4語。JSON の文字列配列だけを返す。`,
+        `${context}\n\n` +
+        `Wikimedia Commons / Openverse で実在の参考画像を探すための検索クエリを、` +
+        `具体的→広い の順で3案、JSON の文字列配列だけで返す。クエリは必ず英語 ` +
+        `(日本の固有名詞のみローマ字可)・各2〜4語。` +
+        `もし「web で参考画像を探してほしい」という依頼でなければ [] だけを返す。`,
         { primaryModel: "gemini-2.5-flash-lite", maxOutputTokens: 500, jsonMode: true }
       );
       const t = (result.response.text() || "").trim();
       const arr = JSON.parse(t.slice(t.indexOf("["), t.lastIndexOf("]") + 1));
-      const queries = (Array.isArray(arr) ? arr : []).map((s) => String(s).trim().slice(0, 80)).filter(Boolean).slice(0, 3);
-      if (queries.length) await runWebImageSearch(queries);
+      return (Array.isArray(arr) ? arr : []).map((s) => String(s).trim().slice(0, 80)).filter(Boolean).slice(0, 3);
     } catch (e) {
-      console.warn("[drama] imgquery fallback failed:", e.message);
+      console.warn("[drama] imgquery failed:", e.message);
+      return [];
+    }
+  };
+  const searchContext = `ユーザーの依頼: ${(message || "").slice(0, 300)}\nアシスタントの回答: ${reply.slice(0, 1200)}`;
+  const webSearchM = reply.match(/\[画像検索:\s*([\s\S]*?)\]/);
+  if (webSearchM) {
+    reply = reply.replace(/\[画像検索:\s*[\s\S]*?\]/g, "").trim();
+    let queries = webSearchM[1].split(/[/／]/).map((s) => s.trim().slice(0, 80)).filter(Boolean);
+    let found = await trySearch(queries);
+    if (!found.length) {
+      // 日本語クエリ等で 0 件 → 英語クエリを起こして 1 回だけ再検索
+      const eq = await genSearchQueries(`${searchContext}\n(検索語「${queries.join(" / ")}」では 0 件だった)`);
+      if (eq.length) { const f2 = await trySearch(eq); if (f2.length) { queries = eq; found = f2; } }
+    }
+    if (found.length) appendSearchResults(queries, found);
+    else reply += `\n\n(画像検索「${queries.join(" / ")}」: 見つかりませんでした。言い方を変えてもう一度どうぞ)`;
+  } else if (/探し|探して|検索し|見つけて/.test(message || "") && !generatedImages.length) {
+    // マーカー無しの保険。画像を探す依頼かどうかの判定は flash-lite に任せる
+    const eq = await genSearchQueries(searchContext);
+    if (eq.length) {
+      const found = await trySearch(eq);
+      if (found.length) appendSearchResults(eq, found);
+      // 誤発火の可能性があるので 0 件時は何も足さない
     }
   }
   // [引用: メッセージ番号] = LINE の返信のように過去メッセージを引用表示する。
