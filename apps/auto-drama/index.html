@@ -115,6 +115,17 @@ textarea.field-input { min-height: 70px; resize: vertical; }
 @keyframes typing-bounce { 0%, 60%, 100% { transform: translateY(0); opacity: 0.35; } 30% { transform: translateY(-4px); opacity: 1; } }
 .typing-label { font-size: 11px; color: var(--text2); font-weight: 600; }
 
+/* 引用 (リプライ) */
+.quote-btn { border: none; background: none; padding: 2px 4px; margin-top: 6px; cursor: pointer; color: inherit; opacity: 0.45; font-size: 12px; font-weight: 700; display: inline-flex; align-items: center; gap: 3px; font-family: inherit; }
+.quote-box { display: flex; align-items: center; gap: 8px; padding: 6px 9px; border-radius: 9px; background: rgba(0,0,0,0.08); margin-bottom: 6px; border-left: 3px solid rgba(0,0,0,0.18); }
+.msg.user .quote-box { background: rgba(255,255,255,0.18); border-left-color: rgba(255,255,255,0.5); }
+.quote-box img { width: 34px; height: 34px; border-radius: 6px; object-fit: cover; flex-shrink: 0; }
+.quote-box .qtext { font-size: 11px; opacity: 0.8; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.quote-bar { display: flex; align-items: center; gap: 8px; padding: 7px 10px; border-radius: 10px; background: var(--bg2); box-shadow: inset 2px 2px 5px var(--sd), inset -2px -2px 4px var(--sl); margin-bottom: 6px; }
+.quote-bar img { width: 38px; height: 38px; border-radius: 7px; object-fit: cover; flex-shrink: 0; }
+.quote-bar .qtext { flex: 1; min-width: 0; font-size: 11px; color: var(--text2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.quote-bar button { border: none; background: none; color: var(--text2); font-size: 15px; cursor: pointer; padding: 4px; }
+
 /* ── PC (900px〜): チャットは右サイドバーにドッキング、コンテンツはその分縮む ── */
 .chat-close { display: none; }
 @media (min-width: 900px) {
@@ -685,12 +696,23 @@ const TEMPLATE = `
             @click="sendStarter(s)">{{ s }}</button>
         </div>
         <div v-for="m in chatMessages" :key="m.id || m.content" class="msg" :class="m.role">
+          <div v-if="m.quotedContent || (m.quotedImages || []).length" class="quote-box">
+            <img v-if="(m.quotedImages || []).length" :src="m.quotedImages[0]">
+            <span class="qtext">{{ m.quotedContent || '(画像)' }}</span>
+          </div>
           <div v-if="(m.images || []).length" style="display:flex; gap:6px; flex-wrap:wrap; margin-bottom:6px;">
             <img v-for="(u,i) in m.images" :key="i" :src="u" class="zoomable" style="width:100%; max-width:240px; height:auto; border-radius:10px; display:block;" @click="viewerUrl = u">
-          </div>{{ m.content }}</div>
+          </div>{{ m.content }}<div v-if="m.id">
+            <button class="quote-btn" @click="quoteMsg(m)"><span class="icon" style="font-size:13px;">reply</span>引用</button>
+          </div></div>
         <div v-if="chatSending" class="msg assistant">
           <div class="typing-dots"><span></span><span></span><span></span></div>
         </div>
+      </div>
+      <div v-if="quoting" class="quote-bar">
+        <img v-if="(quoting.images || []).length" :src="quoting.images[0]">
+        <span class="qtext">引用: {{ quoting.content || '(画像)' }}</span>
+        <button @click="quoting = null">✕</button>
       </div>
       <div v-if="chatAttach.length" style="display:flex; gap:6px; padding:4px 0; flex-wrap:wrap;">
         <div v-for="(a,i) in chatAttach" :key="i" style="position:relative;">
@@ -775,6 +797,10 @@ const App = {
     const chatSending = ref(false);
     const chatLogEl = ref(null);
     const chatAttach = ref([]); // [{ file, preview }]
+    const quoting = ref(null);  // 引用中のメッセージ { id, content, images }
+    function quoteMsg(m) {
+      quoting.value = { id: m.id, content: (m.content || "").slice(0, 80), images: m.images || [] };
+    }
     let chatEpisodeId = null;
 
     const chapters = ref([]);
@@ -1428,7 +1454,7 @@ const App = {
         const msgs = await apiFetch(`/api/drama/projects/${currentProject.value.id}/chat${qs}`);
         const pending = msgs.find((m) => m.status === "pending");
         chatMessages.value = msgs.filter((m) => m.status !== "pending");
-        nextTick(scrollChatToBottom);
+        scrollChatToBottomHard(); // 画像読み込み後も最下部 (最新) に張り付く
         if (pending) {
           // 前回の応答がまだ処理中 → インジケーターを出して追いかけ再開
           chatSending.value = true;
@@ -1465,6 +1491,13 @@ const App = {
     function scrollChatToBottom() {
       if (chatLogEl.value) chatLogEl.value.scrollTop = chatLogEl.value.scrollHeight;
     }
+    // 開いた直後は画像の読み込みで高さが伸びてスクロール位置がズレるため、
+    // 少し遅らせて数回スクロールし直す
+    function scrollChatToBottomHard() {
+      nextTick(scrollChatToBottom);
+      setTimeout(scrollChatToBottom, 250);
+      setTimeout(scrollChatToBottom, 800);
+    }
     function onChatImagePick(e) {
       for (const file of e.target.files || []) {
         chatAttach.value.push({ file, preview: URL.createObjectURL(file) });
@@ -1474,11 +1507,16 @@ const App = {
     async function sendChat() {
       const message = chatInput.value.trim();
       const attachments = [...chatAttach.value];
+      const quote = quoting.value;
       if ((!message && !attachments.length) || chatSending.value) return;
       chatSending.value = true;
       chatInput.value = "";
       chatAttach.value = [];
-      chatMessages.value.push({ role: "user", content: message, images: attachments.map((a) => a.preview) });
+      quoting.value = null;
+      chatMessages.value.push({
+        role: "user", content: message, images: attachments.map((a) => a.preview),
+        quotedContent: quote?.content, quotedImages: quote?.images || [],
+      });
       nextTick(scrollChatToBottom);
       try {
         // 添付画像を Firebase Storage に上げてから URL をサーバーへ (サーバーが Gemini に渡す)
@@ -1487,7 +1525,7 @@ const App = {
           imageUrls.push(await uploadImage(a.file, `auto-drama/${currentProject.value.id}/chat`));
         }
         const res = await apiFetch(`/api/drama/projects/${currentProject.value.id}/chat`, {
-          method: "POST", body: { message, episodeId: chatEpisodeId, imageUrls },
+          method: "POST", body: { message, episodeId: chatEpisodeId, imageUrls, quotedMessageId: quote?.id || null },
         });
         if (res.pendingId) {
           // 非同期処理 (Cloud Tasks)。done になるまでポーリング
@@ -1545,7 +1583,7 @@ const App = {
       editingCast, appearingCharacters, autoBuilding, autoBuildStage, autoBuildEpisode,
       isAppearing, toggleAppearing, onKeyVisualPick,
       exporting, exportErr, exportEpisode,
-      chatOpen, chatExpanded, viewerUrl, chatMessages, chatInput, chatSending, chatLogEl, chatAttach, openChat, sendChat, onChatImagePick,
+      chatOpen, chatExpanded, viewerUrl, chatMessages, chatInput, chatSending, chatLogEl, chatAttach, quoting, quoteMsg, openChat, sendChat, onChatImagePick,
       chapters, chapterOpenId, chapterContent, aozoraUrl, importing, analyzing, analyzeProgress,
       setupAnalyzing, runSetupAnalysis, settingsEdit, settingsSaving, usage, openSettingsTab, saveSettings,
       newAssetName, onStyleRefPick, clearStyleRef, onAssetPick, deleteAsset,

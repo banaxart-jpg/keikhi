@@ -1177,6 +1177,8 @@ async function ensureSchema() {
     await p.query(`ALTER TABLE drama_chat_messages ADD COLUMN IF NOT EXISTS images JSONB NOT NULL DEFAULT '[]'::jsonb`);
     // 非同期処理ステータス ('pending' = Cloud Tasks で処理中の assistant 行)
     await p.query(`ALTER TABLE drama_chat_messages ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'done'`);
+    // 引用返信 (「この画像の感じで作って」用)。引用先の画像は生成の最優先参照になる
+    await p.query(`ALTER TABLE drama_chat_messages ADD COLUMN IF NOT EXISTS quoted_message_id BIGINT`);
     // 原作の章分割 (青空文庫 import で自動生成)。summary / character_names は AI 解析で埋まる
     await p.query(`
       CREATE TABLE IF NOT EXISTS drama_chapters (
@@ -8679,8 +8681,16 @@ app.get("/api/drama/projects/:id/chat", async (req, res) => {
     const episodeId = req.query.episodeId || null;
     const { rows } = await p.query(
       episodeId
-        ? `SELECT id, role, content, images, status, created_at AS "createdAt" FROM drama_chat_messages WHERE project_id=$1 AND episode_id=$2 ORDER BY id`
-        : `SELECT id, role, content, images, status, created_at AS "createdAt" FROM drama_chat_messages WHERE project_id=$1 AND episode_id IS NULL ORDER BY id`,
+        ? `SELECT m.id, m.role, m.content, m.images, m.status, m.created_at AS "createdAt",
+                  q.content AS "quotedContent", q.images AS "quotedImages"
+             FROM drama_chat_messages m
+             LEFT JOIN drama_chat_messages q ON q.id = m.quoted_message_id
+            WHERE m.project_id=$1 AND m.episode_id=$2 ORDER BY m.id`
+        : `SELECT m.id, m.role, m.content, m.images, m.status, m.created_at AS "createdAt",
+                  q.content AS "quotedContent", q.images AS "quotedImages"
+             FROM drama_chat_messages m
+             LEFT JOIN drama_chat_messages q ON q.id = m.quoted_message_id
+            WHERE m.project_id=$1 AND m.episode_id IS NULL ORDER BY m.id`,
       episodeId ? [req.params.id, episodeId] : [req.params.id]
     );
     res.json(rows);
@@ -9012,7 +9022,7 @@ async function dramaFetchImagePartsSafe(imageUrls, max) {
 
 // チャット処理の本体。同期ルートと Cloud Tasks ワーカーの両方から使う。
 // 処理結果は assistantMessageId の行に書き込む (status: pending → done)。
-async function dramaProcessChat(p, { projectId, episodeId, message, imageUrls = [], userMessageId, assistantMessageId }) {
+async function dramaProcessChat(p, { projectId, episodeId, message, imageUrls = [], quotedMessageId, userMessageId, assistantMessageId }) {
   const { rows: projRows } = await p.query(
     `SELECT id, title, author, style_guide AS "styleGuide", world_setting AS "worldSetting",
             source_text AS "sourceText", ai_notes AS "aiNotes", style_ref_images AS "styleRefImages"
@@ -9079,8 +9089,22 @@ async function dramaProcessChat(p, { projectId, episodeId, message, imageUrls = 
   const historyImageUrls = history.flatMap((h) => h.images || []).slice(-4);
   const historyImageParts = await dramaFetchImagePartsSafe(historyImageUrls, 4);
 
+  // 引用返信: 引用先のメッセージ本文 + 画像は「この画像の感じで」の最優先参照
+  let quoted = { text: "", parts: [], imageUrls: [] };
+  if (quotedMessageId) {
+    const { rows: qRows } = await p.query(
+      `SELECT content, images FROM drama_chat_messages WHERE id=$1 AND project_id=$2`,
+      [quotedMessageId, projectId]
+    );
+    if (qRows.length) {
+      quoted.text = (qRows[0].content || "").slice(0, 300);
+      quoted.imageUrls = (qRows[0].images || []).slice(0, 2);
+      quoted.parts = await dramaFetchImagePartsSafe(quoted.imageUrls, 2);
+    }
+  }
+
   const imageParts = await dramaFetchImageParts(imageUrls);
-  let reply = await dramaChatOnce(dramaTrackedGemini(projectId, "chat"), systemPrompt, history, message || "(画像を確認して)", imageParts, historyImageParts);
+  let reply = await dramaChatOnce(dramaTrackedGemini(projectId, "chat"), systemPrompt, history, message || "(画像を確認して)", imageParts, historyImageParts, quoted);
 
   // [画像生成: プロンプト] マーカーを検出したら実際に画像を作って返す (最大2枚)。
   // 生成後に AI 自身が意図どおりか審査し、NG なら修正プロンプトで作り直す (最大2回まで)。
@@ -9094,7 +9118,8 @@ async function dramaProcessChat(p, { projectId, episodeId, message, imageUrls = 
   for (const mk of markers) {
     try {
       let imgPrompt = mk[1].trim();
-      const refParts = [...styleRefParts, ...imageParts.slice(0, 2)];
+      // 引用画像が最優先 (「この画像の感じで作って」)、次に基準画像・今回の添付
+      const refParts = [...quoted.parts, ...styleRefParts, ...imageParts.slice(0, 2)];
       for (const a of assets) {
         if (refParts.length >= 4) break;
         if (a.name && imgPrompt.includes(a.name)) refParts.push(...await dramaFetchImagePartsSafe([a.url], 1));
@@ -9212,13 +9237,14 @@ app.post("/api/drama/projects/:id/chat", async (req, res) => {
   if (!p) return res.status(503).json({ error: "DB not configured" });
   if (!genAI) return res.status(503).json({ error: "Gemini not configured" });
   try {
-    const { message, episodeId, imageUrls = [] } = req.body || {};
+    const { message, episodeId, imageUrls = [], quotedMessageId } = req.body || {};
     if (!message && !imageUrls.length) return res.status(400).json({ error: "message is required" });
 
     const { rows: userRows } = await p.query(
-      `INSERT INTO drama_chat_messages (project_id, episode_id, role, content, images)
-       VALUES ($1,$2,'user',$3,$4) RETURNING id`,
-      [req.params.id, episodeId || null, message || "", JSON.stringify(imageUrls.slice(0, DRAMA_CHAT_MAX_IMAGES))]
+      `INSERT INTO drama_chat_messages (project_id, episode_id, role, content, images, quoted_message_id)
+       VALUES ($1,$2,'user',$3,$4,$5) RETURNING id`,
+      [req.params.id, episodeId || null, message || "", JSON.stringify(imageUrls.slice(0, DRAMA_CHAT_MAX_IMAGES)),
+       quotedMessageId || null]
     );
     const { rows: asstRows } = await p.query(
       `INSERT INTO drama_chat_messages (project_id, episode_id, role, content, images, status)
@@ -9228,6 +9254,7 @@ app.post("/api/drama/projects/:id/chat", async (req, res) => {
     const job = {
       projectId: req.params.id, episodeId: episodeId || null,
       message: message || "", imageUrls: imageUrls.slice(0, DRAMA_CHAT_MAX_IMAGES),
+      quotedMessageId: quotedMessageId || null,
       userMessageId: userRows[0].id, assistantMessageId: asstRows[0].id,
     };
 

@@ -195,15 +195,19 @@ ACTIONS>>>
 // imageParts: 今回のメッセージの添付 [{ inlineData }]
 // historyImageParts: 直近の会話に出た画像 (ユーザー添付 + AI 生成)。過去の画像と
 // 比較しながら答えたり作り直したりできるように毎回渡す。
-export async function chatOnce(callGemini, systemPrompt, history, userMessage, imageParts = [], historyImageParts = []) {
+export async function chatOnce(callGemini, systemPrompt, history, userMessage, imageParts = [], historyImageParts = [], quoted = { text: "", parts: [] }) {
   const historyText = (history || [])
     .map((h) => `${h.role === "assistant" ? "アシスタント" : "ユーザー"}: ${h.content}${(h.images || []).length ? ` (画像${h.images.length}枚)` : ""}`)
     .join("\n\n");
-  const imgNote = (historyImageParts.length || imageParts.length)
-    ? `\n(この後に画像が付いている: 先頭 ${historyImageParts.length} 枚は直近の会話に出た画像 (古い順)、その後の ${imageParts.length} 枚が今回のメッセージの添付。比較・差分の指摘に使ってよい)`
+  const quotedParts = quoted.parts || [];
+  const quotedNote = (quoted.text || quotedParts.length)
+    ? `\n(ユーザーは過去のメッセージを引用している${quoted.text ? `: 「${quoted.text}」` : ""}${quotedParts.length ? `。引用メッセージの画像 ${quotedParts.length} 枚を添付の最初に付けてある — 今回の指示はこの画像が対象。画像生成する場合もこの画像が最優先の参照になる` : ""})`
     : "";
-  const prompt = `${systemPrompt}\n\n${historyText ? `これまでの会話:\n${historyText}\n\n` : ""}ユーザー: ${userMessage}${imgNote}\n\nアシスタント:`;
-  const allParts = [...historyImageParts, ...imageParts];
+  const imgNote = (historyImageParts.length || imageParts.length)
+    ? `\n(添付画像の並び: ${quotedParts.length ? `引用 ${quotedParts.length} 枚 → ` : ""}直近の会話の画像 ${historyImageParts.length} 枚 (古い順) → 今回の添付 ${imageParts.length} 枚)`
+    : "";
+  const prompt = `${systemPrompt}\n\n${historyText ? `これまでの会話:\n${historyText}\n\n` : ""}ユーザー: ${userMessage}${quotedNote}${imgNote}\n\nアシスタント:`;
+  const allParts = [...quotedParts, ...historyImageParts, ...imageParts];
   const content = allParts.length ? [prompt, ...allParts] : prompt;
   const { result } = await callGemini(content, {
     primaryModel: "gemini-2.5-flash",
