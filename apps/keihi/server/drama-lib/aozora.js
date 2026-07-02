@@ -1,3 +1,5 @@
+import zlib from "node:zlib";
+
 // 青空文庫の XHTML から本文テキストを取り込む。
 // - Shift_JIS デコード (青空文庫の HTML はほぼ全部 Shift_JIS)
 // - ルビ (<rt>/<rp>) と注記タグを除去して素のテキストに
@@ -5,6 +7,96 @@
 //   見出しが無い作品は 1 章 (全文) として返す
 
 const KANJI_CHAPTER_RE = /^[　\s]*[一二三四五六七八九十百]+[　\s]*$/;
+
+// ── 作品カタログ検索 ──
+// 青空文庫公式の全作品 CSV (zip) をメモリに読み込んで検索する。
+// LLM に URL を言わせると実在しない図書カード番号を創作するので (実際に 404 が出た)、
+// 検索は必ずこのカタログ経由にする。インスタンス生存中はキャッシュ。
+const CATALOG_URL = "https://www.aozora.gr.jp/index_pages/list_person_all_extended_utf8.zip";
+let catalogCache = null;
+
+function inflateZipSingleFile(buf) {
+  // 単一ファイル zip 前提の最小パーサ: EOCD → central directory → local header → inflateRaw
+  let eocd = -1;
+  for (let i = buf.length - 22; i >= 0; i--) {
+    if (buf.readUInt32LE(i) === 0x06054b50) { eocd = i; break; }
+  }
+  if (eocd < 0) throw new Error("zip EOCD が見つかりません");
+  const cd = buf.readUInt32LE(eocd + 16);
+  if (buf.readUInt32LE(cd) !== 0x02014b50) throw new Error("zip central directory が不正");
+  const method = buf.readUInt16LE(cd + 10);
+  const compSize = buf.readUInt32LE(cd + 20);
+  const localOffset = buf.readUInt32LE(cd + 42);
+  const lNameLen = buf.readUInt16LE(localOffset + 26);
+  const lExtraLen = buf.readUInt16LE(localOffset + 28);
+  const dataStart = localOffset + 30 + lNameLen + lExtraLen;
+  const data = buf.slice(dataStart, dataStart + compSize);
+  if (method === 0) return data;
+  return zlib.inflateRawSync(data);
+}
+
+// クオート対応の CSV 1 行パース
+function parseCsvLine(line) {
+  const out = [];
+  let cur = "", inQ = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (inQ) {
+      if (ch === '"') {
+        if (line[i + 1] === '"') { cur += '"'; i++; } else inQ = false;
+      } else cur += ch;
+    } else if (ch === '"') inQ = true;
+    else if (ch === ",") { out.push(cur); cur = ""; }
+    else cur += ch;
+  }
+  out.push(cur);
+  return out;
+}
+
+async function loadCatalog() {
+  if (catalogCache) return catalogCache;
+  const res = await fetch(CATALOG_URL);
+  if (!res.ok) throw new Error(`カタログ取得に失敗: HTTP ${res.status}`);
+  const csv = inflateZipSingleFile(Buffer.from(await res.arrayBuffer())).toString("utf8");
+  const lines = csv.split("\n");
+  const seen = new Set();
+  const works = [];
+  for (let i = 1; i < lines.length; i++) {
+    if (!lines[i].trim()) continue;
+    const c = parseCsvLine(lines[i]);
+    const id = c[0];
+    if (!id || seen.has(id)) continue; // 翻訳者等で同一作品が複数行になるため 1 行目だけ採用
+    seen.add(id);
+    works.push({
+      title: c[1] || "",
+      reading: c[2] || "",
+      author: `${c[15] || ""}${c[16] || ""}`,
+      cardUrl: c[13] || "",
+      fileUrl: c[50] || "",
+    });
+  }
+  catalogCache = works;
+  console.log(`[aozora] catalog loaded: ${works.length} works`);
+  return works;
+}
+
+// タイトル/読み/作者名の部分一致。完全一致 → 前方一致 → 部分一致の順で上位に。
+export async function searchAozoraCatalog(query, limit = 10) {
+  const works = await loadCatalog();
+  const q = String(query || "").trim();
+  if (!q) return [];
+  const scored = [];
+  for (const w of works) {
+    let score = -1;
+    if (w.title === q) score = 0;
+    else if (w.title.startsWith(q)) score = 1;
+    else if (w.title.includes(q) || w.reading.includes(q)) score = 2;
+    else if (w.author.includes(q)) score = 3;
+    if (score >= 0) scored.push({ score, w });
+  }
+  scored.sort((a, b) => a.score - b.score || a.w.title.length - b.w.title.length);
+  return scored.slice(0, limit).map(({ w }) => ({ title: w.title, author: w.author, cardUrl: w.cardUrl }));
+}
 
 // 青空文庫 XHTML の定型マークアップからタイトル・作者を取る
 export function extractAozoraMeta(html) {

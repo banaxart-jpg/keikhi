@@ -256,11 +256,19 @@ const TEMPLATE = `
 
     <!-- エピソード一覧 -->
     <div class="list" v-if="projectTab === 'episodes'">
+      <div class="actions-row" v-if="chapters.length">
+        <button @click="composeSeriesFn" :disabled="composingSeries">
+          {{ composingSeries ? 'AIが話数割りを構成中…' : (currentProject.episodes.length ? 'AIでシリーズ構成を作り直す' : 'AIでシリーズ構成 (話数割り)') }}</button>
+      </div>
+      <div class="card-sub" v-if="chapters.length" style="padding:0 4px;">地味な章は圧縮・見せ場は引き伸ばす編集方針で、1章=1話にはしません</div>
       <div v-if="currentProject.episodes.length === 0" class="empty">まだ話がありません</div>
       <div v-for="ep in currentProject.episodes" :key="ep.id" class="card" @click="openEpisode(ep.id)">
         <div class="card-row">
           <div class="card-main">
             <div class="card-title">第{{ ep.number }}話 {{ ep.title || '(無題)' }}</div>
+            <div class="card-sub" v-if="(ep.chapterNumbers || []).length">
+              原作{{ ep.chapterNumbers.join('・') }}章{{ ep.pacing === 'compress' ? ' / 圧縮' : ep.pacing === 'stretch' ? ' / 引き伸ばし' : '' }}</div>
+            <div class="card-sub" v-if="ep.focus">{{ ep.focus }}</div>
           </div>
           <span class="badge" :class="'state-' + ep.state">{{ STATE_LABEL[ep.state] || ep.state }}</span>
           <span class="chev">chevron_right</span>
@@ -484,7 +492,25 @@ const TEMPLATE = `
       <label class="filepick" style="margin-top:8px;"><input type="file" accept="image/*" @change="onKeyVisualPick"><span class="icon">add_photo_alternate</span>アップロード</label>
     </div>
 
-    <div class="section-title">カット割り ({{ currentEpisode.cuts.length }})</div>
+    <div class="section-title">① 脚本</div>
+    <div class="list" style="padding-top:0;">
+      <div class="actions-row">
+        <button @click="writeScriptFn" :disabled="scriptWriting">
+          {{ scriptWriting ? 'AIが執筆中…' : (currentEpisode.script ? 'AIで脚本を書き直す' : 'AIで脚本を生成 (割当章から)') }}</button>
+      </div>
+      <textarea class="field-input" v-model="scriptEdit" style="min-height:150px;" placeholder="N: ナレーション / 人物名: セリフ / ◆ ト書き — AIで生成して手直しできます"></textarea>
+      <div class="actions-row" v-if="scriptEdit !== (currentEpisode.script || '')">
+        <button class="primary" @click="saveScript" :disabled="scriptSaving">{{ scriptSaving ? '保存中…' : '脚本を保存' }}</button>
+      </div>
+    </div>
+
+    <div class="section-title">② カット割り → 絵コンテ → 作画 ({{ currentEpisode.cuts.length }}カット)</div>
+    <div class="list" style="padding-top:0;">
+      <div class="actions-row">
+        <button @click="composeCutsFn" :disabled="composingCuts">
+          {{ composingCuts ? 'AIがカットを割ってます…' : (currentEpisode.cuts.length ? 'AIでカットを割り直す (脚本から)' : 'AIでカット割り (脚本から)') }}</button>
+      </div>
+    </div>
     <div class="list">
       <div v-for="(cut, idx) in currentEpisode.cuts" :key="cut.id" class="card" :class="{ open: cutOpenId === cut.id }">
         <div class="card-row" @click="toggleCut(cut)">
@@ -520,9 +546,15 @@ const TEMPLATE = `
             <button class="danger" @click="deleteCut(cut)" :disabled="cutSaving">削除</button>
             <button @click="saveCut(cut)" :disabled="cutSaving">{{ cutSaving ? '保存中…' : '保存' }}</button>
           </div>
+          <div v-if="cut.storyboardUrl">
+            <div class="field-label">絵コンテ (構図確認用の静止画)</div>
+            <img :src="cut.storyboardUrl" style="width:100%; border-radius:12px;">
+          </div>
           <div class="actions-row">
+            <button @click="generateStoryboard(cut)" :disabled="storyboardingCutId === cut.id">
+              {{ storyboardingCutId === cut.id ? '絵コンテ生成中…' : (cut.storyboardUrl ? '絵コンテを再生成 (≈¥6)' : '絵コンテを生成 (静止画 ≈¥6)') }}</button>
             <button class="primary" @click="generateCut(cut)" :disabled="generatingCutId === cut.id">
-              {{ generatingCutId === cut.id ? '生成中…' : '動画生成' }}
+              {{ generatingCutId === cut.id ? '生成中…' : '動画生成 (≈¥150)' }}
             </button>
           </div>
           <div v-if="genErrorFor === cut.id" class="err">{{ genError }}</div>
@@ -539,7 +571,7 @@ const TEMPLATE = `
       <button class="pill" style="align-self:center;" @click="addCut">+ カットを追加</button>
     </div>
 
-    <div class="section-title">タイムライン (書き出し順)</div>
+    <div class="section-title">③ 編集・書き出し</div>
     <div class="list" style="padding-top:0; gap:4px;">
       <div class="card-sub" style="padding: 0 16px;">カット順にそのまま連結されます。並べ替えはカット割りの ‹ › で。</div>
       <div class="actions-row" style="padding: 8px 16px 0;">
@@ -734,6 +766,7 @@ const App = {
       err.value = "";
       try {
         currentEpisode.value = await apiFetch(`/api/drama/episodes/${id}`);
+        scriptEdit.value = currentEpisode.value.script || "";
         view.value = "episode";
         ensureGenPolling(); // 生成中タスクが残ってたら追いかけ再開
       } catch (e) { err.value = e.message; }
@@ -1053,6 +1086,65 @@ const App = {
       } catch (e) { err.value = e.message; } finally { locSaving.value = false; }
     }
 
+    // ── アニメ工程: シリーズ構成 / 脚本 / カット割り / 絵コンテ ──
+    const composingSeries = ref(false);
+    const scriptEdit = ref("");
+    const scriptWriting = ref(false);
+    const scriptSaving = ref(false);
+    const composingCuts = ref(false);
+    const storyboardingCutId = ref(null);
+
+    async function composeSeriesFn() {
+      const hasExisting = currentProject.value.episodes.length > 0;
+      if (hasExisting && !confirm("シリーズ構成を作り直すと、既存の話とカット (生成履歴含む) が全部消えます。いい？")) return;
+      composingSeries.value = true;
+      err.value = "";
+      try {
+        await apiFetch(`/api/drama/projects/${currentProject.value.id}/compose-series`, {
+          method: "POST", body: { force: hasExisting },
+        });
+        await openProject(currentProject.value.id);
+      } catch (e) { err.value = e.message; } finally { composingSeries.value = false; }
+    }
+    async function writeScriptFn() {
+      if (currentEpisode.value.script && !confirm("脚本を AI で書き直します (今の脚本は上書き)。いい？")) return;
+      scriptWriting.value = true;
+      err.value = "";
+      try {
+        const r = await apiFetch(`/api/drama/episodes/${currentEpisode.value.id}/write-script`, { method: "POST", body: {} });
+        currentEpisode.value.script = r.script;
+        scriptEdit.value = r.script;
+      } catch (e) { err.value = e.message; } finally { scriptWriting.value = false; }
+    }
+    async function saveScript() {
+      scriptSaving.value = true;
+      try {
+        await apiFetch(`/api/drama/episodes/${currentEpisode.value.id}`, { method: "PATCH", body: { script: scriptEdit.value } });
+        currentEpisode.value.script = scriptEdit.value;
+      } catch (e) { err.value = e.message; } finally { scriptSaving.value = false; }
+    }
+    async function composeCutsFn() {
+      if (!currentEpisode.value.script) { err.value = "脚本がまだありません (①で生成してから)"; return; }
+      const hasExisting = currentEpisode.value.cuts.length > 0;
+      if (hasExisting && !confirm("カットを割り直すと既存カット (生成履歴含む) が消えます。いい？")) return;
+      composingCuts.value = true;
+      err.value = "";
+      try {
+        await apiFetch(`/api/drama/episodes/${currentEpisode.value.id}/compose-cuts`, {
+          method: "POST", body: { force: hasExisting },
+        });
+        await refreshEpisode();
+      } catch (e) { err.value = e.message; } finally { composingCuts.value = false; }
+    }
+    async function generateStoryboard(cut) {
+      storyboardingCutId.value = cut.id;
+      err.value = "";
+      try {
+        await apiFetch(`/api/drama/cuts/${cut.id}/storyboard`, { method: "POST", body: {} });
+        await refreshEpisode();
+      } catch (e) { err.value = e.message; } finally { storyboardingCutId.value = null; }
+    }
+
     // ── カット ──
     function toggleCut(cut) {
       if (cutOpenId.value === cut.id) { cutOpenId.value = null; return; }
@@ -1239,6 +1331,8 @@ const App = {
       locOpenId, locEdit, locSaving, showNewLocation, newLocation, toggleLoc, createLocation, onLocImagePick, saveLocation, deleteLocation,
       cutOpenId, cutEdit, cutSaving, toggleCut, toggleCutChar, addCut, saveCut, deleteCut, moveCut,
       generatingCutId, genError, genErrorFor, generateCut, selectGeneration, refreshGeneration,
+      composingSeries, composeSeriesFn, scriptEdit, scriptWriting, scriptSaving, writeScriptFn, saveScript,
+      composingCuts, composeCutsFn, storyboardingCutId, generateStoryboard,
       isAppearing, toggleAppearing, onKeyVisualPick,
       exporting, exportErr, exportEpisode,
       chatOpen, chatMessages, chatInput, chatSending, chatLogEl, chatAttach, openChat, sendChat, onChatImagePick,

@@ -102,6 +102,9 @@ ${missingBlock}
 - 初期構造化 (取り込み・キャラ下書き) が終わった直後の段階では、まず「方向性詰め」を
   手伝う: 絵柄 (styleGuide の具体化)、画像の粒度 (1話を何カットで割るか・どこまで細かく
   画にするか)、トーン。ここが決まってからキャラ参照画像 → 話の切り出しに進める。
+- 話数割り・脚本・カット割りでは実際のアニメの編集感覚で緩急をつける:
+  原作の章と話数を 1:1 にせず、説明的で地味な部分は大胆に圧縮し (複数章を数秒に)、
+  見せ場 (対決・怪異・情念) はカットを増やして引き伸ばす。判断基準は「画になるか」。
 - 素材が揃っていない場合は動画生成に進めるよう促さず、何を決めるべきかを案内する。
 - キャラクターの見た目は identityTokens (識別子) を毎回一貫させるよう助言する。
 - 場所 (背景) も同様に統一する。カットには極力「場所」を設定させ、同じ場所は同じ
@@ -223,6 +226,136 @@ JSON のみで返す (前置き禁止):
   const j = parseJsonLoose(t);
   if (!j) return [];
   return (Array.isArray(j.results) ? j.results : []).slice(0, 5);
+}
+
+// ── 編集方針 (シリーズ構成・脚本・カット割りの全プロンプトに共通で入れる) ──
+// 「1章=1話にしない」が肝。実際のアニメ (例: 呪術廻戦) と同じ緩急のつけ方。
+const PACING_PRINCIPLE = `編集方針 (重要):
+- 原作の章と話数を 1:1 で対応させない。映像として地味な部分は大胆に端折る。
+- 説明・状況描写・回想などの静的なパートは圧縮する (複数章を数カットやナレーション数秒にまとめてよい)。
+- 見せ場 (対決、怪異、情念の爆発、運命の転換点) は逆に引き伸ばす。カットを増やし、間や表情も画にする。
+- 各話は必ず「掴み (最初の2秒で目を留めさせる)」と「引き (次話を見たくなる切り方)」を持つ。
+- 判断基準は「画になるか」。画にならない情報は捨てるかナレーション一言に落とす。`;
+
+// シリーズ構成: 章一覧から話数割りを提案する (緩急をつけて、1章1話にしない)
+export async function composeSeries(callGemini, { title, author, chapters, targetDurationSec = 60 }) {
+  const chapterLines = chapters.map((ch) =>
+    `第${ch.number}章「${ch.title}」(${ch.charCount}字)${ch.summary ? `: ${ch.summary}` : ""}`
+  ).join("\n");
+  const prompt = `「${title}」(${author || "作者不明"}) を 1 話約${targetDurationSec}秒の縦型ショート動画の連載にします。
+あなたはシリーズ構成の担当です。
+
+${PACING_PRINCIPLE}
+
+原作の章一覧:
+${chapterLines}
+
+全体の話数割りを JSON のみで返してください (前置き禁止):
+{
+  "episodes": [
+    {
+      "number": 1,
+      "title": "この話のタイトル (キャッチーに、15字以内)",
+      "chapterNumbers": [1, 2],
+      "pacing": "compress" | "normal" | "stretch",
+      "focus": "この話の見せ場・掴み・引きを1-2文で"
+    }
+  ]
+}
+- 地味な章は複数まとめて compress、見せ場の章は 1 章を複数話に割って stretch してよい
+  (その場合は同じ chapterNumbers を複数話に入れ、focus で範囲を区別する)。
+- 未完の作品の場合、最終話は「引き」で終わらせるか注記する。`;
+  const { result } = await callGemini(prompt, {
+    primaryModel: "gemini-2.5-flash",
+    maxOutputTokens: 16000,
+    jsonMode: true,
+  });
+  const j = parseJsonLoose((result.response.text() || "").trim());
+  if (!j || !Array.isArray(j.episodes)) throw new Error("シリーズ構成のレスポンスから JSON 取れず");
+  return j.episodes.slice(0, 60).map((e, i) => ({
+    number: Number(e.number) || i + 1,
+    title: String(e.title || "").slice(0, 60),
+    chapterNumbers: (Array.isArray(e.chapterNumbers) ? e.chapterNumbers : []).map(Number).filter((n) => !isNaN(n)),
+    pacing: ["compress", "normal", "stretch"].includes(e.pacing) ? e.pacing : "normal",
+    focus: String(e.focus || "").slice(0, 300),
+  }));
+}
+
+// 脚本: 割り当てられた章の本文から話単位の脚本を書く
+export async function writeScript(callGemini, { title, author, styleGuide, episode, chapterTexts, characters }) {
+  const charNames = characters.map((c) => c.name).join("、");
+  const prompt = `「${title}」(${author || "作者不明"}) の第${episode.number}話「${episode.title || ""}」の脚本を書いてください。
+1 話は約${episode.targetDurationSec || 60}秒の縦型ショート動画。ナレーションは 300〜350 字が上限の目安。
+
+${PACING_PRINCIPLE}
+
+この話の方針: ${episode.pacing === "compress" ? "圧縮 (原作の情報を大胆に間引く)" : episode.pacing === "stretch" ? "引き伸ばし (見せ場をじっくり画にする)" : "標準"}
+見せ場: ${episode.focus || "(未指定)"}
+登場人物: ${charNames || "(未登録)"}
+
+原作該当部分:
+---
+${chapterTexts}
+---
+
+脚本の形式 (プレーンテキストで返す。JSON 不要):
+- ナレーション行は「N: 」で始める
+- セリフ行は「人物名: 」で始める
+- ト書き (画の指示) は「◆ 」で始める
+- 掴み → 本編 → 引き の順で。全体で画面 8 カット前後を想定`;
+  const { result } = await callGemini(prompt, {
+    primaryModel: "gemini-2.5-flash",
+    maxOutputTokens: 8000,
+  });
+  return (result.response.text() || "").trim();
+}
+
+// カット割り (絵コンテの設計図): 脚本から 8 秒×Nカットの構成を起こす
+export async function composeCuts(callGemini, { title, styleGuide, episode, script, characters, locations }) {
+  const charList = characters.map((c) => `id=${c.id}: ${c.name}`).join(" / ") || "(なし)";
+  const locList = locations.map((l) => `id=${l.id}: ${l.name}`).join(" / ") || "(なし)";
+  const prompt = `「${title}」第${episode.number}話のカット割り (絵コンテの設計) を作ってください。
+1 カット 4〜10 秒、合計で約${episode.targetDurationSec || 60}秒。縦 9:16。
+絵柄: ${styleGuide || "(未指定)"}
+
+${PACING_PRINCIPLE}
+
+脚本:
+---
+${script}
+---
+
+登録済みキャラ: ${charList}
+登録済みの場所: ${locList}
+
+JSON のみで返す (前置き禁止):
+{
+  "cuts": [
+    {
+      "durationSec": 8,
+      "prompt": "このカットの動画生成プロンプト (構図・動き・感情を具体的に。絵柄指示込み)",
+      "characterIds": [登場キャラの id 数値],
+      "locationId": 場所の id 数値 または null,
+      "narration": "このカットに載せるナレーション (なければ空)",
+      "subtitle": "画面に出す字幕 (なければ空)"
+    }
+  ]
+}`;
+  const { result } = await callGemini(prompt, {
+    primaryModel: "gemini-2.5-flash",
+    maxOutputTokens: 16000,
+    jsonMode: true,
+  });
+  const j = parseJsonLoose((result.response.text() || "").trim());
+  if (!j || !Array.isArray(j.cuts)) throw new Error("カット割りのレスポンスから JSON 取れず");
+  return j.cuts.slice(0, 15).map((c) => ({
+    durationSec: Math.max(4, Math.min(10, Number(c.durationSec) || 8)),
+    prompt: String(c.prompt || "").slice(0, 1000),
+    characterIds: (Array.isArray(c.characterIds) ? c.characterIds : []).map(String),
+    locationId: c.locationId ? String(c.locationId) : null,
+    narration: String(c.narration || "").slice(0, 500),
+    subtitle: String(c.subtitle || "").slice(0, 200),
+  }));
 }
 
 // 章の AI 解析: 要約 + 出演キャラ名を JSON で返す
