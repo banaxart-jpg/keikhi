@@ -8985,6 +8985,10 @@ async function dramaExecuteActions(p, projectId, actions, ctx = {}) {
   const applied = [];
   const strOr = (v, max) => (v === undefined || v === null) ? undefined : String(v).slice(0, max);
   const tokensOr = (v) => Array.isArray(v) ? JSON.stringify(v.map((s) => String(s).slice(0, 30)).slice(0, 6)) : undefined;
+  // 数値リスト: "7,8" (カンマ区切り文字列) or [7,8]。文字列が基本 (数字だけの配列は
+  // 検索グラウンディングが引用マーカーとして削るため、プロンプトで文字列を指示している)
+  const numListOr = (v) => (Array.isArray(v) ? v : typeof v === "string" ? v.split(/[,、]/) : [])
+    .map((x) => Number(String(x).trim())).filter((n) => Number.isInteger(n));
   const attached = ctx.attachedImageUrls || []; // 今回のメッセージの添付画像 URL
   for (const a of (actions || []).slice(0, 10)) {
     try {
@@ -9056,7 +9060,7 @@ async function dramaExecuteActions(p, projectId, actions, ctx = {}) {
         const { rowCount } = await p.query(`DELETE FROM drama_locations WHERE project_id=$1 AND name=$2`, [projectId, strOr(a.name, 50)]);
         applied.push(rowCount ? `場所「${a.name}」を削除` : `場所「${a.name}」が見つからず削除失敗`);
       } else if (a.action === "create_episode" && a.number) {
-        const chapterNumbers = (Array.isArray(a.chapterNumbers) ? a.chapterNumbers : []).map(Number).filter((n) => !isNaN(n));
+        const chapterNumbers = numListOr(a.chapterNumbers);
         const appearing = await dramaCastFromChapters(p, projectId, chapterNumbers);
         await p.query(
           `INSERT INTO drama_episodes (project_id, number, title, chapter_numbers, pacing, focus, appearing_character_ids)
@@ -9067,8 +9071,8 @@ async function dramaExecuteActions(p, projectId, actions, ctx = {}) {
         );
         applied.push(`第${a.number}話を作成`);
       } else if (a.action === "update_episode" && a.number) {
-        const chapterNumbers = Array.isArray(a.chapterNumbers)
-          ? JSON.stringify(a.chapterNumbers.map(Number).filter((n) => !isNaN(n))) : undefined;
+        const chapterNumbers = (a.chapterNumbers !== undefined && a.chapterNumbers !== null)
+          ? JSON.stringify(numListOr(a.chapterNumbers)) : undefined;
         const { rowCount } = await p.query(
           `UPDATE drama_episodes SET
              title = COALESCE($1, title),
@@ -9136,9 +9140,13 @@ async function dramaExecuteActions(p, projectId, actions, ctx = {}) {
         if (a.index === "all") {
           next = [];
         } else {
-          // 複数枚は "index":[1,2] の配列で受ける (別アクションに分けると 1 枚消すたびに
-          // 番号がズレて意図しない画像を消すため)
-          const idxs = (Array.isArray(a.index) ? a.index : [a.index]).map(Number);
+          // 複数枚は "1,2" のカンマ区切り文字列 or 配列で受ける。1 アクションにまとめるのは
+          // 別アクションに分けると 1 枚消すたびに番号がズレるため。文字列形式が基本なのは
+          // [1,2] のような数字だけの配列を Gemini の検索グラウンディングが引用マーカーとして
+          // 本文から削ってしまうため (実測)
+          const idxs = (Array.isArray(a.index) ? a.index
+            : typeof a.index === "string" ? a.index.split(/[,、]/)
+            : [a.index]).map((v) => Number(String(v).trim()));
           const bad = idxs.find((n) => !Number.isInteger(n) || n < 1 || n > refs.length);
           if (bad !== undefined || !idxs.length) {
             applied.push(`${label}「${a.name}」の参照画像 ${JSON.stringify(a.index)} 枚目が見つかりません (現在 ${refs.length}枚・1始まり)`);
@@ -9446,6 +9454,9 @@ async function dramaProcessChat(p, { projectId, episodeId, message, imageUrls = 
   let applied = [];
   let actionsParsed = null;
   let actionsRaw = null; // debug 用: parse 失敗の原因調査にモデルの生出力を返す
+  // モデルが履歴の「⚙ 実行: …」(システムが付ける実行結果行) を真似て、ACTIONS を
+  // 書かずに実行済みのフリをすることがある (実測)。偽の実行行は削る
+  reply = reply.replace(/^⚙\s*実行:.*$/gm, "").trim();
   const actionsMatch = reply.match(/<<<ACTIONS([\s\S]*?)ACTIONS>>>/);
   if (actionsMatch) {
     actionsRaw = actionsMatch[1].trim().slice(0, 3000);
@@ -9455,7 +9466,14 @@ async function dramaProcessChat(p, { projectId, episodeId, message, imageUrls = 
       const s = raw.indexOf("[");
       const e = raw.lastIndexOf("]");
       const jsonText = dramaEscapeCtrlInJsonStrings(raw.slice(s, e + 1)).replace(/,(\s*[}\]])/g, "$1");
-      const actions = JSON.parse(jsonText);
+      let actions;
+      try {
+        actions = JSON.parse(jsonText);
+      } catch (e1) {
+        // 検索グラウンディングが [1,2] 型の値を引用マーカーとして食うと "index":} のように
+        // 値だけ消える。null で埋めて他のアクションは救う (該当アクションは実行時に失敗を通知)
+        actions = JSON.parse(jsonText.replace(/:(\s*)([,}\]])/g, ": null$2"));
+      }
       actionsParsed = actions;
       if (!debug) {
         applied = await dramaExecuteActions(p, projectId, actions, {

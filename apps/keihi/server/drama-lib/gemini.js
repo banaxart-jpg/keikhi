@@ -165,14 +165,14 @@ ${missingBlock}
   {"action":"create_location","name":"場所名","description":"説明","identityTokens":["識別子"],"appearancePrompt":"背景プロンプト"},
   {"action":"update_location","name":"既存の場所名","identityTokens":["新しい識別子"]},
   {"action":"delete_location","name":"場所名"},
-  {"action":"create_episode","number":5,"title":"話タイトル","chapterNumbers":[7,8],"pacing":"normal","focus":"見せ場"},
-  {"action":"update_episode","number":5,"title":"変更したいフィールドだけ","pacing":"stretch","focus":"...","script":"脚本全文","chapterNumbers":[7]},
+  {"action":"create_episode","number":5,"title":"話タイトル","chapterNumbers":"7,8","pacing":"normal","focus":"見せ場"},
+  {"action":"update_episode","number":5,"title":"変更したいフィールドだけ","pacing":"stretch","focus":"...","script":"脚本全文","chapterNumbers":"7"},
   {"action":"delete_episode","number":5},
   {"action":"generate_script","episodeNumber":5},
   {"action":"generate_cuts","episodeNumber":5},
   {"action":"confirm_character","name":"キャラ名","source":"quoted"},
   {"action":"confirm_location","name":"場所名"},
-  {"action":"remove_character_image","name":"キャラ名","index":1},
+  {"action":"remove_character_image","name":"キャラ名","index":"1,2"},
   {"action":"remove_location_image","name":"場所名","index":"all"},
   {"action":"set_style_reference"},
   {"action":"clear_style_reference"},
@@ -203,10 +203,15 @@ ACTIONS>>>
   その画像がキャラ/場所の参照画像に追加され、status が確定になる。
   確定の解除やステータス変更は update_character / update_location の status で行う。
 - remove_character_image / remove_location_image: 参照画像を外す。index は画面の並び順で
-  1 始まり。複数枚は必ず 1 つのアクションで "index":[1,2] の配列にする (アクションを
+  1 始まり。複数枚は必ず 1 つのアクションで "index":"1,2" とまとめる (アクションを
   分けると 1 枚消すたびに番号がズレる)。"index":"all" で全部外す。
   間違って確定した画像を消したい時に使う。何枚あるかは前提情報の「参照画像 N枚」で
   分かる。どれが何枚目か不明ならユーザーに「左から何枚目?」と聞いてから実行する。
+- 数値のリスト (index / chapterNumbers) は必ず "1,2" のようなカンマ区切りの文字列で書く。
+  [1,2] のような数字だけの配列は本文から欠落することがあり、値が空になって失敗する。
+- 「⚙ 実行:」の行はシステムが実行結果として自動で付けるもの。あなた自身は絶対に書かない。
+  本文で「削除しました」と言うだけでは何も起きない — 設定を変える時は必ず ACTIONS
+  ブロックを書く。
 
 会話の作法 (重要):
 - 画像生成 ([画像生成:] マーカー) はユーザーが明示的に画像を求めた時だけ。
