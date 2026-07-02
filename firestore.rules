@@ -48,15 +48,12 @@ service cloud.firestore {
       allow read, write: if request.auth != null;
     }
 
-    // 請求書 (seikyu): 社内 3 アカウント限定。localStorage → Firestore に移行して
-    // PC ↔ スマホ ↔ ユーザー間で realtime 同期。
+    // 請求書 (seikyu): 手配リスト (shopping_items) / タスク と同じく、認証済みなら全員が
+    // 読み書き可 (社外協力者含む) に緩和。localStorage → Firestore で PC ↔ スマホ ↔
+    // ユーザー間で realtime 同期。
+    // (旧: 社内 3 アカウント email 限定 → 全員が登録した請求書を共有したいため緩和)
     match /seikyu_invoices/{invoiceId} {
-      allow read, write: if request.auth != null
-        && request.auth.token.email in [
-          'info@banax.tokyo',
-          'konishi0221@gmail.com',
-          'banaxart@gmail.com'
-        ];
+      allow read, write: if request.auth != null;
     }
 
     // 現場メモ: 社内 3 アカウント限定。ユーザーごとに sub-collection で隔離して
