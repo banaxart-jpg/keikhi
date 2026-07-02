@@ -9420,12 +9420,37 @@ async function dramaProcessChat(p, { projectId, episodeId, message, imageUrls = 
   // 実測で分かっているモデルの癖への対策を全部ここに集約:
   //  - マーカーを書かず文章要約や [画像生成] で代用する → 依頼文から意図判定して検索
   //  - 検索語を日本語で書いて 0 件 → 英語クエリを起こして再検索
-  const trySearch = async (queries) => {
-    try { return await dramaSearchWebImages(queries, 4); } catch (e) {
+  const trySearch = async (queries, limit = 10) => {
+    try { return await dramaSearchWebImages(queries, limit); } catch (e) {
       console.warn("[drama] web image search failed:", e.message);
       return [];
     }
   };
+  // 候補タイトルを flash-lite に審査させ、依頼に本当に関連あるものだけ残す。
+  // Commons のキーワード検索は字面一致で無関係な画像を平気で返す
+  // (実測:「マリアののぼり」→ Mary Baker Eddy の 1868 年の新聞広告) ため、貼る前に必ず通す
+  const vetResults = async (candidates) => {
+    if (!candidates.length) return [];
+    try {
+      const { result } = await dramaTrackedGemini(projectId, K + "imgvet")(
+        `ユーザーの依頼: ${(message || "").slice(0, 300)}\n` +
+        `画像検索の候補 (タイトル — 出典):\n` +
+        candidates.map((c, i) => `${i + 1}. ${c.title} — ${c.source}`).join("\n") +
+        `\n\n依頼の参考画像として本当に関連があるものの番号だけを JSON の数値配列で返す。` +
+        `字面が似ているだけで無関係なもの (人名・新聞・別分野) は含めない。全部無関係なら []。`,
+        { primaryModel: "gemini-2.5-flash-lite", maxOutputTokens: 300, jsonMode: true }
+      );
+      const t = (result.response.text() || "").trim();
+      const arr = JSON.parse(t.slice(t.indexOf("["), t.lastIndexOf("]") + 1));
+      const idx = (Array.isArray(arr) ? arr : []).map(Number)
+        .filter((n) => Number.isInteger(n) && n >= 1 && n <= candidates.length);
+      return idx.map((n) => candidates[n - 1]);
+    } catch (e) {
+      console.warn("[drama] imgvet failed:", e.message);
+      return candidates; // 審査に失敗したら素通し (無いよりまし)
+    }
+  };
+  const searchAndVet = async (queries) => (await vetResults(await trySearch(queries))).slice(0, 4);
   const appendSearchResults = (queries, found) => {
     for (const f of found) attachUrl(f.imageUrl);
     reply += `\n\n画像検索「${queries[0]}」: ${found.length}件 (画像の並び順)\n` +
@@ -9439,7 +9464,8 @@ async function dramaProcessChat(p, { projectId, episodeId, message, imageUrls = 
         `${context}\n\n` +
         `Wikimedia Commons / Openverse で実在の参考画像を探すための検索クエリを、` +
         `具体的→広い の順で3案、JSON の文字列配列だけで返す。クエリは必ず英語 ` +
-        `(日本の固有名詞のみローマ字可)・各2〜4語。` +
+        `(日本の固有名詞のみローマ字可)・各2〜4語。美術・歴史資料なら時代や様式の用語を使う ` +
+        `(例: "Madonna and Child nanban", "Virgin Mary Jesuit Japan", "processional banner")。` +
         `もし「web で参考画像を探してほしい」という依頼でなければ [] だけを返す。`,
         { primaryModel: "gemini-2.5-flash-lite", maxOutputTokens: 500, jsonMode: true }
       );
@@ -9456,19 +9482,19 @@ async function dramaProcessChat(p, { projectId, episodeId, message, imageUrls = 
   if (webSearchM) {
     reply = reply.replace(/\[画像検索:\s*[\s\S]*?\]/g, "").trim();
     let queries = webSearchM[1].split(/[/／]/).map((s) => s.trim().slice(0, 80)).filter(Boolean);
-    let found = await trySearch(queries);
+    let found = await searchAndVet(queries);
     if (!found.length) {
-      // 日本語クエリ等で 0 件 → 英語クエリを起こして 1 回だけ再検索
-      const eq = await genSearchQueries(`${searchContext}\n(検索語「${queries.join(" / ")}」では 0 件だった)`);
-      if (eq.length) { const f2 = await trySearch(eq); if (f2.length) { queries = eq; found = f2; } }
+      // 0 件 or 全部無関係 → 英語クエリを起こして 1 回だけ再検索
+      const eq = await genSearchQueries(`${searchContext}\n(検索語「${queries.join(" / ")}」では関連する画像が見つからなかった)`);
+      if (eq.length) { const f2 = await searchAndVet(eq); if (f2.length) { queries = eq; found = f2; } }
     }
     if (found.length) appendSearchResults(queries, found);
-    else reply += `\n\n(画像検索「${queries.join(" / ")}」: 見つかりませんでした。言い方を変えてもう一度どうぞ)`;
+    else reply += `\n\n(画像検索「${queries.join(" / ")}」: 依頼に合う画像が見つかりませんでした。欲しいイメージをもう少し具体的に言ってもらえると当たりやすいです)`;
   } else if (/探し|探して|検索し|見つけて/.test(message || "") && !generatedImages.length) {
     // マーカー無しの保険。画像を探す依頼かどうかの判定は flash-lite に任せる
     const eq = await genSearchQueries(searchContext);
     if (eq.length) {
-      const found = await trySearch(eq);
+      const found = await searchAndVet(eq);
       if (found.length) appendSearchResults(eq, found);
       // 誤発火の可能性があるので 0 件時は何も足さない
     }
