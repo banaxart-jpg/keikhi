@@ -148,10 +148,15 @@ textarea.field-input { min-height: 70px; resize: vertical; }
     align-items: center; justify-content: center; font-size: 17px; cursor: pointer; z-index: 5; }
 }
 
-/* 画像ライトボックス (タップで拡大表示) */
-.lightbox { position: fixed; inset: 0; z-index: 200; background: rgba(20,22,34,0.92); display: flex; align-items: center; justify-content: center; padding: 20px; }
-.lightbox img { max-width: 100%; max-height: 92vh; border-radius: 12px; object-fit: contain; }
-.lightbox-close { position: absolute; top: calc(14px + env(safe-area-inset-top)); right: 16px; width: 40px; height: 40px; border-radius: 20px; border: none; background: rgba(255,255,255,0.15); color: white; font-size: 20px; cursor: pointer; line-height: 1; }
+/* 画像ライトボックス (ピンチ拡大 / ダブルタップ拡大 / 左右フリックで前後) */
+.lightbox { position: fixed; inset: 0; z-index: 200; background: rgba(20,22,34,0.92); display: flex; align-items: center; justify-content: center; }
+.lb-stage { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; touch-action: none; overflow: hidden; }
+.lb-stage img { max-width: 94vw; max-height: 90vh; border-radius: 12px; object-fit: contain; user-select: none; -webkit-user-select: none; will-change: transform; }
+.lightbox-close { position: absolute; top: calc(14px + env(safe-area-inset-top)); right: 16px; width: 40px; height: 40px; border-radius: 20px; border: none; background: rgba(255,255,255,0.15); color: white; font-size: 20px; cursor: pointer; line-height: 1; z-index: 2; }
+.lb-nav { position: absolute; top: 50%; transform: translateY(-50%); width: 42px; height: 42px; border-radius: 21px; border: none; background: rgba(255,255,255,0.15); color: white; font-size: 24px; cursor: pointer; line-height: 1; z-index: 2; }
+.lb-nav.prev { left: 12px; }
+.lb-nav.next { right: 12px; }
+.lb-counter { position: absolute; bottom: calc(18px + env(safe-area-inset-bottom)); left: 50%; transform: translateX(-50%); color: rgba(255,255,255,0.8); font-size: 12px; font-weight: 700; z-index: 2; }
 .zoomable { cursor: zoom-in; }
 .chat-input-row { display: flex; gap: 8px; padding-top: 6px; }
 .chat-input-row textarea { flex: 1; min-height: 42px; max-height: 120px; }
@@ -347,7 +352,7 @@ const TEMPLATE = `
           <div>
             <div class="field-label">参照画像</div>
             <div class="thumb-row">
-              <img v-for="(img,i) in locEdit.referenceImages" :key="i" :src="img.url" class="thumb zoomable" @click="viewerUrl = img.url">
+              <img v-for="(img,i) in locEdit.referenceImages" :key="i" :src="img.url" class="thumb zoomable" @click="openViewer(locEdit.referenceImages.map(x => x.url), i)">
               <label class="filepick"><input type="file" accept="image/*" @change="e => onLocImagePick(e, l)"><span class="icon">add_photo_alternate</span>追加</label>
             </div>
           </div>
@@ -379,7 +384,7 @@ const TEMPLATE = `
 
       <div class="section-title" style="padding-left:0;">作画基準画像 (すべての画像生成に自動同梱され、絵柄がこれに寄る)</div>
       <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
-        <img v-for="(u,i) in (currentProject.styleRefImages || [])" :key="i" :src="u" class="thumb zoomable" style="width:96px; height:96px;" @click="viewerUrl = u">
+        <img v-for="(u,i) in (currentProject.styleRefImages || [])" :key="i" :src="u" class="thumb zoomable" style="width:96px; height:96px;" @click="openViewer(currentProject.styleRefImages, i)">
         <span v-if="!(currentProject.styleRefImages || []).length" class="card-sub">未登録。チャットで見本画像を添付して「これを基準に」と言うか、ここからアップロード</span>
         <label class="filepick"><input type="file" accept="image/*" @change="onStyleRefPick"><span class="icon">add_photo_alternate</span>登録</label>
         <button v-if="(currentProject.styleRefImages || []).length" class="pill" style="padding:6px 14px; font-size:11px; color:var(--danger);" @click="clearStyleRef">解除</button>
@@ -388,7 +393,7 @@ const TEMPLATE = `
       <div class="section-title" style="padding-left:0;">制作資料・小物 (対比図・護符などの参考画像。名前がプロンプトに出ると生成時に自動参照)</div>
       <div style="display:flex; flex-direction:column; gap:8px;">
         <div v-for="a in (currentProject.assets || [])" :key="a.id" class="card" style="padding:10px 12px; display:flex; align-items:center; gap:10px;">
-          <img :src="a.url" class="thumb zoomable" style="width:56px; height:56px; flex-shrink:0;" @click="viewerUrl = a.url">
+          <img :src="a.url" class="thumb zoomable" style="width:56px; height:56px; flex-shrink:0;" @click="openViewer(currentProject.assets.map(x => x.url), currentProject.assets.indexOf(a))">
           <div style="flex:1; min-width:0;">
             <div style="font-size:13px; font-weight:700;">{{ a.name }}</div>
             <div class="card-sub" v-if="a.note">{{ a.note }}</div>
@@ -486,7 +491,7 @@ const TEMPLATE = `
           <div>
             <div class="field-label">参照画像</div>
             <div class="thumb-row">
-              <img v-for="(img,i) in charEdit.referenceImages" :key="i" :src="img.url" class="thumb zoomable" @click="viewerUrl = img.url">
+              <img v-for="(img,i) in charEdit.referenceImages" :key="i" :src="img.url" class="thumb zoomable" @click="openViewer(charEdit.referenceImages.map(x => x.url), i)">
               <label class="filepick"><input type="file" accept="image/*" @change="e => onCharImagePick(e, c)"><span class="icon">add_photo_alternate</span>追加</label>
             </div>
           </div>
@@ -578,7 +583,7 @@ const TEMPLATE = `
 
     <div class="section-title">キービジュアル</div>
     <div class="key-visual-box">
-      <img v-if="currentEpisode.keyVisual && currentEpisode.keyVisual.url" :src="currentEpisode.keyVisual.url" class="kv-img zoomable" @click="viewerUrl = currentEpisode.keyVisual.url">
+      <img v-if="currentEpisode.keyVisual && currentEpisode.keyVisual.url" :src="currentEpisode.keyVisual.url" class="kv-img zoomable" @click="openViewer([currentEpisode.keyVisual.url])">
       <div v-else class="kv-empty">まだキービジュアルがありません</div>
       <label class="filepick" style="margin-top:8px;"><input type="file" accept="image/*" @change="onKeyVisualPick"><span class="icon">add_photo_alternate</span>アップロード</label>
     </div>
@@ -639,7 +644,7 @@ const TEMPLATE = `
           </div>
           <div v-if="cut.storyboardUrl">
             <div class="field-label">絵コンテ (構図確認用の静止画)</div>
-            <img :src="cut.storyboardUrl" class="zoomable" style="width:100%; border-radius:12px;" @click="viewerUrl = cut.storyboardUrl">
+            <img :src="cut.storyboardUrl" class="zoomable" style="width:100%; border-radius:12px;" @click="openViewer([cut.storyboardUrl])">
           </div>
           <div class="actions-row">
             <button @click="generateStoryboard(cut)" :disabled="storyboardingCutId === cut.id">
@@ -679,10 +684,17 @@ const TEMPLATE = `
     </div>
   </template>
 
-  <!-- 画像ライトボックス (どの画面のどの画像でもタップで拡大) -->
-  <div v-if="viewerUrl" class="lightbox" @click="viewerUrl = null">
-    <img :src="viewerUrl" @click.stop>
-    <button class="lightbox-close" @click="viewerUrl = null">×</button>
+  <!-- 画像ライトボックス (ピンチ拡大・ダブルタップ拡大・左右フリックで前後) -->
+  <div v-if="viewer" class="lightbox" @click="closeViewer">
+    <div class="lb-stage" @click.stop
+      @pointerdown.prevent="lbDown" @pointermove.prevent="lbMove"
+      @pointerup="lbUp" @pointercancel="lbUp">
+      <img :src="viewer.list[viewer.index]" :style="lbStyle" draggable="false">
+    </div>
+    <button class="lightbox-close" @click.stop="closeViewer">✕</button>
+    <button v-if="viewer.index > 0" class="lb-nav prev" @click.stop="lbGo(-1)">‹</button>
+    <button v-if="viewer.index < viewer.list.length - 1" class="lb-nav next" @click.stop="lbGo(1)">›</button>
+    <div class="lb-counter" v-if="viewer.list.length > 1">{{ viewer.index + 1 }} / {{ viewer.list.length }}</div>
   </div>
 
   <!-- ───────── AI チャット (モバイル: 下から + 上スワイプ全画面 / PC: 右サイドバー) ───────── -->
@@ -701,7 +713,7 @@ const TEMPLATE = `
             <span class="qtext">{{ m.quotedContent || '(画像)' }}</span>
           </div>
           <div v-if="(m.images || []).length" style="display:flex; gap:6px; flex-wrap:wrap; margin-bottom:6px;">
-            <img v-for="(u,i) in m.images" :key="i" :src="u" class="zoomable" style="width:100%; max-width:240px; height:auto; border-radius:10px; display:block;" @click="viewerUrl = u">
+            <img v-for="(u,i) in m.images" :key="i" :src="u" class="zoomable" style="width:100%; max-width:240px; height:auto; border-radius:10px; display:block;" @click="openChatImage(u)">
           </div>{{ m.content }}<div v-if="m.id">
             <button class="quote-btn" @click="quoteMsg(m)"><span class="icon" style="font-size:13px;">reply</span>引用</button>
           </div></div>
@@ -791,8 +803,98 @@ const App = {
 
     const chatOpen = ref(false);
     const chatExpanded = ref(false);
-    const viewerUrl = ref(null); // 画像ライトボックス
+
+    // ── 画像ビューア (ギャラリー + ピンチ/ダブルタップ拡大 + フリックで前後) ──
+    const viewer = ref(null); // { list: [url], index }
+    const vScale = ref(1), vX = ref(0), vY = ref(0), vDragging = ref(false);
+    const lbStyle = computed(() => ({
+      transform: `translate(${vX.value}px, ${vY.value}px) scale(${vScale.value})`,
+      transition: vDragging.value ? "none" : "transform 160ms ease",
+    }));
+    function openViewer(list, index = 0) {
+      const clean = (list || []).filter(Boolean);
+      if (!clean.length) return;
+      viewer.value = { list: clean, index: Math.max(0, Math.min(index, clean.length - 1)) };
+      lbReset();
+    }
+    function closeViewer() { viewer.value = null; }
+    function lbReset() { vScale.value = 1; vX.value = 0; vY.value = 0; }
+    function lbGo(d) {
+      if (!viewer.value) return;
+      const next = viewer.value.index + d;
+      if (next < 0 || next >= viewer.value.list.length) { vX.value = 0; return; }
+      viewer.value = { ...viewer.value, index: next };
+      lbReset();
+    }
+    const lbPointers = new Map();
+    let lbPinch = null;   // { dist0, scale0, midX, midY, x0, y0 }
+    let lbPan = null;     // { startX, startY, x0, y0, moved }
+    let lbLastTap = 0;
+    function lbDown(e) {
+      lbPointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      e.currentTarget.setPointerCapture?.(e.pointerId);
+      vDragging.value = true;
+      if (lbPointers.size === 2) {
+        const [a, b] = [...lbPointers.values()];
+        lbPinch = {
+          dist0: Math.hypot(a.x - b.x, a.y - b.y), scale0: vScale.value,
+          midX: (a.x + b.x) / 2, midY: (a.y + b.y) / 2, x0: vX.value, y0: vY.value,
+        };
+        lbPan = null;
+      } else if (lbPointers.size === 1) {
+        lbPan = { startX: e.clientX, startY: e.clientY, x0: vX.value, y0: vY.value, moved: false };
+      }
+    }
+    function lbMove(e) {
+      if (!lbPointers.has(e.pointerId)) return;
+      lbPointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (lbPointers.size === 2 && lbPinch) {
+        const [a, b] = [...lbPointers.values()];
+        const dist = Math.hypot(a.x - b.x, a.y - b.y);
+        vScale.value = Math.max(1, Math.min(5, lbPinch.scale0 * (dist / lbPinch.dist0)));
+        const midX = (a.x + b.x) / 2, midY = (a.y + b.y) / 2;
+        vX.value = lbPinch.x0 + (midX - lbPinch.midX);
+        vY.value = lbPinch.y0 + (midY - lbPinch.midY);
+      } else if (lbPointers.size === 1 && lbPan) {
+        const dx = e.clientX - lbPan.startX, dy = e.clientY - lbPan.startY;
+        if (Math.abs(dx) > 6 || Math.abs(dy) > 6) lbPan.moved = true;
+        if (vScale.value > 1) {
+          vX.value = lbPan.x0 + dx;
+          vY.value = lbPan.y0 + dy;
+        } else {
+          vX.value = dx; // 等倍時はフリック (横) の追従だけ
+          vY.value = 0;
+        }
+      }
+    }
+    function lbUp(e) {
+      const wasPan = lbPan;
+      lbPointers.delete(e.pointerId);
+      if (lbPointers.size < 2) lbPinch = null;
+      if (lbPointers.size === 0) {
+        vDragging.value = false;
+        if (wasPan && vScale.value <= 1) {
+          const dx = vX.value;
+          if (Math.abs(dx) > 60) { lbGo(dx < 0 ? 1 : -1); }
+          else {
+            vX.value = 0;
+            if (!wasPan.moved) {
+              // ダブルタップで 2.5 倍 ⇔ 等倍
+              const now = Date.now();
+              if (now - lbLastTap < 320) { vScale.value = vScale.value > 1 ? 1 : 2.5; vX.value = 0; vY.value = 0; lbLastTap = 0; }
+              else lbLastTap = now;
+            }
+          }
+        } else if (vScale.value <= 1) { vX.value = 0; vY.value = 0; }
+        lbPan = null;
+      }
+    }
     const chatMessages = ref([]);
+    // チャット内の画像タップ → 会話中の全画像を横断できるギャラリーで開く
+    function openChatImage(url) {
+      const all = chatMessages.value.flatMap((m) => m.images || []);
+      openViewer(all, Math.max(0, all.indexOf(url)));
+    }
     const chatInput = ref("");
     const chatSending = ref(false);
     const chatLogEl = ref(null);
@@ -1583,7 +1685,7 @@ const App = {
       editingCast, appearingCharacters, autoBuilding, autoBuildStage, autoBuildEpisode,
       isAppearing, toggleAppearing, onKeyVisualPick,
       exporting, exportErr, exportEpisode,
-      chatOpen, chatExpanded, viewerUrl, chatMessages, chatInput, chatSending, chatLogEl, chatAttach, quoting, quoteMsg, openChat, sendChat, onChatImagePick,
+      chatOpen, chatExpanded, viewer, lbStyle, openViewer, closeViewer, lbGo, lbDown, lbMove, lbUp, openChatImage, chatMessages, chatInput, chatSending, chatLogEl, chatAttach, quoting, quoteMsg, openChat, sendChat, onChatImagePick,
       chapters, chapterOpenId, chapterContent, aozoraUrl, importing, analyzing, analyzeProgress,
       setupAnalyzing, runSetupAnalysis, settingsEdit, settingsSaving, usage, openSettingsTab, saveSettings,
       newAssetName, onStyleRefPick, clearStyleRef, onAssetPick, deleteAsset,
