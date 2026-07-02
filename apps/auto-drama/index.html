@@ -115,6 +115,28 @@ textarea.field-input { min-height: 70px; resize: vertical; }
 @keyframes typing-bounce { 0%, 60%, 100% { transform: translateY(0); opacity: 0.35; } 30% { transform: translateY(-4px); opacity: 1; } }
 .typing-label { font-size: 11px; color: var(--text2); font-weight: 600; }
 
+/* ── PC (900px〜): チャットは右サイドバーにドッキング、コンテンツはその分縮む ── */
+.chat-close { display: none; }
+@media (min-width: 900px) {
+  .chat-docked { padding-right: 420px; }
+  .chat-docked .fab-row { right: 442px; }
+  /* bottom-sheet を右サイドバー化 (chat-bs クラスの sheet だけ) */
+  .chat-bs.bs-modal { justify-content: flex-end; align-items: stretch; background: transparent !important; pointer-events: none; }
+  .chat-bs.bs-modal .bs-sheet {
+    width: 420px; max-width: 420px; height: 100dvh; max-height: 100dvh;
+    border-radius: 0; pointer-events: auto;
+    box-shadow: -8px 0 24px rgba(148,152,176,0.35);
+    transform: translateX(100%);
+  }
+  .chat-bs.bs-modal .bs-grab { pointer-events: none; } /* ドラッグ閉じ無効 (タイトルは残す) → × で閉じる */
+  .chat-bs.bs-modal .bs-handle { display: none; }
+  .chat-bs.bs-modal .chat-sheet { height: calc(100dvh - 120px); }
+  .chat-close { display: flex; position: absolute; top: 14px; right: 14px; width: 34px; height: 34px;
+    border-radius: 17px; border: none; background: var(--bg); color: var(--text2);
+    box-shadow: 3px 3px 8px var(--sd), -2px -2px 6px var(--sl);
+    align-items: center; justify-content: center; font-size: 17px; cursor: pointer; z-index: 5; }
+}
+
 /* 画像ライトボックス (タップで拡大表示) */
 .lightbox { position: fixed; inset: 0; z-index: 200; background: rgba(20,22,34,0.92); display: flex; align-items: center; justify-content: center; padding: 20px; }
 .lightbox img { max-width: 100%; max-height: 92vh; border-radius: 12px; object-fit: contain; }
@@ -152,7 +174,7 @@ const STATE_LABEL = {
 const IMG_KIND_LABEL = { full: "全身", face: "顔", expression: "表情" };
 
 const TEMPLATE = `
-<div>
+<div :class="{ 'chat-docked': chatOpen }">
   <!-- ───────── プロジェクト一覧 ───────── -->
   <template v-if="view === 'projects'">
     <div class="header-fix">
@@ -628,8 +650,9 @@ const TEMPLATE = `
     <button class="lightbox-close" @click="viewerUrl = null">×</button>
   </div>
 
-  <!-- ───────── AI チャット (ハンドル上スワイプで全画面) ───────── -->
-  <bottom-sheet v-model="chatOpen" title="AI チャット" expandable fullscreen-on-expand v-model:expanded="chatExpanded">
+  <!-- ───────── AI チャット (モバイル: 下から + 上スワイプ全画面 / PC: 右サイドバー) ───────── -->
+  <bottom-sheet class="chat-bs" v-model="chatOpen" title="AI チャット" expandable fullscreen-on-expand v-model:expanded="chatExpanded">
+    <button class="chat-close" @click="chatOpen = false">✕</button>
     <div class="chat-sheet" :class="{ full: chatExpanded }">
       <div class="chat-log" ref="chatLogEl">
         <div v-if="chatMessages.length === 0" style="display:flex; flex-direction:column; gap:8px; padding:12px 4px;">
@@ -642,10 +665,7 @@ const TEMPLATE = `
             <img v-for="(u,i) in m.images" :key="i" :src="u" class="zoomable" style="width:100%; max-width:240px; height:auto; border-radius:10px; display:block;" @click="viewerUrl = u">
           </div>{{ m.content }}</div>
         <div v-if="chatSending" class="msg assistant">
-          <div class="typing-row">
-            <div class="typing-dots"><span></span><span></span><span></span></div>
-            <span class="typing-label">AI が応答中… (画像生成や設定操作を含むと 30 秒くらいかかることがあります)</span>
-          </div>
+          <div class="typing-dots"><span></span><span></span><span></span></div>
         </div>
       </div>
       <div v-if="chatAttach.length" style="display:flex; gap:6px; padding:4px 0; flex-wrap:wrap;">
@@ -659,8 +679,9 @@ const TEMPLATE = `
           <input type="file" accept="image/*" multiple style="display:none;" @change="onChatImagePick" :disabled="chatSending">
           <span class="icon">add_photo_alternate</span>
         </label>
-        <!-- Enter は改行 (スマホの誤送信対策)。送信はボタンのみ -->
-        <textarea class="field-input" v-model="chatInput" placeholder="メッセージを入力…"></textarea>
+        <!-- Enter は改行 (スマホの誤送信対策)。送信はボタン or Cmd/Ctrl+Enter -->
+        <textarea class="field-input" v-model="chatInput" placeholder="メッセージを入力…"
+          @keydown.enter.meta.prevent="sendChat" @keydown.enter.ctrl.prevent="sendChat"></textarea>
         <button class="chat-send" @click="sendChat" :disabled="chatSending || (!chatInput.trim() && !chatAttach.length)"><span class="icon">{{ chatSending ? 'hourglass_top' : 'send' }}</span></button>
       </div>
     </div>
