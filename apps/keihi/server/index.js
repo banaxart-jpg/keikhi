@@ -9369,12 +9369,20 @@ async function dramaProcessChat(p, { projectId, episodeId, message, imageUrls = 
   // 生成後に AI 自身が意図どおりか審査し、NG なら修正プロンプトで作り直す (最大2回まで)。
   const generatedImages = [];
   // [画像再掲: k] = 会話の画像 k をそのまま返信に貼る (再生成しない・無料・劣化なし)。
-  // 番号が範囲外ならマーカーを残す (それらしい別画像を勝手に出さないため)
-  reply = reply.replace(/\[画像再掲:\s*(?:会話の画像)?\s*(\d+)\s*\]/g, (m, k) => {
+  // モデルはマーカーの代わりにラベル「(会話の画像k)」を本文に書いてしまうことがある
+  // (実測) ので、そちらも拾って画像を貼り、本文は読める文言に置き換える。
+  // 番号が範囲外なら何もしない (それらしい別画像を勝手に出さないため)
+  const attachReshow = (k) => {
     const url = historyImageUrls[Number(k) - 1];
-    if (!url) return m;
-    if (!generatedImages.includes(url)) generatedImages.push(url);
-    return "";
+    if (!url) return 0;
+    let i = generatedImages.indexOf(url);
+    if (i < 0) { generatedImages.push(url); i = generatedImages.length - 1; }
+    return i + 1; // 添付での並び順 (1始まり)
+  };
+  reply = reply.replace(/\[画像再掲:\s*(?:会話の画像)?\s*(\d+)\s*\]/g, (m, k) => attachReshow(k) ? "" : m);
+  reply = reply.replace(/[（(]会話の画像\s*(\d+)[）)]/g, (m, k) => {
+    const n = attachReshow(k);
+    return n ? `(添付${n}枚目)` : m;
   });
   // [画像生成: ...] = 新規生成 / [画像編集: ...] = 直前の画像 (引用 > 添付 > 会話の最後の画像) を編集
   let markers = [...reply.matchAll(/\[画像(生成|編集):\s*([\s\S]*?)\]/g)].slice(0, 2);
