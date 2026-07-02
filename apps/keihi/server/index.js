@@ -9445,8 +9445,10 @@ async function dramaProcessChat(p, { projectId, episodeId, message, imageUrls = 
   // debug モードでは解析だけして実行しない (本物のデータを書き換えないため)
   let applied = [];
   let actionsParsed = null;
+  let actionsRaw = null; // debug 用: parse 失敗の原因調査にモデルの生出力を返す
   const actionsMatch = reply.match(/<<<ACTIONS([\s\S]*?)ACTIONS>>>/);
   if (actionsMatch) {
+    actionsRaw = actionsMatch[1].trim().slice(0, 3000);
     reply = reply.replace(/<<<ACTIONS[\s\S]*?ACTIONS>>>/g, "").trim();
     try {
       const raw = actionsMatch[1].trim();
@@ -9472,7 +9474,7 @@ async function dramaProcessChat(p, { projectId, episodeId, message, imageUrls = 
 
   if (debug) {
     return {
-      reply, images: generatedImages, markers: markerInfo, imageRuns, actionsParsed,
+      reply, images: generatedImages, markers: markerInfo, imageRuns, actionsParsed, actionsRaw,
       timings, systemPromptChars: systemPrompt.length,
       historyImagesSent: historyImageParts.length, currentImagesSent: imageParts.length,
       quoted: { text: quoted.text, images: quoted.imageUrls.length },
