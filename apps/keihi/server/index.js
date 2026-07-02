@@ -8109,7 +8109,9 @@ app.post("/api/drama/projects/:id/compose-series", async (req, res) => {
   if (!p) return res.status(503).json({ error: "DB not configured" });
   if (!genAI) return res.status(503).json({ error: "Gemini not configured" });
   try {
-    const { rows: projRows } = await p.query(`SELECT title, author FROM drama_projects WHERE id=$1`, [req.params.id]);
+    const { rows: projRows } = await p.query(
+      `SELECT title, author, style_guide AS "styleGuide", world_setting AS "worldSetting", ai_notes AS "aiNotes"
+         FROM drama_projects WHERE id=$1`, [req.params.id]);
     if (!projRows.length) return res.status(404).json({ error: "not found" });
     const { rows: chapters } = await p.query(
       `SELECT number, title, length(content) AS "charCount", summary FROM drama_chapters WHERE project_id=$1 ORDER BY number`,
@@ -8123,6 +8125,7 @@ app.post("/api/drama/projects/:id/compose-series", async (req, res) => {
     const episodes = await dramaComposeSeries(dramaTrackedGemini(req.params.id, "compose_series"), {
       title: projRows[0].title, author: projRows[0].author, chapters,
       targetDurationSec: Number(req.body?.targetDurationSec) || 60,
+      styleGuide: projRows[0].styleGuide, worldSetting: projRows[0].worldSetting, aiNotes: projRows[0].aiNotes,
     });
     if (req.body?.force) await p.query(`DELETE FROM drama_episodes WHERE project_id=$1`, [req.params.id]);
 
@@ -8158,34 +8161,11 @@ app.post("/api/drama/episodes/:id/write-script", async (req, res) => {
   if (!p) return res.status(503).json({ error: "DB not configured" });
   if (!genAI) return res.status(503).json({ error: "Gemini not configured" });
   try {
-    const { rows: epRows } = await p.query(
-      `SELECT id, project_id AS "projectId", number, title, target_duration_sec AS "targetDurationSec",
-              chapter_numbers AS "chapterNumbers", pacing, focus
-         FROM drama_episodes WHERE id=$1`,
-      [req.params.id]
-    );
-    if (!epRows.length) return res.status(404).json({ error: "not found" });
-    const episode = epRows[0];
-    const chapterNumbers = episode.chapterNumbers || [];
-    if (!chapterNumbers.length) return res.status(400).json({ error: "この話に章が割り当てられていません (シリーズ構成を先に)" });
-    const { rows: projRows } = await p.query(
-      `SELECT title, author, style_guide AS "styleGuide" FROM drama_projects WHERE id=$1`, [episode.projectId]
-    );
-    const { rows: chapterRows } = await p.query(
-      `SELECT number, title, content FROM drama_chapters WHERE project_id=$1 AND number = ANY($2::int[]) ORDER BY number`,
-      [episode.projectId, chapterNumbers]
-    );
-    const { rows: characters } = await p.query(`SELECT id, name FROM drama_characters WHERE project_id=$1`, [episode.projectId]);
-    const chapterTexts = chapterRows.map((c) => `【第${c.number}章 ${c.title}】\n${c.content}`).join("\n\n");
-    const script = await dramaWriteScript(dramaTrackedGemini(episode.projectId, "write_script"), {
-      title: projRows[0].title, author: projRows[0].author, styleGuide: projRows[0].styleGuide,
-      episode, chapterTexts, characters,
-    });
-    await p.query(`UPDATE drama_episodes SET script=$1, updated_at=now() WHERE id=$2`, [script, req.params.id]);
+    const script = await dramaRunWriteScript(p, req.params.id);
     res.json({ ok: true, script });
   } catch (err) {
     console.error("[drama] write-script", err);
-    res.status(500).json({ error: err.message });
+    res.status(err.status || 500).json({ error: err.message });
   }
 });
 
@@ -8196,55 +8176,11 @@ app.post("/api/drama/episodes/:id/compose-cuts", async (req, res) => {
   if (!p) return res.status(503).json({ error: "DB not configured" });
   if (!genAI) return res.status(503).json({ error: "Gemini not configured" });
   try {
-    const { rows: epRows } = await p.query(
-      `SELECT id, project_id AS "projectId", number, title, target_duration_sec AS "targetDurationSec", pacing, focus, script
-         FROM drama_episodes WHERE id=$1`,
-      [req.params.id]
-    );
-    if (!epRows.length) return res.status(404).json({ error: "not found" });
-    const episode = epRows[0];
-    if (!episode.script) return res.status(400).json({ error: "脚本がまだありません (②脚本を先に)" });
-    const { rows: existing } = await p.query(`SELECT COUNT(*)::int AS n FROM drama_cuts WHERE episode_id=$1`, [req.params.id]);
-    if (existing[0].n > 0 && !req.body?.force) {
-      return res.status(409).json({ error: "既にカットがあります。作り直す場合は force を指定 (既存カットと生成履歴は消えます)" });
-    }
-    const { rows: projRows } = await p.query(
-      `SELECT title, style_guide AS "styleGuide" FROM drama_projects WHERE id=$1`, [episode.projectId]
-    );
-    const { rows: characters } = await p.query(`SELECT id, name FROM drama_characters WHERE project_id=$1`, [episode.projectId]);
-    const { rows: locations } = await p.query(`SELECT id, name FROM drama_locations WHERE project_id=$1`, [episode.projectId]);
-    const cuts = await dramaComposeCuts(dramaTrackedGemini(episode.projectId, "compose_cuts"), {
-      title: projRows[0].title, styleGuide: projRows[0].styleGuide, episode, script: episode.script, characters, locations,
-    });
-    if (req.body?.force) await p.query(`DELETE FROM drama_cuts WHERE episode_id=$1`, [req.params.id]);
-    const validCharIds = new Set(characters.map((c) => String(c.id)));
-    const validLocIds = new Set(locations.map((l) => String(l.id)));
-    const usedCharIds = new Set();
-    let order = 1;
-    for (const c of cuts) {
-      const charIds = c.characterIds.filter((id) => validCharIds.has(id));
-      charIds.forEach((id) => usedCharIds.add(id));
-      await p.query(
-        `INSERT INTO drama_cuts (episode_id, "order", duration_sec, prompt, character_ids, location_id, narration, subtitle)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
-        [req.params.id, order++, c.durationSec, c.prompt,
-         JSON.stringify(charIds),
-         validLocIds.has(c.locationId) ? c.locationId : null,
-         c.narration || null, c.subtitle || null]
-      );
-    }
-    // 話の出演キャラをカットの実使用から自動更新 (既存の選択とマージ)
-    const { rows: epCast } = await p.query(
-      `SELECT appearing_character_ids AS "appearingCharacterIds" FROM drama_episodes WHERE id=$1`, [req.params.id]
-    );
-    const merged = new Set([...(epCast[0]?.appearingCharacterIds || []).map(String), ...usedCharIds]);
-    await p.query(`UPDATE drama_episodes SET appearing_character_ids=$1, updated_at=now() WHERE id=$2`,
-      [JSON.stringify([...merged]), req.params.id]);
-    await dramaRecomputeState(p, req.params.id);
-    res.json({ ok: true, cutCount: cuts.length });
+    const cutCount = await dramaRunComposeCuts(p, req.params.id, { force: !!req.body?.force });
+    res.json({ ok: true, cutCount });
   } catch (err) {
     console.error("[drama] compose-cuts", err);
-    res.status(500).json({ error: err.message });
+    res.status(err.status || 500).json({ error: err.message });
   }
 });
 
@@ -8677,9 +8613,106 @@ app.get("/api/drama/projects/:id/chat", async (req, res) => {
   }
 });
 
+// 章 index (character_names) と登録キャラを名前で突き合わせて出演キャラ id を出す
+async function dramaCastFromChapters(p, projectId, chapterNumbers) {
+  const { rows: chapNames } = await p.query(
+    `SELECT number, character_names AS "characterNames" FROM drama_chapters WHERE project_id=$1`, [projectId]
+  );
+  const namesByChapter = new Map(chapNames.map((c) => [Number(c.number), c.characterNames || []]));
+  const { rows: regChars } = await p.query(`SELECT id, name FROM drama_characters WHERE project_id=$1`, [projectId]);
+  const nameMatch = (a, b) => a && b && (a === b || a.includes(b) || b.includes(a));
+  const cast = new Set();
+  for (const n of chapterNumbers || []) for (const nm of (namesByChapter.get(Number(n)) || [])) cast.add(nm);
+  return regChars.filter((c) => [...cast].some((nm) => nameMatch(c.name, nm))).map((c) => String(c.id));
+}
+
+// 脚本生成の本体 (ルートとチャット ACTIONS の両方から使う)
+async function dramaRunWriteScript(p, episodeId) {
+  const { rows: epRows } = await p.query(
+    `SELECT id, project_id AS "projectId", number, title, target_duration_sec AS "targetDurationSec",
+            chapter_numbers AS "chapterNumbers", pacing, focus
+       FROM drama_episodes WHERE id=$1`,
+    [episodeId]
+  );
+  if (!epRows.length) { const e = new Error("話が見つかりません"); e.status = 404; throw e; }
+  const episode = epRows[0];
+  const chapterNumbers = episode.chapterNumbers || [];
+  if (!chapterNumbers.length) { const e = new Error("この話に章が割り当てられていません (シリーズ構成を先に)"); e.status = 400; throw e; }
+  const { rows: projRows } = await p.query(
+    `SELECT title, author, style_guide AS "styleGuide", world_setting AS "worldSetting", ai_notes AS "aiNotes"
+       FROM drama_projects WHERE id=$1`, [episode.projectId]
+  );
+  const { rows: chapterRows } = await p.query(
+    `SELECT number, title, content FROM drama_chapters WHERE project_id=$1 AND number = ANY($2::int[]) ORDER BY number`,
+    [episode.projectId, chapterNumbers]
+  );
+  const { rows: characters } = await p.query(`SELECT id, name FROM drama_characters WHERE project_id=$1`, [episode.projectId]);
+  const chapterTexts = chapterRows.map((c) => `【第${c.number}章 ${c.title}】\n${c.content}`).join("\n\n");
+  const script = await dramaWriteScript(dramaTrackedGemini(episode.projectId, "write_script"), {
+    title: projRows[0].title, author: projRows[0].author, styleGuide: projRows[0].styleGuide,
+    worldSetting: projRows[0].worldSetting, aiNotes: projRows[0].aiNotes,
+    episode, chapterTexts, characters,
+  });
+  await p.query(`UPDATE drama_episodes SET script=$1, updated_at=now() WHERE id=$2`, [script, episodeId]);
+  return script;
+}
+
+// カット割り生成の本体 (ルートとチャット ACTIONS の両方から使う)
+async function dramaRunComposeCuts(p, episodeId, { force = false } = {}) {
+  const { rows: epRows } = await p.query(
+    `SELECT id, project_id AS "projectId", number, title, target_duration_sec AS "targetDurationSec", pacing, focus, script
+       FROM drama_episodes WHERE id=$1`,
+    [episodeId]
+  );
+  if (!epRows.length) { const e = new Error("話が見つかりません"); e.status = 404; throw e; }
+  const episode = epRows[0];
+  if (!episode.script) { const e = new Error("脚本がまだありません (先に脚本を生成)"); e.status = 400; throw e; }
+  const { rows: existing } = await p.query(`SELECT COUNT(*)::int AS n FROM drama_cuts WHERE episode_id=$1`, [episodeId]);
+  if (existing[0].n > 0 && !force) {
+    const e = new Error("既にカットがあります。作り直す場合は force を指定 (既存カットと生成履歴は消えます)");
+    e.status = 409; throw e;
+  }
+  const { rows: projRows } = await p.query(
+    `SELECT title, style_guide AS "styleGuide", world_setting AS "worldSetting", ai_notes AS "aiNotes"
+       FROM drama_projects WHERE id=$1`, [episode.projectId]
+  );
+  const { rows: characters } = await p.query(`SELECT id, name FROM drama_characters WHERE project_id=$1`, [episode.projectId]);
+  const { rows: locations } = await p.query(`SELECT id, name FROM drama_locations WHERE project_id=$1`, [episode.projectId]);
+  const cuts = await dramaComposeCuts(dramaTrackedGemini(episode.projectId, "compose_cuts"), {
+    title: projRows[0].title, styleGuide: projRows[0].styleGuide,
+    worldSetting: projRows[0].worldSetting, aiNotes: projRows[0].aiNotes,
+    episode, script: episode.script, characters, locations,
+  });
+  if (force) await p.query(`DELETE FROM drama_cuts WHERE episode_id=$1`, [episodeId]);
+  const validCharIds = new Set(characters.map((c) => String(c.id)));
+  const validLocIds = new Set(locations.map((l) => String(l.id)));
+  const usedCharIds = new Set();
+  let order = 1;
+  for (const c of cuts) {
+    const charIds = c.characterIds.filter((id) => validCharIds.has(id));
+    charIds.forEach((id) => usedCharIds.add(id));
+    await p.query(
+      `INSERT INTO drama_cuts (episode_id, "order", duration_sec, prompt, character_ids, location_id, narration, subtitle)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+      [episodeId, order++, c.durationSec, c.prompt, JSON.stringify(charIds),
+       validLocIds.has(c.locationId) ? c.locationId : null, c.narration || null, c.subtitle || null]
+    );
+  }
+  // 話の出演キャラをカットの実使用から自動更新 (既存の選択とマージ)
+  const { rows: epCast } = await p.query(
+    `SELECT appearing_character_ids AS "appearingCharacterIds" FROM drama_episodes WHERE id=$1`, [episodeId]
+  );
+  const merged = new Set([...(epCast[0]?.appearingCharacterIds || []).map(String), ...usedCharIds]);
+  await p.query(`UPDATE drama_episodes SET appearing_character_ids=$1, updated_at=now() WHERE id=$2`,
+    [JSON.stringify([...merged]), episodeId]);
+  await dramaRecomputeState(p, episodeId);
+  return cuts.length;
+}
+
 // ── チャット AI の設定操作 (CRUD)。<<<ACTIONS [...] ACTIONS>>> ブロックを実行する ──
-// 対象: プロジェクト設定 (styleGuide/worldSetting)・制作メモ (ai_notes)・キャラ・場所。
-// キャラ/場所は名前で特定 (プロジェクト内)。結果は日本語サマリで返してチャットに表示する。
+// 対象: プロジェクト設定・制作メモ・キャラ・場所・エピソード + 生成ツール
+// (generate_script / generate_cuts)。キャラ/場所は名前、話は話数で特定。
+// 結果は日本語サマリで返してチャットに表示する。
 // LLM が文字列リテラル内に生の改行を書きがち (メモの箇条書き等) なので、
 // JSON.parse 前に文字列内の制御文字をエスケープする
 function dramaEscapeCtrlInJsonStrings(s) {
@@ -8771,6 +8804,49 @@ async function dramaExecuteActions(p, projectId, actions) {
       } else if (a.action === "delete_location" && a.name) {
         const { rowCount } = await p.query(`DELETE FROM drama_locations WHERE project_id=$1 AND name=$2`, [projectId, strOr(a.name, 50)]);
         applied.push(rowCount ? `場所「${a.name}」を削除` : `場所「${a.name}」が見つからず削除失敗`);
+      } else if (a.action === "create_episode" && a.number) {
+        const chapterNumbers = (Array.isArray(a.chapterNumbers) ? a.chapterNumbers : []).map(Number).filter((n) => !isNaN(n));
+        const appearing = await dramaCastFromChapters(p, projectId, chapterNumbers);
+        await p.query(
+          `INSERT INTO drama_episodes (project_id, number, title, chapter_numbers, pacing, focus, appearing_character_ids)
+           VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+          [projectId, Number(a.number), strOr(a.title, 60) || null, JSON.stringify(chapterNumbers),
+           ["compress", "normal", "stretch"].includes(a.pacing) ? a.pacing : "normal",
+           strOr(a.focus, 300) || null, JSON.stringify(appearing)]
+        );
+        applied.push(`第${a.number}話を作成`);
+      } else if (a.action === "update_episode" && a.number) {
+        const chapterNumbers = Array.isArray(a.chapterNumbers)
+          ? JSON.stringify(a.chapterNumbers.map(Number).filter((n) => !isNaN(n))) : undefined;
+        const { rowCount } = await p.query(
+          `UPDATE drama_episodes SET
+             title = COALESCE($1, title),
+             pacing = COALESCE($2, pacing),
+             focus = COALESCE($3, focus),
+             script = COALESCE($4, script),
+             chapter_numbers = COALESCE($5::jsonb, chapter_numbers),
+             updated_at = now()
+           WHERE project_id=$6 AND number=$7`,
+          [strOr(a.title, 60), ["compress", "normal", "stretch"].includes(a.pacing) ? a.pacing : null,
+           strOr(a.focus, 300), strOr(a.script, 8000), chapterNumbers || null, projectId, Number(a.number)]
+        );
+        applied.push(rowCount ? `第${a.number}話を更新` : `第${a.number}話が見つからず更新失敗`);
+      } else if (a.action === "delete_episode" && a.number) {
+        const { rowCount } = await p.query(`DELETE FROM drama_episodes WHERE project_id=$1 AND number=$2`, [projectId, Number(a.number)]);
+        applied.push(rowCount ? `第${a.number}話を削除` : `第${a.number}話が見つからず削除失敗`);
+      } else if ((a.action === "generate_script" || a.action === "generate_cuts") && a.episodeNumber) {
+        const { rows: epId } = await p.query(
+          `SELECT id FROM drama_episodes WHERE project_id=$1 AND number=$2`, [projectId, Number(a.episodeNumber)]
+        );
+        if (!epId.length) {
+          applied.push(`第${a.episodeNumber}話が見つからず${a.action === "generate_script" ? "脚本" : "カット"}生成失敗`);
+        } else if (a.action === "generate_script") {
+          await dramaRunWriteScript(p, epId[0].id);
+          applied.push(`第${a.episodeNumber}話の脚本を生成`);
+        } else {
+          const n = await dramaRunComposeCuts(p, epId[0].id, { force: true });
+          applied.push(`第${a.episodeNumber}話のカット割りを生成 (${n}カット)`);
+        }
       } else {
         applied.push(`不明な操作: ${a.action || "(なし)"}`);
       }

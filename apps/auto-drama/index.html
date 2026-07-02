@@ -481,12 +481,27 @@ const TEMPLATE = `
       <ul><li v-for="m in currentEpisode.missingInfo" :key="m">{{ m }}</li></ul>
     </div>
 
-    <div class="section-title">登場キャラクター (タップで選択、色付き = この話に出演)</div>
+    <div class="list" style="padding-top:8px; padding-bottom:0;">
+      <div class="actions-row">
+        <button class="primary" @click="autoBuildEpisode" :disabled="autoBuilding">
+          {{ autoBuilding ? autoBuildStage : 'この話をAIで一気に生成 (脚本 → カット割り)' }}</button>
+      </div>
+    </div>
+
+    <div class="section-title">登場キャラクター</div>
     <div class="list" style="padding-top:0;">
-      <div style="display:flex; flex-wrap:wrap; gap:8px; padding: 0 16px;">
-        <label v-for="c in currentProject.characters" :key="c.id" class="chip" :style="isAppearing(c.id) ? { background: 'var(--accent)', color: 'white' } : {}">
-          <input type="checkbox" style="display:none;" :checked="isAppearing(c.id)" @change="toggleAppearing(c.id)">{{ c.name }}
-        </label>
+      <div style="display:flex; flex-wrap:wrap; gap:8px; padding: 0 16px; align-items:center;">
+        <template v-if="!editingCast">
+          <span v-for="c in appearingCharacters" :key="c.id" class="chip" style="background: var(--accent); color: white;">{{ c.name }}</span>
+          <span v-if="!appearingCharacters.length" class="card-sub">未設定 (シリーズ構成・カット割りで自動設定されます)</span>
+          <button class="pill" style="padding:6px 14px; font-size:11px;" @click="editingCast = true">変更</button>
+        </template>
+        <template v-else>
+          <label v-for="c in currentProject.characters" :key="c.id" class="chip" style="cursor:pointer;"
+            :style="isAppearing(c.id) ? { background: 'var(--accent)', color: 'white' } : {}"
+            @click="toggleAppearing(c.id)">{{ isAppearing(c.id) ? '✓ ' : '' }}{{ c.name }}</label>
+          <button class="pill" style="padding:6px 14px; font-size:11px;" @click="editingCast = false">完了</button>
+        </template>
       </div>
     </div>
 
@@ -1101,6 +1116,31 @@ const App = {
     const scriptSaving = ref(false);
     const composingCuts = ref(false);
     const storyboardingCutId = ref(null);
+    const editingCast = ref(false);
+    const autoBuilding = ref(false);
+    const autoBuildStage = ref("");
+    const appearingCharacters = computed(() =>
+      (currentProject.value?.characters || []).filter((c) => isAppearing(c.id))
+    );
+
+    // 1 話ずつの一括生成: 脚本 → カット割りをこの話だけ実行 (全話一気はトークンが
+    // もったいない + 構成ミス時のやり直しが高くつくため、話単位で回す)
+    async function autoBuildEpisode() {
+      const hasScript = !!currentEpisode.value.script;
+      const hasCuts = currentEpisode.value.cuts.length > 0;
+      if ((hasScript || hasCuts) && !confirm("既存の脚本" + (hasCuts ? "とカット (生成履歴含む)" : "") + "を上書きして作り直します。いい？")) return;
+      autoBuilding.value = true;
+      err.value = "";
+      try {
+        autoBuildStage.value = "① 脚本を執筆中…";
+        const r = await apiFetch(`/api/drama/episodes/${currentEpisode.value.id}/write-script`, { method: "POST", body: {} });
+        scriptEdit.value = r.script;
+        autoBuildStage.value = "② カットを割ってます…";
+        await apiFetch(`/api/drama/episodes/${currentEpisode.value.id}/compose-cuts`, { method: "POST", body: { force: hasCuts } });
+        await refreshEpisode();
+        scriptEdit.value = currentEpisode.value.script || "";
+      } catch (e) { err.value = e.message; } finally { autoBuilding.value = false; autoBuildStage.value = ""; }
+    }
 
     async function composeSeriesFn() {
       const hasExisting = currentProject.value.episodes.length > 0;
@@ -1310,6 +1350,9 @@ const App = {
           apiFetch(`/api/drama/projects/${currentProject.value.id}`)
             .then((proj) => { currentProject.value = proj; })
             .catch(() => {});
+          if (view.value === "episode" && currentEpisode.value) {
+            refreshEpisode().then(() => { scriptEdit.value = currentEpisode.value.script || ""; }).catch(() => {});
+          }
         }
       } catch (e) {
         chatMessages.value.push({ role: "assistant", content: "(エラー: " + e.message + ")" });
@@ -1348,6 +1391,7 @@ const App = {
       generatingCutId, genError, genErrorFor, generateCut, selectGeneration, refreshGeneration,
       composingSeries, composeSeriesFn, scriptEdit, scriptWriting, scriptSaving, writeScriptFn, saveScript,
       composingCuts, composeCutsFn, storyboardingCutId, generateStoryboard,
+      editingCast, appearingCharacters, autoBuilding, autoBuildStage, autoBuildEpisode,
       isAppearing, toggleAppearing, onKeyVisualPick,
       exporting, exportErr, exportEpisode,
       chatOpen, chatExpanded, chatMessages, chatInput, chatSending, chatLogEl, chatAttach, openChat, sendChat, onChatImagePick,

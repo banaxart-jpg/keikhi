@@ -145,7 +145,12 @@ ${missingBlock}
   {"action":"delete_character","name":"名前"},
   {"action":"create_location","name":"場所名","description":"説明","identityTokens":["識別子"],"appearancePrompt":"背景プロンプト"},
   {"action":"update_location","name":"既存の場所名","identityTokens":["新しい識別子"]},
-  {"action":"delete_location","name":"場所名"}
+  {"action":"delete_location","name":"場所名"},
+  {"action":"create_episode","number":5,"title":"話タイトル","chapterNumbers":[7,8],"pacing":"normal","focus":"見せ場"},
+  {"action":"update_episode","number":5,"title":"変更したいフィールドだけ","pacing":"stretch","focus":"...","script":"脚本全文","chapterNumbers":[7]},
+  {"action":"delete_episode","number":5},
+  {"action":"generate_script","episodeNumber":5},
+  {"action":"generate_cuts","episodeNumber":5}
 ]
 ACTIONS>>>
 
@@ -155,7 +160,10 @@ ACTIONS>>>
 - update_project / update_character 等の反映は即時。実行したら本文でも一言触れる。
 - update_notes はあなたの長期記憶の全文置き換え。決定事項が増えるたびに、これまでの
   内容と統合して書き直す (箇条書き・2000字以内)。作画の趣向・キャラの細かい設定・
-  トーンの決定・やらないと決めたこと、を残す。`;
+  トーンの決定・やらないと決めたこと、を残す。
+- generate_script / generate_cuts は AI 生成を実行する重い操作 (数十秒・数円かかる)。
+  1 メッセージにつきどちらか 1 件まで。既に脚本/カットがある話への再生成は、
+  ユーザーが作り直しを明示した時だけ (既存の内容は上書き/削除される)。`;
 }
 
 // userMessage: string、imageParts: [{ inlineData: { data(base64), mimeType } }]
@@ -273,14 +281,23 @@ const PACING_PRINCIPLE = `編集方針 (重要):
 - 各話は必ず「掴み (最初の2秒で目を留めさせる)」と「引き (次話を見たくなる切り方)」を持つ。
 - 判断基準は「画になるか」。画にならない情報は捨てるかナレーション一言に落とす。`;
 
+// 決定済みの方向性 (制作メモ・時代背景・絵柄) を生成系プロンプトに共通で挿す
+function directionBlock({ aiNotes, worldSetting, styleGuide }) {
+  const parts = [];
+  if (styleGuide) parts.push(`絵柄: ${styleGuide}`);
+  if (worldSetting) parts.push(`世界観・トーン: ${worldSetting}`);
+  if (aiNotes) parts.push(`制作メモ (チャットで決定済みの方向性・趣向。必ず従う):\n${aiNotes}`);
+  return parts.length ? `\n${parts.join("\n")}\n` : "";
+}
+
 // シリーズ構成: 章一覧から話数割りを提案する (緩急をつけて、1章1話にしない)
-export async function composeSeries(callGemini, { title, author, chapters, targetDurationSec = 60 }) {
+export async function composeSeries(callGemini, { title, author, chapters, targetDurationSec = 60, aiNotes, worldSetting, styleGuide }) {
   const chapterLines = chapters.map((ch) =>
     `第${ch.number}章「${ch.title}」(${ch.charCount}字)${ch.summary ? `: ${ch.summary}` : ""}`
   ).join("\n");
   const prompt = `「${title}」(${author || "作者不明"}) を 1 話約${targetDurationSec}秒の縦型ショート動画の連載にします。
 あなたはシリーズ構成の担当です。
-
+${directionBlock({ aiNotes, worldSetting, styleGuide })}
 ${PACING_PRINCIPLE}
 
 原作の章一覧:
@@ -318,11 +335,11 @@ ${chapterLines}
 }
 
 // 脚本: 割り当てられた章の本文から話単位の脚本を書く
-export async function writeScript(callGemini, { title, author, styleGuide, episode, chapterTexts, characters }) {
+export async function writeScript(callGemini, { title, author, styleGuide, episode, chapterTexts, characters, aiNotes, worldSetting }) {
   const charNames = characters.map((c) => c.name).join("、");
   const prompt = `「${title}」(${author || "作者不明"}) の第${episode.number}話「${episode.title || ""}」の脚本を書いてください。
 1 話は約${episode.targetDurationSec || 60}秒の縦型ショート動画。ナレーションは 300〜350 字が上限の目安。
-
+${directionBlock({ aiNotes, worldSetting, styleGuide })}
 ${PACING_PRINCIPLE}
 
 この話の方針: ${episode.pacing === "compress" ? "圧縮 (原作の情報を大胆に間引く)" : episode.pacing === "stretch" ? "引き伸ばし (見せ場をじっくり画にする)" : "標準"}
@@ -347,13 +364,12 @@ ${chapterTexts}
 }
 
 // カット割り (絵コンテの設計図): 脚本から 8 秒×Nカットの構成を起こす
-export async function composeCuts(callGemini, { title, styleGuide, episode, script, characters, locations }) {
+export async function composeCuts(callGemini, { title, styleGuide, episode, script, characters, locations, aiNotes, worldSetting }) {
   const charList = characters.map((c) => `id=${c.id}: ${c.name}`).join(" / ") || "(なし)";
   const locList = locations.map((l) => `id=${l.id}: ${l.name}`).join(" / ") || "(なし)";
   const prompt = `「${title}」第${episode.number}話のカット割り (絵コンテの設計) を作ってください。
 1 カット 4〜10 秒、合計で約${episode.targetDurationSec || 60}秒。縦 9:16。
-絵柄: ${styleGuide || "(未指定)"}
-
+${directionBlock({ aiNotes, worldSetting, styleGuide })}
 ${PACING_PRINCIPLE}
 
 脚本:
