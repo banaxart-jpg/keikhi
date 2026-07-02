@@ -23,9 +23,10 @@ export function recomputeEpisodeState(episode, cuts, timeline) {
 }
 
 // 不足している素材・情報を日本語の箇条書きで返す。空配列 = 動画生成に進める状態。
-export function computeMissingInfo({ project, characters, episode, cuts }) {
+export function computeMissingInfo({ project, characters, episode, cuts, locations = [] }) {
   const missing = [];
   const byId = new Map(characters.map((c) => [String(c.id), c]));
+  const locById = new Map(locations.map((l) => [String(l.id), l]));
 
   const confirmed = characters.filter((c) => c.status === "confirmed");
   if (!confirmed.length) missing.push("確定済みのキャラクターがまだ1人もいません");
@@ -54,13 +55,24 @@ export function computeMissingInfo({ project, characters, episode, cuts }) {
         missing.push(`第${episode.number}話 カット${cut.order}: 「${c.name}」の参照画像が無いため一貫性が保てません`);
       }
     }
+    if (!cut.locationId) {
+      missing.push(`第${episode.number}話 カット${cut.order}: 場所が未設定です (背景の統一性のため設定推奨)`);
+    } else {
+      const l = locById.get(String(cut.locationId));
+      if (l && !(l.referenceImages || []).length) {
+        missing.push(`第${episode.number}話 カット${cut.order}: 場所「${l.name}」の参照画像が無いため背景がブレます`);
+      }
+    }
   }
   return missing;
 }
 
-// このカットを動画生成に進めてよいか (= カットに登場するキャラが確定済み + 参照画像ありか)。
-export function cutIsReadyForGeneration(cut, characters) {
+// このカットを動画生成に進めてよいか。
+// キャラ: 確定済み + 参照画像必須。場所: 設定されている場合は参照画像必須
+// (場所未設定は警告どまりで生成は通す)。
+export function cutIsReadyForGeneration(cut, characters, locations = []) {
   const byId = new Map(characters.map((c) => [String(c.id), c]));
+  const locById = new Map(locations.map((l) => [String(l.id), l]));
   const reasons = [];
   if (!cut.prompt) reasons.push("プロンプトが未設定です");
   for (const cid of cut.characterIds || []) {
@@ -68,6 +80,10 @@ export function cutIsReadyForGeneration(cut, characters) {
     if (!c) continue;
     if (c.status !== "confirmed") reasons.push(`「${c.name}」のキャラ設定が未確定です`);
     else if (!(c.referenceImages || []).length) reasons.push(`「${c.name}」の参照画像がありません`);
+  }
+  if (cut.locationId) {
+    const l = locById.get(String(cut.locationId));
+    if (l && !(l.referenceImages || []).length) reasons.push(`場所「${l.name}」の参照画像がありません`);
   }
   return { ready: reasons.length === 0, reasons };
 }

@@ -156,6 +156,7 @@ const TEMPLATE = `
               <div class="card-title">{{ p.title }}</div>
               <div class="card-sub">{{ p.author || '作者不明' }}</div>
             </div>
+            <span v-if="p.costYen >= 1" class="badge">API ¥{{ Math.round(p.costYen) }}</span>
             <span class="chev">chevron_right</span>
           </div>
         </div>
@@ -243,7 +244,9 @@ const TEMPLATE = `
       <div class="tabs">
         <button class="tab" :class="{ on: projectTab === 'episodes' }" @click="projectTab = 'episodes'">エピソード</button>
         <button class="tab" :class="{ on: projectTab === 'characters' }" @click="projectTab = 'characters'">キャラクター ({{ currentProject.characters.length }})</button>
+        <button class="tab" :class="{ on: projectTab === 'locations' }" @click="projectTab = 'locations'">場所 ({{ (currentProject.locations || []).length }})</button>
         <button class="tab" :class="{ on: projectTab === 'source' }" @click="openSourceTab">原作 ({{ chapters.length }})</button>
+        <button class="tab" :class="{ on: projectTab === 'settings' }" @click="openSettingsTab">設定</button>
       </div>
     </div>
 
@@ -261,6 +264,75 @@ const TEMPLATE = `
       </div>
     </div>
 
+    <!-- 場所 (シーン背景の統一性) -->
+    <div class="list" v-else-if="projectTab === 'locations'">
+      <div v-if="(currentProject.locations || []).length === 0" class="empty">まだ場所がありません。原作タブの「AIでキャラ・時代背景を登録」でも自動登録されます</div>
+      <div v-for="l in currentProject.locations" :key="l.id" class="card" :class="{ open: locOpenId === l.id }">
+        <div class="card-row" @click="toggleLoc(l)">
+          <div class="card-main">
+            <div class="card-title">{{ l.name }}</div>
+            <div class="card-sub">参照画像 {{ (l.referenceImages||[]).length }}枚</div>
+          </div>
+          <span class="badge" :class="'status-' + l.status">{{ l.status === 'confirmed' ? '確定' : '下書き' }}</span>
+          <span class="chev">expand_more</span>
+        </div>
+        <div v-if="locOpenId === l.id" class="card-detail">
+          <div><div class="field-label">名前</div><input class="field-input" v-model="locEdit.name"></div>
+          <div><div class="field-label">状態</div>
+            <select class="field-input" v-model="locEdit.status"><option value="draft">下書き</option><option value="confirmed">確定</option></select>
+          </div>
+          <div><div class="field-label">説明 (どんな場面で使うか)</div><textarea class="field-input" v-model="locEdit.description"></textarea></div>
+          <div><div class="field-label">識別子 (背景の統一要素・読点区切り)</div><input class="field-input" v-model="locEdit.identityTokensText" placeholder="例: 朱塗りの門、篝火、砂利の前庭"></div>
+          <div><div class="field-label">背景画像生成用プロンプト</div><textarea class="field-input" v-model="locEdit.appearancePrompt"></textarea></div>
+          <div>
+            <div class="field-label">参照画像</div>
+            <div class="thumb-row">
+              <img v-for="(img,i) in locEdit.referenceImages" :key="i" :src="img.url" class="thumb">
+              <label class="filepick"><input type="file" accept="image/*" @change="e => onLocImagePick(e, l)"><span class="icon">add_photo_alternate</span>追加</label>
+            </div>
+          </div>
+          <div class="actions-row">
+            <button class="danger" @click="deleteLocation(l)" :disabled="locSaving">削除</button>
+            <button class="primary" @click="saveLocation(l)" :disabled="locSaving">{{ locSaving ? '保存中…' : '保存' }}</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 設定 (時代背景・作画 + API コスト) -->
+    <div class="list" v-else-if="projectTab === 'settings'">
+      <div>
+        <div class="field-label">時代背景・世界観 (worldSetting — AI チャットが毎回読む前提情報)</div>
+        <textarea class="field-input" v-model="settingsEdit.worldSetting" style="min-height:110px;"></textarea>
+      </div>
+      <div>
+        <div class="field-label">作画設定 (styleGuide — 絵柄・画風の統一指示)</div>
+        <textarea class="field-input" v-model="settingsEdit.styleGuide"></textarea>
+      </div>
+      <div class="actions-row">
+        <button class="primary" @click="saveSettings" :disabled="settingsSaving">{{ settingsSaving ? '保存中…' : '保存' }}</button>
+      </div>
+
+      <div class="section-title" style="padding-left:0;">API 費用 (概算)</div>
+      <div class="card" style="padding:14px 16px;">
+        <div v-if="!usage" class="card-sub">読み込み中…</div>
+        <template v-else>
+          <div class="card-title" style="margin-bottom:8px;">合計 ¥{{ usage.totalYen.toFixed(1) }}</div>
+          <div v-for="(yen, prov) in usage.byProvider" :key="prov" style="display:flex; justify-content:space-between; padding:4px 0; font-size:13px;">
+            <span style="font-weight:700;">{{ prov === 'gemini' ? 'Gemini (チャット/解析)' : 'Seedance (動画生成)' }}</span>
+            <span>¥{{ yen.toFixed(1) }}</span>
+          </div>
+          <div style="border-top:1px solid rgba(168,172,192,0.18); margin-top:8px; padding-top:8px;">
+            <div v-for="r in usage.byKind" :key="r.provider + r.kind" style="display:flex; justify-content:space-between; padding:2px 0; font-size:11px; color:var(--text2);">
+              <span>{{ r.provider }} / {{ r.kind }} × {{ r.calls }}</span>
+              <span>¥{{ r.costYen.toFixed(1) }}</span>
+            </div>
+          </div>
+          <div class="card-sub" style="margin-top:8px;">動画は 720p 8秒 ≈ ¥150 の概算計上 (保守側)。単価改定はサーバー側の定数で調整</div>
+        </template>
+      </div>
+    </div>
+
     <!-- 原作 (章分割 + 出演 index) -->
     <div class="list" v-else-if="projectTab === 'source'">
       <div style="display:flex; flex-direction:column; gap:8px;">
@@ -270,7 +342,10 @@ const TEMPLATE = `
           <button class="tab" @click="importSource" :disabled="importing" style="flex:1;">{{ importing ? '取込中…' : '取り込み' }}</button>
         </div>
         <div class="actions-row" v-if="chapters.length">
-          <button @click="analyzeChapters" :disabled="analyzing">{{ analyzing ? 'AI解析中… (章数分かかります)' : 'AIで章を解析 (要約 + 出演キャラindex)' }}</button>
+          <button @click="runSetupAnalysis" :disabled="setupAnalyzing">{{ setupAnalyzing ? 'AI構造化中…' : 'AIでキャラ・時代背景を登録 (構造化)' }}</button>
+        </div>
+        <div class="actions-row" v-if="chapters.length">
+          <button @click="analyzeChapters" :disabled="analyzing">{{ analyzing ? ('章を解析中… ' + analyzeProgress) : 'AIで章を解析 (要約 + 出演キャラindex)' }}</button>
         </div>
       </div>
       <div v-if="chapters.length === 0" class="empty">原作テキストがまだ取り込まれていません</div>
@@ -337,7 +412,8 @@ const TEMPLATE = `
 
     <div class="fab-row">
       <button class="fab chat" @click="openChat()" title="AIチャット"><span class="icon" style="font-size:24px;">forum</span></button>
-      <button class="fab add" v-if="projectTab !== 'source'" @click="projectTab === 'episodes' ? (showNewEpisode = true) : (showNewCharacter = true)" title="追加">+</button>
+      <button class="fab add" v-if="['episodes','characters','locations'].includes(projectTab)"
+        @click="projectTab === 'episodes' ? (showNewEpisode = true) : projectTab === 'locations' ? (showNewLocation = true) : (showNewCharacter = true)" title="追加">+</button>
     </div>
 
     <bottom-sheet v-model="showNewEpisode" title="新しい話">
@@ -360,6 +436,14 @@ const TEMPLATE = `
         <div><div class="field-label">名前</div><input class="field-input" v-model="newCharacter.name" required></div>
         <div><div class="field-label">読み</div><input class="field-input" v-model="newCharacter.reading"></div>
         <div><div class="field-label">人物像</div><textarea class="field-input" v-model="newCharacter.description"></textarea></div>
+        <div class="actions-row"><button type="submit" class="primary" :disabled="creating">{{ creating ? '作成中…' : '作成' }}</button></div>
+      </form>
+    </bottom-sheet>
+
+    <bottom-sheet v-model="showNewLocation" title="新しい場所">
+      <form @submit.prevent="createLocation" class="card-detail" style="border:none; padding:0;">
+        <div><div class="field-label">名前 (例: 堀川の御屋形)</div><input class="field-input" v-model="newLocation.name" required></div>
+        <div><div class="field-label">説明 (どんな場面で使うか)</div><textarea class="field-input" v-model="newLocation.description"></textarea></div>
         <div class="actions-row"><button type="submit" class="primary" :disabled="creating">{{ creating ? '作成中…' : '作成' }}</button></div>
       </form>
     </bottom-sheet>
@@ -418,6 +502,13 @@ const TEMPLATE = `
             <div style="display:flex; flex-wrap:wrap; gap:8px;">
               <label v-for="c in currentProject.characters" :key="c.id" class="chip" :style="cutEdit.characterIds.includes(c.id) ? { background: 'var(--accent)', color: 'white' } : {}" @click="toggleCutChar(c.id)">{{ c.name }}</label>
             </div>
+          </div>
+          <div>
+            <div class="field-label">場所 (背景の統一用)</div>
+            <select class="field-input" v-model="cutEdit.locationId">
+              <option :value="null">未設定</option>
+              <option v-for="l in currentProject.locations" :key="l.id" :value="l.id">{{ l.name }}{{ (l.referenceImages||[]).length ? '' : ' (参照画像なし)' }}</option>
+            </select>
           </div>
           <div><div class="field-label">ナレーション</div><textarea class="field-input" v-model="cutEdit.narration"></textarea></div>
           <div><div class="field-label">字幕</div><input class="field-input" v-model="cutEdit.subtitle"></div>
@@ -533,6 +624,12 @@ const App = {
     const charEdit = ref({});
     const charSaving = ref(false);
 
+    const locOpenId = ref(null);
+    const locEdit = ref({});
+    const locSaving = ref(false);
+    const showNewLocation = ref(false);
+    const newLocation = ref({ name: "", description: "" });
+
     const cutOpenId = ref(null);
     const cutEdit = ref({ characterIds: [] });
     const cutSaving = ref(false);
@@ -556,6 +653,11 @@ const App = {
     const aozoraUrl = ref("");
     const importing = ref(false);
     const analyzing = ref(false);
+    const analyzeProgress = ref("");
+    const setupAnalyzing = ref(false);
+    const settingsEdit = ref({ worldSetting: "", styleGuide: "" });
+    const settingsSaving = ref(false);
+    const usage = ref(null);
 
     async function apiFetch(path, opts = {}) {
       const token = await user.value.getIdToken();
@@ -689,11 +791,11 @@ const App = {
           setStage("setup", "wait");
           err.value = "AI 初期解析は失敗 (取り込みは成功、あとで原作タブから再実行可): " + e.message;
         }
-        // 3. 章 index は裏で継続しつつ、先にチャットへ
+        // 3. 章 index は裏で継続しつつ、先にチャットへ (数章ずつのバッチをループ)
         setStage("index", "doing");
-        apiFetch(`/api/drama/projects/${r.id}/chapters/analyze`, { method: "POST", body: {} })
-          .then(() => { if (currentProject.value?.id === r.id) loadChapters(r.id); })
-          .catch(() => {});
+        runChapterAnalysisLoop(r.id, () => {
+          if (currentProject.value?.id === r.id) loadChapters(r.id);
+        }).catch(() => {});
         await loadProjects();
         await openProject(r.id);
         openChat(); // 方向性詰めはチャットから
@@ -725,13 +827,63 @@ const App = {
         chapterContent.value = {};
       } catch (e) { err.value = e.message; } finally { importing.value = false; }
     }
+    // 章解析: サーバーは 1 リクエストで数章ずつしか処理しない (Hosting 60秒制限対策) ので
+    // remaining が 0 になるまでループで叩く。進捗は analyzeProgress に出す。
+    async function runChapterAnalysisLoop(projectId, onProgress) {
+      let guard = 0;
+      while (guard++ < 40) {
+        const r = await apiFetch(`/api/drama/projects/${projectId}/chapters/analyze`, { method: "POST", body: {} });
+        if (onProgress) onProgress(r);
+        if (!r.remaining) return;
+      }
+    }
     async function analyzeChapters() {
       analyzing.value = true;
+      analyzeProgress.value = "";
       err.value = "";
       try {
-        await apiFetch(`/api/drama/projects/${currentProject.value.id}/chapters/analyze`, { method: "POST", body: {} });
+        await runChapterAnalysisLoop(currentProject.value.id, (r) => {
+          analyzeProgress.value = `(残り ${r.remaining}/${r.total} 章)`;
+          loadChapters(currentProject.value.id); // 出来た分から順次表示
+        });
         await loadChapters(currentProject.value.id);
-      } catch (e) { err.value = e.message; } finally { analyzing.value = false; }
+      } catch (e) { err.value = e.message; } finally { analyzing.value = false; analyzeProgress.value = ""; }
+    }
+    // AI 構造化 (時代背景・作画・キャラ登録) を原作タブから再実行できるように
+    async function runSetupAnalysis() {
+      setupAnalyzing.value = true;
+      err.value = "";
+      try {
+        const r = await apiFetch(`/api/drama/projects/${currentProject.value.id}/analyze-setup`, { method: "POST", body: {} });
+        await openProject(currentProject.value.id);
+        projectTab.value = "characters"; // 登録されたキャラを見せる
+        if (!(r.charactersCreated || []).length) err.value = "新しく登録できるキャラが見つかりませんでした (登録済みは重複登録されません)";
+      } catch (e) { err.value = e.message; } finally { setupAnalyzing.value = false; }
+    }
+
+    // ── 設定タブ ──
+    function openSettingsTab() {
+      projectTab.value = "settings";
+      settingsEdit.value = {
+        worldSetting: currentProject.value.worldSetting || "",
+        styleGuide: currentProject.value.styleGuide || "",
+      };
+      usage.value = null;
+      apiFetch(`/api/drama/projects/${currentProject.value.id}/usage`)
+        .then((u) => { usage.value = u; })
+        .catch(() => { usage.value = { totalYen: 0, byProvider: {}, byKind: [], recent: [] }; });
+    }
+    async function saveSettings() {
+      settingsSaving.value = true;
+      err.value = "";
+      try {
+        await apiFetch(`/api/drama/projects/${currentProject.value.id}`, {
+          method: "PATCH",
+          body: { worldSetting: settingsEdit.value.worldSetting, styleGuide: settingsEdit.value.styleGuide },
+        });
+        currentProject.value.worldSetting = settingsEdit.value.worldSetting;
+        currentProject.value.styleGuide = settingsEdit.value.styleGuide;
+      } catch (e) { err.value = e.message; } finally { settingsSaving.value = false; }
     }
     async function toggleChapter(ch) {
       if (chapterOpenId.value === ch.id) { chapterOpenId.value = null; return; }
@@ -832,12 +984,66 @@ const App = {
       } catch (e) { err.value = e.message; } finally { charSaving.value = false; }
     }
 
+    // ── 場所 ──
+    function toggleLoc(l) {
+      if (locOpenId.value === l.id) { locOpenId.value = null; return; }
+      locOpenId.value = l.id;
+      locEdit.value = {
+        name: l.name, description: l.description || "",
+        appearancePrompt: l.appearancePrompt || "", status: l.status,
+        identityTokensText: (l.identityTokens || []).join("、"),
+        referenceImages: l.referenceImages || [],
+      };
+    }
+    async function createLocation() {
+      creating.value = true;
+      try {
+        await apiFetch(`/api/drama/projects/${currentProject.value.id}/locations`, { method: "POST", body: newLocation.value });
+        showNewLocation.value = false;
+        newLocation.value = { name: "", description: "" };
+        await openProject(currentProject.value.id);
+      } catch (e) { err.value = e.message; } finally { creating.value = false; }
+    }
+    async function onLocImagePick(e, l) {
+      const file = e.target.files?.[0];
+      if (!file) return;
+      try {
+        const url = await uploadImage(file, `auto-drama/${currentProject.value.id}/locations/${l.id}`);
+        locEdit.value.referenceImages = [...(locEdit.value.referenceImages || []), { url, kind: "full", note: "" }];
+      } catch (e2) { err.value = e2.message; }
+    }
+    async function saveLocation(l) {
+      locSaving.value = true;
+      try {
+        const b = locEdit.value;
+        await apiFetch(`/api/drama/locations/${l.id}`, {
+          method: "PATCH",
+          body: {
+            name: b.name, description: b.description, appearancePrompt: b.appearancePrompt,
+            status: b.status, identityTokens: b.identityTokensText.split("、").map((s) => s.trim()).filter(Boolean),
+            referenceImages: b.referenceImages,
+          },
+        });
+        locOpenId.value = null;
+        await openProject(currentProject.value.id);
+      } catch (e) { err.value = e.message; } finally { locSaving.value = false; }
+    }
+    async function deleteLocation(l) {
+      locSaving.value = true;
+      try {
+        await apiFetch(`/api/drama/locations/${l.id}`, { method: "DELETE" });
+        locOpenId.value = null;
+        await openProject(currentProject.value.id);
+      } catch (e) { err.value = e.message; } finally { locSaving.value = false; }
+    }
+
     // ── カット ──
     function toggleCut(cut) {
       if (cutOpenId.value === cut.id) { cutOpenId.value = null; return; }
       cutOpenId.value = cut.id;
       cutEdit.value = {
         prompt: cut.prompt || "", durationSec: cut.durationSec, characterIds: [...(cut.characterIds || [])],
+        locationId: cut.locationId || null,
         narration: cut.narration || "", subtitle: cut.subtitle || "",
       };
     }
@@ -857,7 +1063,7 @@ const App = {
         const b = cutEdit.value;
         await apiFetch(`/api/drama/cuts/${cut.id}`, {
           method: "PATCH",
-          body: { prompt: b.prompt, durationSec: Number(b.durationSec), characterIds: b.characterIds, narration: b.narration, subtitle: b.subtitle },
+          body: { prompt: b.prompt, durationSec: Number(b.durationSec), characterIds: b.characterIds, locationId: b.locationId, narration: b.narration, subtitle: b.subtitle },
         });
         cutOpenId.value = null;
         await refreshEpisode();
@@ -1014,12 +1220,14 @@ const App = {
       showNewCharacter, newCharacter, createCharacter,
       openProject, backToProjects, openEpisode, backToProject,
       charOpenId, charEdit, charSaving, toggleChar, onCharImagePick, saveCharacter, deleteCharacter,
+      locOpenId, locEdit, locSaving, showNewLocation, newLocation, toggleLoc, createLocation, onLocImagePick, saveLocation, deleteLocation,
       cutOpenId, cutEdit, cutSaving, toggleCut, toggleCutChar, addCut, saveCut, deleteCut, moveCut,
       generatingCutId, genError, genErrorFor, generateCut, selectGeneration, refreshGeneration,
       isAppearing, toggleAppearing, onKeyVisualPick,
       exporting, exportErr, exportEpisode,
       chatOpen, chatMessages, chatInput, chatSending, chatLogEl, chatAttach, openChat, sendChat, onChatImagePick,
-      chapters, chapterOpenId, chapterContent, aozoraUrl, importing, analyzing,
+      chapters, chapterOpenId, chapterContent, aozoraUrl, importing, analyzing, analyzeProgress,
+      setupAnalyzing, runSetupAnalysis, settingsEdit, settingsSaving, usage, openSettingsTab, saveSettings,
       openSourceTab, importSource, analyzeChapters, toggleChapter, isRegisteredCharacter,
       aozoraQuery, aozoraResults, searching, aozoraCreateUrl,
       createStep, createTitle, createStages, chatStarters,

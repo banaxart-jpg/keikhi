@@ -2,6 +2,18 @@
 // 「呼び出し関数を inject する」設計にして循環依存を避ける (fx-lib/ai.js と同じ流儀)。
 // callGemini = (content, opts) => Promise<{result, modelUsed, attempts}>
 
+// jsonMode でも ```json フェンスや末尾カンマが混ざることがあるので、ゆるくパースする
+function parseJsonLoose(text) {
+  let t = String(text || "").trim().replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/i, "").trim();
+  const s = t.indexOf("{");
+  const e = t.lastIndexOf("}");
+  if (s < 0 || e <= s) return null;
+  const body = t.slice(s, e + 1);
+  try { return JSON.parse(body); } catch (_) {}
+  try { return JSON.parse(body.replace(/,(\s*[}\]])/g, "$1")); } catch (_) {}
+  return null;
+}
+
 // システムプロンプトに含める原文の上限 (章 index は常に入れる)。
 // 邪宗門で約 4 万字。Gemini flash の 1M コンテキストには余裕だが、
 // 毎メッセージのコストを抑えるため上限を切っておく。
@@ -10,7 +22,7 @@ const SOURCE_TEXT_CAP = 60000;
 // 制作アシスタントのシステムプロンプトを毎回組み立てる。
 // missingInfo (state.js の computeMissingInfo) を埋め込むことで、
 // 「素材が揃うまで動画生成に進ませない」を AI にも徹底させる。
-export function buildSystemPrompt({ project, characters, episode, cuts, missingInfo, chapters = [] }) {
+export function buildSystemPrompt({ project, characters, episode, cuts, missingInfo, chapters = [], locations = [] }) {
   const charLines = characters.length
     ? characters.map((c) => {
         const tokens = (c.identityTokens || []).join("、");
@@ -20,6 +32,16 @@ export function buildSystemPrompt({ project, characters, episode, cuts, missingI
           + (refs ? ` / 参照画像 ${refs}枚` : " / 参照画像なし");
       }).join("\n")
     : "(まだキャラクターが登録されていません)";
+
+  const locLines = locations.length
+    ? locations.map((l) => {
+        const tokens = (l.identityTokens || []).join("、");
+        const refs = (l.referenceImages || []).length;
+        return `- ${l.name}: ${l.status === "confirmed" ? "確定" : "下書き"}`
+          + (tokens ? ` / 識別子: ${tokens}` : "")
+          + (refs ? ` / 参照画像 ${refs}枚` : " / 参照画像なし");
+      }).join("\n")
+    : "(まだ場所が登録されていません)";
 
   const episodeBlock = episode
     ? `現在編集中の話: 第${episode.number}話「${episode.title || "(無題)"}」
@@ -67,6 +89,9 @@ export function buildSystemPrompt({ project, characters, episode, cuts, missingI
 
 登録済みキャラクター:
 ${charLines}
+
+登録済みの場所 (シーン背景の統一性のためカットごとに場所を指定する):
+${locLines}
 ${chaptersBlock}${sourceBlock}
 ${episodeBlock}
 
@@ -79,6 +104,8 @@ ${missingBlock}
   画にするか)、トーン。ここが決まってからキャラ参照画像 → 話の切り出しに進める。
 - 素材が揃っていない場合は動画生成に進めるよう促さず、何を決めるべきかを案内する。
 - キャラクターの見た目は identityTokens (識別子) を毎回一貫させるよう助言する。
+- 場所 (背景) も同様に統一する。カットには極力「場所」を設定させ、同じ場所は同じ
+  識別子・参照画像を使い回すよう案内する。
 - ユーザーが素材を確定したら、次のステートへ進める提案をする。
 - タイムライン編集の最終判断はユーザー。配置案の提案はしてよいが決定はしない。
 - 原作本文が上に与えられている場合は、章番号を引きながら具体的に答える
@@ -134,18 +161,28 @@ ${excerpt}
       "identityTokens": ["見た目の識別子を3-5個 (毎カットの画像生成で一貫させる特徴。例: 渦巻く長髪)"],
       "appearancePrompt": "この人物の画像生成プロンプト案 (100字以内)"
     }
+  ],
+  "locations": [
+    {
+      "name": "主要な場所の呼び名 (本文の表記で。例: 堀川の御屋形)",
+      "description": "場所の説明 (80字以内。どんな場面で使われるか)",
+      "identityTokens": ["背景の識別子を3-5個 (例: 朱塗りの門、篝火、砂利の前庭)"],
+      "appearancePrompt": "この場所の背景画像生成プロンプト案 (100字以内)"
+    }
   ]
 }
-characters は物語を動かす主要人物だけ (最大8人)。本文に容姿描写があればそれを identityTokens に優先採用。`;
+characters は物語を動かす主要人物だけ (最大8人)。本文に容姿描写があればそれを identityTokens に優先採用。
+locations は繰り返し登場する舞台だけ (最大8箇所)。背景の統一性のために使う。`;
   const { result } = await callGemini(prompt, {
     primaryModel: "gemini-2.5-flash",
-    maxOutputTokens: 4000,
+    // 2.5 系は thinking トークンも maxOutputTokens に含まれるため、余裕を持たせないと
+    // JSON が途中で切れて「キャラが1人も登録されない」事故になる (実際に起きた)
+    maxOutputTokens: 16000,
     jsonMode: true,
   });
   const t = (result.response.text() || "").trim();
-  const m = t.match(/\{[\s\S]*\}/);
-  if (!m) throw new Error("作品解析のレスポンスから JSON 取れず: " + t.slice(0, 100));
-  const j = JSON.parse(m[0]);
+  const j = parseJsonLoose(t);
+  if (!j) throw new Error("作品解析のレスポンスから JSON 取れず: " + t.slice(0, 100));
   return {
     worldSetting: String(j.worldSetting || "").slice(0, 500),
     styleGuide: String(j.styleGuide || "").slice(0, 200),
@@ -156,6 +193,12 @@ characters は物語を動かす主要人物だけ (最大8人)。本文に容�
       identityTokens: (Array.isArray(c.identityTokens) ? c.identityTokens : []).map((s) => String(s).slice(0, 30)).slice(0, 6),
       appearancePrompt: String(c.appearancePrompt || "").slice(0, 300),
     })).filter((c) => c.name),
+    locations: (Array.isArray(j.locations) ? j.locations : []).slice(0, 8).map((l) => ({
+      name: String(l.name || "").slice(0, 50),
+      description: String(l.description || "").slice(0, 300),
+      identityTokens: (Array.isArray(l.identityTokens) ? l.identityTokens : []).map((s) => String(s).slice(0, 30)).slice(0, 6),
+      appearancePrompt: String(l.appearancePrompt || "").slice(0, 300),
+    })).filter((l) => l.name),
   };
 }
 
@@ -173,16 +216,13 @@ JSON のみで返す (前置き禁止):
 - cardUrl は図書カードページ (cards/番号/cardYY.html 形式)。不明なら null`;
   const { result } = await callGemini(prompt, {
     primaryModel: "gemini-2.5-flash",
-    maxOutputTokens: 1500,
+    maxOutputTokens: 4000,
     useGoogleSearch: true,
   });
   const t = (result.response.text() || "").trim();
-  const m = t.match(/\{[\s\S]*\}/);
-  if (!m) return [];
-  try {
-    const j = JSON.parse(m[0]);
-    return (Array.isArray(j.results) ? j.results : []).slice(0, 5);
-  } catch (_) { return []; }
+  const j = parseJsonLoose(t);
+  if (!j) return [];
+  return (Array.isArray(j.results) ? j.results : []).slice(0, 5);
 }
 
 // 章の AI 解析: 要約 + 出演キャラ名を JSON で返す
@@ -200,13 +240,12 @@ ${chapter.content}
 }`;
   const { result } = await callGemini(prompt, {
     primaryModel: "gemini-2.5-flash-lite",
-    maxOutputTokens: 1000,
+    maxOutputTokens: 4000,
     jsonMode: true,
   });
   const text = (result.response.text() || "").trim();
-  const m = text.match(/\{[\s\S]*\}/);
-  if (!m) throw new Error("章解析のレスポンスから JSON 取れず: " + text.slice(0, 100));
-  const j = JSON.parse(m[0]);
+  const j = parseJsonLoose(text);
+  if (!j) throw new Error("章解析のレスポンスから JSON 取れず: " + text.slice(0, 100));
   return {
     summary: String(j.summary || "").slice(0, 300),
     characterNames: Array.isArray(j.characterNames) ? j.characterNames.map((s) => String(s).slice(0, 50)).slice(0, 30) : [],

@@ -77,6 +77,98 @@ app.get("/api/version", (req, res) => {
   res.json({ version: APP_VERSION, buildId: BUILD_ID, startedAt: SERVER_STARTED_AT });
 });
 
+// auto-drama のデータ点検用 (Claude Code が curl で構造・粒度を確認する用の read-only JSON)。
+// 認証なしで公開する代わりに: 原文 (著作権切れ) と制作メタデータのみ。
+// チャットは件数だけ、参照画像は枚数だけ (URL は出さない)。
+// ?chapter=<番号> でその章の本文も返す。
+app.get("/api/drama/inspect/:id", async (req, res) => {
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  try {
+    await ensureSchema();
+    const { rows: projRows } = await p.query(
+      `SELECT id, title, author, world_setting AS "worldSetting", style_guide AS "styleGuide",
+              length(COALESCE(source_text,'')) AS "sourceTextChars", created_at AS "createdAt"
+         FROM drama_projects WHERE id=$1`,
+      [req.params.id]
+    );
+    if (!projRows.length) return res.status(404).json({ error: "not found" });
+    const { rows: characters } = await p.query(
+      `SELECT id, name, reading, description, appearance_prompt AS "appearancePrompt",
+              identity_tokens AS "identityTokens", jsonb_array_length(reference_images) AS "referenceImageCount", status
+         FROM drama_characters WHERE project_id=$1 ORDER BY id`,
+      [req.params.id]
+    );
+    const { rows: locations } = await p.query(
+      `SELECT id, name, description, appearance_prompt AS "appearancePrompt",
+              identity_tokens AS "identityTokens", jsonb_array_length(reference_images) AS "referenceImageCount", status
+         FROM drama_locations WHERE project_id=$1 ORDER BY id`,
+      [req.params.id]
+    );
+    const { rows: chapters } = await p.query(
+      `SELECT number, title, length(content) AS "charCount", summary, character_names AS "characterNames"
+         FROM drama_chapters WHERE project_id=$1 ORDER BY number`,
+      [req.params.id]
+    );
+    let chapterContent = null;
+    if (req.query.chapter) {
+      const { rows: c } = await p.query(
+        `SELECT number, title, content FROM drama_chapters WHERE project_id=$1 AND number=$2`,
+        [req.params.id, Number(req.query.chapter)]
+      );
+      chapterContent = c[0] || null;
+    }
+    const { rows: episodes } = await p.query(
+      `SELECT e.id, e.number, e.title, e.state, e.target_duration_sec AS "targetDurationSec",
+              e.appearing_character_ids AS "appearingCharacterIds",
+              (e.key_visual->>'url') IS NOT NULL AS "hasKeyVisual"
+         FROM drama_episodes e WHERE e.project_id=$1 ORDER BY e.number`,
+      [req.params.id]
+    );
+    for (const ep of episodes) {
+      const { rows: cuts } = await p.query(
+        `SELECT "order", duration_sec AS "durationSec", length(COALESCE(prompt,'')) AS "promptChars",
+                character_ids AS "characterIds", jsonb_array_length(generations) AS "generationCount",
+                selected_generation_index AS "selectedGenerationIndex",
+                length(COALESCE(narration,'')) AS "narrationChars", subtitle
+           FROM drama_cuts WHERE episode_id=$1 ORDER BY "order"`,
+        [ep.id]
+      );
+      ep.cuts = cuts;
+    }
+    const { rows: chatCount } = await p.query(
+      `SELECT COUNT(*)::int AS n FROM drama_chat_messages WHERE project_id=$1`, [req.params.id]
+    );
+    const { rows: usage } = await p.query(
+      `SELECT provider, COALESCE(SUM(cost_yen),0)::float AS "costYen", COUNT(*)::int AS calls
+         FROM drama_api_usage WHERE project_id=$1 GROUP BY provider`,
+      [req.params.id]
+    );
+    const chapterChars = chapters.map((c) => Number(c.charCount));
+    res.json({
+      project: projRows[0],
+      stats: {
+        chapterCount: chapters.length,
+        chapterChars: chapterChars.length ? {
+          avg: Math.round(chapterChars.reduce((a, b) => a + b, 0) / chapterChars.length),
+          min: Math.min(...chapterChars),
+          max: Math.max(...chapterChars),
+        } : null,
+        chatMessages: chatCount[0].n,
+      },
+      usage,
+      characters,
+      locations,
+      chapters,
+      chapterContent,
+      episodes,
+    });
+  } catch (err) {
+    console.error("[drama] inspect", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 
 // Gate /api/* with a Firebase ID token. The browser calls this service
 // same-origin via Firebase Hosting rewrite, so no CORS/OAuth token is
@@ -964,6 +1056,22 @@ async function ensureSchema() {
       )
     `);
     await p.query("CREATE INDEX IF NOT EXISTS drama_char_project_idx ON drama_characters (project_id)");
+    // 場所 (シーン背景)。キャラと同じ構造: 識別子 + 参照画像で背景の統一性を担保する
+    await p.query(`
+      CREATE TABLE IF NOT EXISTS drama_locations (
+        id                BIGSERIAL PRIMARY KEY,
+        project_id        BIGINT NOT NULL REFERENCES drama_projects(id) ON DELETE CASCADE,
+        name              TEXT NOT NULL,
+        description       TEXT,
+        appearance_prompt TEXT,
+        identity_tokens   JSONB NOT NULL DEFAULT '[]'::jsonb,
+        reference_images  JSONB NOT NULL DEFAULT '[]'::jsonb,
+        status            TEXT NOT NULL DEFAULT 'draft',
+        created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+        updated_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+      )
+    `);
+    await p.query("CREATE INDEX IF NOT EXISTS drama_loc_project_idx ON drama_locations (project_id)");
     await p.query(`
       CREATE TABLE IF NOT EXISTS drama_episodes (
         id                      BIGSERIAL PRIMARY KEY,
@@ -998,6 +1106,8 @@ async function ensureSchema() {
       )
     `);
     await p.query(`CREATE INDEX IF NOT EXISTS drama_cut_ep_idx ON drama_cuts (episode_id, "order")`);
+    // カットの撮影場所 (背景統一用)。既存テーブルへの後付けなので ALTER
+    await p.query(`ALTER TABLE drama_cuts ADD COLUMN IF NOT EXISTS location_id BIGINT REFERENCES drama_locations(id) ON DELETE SET NULL`);
     await p.query(`
       CREATE TABLE IF NOT EXISTS drama_timelines (
         episode_id         BIGINT PRIMARY KEY REFERENCES drama_episodes(id) ON DELETE CASCADE,
@@ -1034,6 +1144,22 @@ async function ensureSchema() {
       )
     `);
     await p.query("CREATE INDEX IF NOT EXISTS drama_chap_project_idx ON drama_chapters (project_id, number)");
+    // API 使用量の記録 (プロジェクト別のコスト見える化。gemini はトークン実測、seedance は秒数から概算)
+    await p.query(`
+      CREATE TABLE IF NOT EXISTS drama_api_usage (
+        id            BIGSERIAL PRIMARY KEY,
+        project_id    BIGINT REFERENCES drama_projects(id) ON DELETE CASCADE,
+        provider      TEXT NOT NULL,     -- 'gemini' | 'seedance'
+        kind          TEXT NOT NULL,     -- 'chat' | 'chapter_analyze' | 'work_setup' | 'search' | 'video'
+        model         TEXT,
+        input_tokens  INTEGER,
+        output_tokens INTEGER,
+        video_seconds NUMERIC,
+        cost_yen      NUMERIC NOT NULL DEFAULT 0,
+        created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+      )
+    `);
+    await p.query("CREATE INDEX IF NOT EXISTS drama_usage_project_idx ON drama_api_usage (project_id, created_at DESC)");
 
     schemaMigrated = true;
     console.log("[schema] migration ok: records.drive_url + tasks + yado_bookings + seko_* + fx_* + drama_* ensured");
@@ -7315,6 +7441,55 @@ app.get("/api/records/:id/image", async (req, res) => {
 // ─────────────────────────────
 // 自動ドラマ作成 (auto-drama)
 // ─────────────────────────────
+
+// ── API コスト記録 (プロジェクト別。料金改定時はここの定数を直す) ──
+const DRAMA_USD_JPY = 155; // 概算レート
+// Gemini 料金 (USD / 1M tokens): [input, output]
+const DRAMA_GEMINI_PRICES = {
+  "gemini-2.5-flash":      [0.30, 2.50],
+  "gemini-2.5-flash-lite": [0.10, 0.40],
+  "gemini-flash-latest":   [0.30, 2.50],
+};
+// Seedance 2.0 fast 720p: 動画トークン = 幅×高×fps×秒 / 1024。
+// 720×1280×24fps → 21,600 tokens/秒。$5.6/1M tokens (保守側=高い方の掲示額) で概算。
+// → 約 ¥19/秒、8 秒カットで ¥150 前後。
+const DRAMA_SEEDANCE_TOKENS_PER_SEC = Math.round((720 * 1280 * 24) / 1024);
+const DRAMA_SEEDANCE_USD_PER_1M = 5.6;
+
+function dramaRecordUsage(row) {
+  const p = getPool();
+  if (!p) return;
+  p.query(
+    `INSERT INTO drama_api_usage (project_id, provider, kind, model, input_tokens, output_tokens, video_seconds, cost_yen)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+    [row.projectId || null, row.provider, row.kind, row.model || null,
+     row.inputTokens ?? null, row.outputTokens ?? null, row.videoSeconds ?? null, row.costYen || 0]
+  ).catch((e) => console.warn("[drama] usage record failed:", e.message));
+}
+
+// callGeminiWithFallback 互換のラッパー: 呼んだ後にトークン実測からコストを記録する。
+// drama-lib には「呼び出し関数を inject する」設計なので、これを渡すだけで全calls が追跡される。
+function dramaTrackedGemini(projectId, kind) {
+  return async (content, opts) => {
+    const r = await callGeminiWithFallback(content, opts);
+    try {
+      const u = r.result?.response?.usageMetadata || {};
+      const model = r.modelUsed || opts?.primaryModel || "gemini-2.5-flash";
+      const [inP, outP] = DRAMA_GEMINI_PRICES[model] || DRAMA_GEMINI_PRICES["gemini-2.5-flash"];
+      const inTok = u.promptTokenCount || 0;
+      const outTok = (u.candidatesTokenCount || 0) + (u.thoughtsTokenCount || 0);
+      const costYen = ((inTok * inP + outTok * outP) / 1e6) * DRAMA_USD_JPY;
+      dramaRecordUsage({ projectId, provider: "gemini", kind, model, inputTokens: inTok, outputTokens: outTok, costYen });
+    } catch (_) {}
+    return r;
+  };
+}
+
+function dramaRecordSeedanceUsage(projectId, seconds, model) {
+  const tokens = DRAMA_SEEDANCE_TOKENS_PER_SEC * seconds;
+  const costYen = (tokens * DRAMA_SEEDANCE_USD_PER_1M / 1e6) * DRAMA_USD_JPY;
+  dramaRecordUsage({ projectId, provider: "seedance", kind: "video", model, videoSeconds: seconds, costYen });
+}
 // 状態は毎回 DB の実データから再計算して保存する (episode.state はキャッシュ扱い)。
 async function dramaRecomputeState(p, episodeId) {
   const { rows } = await p.query(`SELECT key_visual AS "keyVisual" FROM drama_episodes WHERE id=$1`, [episodeId]);
@@ -7336,10 +7511,14 @@ app.get("/api/drama/projects", async (req, res) => {
   try {
     await ensureSchema();
     const { rows } = await p.query(
-      `SELECT id, title, author, world_setting AS "worldSetting", style_guide AS "styleGuide",
-              default_video_model AS "defaultVideoModel", created_by AS "createdBy",
-              created_at AS "createdAt", updated_at AS "updatedAt"
-         FROM drama_projects ORDER BY updated_at DESC`
+      `SELECT p.id, p.title, p.author, p.world_setting AS "worldSetting", p.style_guide AS "styleGuide",
+              p.default_video_model AS "defaultVideoModel", p.created_by AS "createdBy",
+              p.created_at AS "createdAt", p.updated_at AS "updatedAt",
+              COALESCE(u.cost, 0)::float AS "costYen"
+         FROM drama_projects p
+         LEFT JOIN (SELECT project_id, SUM(cost_yen) AS cost FROM drama_api_usage GROUP BY project_id) u
+           ON u.project_id = p.id
+        ORDER BY p.updated_at DESC`
     );
     res.json(rows);
   } catch (err) {
@@ -7386,6 +7565,12 @@ app.get("/api/drama/projects/:id", async (req, res) => {
          FROM drama_characters WHERE project_id=$1 ORDER BY id`,
       [req.params.id]
     );
+    const { rows: locations } = await p.query(
+      `SELECT id, name, description, appearance_prompt AS "appearancePrompt",
+              identity_tokens AS "identityTokens", reference_images AS "referenceImages", status
+         FROM drama_locations WHERE project_id=$1 ORDER BY id`,
+      [req.params.id]
+    );
     const { rows: episodes } = await p.query(
       `SELECT id, number, title, source_range_start AS "sourceRangeStart", source_range_end AS "sourceRangeEnd",
               target_duration_sec AS "targetDurationSec", key_visual AS "keyVisual", state,
@@ -7393,7 +7578,7 @@ app.get("/api/drama/projects/:id", async (req, res) => {
          FROM drama_episodes WHERE project_id=$1 ORDER BY number`,
       [req.params.id]
     );
-    res.json({ ...rows[0], characters, episodes });
+    res.json({ ...rows[0], characters, locations, episodes });
   } catch (err) {
     console.error("[drama] project detail", err);
     res.status(500).json({ error: err.message });
@@ -7421,6 +7606,37 @@ app.patch("/api/drama/projects/:id", async (req, res) => {
   }
 });
 
+// プロジェクトの API 使用量: 合計 + provider/kind 別 + 直近履歴
+app.get("/api/drama/projects/:id/usage", async (req, res) => {
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  try {
+    const { rows: byKind } = await p.query(
+      `SELECT provider, kind, COUNT(*)::int AS calls,
+              COALESCE(SUM(input_tokens),0)::int AS "inputTokens",
+              COALESCE(SUM(output_tokens),0)::int AS "outputTokens",
+              COALESCE(SUM(video_seconds),0)::float AS "videoSeconds",
+              COALESCE(SUM(cost_yen),0)::float AS "costYen"
+         FROM drama_api_usage WHERE project_id=$1
+        GROUP BY provider, kind ORDER BY "costYen" DESC`,
+      [req.params.id]
+    );
+    const { rows: recent } = await p.query(
+      `SELECT provider, kind, model, input_tokens AS "inputTokens", output_tokens AS "outputTokens",
+              video_seconds AS "videoSeconds", cost_yen::float AS "costYen", created_at AS "createdAt"
+         FROM drama_api_usage WHERE project_id=$1 ORDER BY id DESC LIMIT 30`,
+      [req.params.id]
+    );
+    const totalYen = byKind.reduce((s, r) => s + r.costYen, 0);
+    const byProvider = {};
+    for (const r of byKind) byProvider[r.provider] = (byProvider[r.provider] || 0) + r.costYen;
+    res.json({ totalYen, byProvider, byKind, recent });
+  } catch (err) {
+    console.error("[drama] usage", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // 青空文庫の作品検索 (Gemini + Google 検索グラウンディング)。
 // { query: "邪宗門" } → [{ title, author, cardUrl }]
 app.post("/api/drama/aozora-search", async (req, res) => {
@@ -7428,7 +7644,7 @@ app.post("/api/drama/aozora-search", async (req, res) => {
   try {
     const { query } = req.body || {};
     if (!query) return res.status(400).json({ error: "query is required" });
-    const results = await dramaSearchAozora(callGeminiWithFallback, String(query).slice(0, 100));
+    const results = await dramaSearchAozora(dramaTrackedGemini(null, "search"), String(query).slice(0, 100));
     res.json({ results });
   } catch (err) {
     console.error("[drama] aozora-search", err);
@@ -7459,7 +7675,7 @@ app.post("/api/drama/projects/from-aozora", async (req, res) => {
     let setupError = null;
     if (genAI && !skipSetup) {
       try {
-        setup = await dramaAnalyzeWorkSetup(callGeminiWithFallback, {
+        setup = await dramaAnalyzeWorkSetup(dramaTrackedGemini(null, "work_setup"), {
           title: meta.title || "無題", author: meta.author, text,
         });
       } catch (e) {
@@ -7489,12 +7705,20 @@ app.post("/api/drama/projects/from-aozora", async (req, res) => {
         [projectId, c.name, c.reading || null, c.description || null, c.appearancePrompt || null, JSON.stringify(c.identityTokens || [])]
       );
     }
+    for (const l of setup.locations || []) {
+      await p.query(
+        `INSERT INTO drama_locations (project_id, name, description, appearance_prompt, identity_tokens, status)
+         VALUES ($1,$2,$3,$4,$5,'draft')`,
+        [projectId, l.name, l.description || null, l.appearancePrompt || null, JSON.stringify(l.identityTokens || [])]
+      );
+    }
 
     res.status(201).json({
       id: projectId,
       title: meta.title, author: meta.author,
       totalChars: text.length, chapterCount: chapters.length,
       charactersCreated: setup.characters.map((c) => c.name),
+      locationsCreated: (setup.locations || []).map((l) => l.name),
       worldSetting: setup.worldSetting, styleGuide: setup.styleGuide,
       setupError,
     });
@@ -7522,7 +7746,7 @@ app.post("/api/drama/projects/:id/analyze-setup", async (req, res) => {
     const proj = rows[0];
     if (!proj.sourceText) return res.status(400).json({ error: "原作テキストが未取り込みです" });
 
-    const setup = await dramaAnalyzeWorkSetup(callGeminiWithFallback, {
+    const setup = await dramaAnalyzeWorkSetup(dramaTrackedGemini(req.params.id, "work_setup"), {
       title: proj.title, author: proj.author, text: proj.sourceText,
     });
     await p.query(
@@ -7545,7 +7769,19 @@ app.post("/api/drama/projects/:id/analyze-setup", async (req, res) => {
       );
       created.push(c.name);
     }
-    res.json({ ok: true, worldSetting: setup.worldSetting, styleGuide: setup.styleGuide, charactersCreated: created });
+    const { rows: existingLocs } = await p.query(`SELECT name FROM drama_locations WHERE project_id=$1`, [req.params.id]);
+    const knownLocs = new Set(existingLocs.map((r) => r.name));
+    const locationsCreated = [];
+    for (const l of setup.locations || []) {
+      if (knownLocs.has(l.name)) continue;
+      await p.query(
+        `INSERT INTO drama_locations (project_id, name, description, appearance_prompt, identity_tokens, status)
+         VALUES ($1,$2,$3,$4,$5,'draft')`,
+        [req.params.id, l.name, l.description || null, l.appearancePrompt || null, JSON.stringify(l.identityTokens || [])]
+      );
+      locationsCreated.push(l.name);
+    }
+    res.json({ ok: true, worldSetting: setup.worldSetting, styleGuide: setup.styleGuide, charactersCreated: created, locationsCreated });
   } catch (err) {
     console.error("[drama] analyze-setup", err);
     res.status(500).json({ error: err.message });
@@ -7624,28 +7860,34 @@ app.get("/api/drama/chapters/:id", async (req, res) => {
 });
 
 // 章の AI 解析: 各章の要約 + 出演キャラ名を Gemini で埋める (index 作成)。
-// 既に解析済みの章はスキップ (force=true で全再解析)。
+// Firebase Hosting の rewrite が 60 秒で切れるため、1 リクエストで最大 limit 章 (既定5) まで
+// しか処理せず { remaining } を返す。クライアントは remaining が 0 になるまでループで叩く。
+// force=true は最初の呼び出しで全章の解析結果をリセットしてから始める。
 app.post("/api/drama/projects/:id/chapters/analyze", async (req, res) => {
   const p = getPool();
   if (!p) return res.status(503).json({ error: "DB not configured" });
   if (!genAI) return res.status(503).json({ error: "Gemini not configured" });
   try {
-    const force = !!req.body?.force;
+    const limit = Math.max(1, Math.min(10, Number(req.body?.limit) || 5));
+    if (req.body?.force) {
+      await p.query(`UPDATE drama_chapters SET summary=NULL, character_names='[]'::jsonb WHERE project_id=$1`, [req.params.id]);
+    }
     const { rows: projRows } = await p.query(`SELECT title, author FROM drama_projects WHERE id=$1`, [req.params.id]);
     if (!projRows.length) return res.status(404).json({ error: "not found" });
     const { rows: charRows } = await p.query(`SELECT name FROM drama_characters WHERE project_id=$1`, [req.params.id]);
     const knownCharacterNames = charRows.map((r) => r.name);
-    const { rows: chapters } = await p.query(
+    const { rows: allChapters } = await p.query(
       `SELECT id, number, title, content, summary FROM drama_chapters WHERE project_id=$1 ORDER BY number`,
       [req.params.id]
     );
-    if (!chapters.length) return res.status(400).json({ error: "章がありません。先に原作テキストを取り込んでください" });
+    if (!allChapters.length) return res.status(400).json({ error: "章がありません。先に原作テキストを取り込んでください" });
 
+    const pending = allChapters.filter((ch) => !ch.summary);
+    const batch = pending.slice(0, limit);
     const results = [];
-    for (const ch of chapters) {
-      if (ch.summary && !force) { results.push({ number: ch.number, skipped: true }); continue; }
+    for (const ch of batch) {
       try {
-        const a = await dramaAnalyzeChapter(callGeminiWithFallback, {
+        const a = await dramaAnalyzeChapter(dramaTrackedGemini(req.params.id, "chapter_analyze"), {
           projectTitle: projRows[0].title, author: projRows[0].author, chapter: ch, knownCharacterNames,
         });
         await p.query(
@@ -7658,7 +7900,8 @@ app.post("/api/drama/projects/:id/chapters/analyze", async (req, res) => {
         results.push({ number: ch.number, error: e.message });
       }
     }
-    res.json({ ok: true, results });
+    const remaining = pending.length - batch.length;
+    res.json({ ok: true, results, processed: batch.length, remaining, total: allChapters.length });
   } catch (err) {
     console.error("[drama] chapters analyze", err);
     res.status(500).json({ error: err.message });
@@ -7724,6 +7967,65 @@ app.delete("/api/drama/characters/:id", async (req, res) => {
   }
 });
 
+// 場所 (キャラと同じ CRUD 形)
+app.post("/api/drama/projects/:id/locations", async (req, res) => {
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  try {
+    const b = req.body || {};
+    if (!b.name) return res.status(400).json({ error: "name is required" });
+    const { rows } = await p.query(
+      `INSERT INTO drama_locations (project_id, name, description, appearance_prompt, identity_tokens, status)
+       VALUES ($1,$2,$3,$4,$5,$6) RETURNING id`,
+      [req.params.id, b.name, b.description || null, b.appearancePrompt || null,
+       JSON.stringify(b.identityTokens || []), b.status || "draft"]
+    );
+    res.status(201).json({ id: rows[0].id });
+  } catch (err) {
+    console.error("[drama] location create", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.patch("/api/drama/locations/:id", async (req, res) => {
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  try {
+    const b = req.body || {};
+    const fields = [];
+    const values = [];
+    let i = 1;
+    const set = (col, val) => { fields.push(`${col}=$${i++}`); values.push(val); };
+    if (b.name !== undefined) set("name", b.name);
+    if (b.description !== undefined) set("description", b.description);
+    if (b.appearancePrompt !== undefined) set("appearance_prompt", b.appearancePrompt);
+    if (b.identityTokens !== undefined) set("identity_tokens", JSON.stringify(b.identityTokens));
+    if (b.referenceImages !== undefined) set("reference_images", JSON.stringify(b.referenceImages));
+    if (b.status !== undefined) set("status", b.status);
+    if (!fields.length) return res.status(400).json({ error: "no fields to update" });
+    fields.push("updated_at=now()");
+    values.push(req.params.id);
+    const { rowCount } = await p.query(`UPDATE drama_locations SET ${fields.join(", ")} WHERE id=$${i}`, values);
+    if (!rowCount) return res.status(404).json({ error: "not found" });
+    res.json({ ok: true });
+  } catch (err) {
+    console.error("[drama] location update", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete("/api/drama/locations/:id", async (req, res) => {
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  try {
+    await p.query("DELETE FROM drama_locations WHERE id=$1", [req.params.id]);
+    res.status(204).end();
+  } catch (err) {
+    console.error("[drama] location delete", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.post("/api/drama/projects/:id/episodes", async (req, res) => {
   const p = getPool();
   if (!p) return res.status(503).json({ error: "DB not configured" });
@@ -7759,6 +8061,7 @@ app.get("/api/drama/episodes/:id", async (req, res) => {
     const episode = rows[0];
     const { rows: cuts } = await p.query(
       `SELECT id, "order", duration_sec AS "durationSec", prompt, character_ids AS "characterIds",
+              location_id AS "locationId",
               generations, selected_generation_index AS "selectedGenerationIndex", narration, subtitle
          FROM drama_cuts WHERE episode_id=$1 ORDER BY "order"`,
       [req.params.id]
@@ -7777,7 +8080,12 @@ app.get("/api/drama/episodes/:id", async (req, res) => {
          FROM drama_characters WHERE project_id=$1`,
       [episode.projectId]
     );
-    const missingInfo = computeMissingInfo({ project: projRows[0] || {}, characters, episode, cuts });
+    const { rows: locations } = await p.query(
+      `SELECT id, name, status, identity_tokens AS "identityTokens", reference_images AS "referenceImages"
+         FROM drama_locations WHERE project_id=$1`,
+      [episode.projectId]
+    );
+    const missingInfo = computeMissingInfo({ project: projRows[0] || {}, characters, episode, cuts, locations });
     res.json({ ...episode, cuts, timeline, missingInfo });
   } catch (err) {
     console.error("[drama] episode detail", err);
@@ -7821,10 +8129,10 @@ app.post("/api/drama/episodes/:id/cuts", async (req, res) => {
     const { rows: existing } = await p.query(`SELECT COALESCE(MAX("order"),0) AS m FROM drama_cuts WHERE episode_id=$1`, [req.params.id]);
     const order = b.order ?? (Number(existing[0].m) + 1);
     const { rows } = await p.query(
-      `INSERT INTO drama_cuts (episode_id, "order", duration_sec, prompt, character_ids, narration, subtitle)
-       VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id`,
+      `INSERT INTO drama_cuts (episode_id, "order", duration_sec, prompt, character_ids, location_id, narration, subtitle)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id`,
       [req.params.id, order, b.durationSec || 8, b.prompt || null, JSON.stringify(b.characterIds || []),
-       b.narration || null, b.subtitle || null]
+       b.locationId || null, b.narration || null, b.subtitle || null]
     );
     await dramaRecomputeState(p, req.params.id);
     res.status(201).json({ id: rows[0].id, order });
@@ -7847,6 +8155,7 @@ app.patch("/api/drama/cuts/:id", async (req, res) => {
     if (b.durationSec !== undefined) set("duration_sec", b.durationSec);
     if (b.prompt !== undefined) set("prompt", b.prompt);
     if (b.characterIds !== undefined) set("character_ids", JSON.stringify(b.characterIds));
+    if (b.locationId !== undefined) set("location_id", b.locationId || null);
     if (b.narration !== undefined) set("narration", b.narration);
     if (b.subtitle !== undefined) set("subtitle", b.subtitle);
     if (b.selectedGenerationIndex !== undefined) set("selected_generation_index", b.selectedGenerationIndex);
@@ -7888,7 +8197,8 @@ app.post("/api/drama/cuts/:id/generate", async (req, res) => {
   try {
     const { rows } = await p.query(
       `SELECT id, episode_id AS "episodeId", duration_sec AS "durationSec", prompt,
-              character_ids AS "characterIds", generations, selected_generation_index AS "selectedGenerationIndex"
+              character_ids AS "characterIds", location_id AS "locationId",
+              generations, selected_generation_index AS "selectedGenerationIndex"
          FROM drama_cuts WHERE id=$1`,
       [req.params.id]
     );
@@ -7902,13 +8212,19 @@ app.post("/api/drama/cuts/:id/generate", async (req, res) => {
       `SELECT id, name, status, reference_images AS "referenceImages" FROM drama_characters WHERE project_id=$1`,
       [epRows[0].projectId]
     );
-    const { ready, reasons } = cutIsReadyForGeneration(cut, characters);
+    const { rows: locations } = await p.query(
+      `SELECT id, name, status, reference_images AS "referenceImages" FROM drama_locations WHERE project_id=$1`,
+      [epRows[0].projectId]
+    );
+    const { ready, reasons } = cutIsReadyForGeneration(cut, characters, locations);
     if (!ready) return res.status(409).json({ error: "素材が揃っていません", reasons });
 
-    // 参照画像: 登場キャラの referenceImages + キービジュアル (あれば)
+    // 参照画像: 登場キャラ + 場所 (背景) + キービジュアル (あれば)
     const referenceImageUrls = (cut.characterIds || [])
       .flatMap((cid) => characters.find((c) => String(c.id) === String(cid))?.referenceImages || [])
       .map((r) => r.url).filter(Boolean);
+    const loc = locations.find((l) => String(l.id) === String(cut.locationId));
+    if (loc) referenceImageUrls.push(...(loc.referenceImages || []).map((r) => r.url).filter(Boolean));
     if (epRows[0].keyVisual?.url) referenceImageUrls.push(epRows[0].keyVisual.url);
 
     const model = req.body?.model || DRAMA_SEEDANCE_MODEL;
@@ -7917,6 +8233,8 @@ app.post("/api/drama/cuts/:id/generate", async (req, res) => {
       const { taskId } = await dramaCreateVideoTask({
         prompt: cut.prompt, referenceImageUrls, durationSec: cut.durationSec, model,
       });
+      // コスト記録はタスク作成時 (保守側=失敗しても計上。実課金は成功分のみなので過大方向)
+      dramaRecordSeedanceUsage(epRows[0].projectId, Math.max(4, Math.min(15, Math.round(cut.durationSec || 8))), model);
       generation = {
         status: "queued", providerTaskId: taskId, videoUrl: null,
         prompt: cut.prompt, revisionNote: req.body?.revisionNote || "", model,
@@ -8125,6 +8443,11 @@ app.post("/api/drama/projects/:id/chat", async (req, res) => {
          FROM drama_chapters WHERE project_id=$1 ORDER BY number`,
       [req.params.id]
     );
+    const { rows: locations } = await p.query(
+      `SELECT id, name, status, identity_tokens AS "identityTokens", reference_images AS "referenceImages"
+         FROM drama_locations WHERE project_id=$1`,
+      [req.params.id]
+    );
     let episode = null, cuts = [];
     if (episodeId) {
       const { rows: epRows } = await p.query(
@@ -8135,14 +8458,15 @@ app.post("/api/drama/projects/:id/chat", async (req, res) => {
       episode = epRows[0] || null;
       if (episode) {
         const { rows: cutRows } = await p.query(
-          `SELECT id, "order", prompt, character_ids AS "characterIds", generations FROM drama_cuts WHERE episode_id=$1 ORDER BY "order"`,
+          `SELECT id, "order", prompt, character_ids AS "characterIds", location_id AS "locationId", generations
+             FROM drama_cuts WHERE episode_id=$1 ORDER BY "order"`,
           [episodeId]
         );
         cuts = cutRows;
       }
     }
-    const missingInfo = computeMissingInfo({ project: projRows[0], characters, episode, cuts });
-    const systemPrompt = dramaBuildSystemPrompt({ project: projRows[0], characters, episode, cuts, missingInfo, chapters });
+    const missingInfo = computeMissingInfo({ project: projRows[0], characters, episode, cuts, locations });
+    const systemPrompt = dramaBuildSystemPrompt({ project: projRows[0], characters, episode, cuts, missingInfo, chapters, locations });
 
     const { rows: history } = await p.query(
       episodeId
@@ -8153,7 +8477,7 @@ app.post("/api/drama/projects/:id/chat", async (req, res) => {
     history.reverse();
 
     const imageParts = await dramaFetchImageParts(imageUrls);
-    const reply = await dramaChatOnce(callGeminiWithFallback, systemPrompt, history, message || "(画像を確認して)", imageParts);
+    const reply = await dramaChatOnce(dramaTrackedGemini(req.params.id, "chat"), systemPrompt, history, message || "(画像を確認して)", imageParts);
 
     await p.query(
       `INSERT INTO drama_chat_messages (project_id, episode_id, role, content, images) VALUES ($1,$2,'user',$3,$4)`,
