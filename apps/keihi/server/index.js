@@ -117,6 +117,63 @@ app.post("/api/drama/inspect/:id/debug-chat", async (req, res) => {
   }
 });
 
+// デバッグ用のプロジェクト作成 (Claude Code 用・debug 予算内)。
+// body: { query } (カタログ検索の 1 件目) または { url }。
+// 作成 → AI 構造化 → 章解析まで一気通貫で実行し、アプリの一覧にも普通に出る。
+app.post("/api/drama/inspect/create-from-aozora", async (req, res) => {
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  try {
+    await ensureSchema();
+    const { rows: spent } = await p.query(
+      `SELECT COALESCE(SUM(cost_yen),0)::float AS y FROM drama_api_usage WHERE kind LIKE 'debug%'`
+    );
+    if (spent[0].y >= DRAMA_DEBUG_BUDGET_YEN) {
+      return res.status(403).json({ error: `デバッグ予算 (¥${DRAMA_DEBUG_BUDGET_YEN}) を使い切りました`, spentYen: spent[0].y });
+    }
+    const b = req.body || {};
+    let url = b.url;
+    if (!url && b.query) {
+      const hits = await dramaSearchCatalog(String(b.query).slice(0, 100), 1);
+      url = hits[0]?.cardUrl;
+    }
+    if (!url) return res.status(400).json({ error: "query か url が必要です" });
+
+    const result = await dramaImportFromAozora(p, {
+      url, createdBy: "claude-debug", skipSetup: false, kindPrefix: "debug_",
+    });
+
+    // 章解析 (要約 + 出演 index) も全章実行
+    const { rows: charRows } = await p.query(`SELECT name FROM drama_characters WHERE project_id=$1`, [result.id]);
+    const knownCharacterNames = charRows.map((r) => r.name);
+    const { rows: chapterRows } = await p.query(
+      `SELECT id, number, title, content FROM drama_chapters WHERE project_id=$1 ORDER BY number`, [result.id]
+    );
+    const chapterResults = [];
+    for (const ch of chapterRows) {
+      try {
+        const a = await dramaAnalyzeChapter(dramaTrackedGemini(result.id, "debug_chapter_analyze"), {
+          projectTitle: result.title, author: result.author, chapter: ch, knownCharacterNames,
+        });
+        await p.query(
+          `UPDATE drama_chapters SET summary=$1, character_names=$2, updated_at=now() WHERE id=$3`,
+          [a.summary, JSON.stringify(a.characterNames), ch.id]
+        );
+        chapterResults.push({ number: ch.number, title: ch.title, summary: a.summary, characterNames: a.characterNames });
+      } catch (e) {
+        chapterResults.push({ number: ch.number, error: e.message });
+      }
+    }
+    const { rows: spentAfter } = await p.query(
+      `SELECT COALESCE(SUM(cost_yen),0)::float AS y FROM drama_api_usage WHERE kind LIKE 'debug%'`
+    );
+    res.status(201).json({ ...result, chapterAnalysis: chapterResults, debugBudget: { spentYen: spentAfter[0].y, capYen: DRAMA_DEBUG_BUDGET_YEN } });
+  } catch (err) {
+    console.error("[drama] debug create", err);
+    res.status(err.status || 500).json({ error: err.message });
+  }
+});
+
 // チャット配線の dry-run (公開・read-only・Gemini 課金なし)。
 // 「モデルに実際に何が渡るか」(画像枚数・基準画像・引用・メモ等) を返す。
 // Claude Code が本番の配線をプッシュ後に検証する用。DB への書き込みは一切しない。
@@ -7829,12 +7886,73 @@ app.post("/api/drama/aozora-search", async (req, res) => {
   }
 });
 
-// 青空文庫 URL からプロジェクトを全自動作成:
+// 青空文庫 URL からのプロジェクト全自動作成の本体:
 //   1. 本文取得 (図書カード URL でも可) → タイトル・作者はページから自動
 //   2. プロジェクト作成 + 全文保存 + 章分割
-//   3. AI が本文から初期構造化: 時代背景 (worldSetting)・絵柄提案 (styleGuide)・
-//      主要キャラを下書きとして一括登録 (identityTokens / appearancePrompt 込み)
-// 章ごとの要約・出演 index は別途 /chapters/analyze (クライアントが後追いで呼ぶ)。
+//   3. AI が本文から初期構造化: 時代背景・絵柄提案・主要キャラ/場所を下書き登録
+// kindPrefix="debug_" で課金記録をデバッグ枠に付ける (通常ルートと debug ルートで共用)
+async function dramaImportFromAozora(p, { url, createdBy = null, skipSetup = false, kindPrefix = "" }) {
+  const { text, meta } = await dramaFetchAozora(url);
+  if (!text || text.length < 100) { const e = new Error("本文が取得できませんでした"); e.status = 400; throw e; }
+
+  const { rows } = await p.query(
+    `INSERT INTO drama_projects (title, author, source_text, created_by)
+     VALUES ($1,$2,$3,$4) RETURNING id`,
+    [meta.title || "無題", meta.author || null, text, createdBy]
+  );
+  const projectId = rows[0].id;
+
+  const chapters = dramaSplitChapters(text);
+  for (const ch of chapters) {
+    await p.query(
+      `INSERT INTO drama_chapters (project_id, number, title, content) VALUES ($1,$2,$3,$4)`,
+      [projectId, ch.number, ch.title, ch.content]
+    );
+  }
+
+  let setup = { worldSetting: null, styleGuide: null, characters: [], locations: [] };
+  let setupError = null;
+  if (genAI && !skipSetup) {
+    try {
+      setup = await dramaAnalyzeWorkSetup(dramaTrackedGemini(projectId, kindPrefix + "work_setup"), {
+        title: meta.title || "無題", author: meta.author, text,
+      });
+      await p.query(
+        `UPDATE drama_projects SET world_setting=$1, style_guide=$2, updated_at=now() WHERE id=$3`,
+        [setup.worldSetting, setup.styleGuide, projectId]
+      );
+      for (const c of setup.characters) {
+        await p.query(
+          `INSERT INTO drama_characters (project_id, name, reading, description, appearance_prompt, identity_tokens, status)
+           VALUES ($1,$2,$3,$4,$5,$6,'draft')`,
+          [projectId, c.name, c.reading || null, c.description || null, c.appearancePrompt || null, JSON.stringify(c.identityTokens || [])]
+        );
+      }
+      for (const l of setup.locations || []) {
+        await p.query(
+          `INSERT INTO drama_locations (project_id, name, description, appearance_prompt, identity_tokens, status)
+           VALUES ($1,$2,$3,$4,$5,'draft')`,
+          [projectId, l.name, l.description || null, l.appearancePrompt || null, JSON.stringify(l.identityTokens || [])]
+        );
+      }
+    } catch (e) {
+      console.warn("[drama] work setup analyze failed:", e.message);
+      setupError = e.message;
+    }
+  }
+
+  return {
+    id: projectId,
+    title: meta.title, author: meta.author,
+    totalChars: text.length, chapterCount: chapters.length,
+    chapters: chapters.map((c) => ({ number: c.number, title: c.title, charCount: c.content.length })),
+    charactersCreated: setup.characters.map((c) => c.name),
+    locationsCreated: (setup.locations || []).map((l) => l.name),
+    worldSetting: setup.worldSetting, styleGuide: setup.styleGuide,
+    setupError,
+  };
+}
+
 app.post("/api/drama/projects/from-aozora", async (req, res) => {
   const p = getPool();
   if (!p) return res.status(503).json({ error: "DB not configured" });
@@ -7842,66 +7960,13 @@ app.post("/api/drama/projects/from-aozora", async (req, res) => {
     const { url, skipSetup } = req.body || {};
     if (!url) return res.status(400).json({ error: "url is required" });
     await ensureSchema();
-
-    const { text, meta } = await dramaFetchAozora(url);
-    if (!text || text.length < 100) return res.status(400).json({ error: "本文が取得できませんでした" });
-
-    // AI 初期構造化 (Gemini 未設定でも取り込み自体は通す)。
-    // skipSetup=true なら取り込みだけ (クライアントが /analyze-setup を段階実行する用)。
-    let setup = { worldSetting: null, styleGuide: null, characters: [] };
-    let setupError = null;
-    if (genAI && !skipSetup) {
-      try {
-        setup = await dramaAnalyzeWorkSetup(dramaTrackedGemini(null, "work_setup"), {
-          title: meta.title || "無題", author: meta.author, text,
-        });
-      } catch (e) {
-        console.warn("[drama] work setup analyze failed:", e.message);
-        setupError = e.message;
-      }
-    }
-
-    const { rows } = await p.query(
-      `INSERT INTO drama_projects (title, author, source_text, world_setting, style_guide, created_by)
-       VALUES ($1,$2,$3,$4,$5,$6) RETURNING id`,
-      [meta.title || "無題", meta.author || null, text, setup.worldSetting, setup.styleGuide, req.user?.email || null]
-    );
-    const projectId = rows[0].id;
-
-    const chapters = dramaSplitChapters(text);
-    for (const ch of chapters) {
-      await p.query(
-        `INSERT INTO drama_chapters (project_id, number, title, content) VALUES ($1,$2,$3,$4)`,
-        [projectId, ch.number, ch.title, ch.content]
-      );
-    }
-    for (const c of setup.characters) {
-      await p.query(
-        `INSERT INTO drama_characters (project_id, name, reading, description, appearance_prompt, identity_tokens, status)
-         VALUES ($1,$2,$3,$4,$5,$6,'draft')`,
-        [projectId, c.name, c.reading || null, c.description || null, c.appearancePrompt || null, JSON.stringify(c.identityTokens || [])]
-      );
-    }
-    for (const l of setup.locations || []) {
-      await p.query(
-        `INSERT INTO drama_locations (project_id, name, description, appearance_prompt, identity_tokens, status)
-         VALUES ($1,$2,$3,$4,$5,'draft')`,
-        [projectId, l.name, l.description || null, l.appearancePrompt || null, JSON.stringify(l.identityTokens || [])]
-      );
-    }
-
-    res.status(201).json({
-      id: projectId,
-      title: meta.title, author: meta.author,
-      totalChars: text.length, chapterCount: chapters.length,
-      charactersCreated: setup.characters.map((c) => c.name),
-      locationsCreated: (setup.locations || []).map((l) => l.name),
-      worldSetting: setup.worldSetting, styleGuide: setup.styleGuide,
-      setupError,
+    const result = await dramaImportFromAozora(p, {
+      url, createdBy: req.user?.email || null, skipSetup: !!skipSetup,
     });
+    res.status(201).json(result);
   } catch (err) {
     console.error("[drama] from-aozora", err);
-    res.status(500).json({ error: err.message });
+    res.status(err.status || 500).json({ error: err.message });
   }
 });
 

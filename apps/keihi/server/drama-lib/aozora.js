@@ -7,6 +7,14 @@ import zlib from "node:zlib";
 //   見出しが無い作品は 1 章 (全文) として返す
 
 const KANJI_CHAPTER_RE = /^[　\s]*[一二三四五六七八九十百]+[　\s]*$/;
+// 「はしがき」「第一の手記」「あとがき」型の見出し (人間失格などで使われる)
+const HEADING_CHAPTER_RE = /^[　\s]*(はしがき|まえがき|序章|序|プロローグ|エピローグ|あとがき|終章|第[一二三四五六七八九十百]+の?(手記|章|話|部|篇|編)?)[　\s]*$/;
+
+function isChapterMarker(line) {
+  const t = line.trim();
+  if (!t || t.length > 12) return false;
+  return KANJI_CHAPTER_RE.test(line) || HEADING_CHAPTER_RE.test(line);
+}
 
 // ── 作品カタログ検索 ──
 // 青空文庫公式の全作品 CSV (zip) をメモリに読み込んで検索する。
@@ -153,25 +161,40 @@ export async function fetchAozoraText(url) {
   return { text: extractAozoraText(html), meta: extractAozoraMeta(html) };
 }
 
-// テキスト → [{ number, title, content }]。章見出し (漢数字だけの行) で分割。
+// テキスト → [{ number, title, content }]。
+// 章見出し = 漢数字だけの行 (一/二/…) または「はしがき/第一の手記/あとがき」型の短行。
+// 見出し直後に別の見出しが続く空章 (例: 第三の手記 → 一) は次章のタイトルに繋げる
+// (「第三の手記 一」)。
 export function splitChapters(text) {
   const lines = text.split("\n");
   const marks = [];
   lines.forEach((line, i) => {
-    if (KANJI_CHAPTER_RE.test(line)) marks.push({ i, label: line.trim() });
+    if (isChapterMarker(line)) marks.push({ i, label: line.trim() });
   });
   if (marks.length < 2) {
     return [{ number: 1, title: "全文", content: text }];
   }
-  const chapters = [];
+  const raw = [];
   for (let k = 0; k < marks.length; k++) {
     const from = marks[k].i + 1;
     const to = k + 1 < marks.length ? marks[k + 1].i : lines.length;
     const content = lines.slice(from, to).join("\n").trim();
-    chapters.push({ number: k + 1, title: marks[k].label, content });
+    raw.push({ title: marks[k].label, content });
   }
+  // 空章 (見出し直後に子見出しが続く「第三の手記」等) は親見出しとして子に引き継ぐ。
+  // 親が付いた後の漢数字だけの章 (一/二…) には親見出しを前置し続ける
+  const merged = [];
+  let parent = "";
+  for (const ch of raw) {
+    const numeral = /^[一二三四五六七八九十百]+$/.test(ch.title);
+    if (!numeral) parent = ""; // 新しい見出しが来たら親をリセット
+    const title = numeral && parent ? `${parent} ${ch.title}` : ch.title;
+    if (ch.content.length < 40) { parent = title; continue; } // 空見出し → 親として繰り越し
+    merged.push({ title, content: ch.content });
+  }
+  const chapters = merged.map((ch, i) => ({ number: i + 1, title: ch.title, content: ch.content }));
   // 最初の見出しより前に本文がある場合 (序文等) は先頭に足す
   const preamble = lines.slice(0, marks[0].i).join("\n").trim();
-  if (preamble) chapters.unshift({ number: 0, title: "序", content: preamble });
+  if (preamble.length >= 40) chapters.unshift({ number: 0, title: "序", content: preamble });
   return chapters;
 }
