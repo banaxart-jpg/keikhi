@@ -433,6 +433,10 @@ const TEMPLATE = `
           <div v-if="genErrorFor === cut.id" class="err">{{ genError }}</div>
           <template v-for="(g, gi) in cut.generations" :key="gi">
             <video v-if="g.videoUrl" :src="g.videoUrl" controls class="gen-video" :style="cut.selectedGenerationIndex === gi ? { outline: '3px solid var(--accent)' } : {}" @click="selectGeneration(cut, gi)"></video>
+            <div v-else-if="g.status === 'queued' || g.status === 'running'" class="gen-note" style="display:flex; align-items:center; gap:8px;">
+              <span class="icon">hourglass_top</span>生成中 ({{ g.status }})… 自動で更新されます
+              <button class="cut-order-btn" style="width:auto; padding:0 10px; border-radius:8px; font-size:11px;" @click="refreshGeneration(cut, gi)">更新</button>
+            </div>
             <div class="gen-note">{{ g.note || (g.status + ' / ' + g.model) }}</div>
           </template>
         </div>
@@ -613,6 +617,7 @@ const App = {
       try {
         currentEpisode.value = await apiFetch(`/api/drama/episodes/${id}`);
         view.value = "episode";
+        ensureGenPolling(); // 生成中タスクが残ってたら追いかけ再開
       } catch (e) { err.value = e.message; }
     }
 
@@ -883,10 +888,44 @@ const App = {
       try {
         await apiFetch(`/api/drama/cuts/${cut.id}/generate`, { method: "POST", body: {} });
         await refreshEpisode();
+        ensureGenPolling(); // 非同期生成 (queued/running) を数秒おきに追いかける
       } catch (e) {
         genError.value = e.message;
         genErrorFor.value = cut.id;
       } finally { generatingCutId.value = null; }
+    }
+
+    // ── 生成タスクの自動ポーリング ──
+    let genPollTimer = null;
+    function pendingGenerations() {
+      const cuts = currentEpisode.value?.cuts || [];
+      const out = [];
+      cuts.forEach((c) => (c.generations || []).forEach((g, gi) => {
+        if (g.status === "queued" || g.status === "running") out.push({ cutId: c.id, gi });
+      }));
+      return out;
+    }
+    function ensureGenPolling() {
+      if (genPollTimer) return;
+      genPollTimer = setInterval(async () => {
+        const pending = pendingGenerations();
+        if (!pending.length || view.value !== "episode") {
+          clearInterval(genPollTimer); genPollTimer = null;
+          return;
+        }
+        try {
+          for (const p of pending) {
+            await apiFetch(`/api/drama/cuts/${p.cutId}/generations/${p.gi}/refresh`, { method: "POST", body: {} });
+          }
+          await refreshEpisode();
+        } catch (_) { /* 次の周回で再試行 */ }
+      }, 8000);
+    }
+    async function refreshGeneration(cut, gi) {
+      try {
+        await apiFetch(`/api/drama/cuts/${cut.id}/generations/${gi}/refresh`, { method: "POST", body: {} });
+        await refreshEpisode();
+      } catch (e) { err.value = e.message; }
     }
     async function selectGeneration(cut, idx) {
       try {
@@ -976,7 +1015,7 @@ const App = {
       openProject, backToProjects, openEpisode, backToProject,
       charOpenId, charEdit, charSaving, toggleChar, onCharImagePick, saveCharacter, deleteCharacter,
       cutOpenId, cutEdit, cutSaving, toggleCut, toggleCutChar, addCut, saveCut, deleteCut, moveCut,
-      generatingCutId, genError, genErrorFor, generateCut, selectGeneration,
+      generatingCutId, genError, genErrorFor, generateCut, selectGeneration, refreshGeneration,
       isAppearing, toggleAppearing, onKeyVisualPick,
       exporting, exportErr, exportEpisode,
       chatOpen, chatMessages, chatInput, chatSending, chatLogEl, chatAttach, openChat, sendChat, onChatImagePick,

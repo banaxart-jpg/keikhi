@@ -40,13 +40,16 @@ AI チャットで方向性を詰める（絵柄・画像の粒度・トーン�
   - `aozora.js` — 青空文庫の取得（Shift_JIS デコード・ルビ除去・章分割・カード URL 解決）
   - `state.js` — 制作状態の再計算・不足情報の判定
   - `gemini.js` — チャット/作品構造化/章解析のプロンプト構築・呼び出し
-  - `videoGen.js` — 動画生成の抽象インターフェース（Seedance 未接続のため現状モック）
+  - `videoGen.js` — Seedance (BytePlus ModelArk) 接続。タスク作成→ポーリングの非同期型。
+    env: `SEEDANCE_API_KEY` / `SEEDANCE_BASE_URL` (Cloud Run に設定済み)。
+    モデル ID はコード内 `SEEDANCE_MODEL` にハードコード (新モデルが出たらここを書き換え)。
+    キー未設定のローカルではモック動画にフォールバック
 - データは Firestore ではなく Cloud SQL (Postgres) の `drama_*` テーブル
   （seko-kanri / fx-bot と同じ流儀。`ensureSchema()` で自動作成）
 
 ## 残課題 / 今後やりたいこと
 
-- [ ] Seedance 公式 API 接続（`drama-lib/videoGen.js` の TODO 箇所）
+- [x] Seedance 公式 API 接続 (BytePlus ModelArk、モデルはコード内 SEEDANCE_MODEL でハードコード管理)
 - [ ] 実際のカット結合・ナレーション音声・字幕焼き込み・BGM を含む書き出しパイプライン
 - [ ] タイムラインの本格的なマルチトラック編集（現状はカット順の自動連結のみ）
 - [ ] AI によるカット割り自動提案（原文＋キービジュアルから8秒×数カットのプロンプト生成）

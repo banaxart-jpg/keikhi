@@ -16,7 +16,11 @@ import { parseCandlesCsv as fxParseCsv } from "./fx-lib/csv.js";
 import { runStrategy as fxRunStrategy, strategyList as fxStrategyList } from "./fx-lib/strategies.js";
 import { recomputeEpisodeState, computeMissingInfo, cutIsReadyForGeneration } from "./drama-lib/state.js";
 import { buildSystemPrompt as dramaBuildSystemPrompt, chatOnce as dramaChatOnce, analyzeChapter as dramaAnalyzeChapter } from "./drama-lib/gemini.js";
-import { generateCutVideo as dramaGenerateCutVideo } from "./drama-lib/videoGen.js";
+import {
+  createCutVideoTask as dramaCreateVideoTask, getVideoTask as dramaGetVideoTask,
+  generateCutVideoMock as dramaGenerateMock, seedanceConfigured as dramaSeedanceConfigured,
+  SEEDANCE_MODEL as DRAMA_SEEDANCE_MODEL,
+} from "./drama-lib/videoGen.js";
 import { fetchAozoraText as dramaFetchAozora, splitChapters as dramaSplitChapters } from "./drama-lib/aozora.js";
 import { analyzeWorkSetup as dramaAnalyzeWorkSetup, searchAozora as dramaSearchAozora } from "./drama-lib/gemini.js";
 import { fileURLToPath } from "node:url";
@@ -1045,6 +1049,7 @@ app.get("/health", (req, res) => {
     gemini: !!genAI,
     storage: !!storage,
     db: !!DB_INSTANCE_CONNECTION_NAME,
+    seedance: dramaSeedanceConfigured(),
   });
 });
 
@@ -7876,6 +7881,7 @@ app.delete("/api/drama/cuts/:id", async (req, res) => {
 
 // カットの動画生成をトリガー。登場キャラが確定 + 参照画像ありでない限り 409 で拒否する
 // (「素材が揃うまで動画生成に進ませない」を実際にゲートする箇所)。
+// Seedance は非同期 API なのでここではタスク作成まで。進捗/結果は下の /refresh で取る。
 app.post("/api/drama/cuts/:id/generate", async (req, res) => {
   const p = getPool();
   if (!p) return res.status(503).json({ error: "DB not configured" });
@@ -7888,7 +7894,9 @@ app.post("/api/drama/cuts/:id/generate", async (req, res) => {
     );
     if (!rows.length) return res.status(404).json({ error: "not found" });
     const cut = rows[0];
-    const { rows: epRows } = await p.query(`SELECT project_id AS "projectId" FROM drama_episodes WHERE id=$1`, [cut.episodeId]);
+    const { rows: epRows } = await p.query(
+      `SELECT project_id AS "projectId", key_visual AS "keyVisual" FROM drama_episodes WHERE id=$1`, [cut.episodeId]
+    );
     if (!epRows.length) return res.status(404).json({ error: "episode not found" });
     const { rows: characters } = await p.query(
       `SELECT id, name, status, reference_images AS "referenceImages" FROM drama_characters WHERE project_id=$1`,
@@ -7897,21 +7905,34 @@ app.post("/api/drama/cuts/:id/generate", async (req, res) => {
     const { ready, reasons } = cutIsReadyForGeneration(cut, characters);
     if (!ready) return res.status(409).json({ error: "素材が揃っていません", reasons });
 
-    const { rows: projRows } = await p.query(
-      `SELECT default_video_model AS "defaultVideoModel" FROM drama_projects WHERE id=$1`, [epRows[0].projectId]
-    );
-    const model = req.body?.model || projRows[0]?.defaultVideoModel || "seedance-2.0-fast";
+    // 参照画像: 登場キャラの referenceImages + キービジュアル (あれば)
     const referenceImageUrls = (cut.characterIds || [])
       .flatMap((cid) => characters.find((c) => String(c.id) === String(cid))?.referenceImages || [])
       .map((r) => r.url).filter(Boolean);
+    if (epRows[0].keyVisual?.url) referenceImageUrls.push(epRows[0].keyVisual.url);
 
-    const genResult = await dramaGenerateCutVideo({ prompt: cut.prompt, referenceImageUrls, durationSec: cut.durationSec, model });
-    const generation = {
-      videoUrl: genResult.videoUrl, prompt: cut.prompt, revisionNote: req.body?.revisionNote || "",
-      model, status: genResult.status, note: genResult.note, createdAt: new Date().toISOString(),
-    };
+    const model = req.body?.model || DRAMA_SEEDANCE_MODEL;
+    let generation;
+    if (dramaSeedanceConfigured()) {
+      const { taskId } = await dramaCreateVideoTask({
+        prompt: cut.prompt, referenceImageUrls, durationSec: cut.durationSec, model,
+      });
+      generation = {
+        status: "queued", providerTaskId: taskId, videoUrl: null,
+        prompt: cut.prompt, revisionNote: req.body?.revisionNote || "", model,
+        createdAt: new Date().toISOString(),
+      };
+    } else {
+      // ローカル/dev: キー無しならモックで即完了
+      const mock = await dramaGenerateMock({ prompt: cut.prompt, durationSec: cut.durationSec, model });
+      generation = {
+        status: mock.status, videoUrl: mock.videoUrl, note: mock.note,
+        prompt: cut.prompt, revisionNote: req.body?.revisionNote || "", model: mock.model,
+        createdAt: new Date().toISOString(),
+      };
+    }
     const generations = [...(cut.generations || []), generation];
-    const newIndex = (genResult.status === "done" && cut.selectedGenerationIndex === -1)
+    const newIndex = (generation.status === "done" && cut.selectedGenerationIndex === -1)
       ? generations.length - 1 : cut.selectedGenerationIndex;
     await p.query(
       `UPDATE drama_cuts SET generations=$1, selected_generation_index=$2, updated_at=now() WHERE id=$3`,
@@ -7921,6 +7942,75 @@ app.post("/api/drama/cuts/:id/generate", async (req, res) => {
     res.json({ ok: true, generation, generations });
   } catch (err) {
     console.error("[drama] cut generate", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 生成タスクの進捗確認 + 完了処理。フロントが数秒おきに叩く。
+//  - succeeded: 動画を GCS に保存 (provider URL は 24h で切れるため)、署名 URL を videoUrl に
+//  - 保存済みで URL が切れた時も、これを叩き直せば署名 URL を再発行する
+app.post("/api/drama/cuts/:id/generations/:gi/refresh", async (req, res) => {
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  try {
+    const gi = Number(req.params.gi);
+    const { rows } = await p.query(
+      `SELECT id, episode_id AS "episodeId", generations, selected_generation_index AS "selectedGenerationIndex"
+         FROM drama_cuts WHERE id=$1`,
+      [req.params.id]
+    );
+    if (!rows.length) return res.status(404).json({ error: "not found" });
+    const cut = rows[0];
+    const generations = [...(cut.generations || [])];
+    const gen = generations[gi];
+    if (!gen) return res.status(404).json({ error: "generation not found" });
+
+    const signGcs = async (gsUrl) => {
+      const [, , bucket, ...rest] = gsUrl.split("/");
+      const [url] = await storage.bucket(bucket).file(rest.join("/"))
+        .getSignedUrl({ action: "read", expires: Date.now() + 7 * 24 * 60 * 60 * 1000 });
+      return url;
+    };
+
+    if (gen.gcsUrl && storage) {
+      // 保存済み → 署名 URL の再発行だけ
+      gen.videoUrl = await signGcs(gen.gcsUrl);
+    } else if (gen.providerTaskId && ["queued", "running"].includes(gen.status)) {
+      const t = await dramaGetVideoTask(gen.providerTaskId);
+      if (t.status === "succeeded" && t.videoUrl) {
+        gen.status = "done";
+        gen.videoUrl = t.videoUrl;
+        // GCS に保存 (provider URL の期限切れ対策)。失敗しても provider URL で続行
+        if (storage && RECEIPTS_BUCKET) {
+          try {
+            const vr = await fetch(t.videoUrl);
+            if (vr.ok) {
+              const buf = Buffer.from(await vr.arrayBuffer());
+              const key = `drama/cuts/${cut.id}/${gen.providerTaskId}.mp4`;
+              await storage.bucket(RECEIPTS_BUCKET).file(key).save(buf, { contentType: "video/mp4", resumable: false });
+              gen.gcsUrl = `gs://${RECEIPTS_BUCKET}/${key}`;
+              gen.videoUrl = await signGcs(gen.gcsUrl);
+            }
+          } catch (e) { console.warn("[drama] video GCS mirror failed:", e.message); }
+        }
+      } else if (t.status === "failed") {
+        gen.status = "failed";
+        gen.note = t.error || "生成に失敗しました";
+      } else {
+        gen.status = t.status === "unknown" ? gen.status : t.status; // queued/running
+      }
+    }
+
+    let newIndex = cut.selectedGenerationIndex;
+    if (gen.status === "done" && newIndex === -1) newIndex = gi;
+    await p.query(
+      `UPDATE drama_cuts SET generations=$1, selected_generation_index=$2, updated_at=now() WHERE id=$3`,
+      [JSON.stringify(generations), newIndex, req.params.id]
+    );
+    await dramaRecomputeState(p, cut.episodeId);
+    res.json({ ok: true, generation: gen, index: gi });
+  } catch (err) {
+    console.error("[drama] generation refresh", err);
     res.status(500).json({ error: err.message });
   }
 });
