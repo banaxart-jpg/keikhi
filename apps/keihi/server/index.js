@@ -7673,26 +7673,58 @@ async function dramaGenerateImage(prompt, refParts = [], opts = {}) {
   if (!GEMINI_API_KEY) throw new Error("Gemini not configured");
   const refNote = opts.refNote
     || "添付画像は絵柄・キャラデザインの基準。新しい絵柄を発明せず、添付のキャラクター・タッチ・線の質感・塗りをそのまま使って、指示のシーンに描き直すこと。ただし参照がキャラクターシートや資料の場合、そのレイアウト・枠・注釈文字・指示に関係ない他のキャラクターを画面に入れてはいけない (シートを作れという指示の場合を除く)。出力は指示された 1 シーンの画のみ";
-  const text = refParts.length ? `${prompt}\n\n(${refNote})` : prompt;
+  // 参照画像の合計サイズを制限 (base64 で ~8MB 超のペイロードは Gemini の
+  // Internal error 率が跳ね上がる。優先度順に入るだけ入れて、超えた分は落とす)
+  const MAX_REF_B64_CHARS = 8_000_000;
+  const trimmedRefs = [];
+  let refBytes = 0;
+  for (const rp of refParts) {
+    const len = rp.inlineData?.data?.length || 0;
+    if (refBytes + len > MAX_REF_B64_CHARS) { console.warn("[drama] ref image dropped (size cap)"); continue; }
+    refBytes += len;
+    trimmedRefs.push(rp);
+  }
+  const text = trimmedRefs.length ? `${prompt}\n\n(${refNote})` : prompt;
   const generationConfig = { responseModalities: ["TEXT", "IMAGE"] };
   if (opts.aspectRatio) generationConfig.imageConfig = { aspectRatio: opts.aspectRatio };
-  const res = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/${DRAMA_GEMINI_IMAGE_MODEL}:generateContent?key=${GEMINI_API_KEY}`,
-    {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        contents: [{ parts: [{ text }, ...refParts] }],
-        generationConfig,
-      }),
+  const body = JSON.stringify({
+    contents: [{ parts: [{ text }, ...trimmedRefs] }],
+    generationConfig,
+  });
+
+  // Gemini 画像 API は一過性の 500 (Internal error) がそこそこ出るため 3 回まで再試行
+  // (テキスト側の callGeminiWithFallback と同じ流儀。実際にチャットで一発失敗が起きた)
+  let lastErr;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      const res = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/${DRAMA_GEMINI_IMAGE_MODEL}:generateContent?key=${GEMINI_API_KEY}`,
+        { method: "POST", headers: { "content-type": "application/json" }, body }
+      );
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        const msg = j?.error?.message || `image gen HTTP ${res.status}`;
+        const transient = /\b(500|503|429)\b|INTERNAL|UNAVAILABLE|overload|rate limit|Internal error/i.test(`${res.status} ${msg}`);
+        if (!transient) throw Object.assign(new Error(msg), { permanent: true });
+        lastErr = new Error(msg);
+      } else {
+        const parts = j.candidates?.[0]?.content?.parts || [];
+        const img = parts.find((pp) => pp.inlineData?.data);
+        if (img) return { data: img.inlineData.data, mimeType: img.inlineData.mimeType || "image/png" };
+        // 画像なし応答 (テキストだけ返る等) も一過性のことがある → 再試行対象
+        lastErr = new Error("画像が返りませんでした: " + (parts.find((pp) => pp.text)?.text || "").slice(0, 100));
+      }
+    } catch (e) {
+      if (e.permanent) throw e;
+      lastErr = e; // ネットワーク断等も再試行
     }
-  );
-  const j = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(j?.error?.message || `image gen HTTP ${res.status}`);
-  const parts = j.candidates?.[0]?.content?.parts || [];
-  const img = parts.find((p) => p.inlineData?.data);
-  if (!img) throw new Error("画像が返りませんでした: " + (parts.find((p) => p.text)?.text || "").slice(0, 100));
-  return { data: img.inlineData.data, mimeType: img.inlineData.mimeType || "image/png" };
+    if (attempt < 3) {
+      const wait = 800 * 2 ** attempt;
+      console.warn(`[drama] image gen attempt ${attempt} failed (${String(lastErr?.message).slice(0, 80)}), retry in ${wait}ms`);
+      await new Promise((r) => setTimeout(r, wait));
+    }
+  }
+  throw lastErr;
 }
 // 状態は毎回 DB の実データから再計算して保存する (episode.state はキャッシュ扱い)。
 async function dramaRecomputeState(p, episodeId) {
