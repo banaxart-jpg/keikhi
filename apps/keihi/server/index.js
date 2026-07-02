@@ -1156,6 +1156,8 @@ async function ensureSchema() {
     await p.query("CREATE INDEX IF NOT EXISTS drama_chat_project_idx ON drama_chat_messages (project_id, created_at)");
     // チャットへの画像添付 (Firebase Storage の URL 配列)
     await p.query(`ALTER TABLE drama_chat_messages ADD COLUMN IF NOT EXISTS images JSONB NOT NULL DEFAULT '[]'::jsonb`);
+    // 非同期処理ステータス ('pending' = Cloud Tasks で処理中の assistant 行)
+    await p.query(`ALTER TABLE drama_chat_messages ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'done'`);
     // 原作の章分割 (青空文庫 import で自動生成)。summary / character_names は AI 解析で埋まる
     await p.query(`
       CREATE TABLE IF NOT EXISTS drama_chapters (
@@ -8602,8 +8604,8 @@ app.get("/api/drama/projects/:id/chat", async (req, res) => {
     const episodeId = req.query.episodeId || null;
     const { rows } = await p.query(
       episodeId
-        ? `SELECT id, role, content, images, created_at AS "createdAt" FROM drama_chat_messages WHERE project_id=$1 AND episode_id=$2 ORDER BY id`
-        : `SELECT id, role, content, images, created_at AS "createdAt" FROM drama_chat_messages WHERE project_id=$1 AND episode_id IS NULL ORDER BY id`,
+        ? `SELECT id, role, content, images, status, created_at AS "createdAt" FROM drama_chat_messages WHERE project_id=$1 AND episode_id=$2 ORDER BY id`
+        : `SELECT id, role, content, images, status, created_at AS "createdAt" FROM drama_chat_messages WHERE project_id=$1 AND episode_id IS NULL ORDER BY id`,
       episodeId ? [req.params.id, episodeId] : [req.params.id]
     );
     res.json(rows);
@@ -8877,8 +8879,141 @@ async function dramaFetchImageParts(imageUrls) {
   return parts;
 }
 
+// チャット処理の本体。同期ルートと Cloud Tasks ワーカーの両方から使う。
+// 処理結果は assistantMessageId の行に書き込む (status: pending → done)。
+async function dramaProcessChat(p, { projectId, episodeId, message, imageUrls = [], userMessageId, assistantMessageId }) {
+  const { rows: projRows } = await p.query(
+    `SELECT id, title, author, style_guide AS "styleGuide", world_setting AS "worldSetting",
+            source_text AS "sourceText", ai_notes AS "aiNotes"
+       FROM drama_projects WHERE id=$1`,
+    [projectId]
+  );
+  if (!projRows.length) { const e = new Error("project not found"); e.status = 404; throw e; }
+  const { rows: characters } = await p.query(
+    `SELECT id, name, reading, status, identity_tokens AS "identityTokens", reference_images AS "referenceImages"
+       FROM drama_characters WHERE project_id=$1`,
+    [projectId]
+  );
+  const { rows: chapters } = await p.query(
+    `SELECT number, title, content, summary, character_names AS "characterNames", length(content) AS "charCount"
+       FROM drama_chapters WHERE project_id=$1 ORDER BY number`,
+    [projectId]
+  );
+  const { rows: locations } = await p.query(
+    `SELECT id, name, status, identity_tokens AS "identityTokens", reference_images AS "referenceImages"
+       FROM drama_locations WHERE project_id=$1`,
+    [projectId]
+  );
+  let episode = null, cuts = [];
+  if (episodeId) {
+    const { rows: epRows } = await p.query(
+      `SELECT id, number, title, key_visual AS "keyVisual", state, appearing_character_ids AS "appearingCharacterIds"
+         FROM drama_episodes WHERE id=$1 AND project_id=$2`,
+      [episodeId, projectId]
+    );
+    episode = epRows[0] || null;
+    if (episode) {
+      const { rows: cutRows } = await p.query(
+        `SELECT id, "order", prompt, character_ids AS "characterIds", location_id AS "locationId", generations
+           FROM drama_cuts WHERE episode_id=$1 ORDER BY "order"`,
+        [episodeId]
+      );
+      cuts = cutRows;
+    }
+  }
+  const missingInfo = computeMissingInfo({ project: projRows[0], characters, episode, cuts, locations });
+  const systemPrompt = dramaBuildSystemPrompt({
+    project: projRows[0], characters, episode, cuts, missingInfo, chapters, locations,
+    aiNotes: projRows[0].aiNotes || "",
+  });
+
+  // 履歴: 今回の user メッセージ自身と pending 行は除外
+  const { rows: history } = await p.query(
+    episodeId
+      ? `SELECT role, content, images FROM drama_chat_messages
+           WHERE project_id=$1 AND episode_id=$2 AND id < $3 AND status='done' ORDER BY id DESC LIMIT 20`
+      : `SELECT role, content, images FROM drama_chat_messages
+           WHERE project_id=$1 AND episode_id IS NULL AND id < $2 AND status='done' ORDER BY id DESC LIMIT 20`,
+    episodeId ? [projectId, episodeId, userMessageId] : [projectId, userMessageId]
+  );
+  history.reverse();
+
+  const imageParts = await dramaFetchImageParts(imageUrls);
+  let reply = await dramaChatOnce(dramaTrackedGemini(projectId, "chat"), systemPrompt, history, message || "(画像を確認して)", imageParts);
+
+  // [画像生成: プロンプト] マーカーを検出したら実際に画像を作って返す (最大2枚)
+  const generatedImages = [];
+  const markers = [...reply.matchAll(/\[画像生成:\s*([\s\S]*?)\]/g)].slice(0, 2);
+  for (const mk of markers) {
+    try {
+      const img = await dramaGenerateImage(mk[1].trim());
+      dramaRecordUsage({ projectId, provider: "gemini", kind: "chat_image", model: DRAMA_GEMINI_IMAGE_MODEL, costYen: DRAMA_GEMINI_IMAGE_YEN });
+      if (storage && RECEIPTS_BUCKET) {
+        const ext = img.mimeType.includes("jpeg") ? "jpg" : "png";
+        const key = `drama/chat/${projectId}/${Date.now()}_${generatedImages.length}.${ext}`;
+        await storage.bucket(RECEIPTS_BUCKET).file(key).save(Buffer.from(img.data, "base64"), { contentType: img.mimeType, resumable: false });
+        const [url] = await storage.bucket(RECEIPTS_BUCKET).file(key)
+          .getSignedUrl({ action: "read", expires: Date.now() + 7 * 24 * 60 * 60 * 1000 });
+        generatedImages.push(url);
+      } else {
+        generatedImages.push(`data:${img.mimeType};base64,${img.data}`); // ローカル dev 用
+      }
+    } catch (e) {
+      console.warn("[drama] chat image gen failed:", e.message);
+      reply += `\n(画像生成に失敗: ${e.message})`;
+    }
+  }
+  if (markers.length) reply = reply.replace(/\[画像生成:\s*[\s\S]*?\]/g, "").trim();
+
+  // <<<ACTIONS [...] ACTIONS>>> ブロック = AI による設定の CRUD。実行して結果を通知
+  let applied = [];
+  const actionsMatch = reply.match(/<<<ACTIONS([\s\S]*?)ACTIONS>>>/);
+  if (actionsMatch) {
+    reply = reply.replace(/<<<ACTIONS[\s\S]*?ACTIONS>>>/g, "").trim();
+    try {
+      const raw = actionsMatch[1].trim();
+      const s = raw.indexOf("[");
+      const e = raw.lastIndexOf("]");
+      const jsonText = dramaEscapeCtrlInJsonStrings(raw.slice(s, e + 1)).replace(/,(\s*[}\]])/g, "$1");
+      const actions = JSON.parse(jsonText);
+      applied = await dramaExecuteActions(p, projectId, actions);
+      if (applied.length) reply += `\n\n⚙ 実行: ${applied.join(" / ")}`;
+    } catch (e) {
+      console.warn("[drama] actions parse failed:", e.message);
+      reply += `\n(設定操作の解析に失敗: ${e.message.slice(0, 80)})`;
+    }
+  }
+
+  await p.query(
+    `UPDATE drama_chat_messages SET content=$1, images=$2, status='done' WHERE id=$3`,
+    [reply, JSON.stringify(generatedImages), assistantMessageId]
+  );
+  return { reply, images: generatedImages, applied };
+}
+
+// Cloud Tasks への enqueue (kaigi と同じ queue を使う)。設定が無ければ null (= 同期処理へ)
+async function enqueueDramaChatWork(payload) {
+  if (!KAIGI_TASKS_QUEUE || !SERVICE_URL || !INTERNAL_TICK_SECRET || !FIREBASE_PROJECT_ID) return null;
+  const client = getTasksClient();
+  const parent = client.queuePath(FIREBASE_PROJECT_ID, KAIGI_TASKS_LOCATION, KAIGI_TASKS_QUEUE);
+  const [resp] = await client.createTask({
+    parent,
+    task: {
+      httpRequest: {
+        httpMethod: "POST",
+        url: `${SERVICE_URL}/api/internal/drama/chat-work`,
+        headers: { "content-type": "application/json", "x-tick-secret": INTERNAL_TICK_SECRET },
+        body: Buffer.from(JSON.stringify(payload)).toString("base64"),
+      },
+    },
+  });
+  return resp.name;
+}
+
 // AI チャット: 現在の制作状態 (キャラ/章/エピソード/カット/不足情報) を毎回組み立てて渡す。
 // 画像添付はクライアントが Firebase Storage に上げた URL を imageUrls で渡してくる。
+// iOS Safari の fetch が 60 秒程度で切れる (Load failed) ため、処理は Cloud Tasks に
+// 逃がして即返し {pendingId} → クライアントがポーリング。queue 未設定なら同期処理。
 app.post("/api/drama/projects/:id/chat", async (req, res) => {
   const p = getPool();
   if (!p) return res.status(503).json({ error: "DB not configured" });
@@ -8887,118 +9022,62 @@ app.post("/api/drama/projects/:id/chat", async (req, res) => {
     const { message, episodeId, imageUrls = [] } = req.body || {};
     if (!message && !imageUrls.length) return res.status(400).json({ error: "message is required" });
 
-    const { rows: projRows } = await p.query(
-      `SELECT id, title, author, style_guide AS "styleGuide", world_setting AS "worldSetting",
-              source_text AS "sourceText", ai_notes AS "aiNotes"
-         FROM drama_projects WHERE id=$1`,
-      [req.params.id]
-    );
-    if (!projRows.length) return res.status(404).json({ error: "project not found" });
-    const { rows: characters } = await p.query(
-      `SELECT id, name, reading, status, identity_tokens AS "identityTokens", reference_images AS "referenceImages"
-         FROM drama_characters WHERE project_id=$1`,
-      [req.params.id]
-    );
-    const { rows: chapters } = await p.query(
-      `SELECT number, title, content, summary, character_names AS "characterNames", length(content) AS "charCount"
-         FROM drama_chapters WHERE project_id=$1 ORDER BY number`,
-      [req.params.id]
-    );
-    const { rows: locations } = await p.query(
-      `SELECT id, name, status, identity_tokens AS "identityTokens", reference_images AS "referenceImages"
-         FROM drama_locations WHERE project_id=$1`,
-      [req.params.id]
-    );
-    let episode = null, cuts = [];
-    if (episodeId) {
-      const { rows: epRows } = await p.query(
-        `SELECT id, number, title, key_visual AS "keyVisual", state, appearing_character_ids AS "appearingCharacterIds"
-           FROM drama_episodes WHERE id=$1 AND project_id=$2`,
-        [episodeId, req.params.id]
-      );
-      episode = epRows[0] || null;
-      if (episode) {
-        const { rows: cutRows } = await p.query(
-          `SELECT id, "order", prompt, character_ids AS "characterIds", location_id AS "locationId", generations
-             FROM drama_cuts WHERE episode_id=$1 ORDER BY "order"`,
-          [episodeId]
-        );
-        cuts = cutRows;
-      }
-    }
-    const missingInfo = computeMissingInfo({ project: projRows[0], characters, episode, cuts, locations });
-    const systemPrompt = dramaBuildSystemPrompt({
-      project: projRows[0], characters, episode, cuts, missingInfo, chapters, locations,
-      aiNotes: projRows[0].aiNotes || "",
-    });
-
-    const { rows: history } = await p.query(
-      episodeId
-        ? `SELECT role, content, images FROM drama_chat_messages WHERE project_id=$1 AND episode_id=$2 ORDER BY id DESC LIMIT 20`
-        : `SELECT role, content, images FROM drama_chat_messages WHERE project_id=$1 AND episode_id IS NULL ORDER BY id DESC LIMIT 20`,
-      episodeId ? [req.params.id, episodeId] : [req.params.id]
-    );
-    history.reverse();
-
-    const imageParts = await dramaFetchImageParts(imageUrls);
-    let reply = await dramaChatOnce(dramaTrackedGemini(req.params.id, "chat"), systemPrompt, history, message || "(画像を確認して)", imageParts);
-
-    // [画像生成: プロンプト] マーカーを検出したら実際に画像を作って返す (最大2枚)
-    const generatedImages = [];
-    const markers = [...reply.matchAll(/\[画像生成:\s*([\s\S]*?)\]/g)].slice(0, 2);
-    for (const mk of markers) {
-      try {
-        const img = await dramaGenerateImage(mk[1].trim());
-        dramaRecordUsage({ projectId: req.params.id, provider: "gemini", kind: "chat_image", model: DRAMA_GEMINI_IMAGE_MODEL, costYen: DRAMA_GEMINI_IMAGE_YEN });
-        if (storage && RECEIPTS_BUCKET) {
-          const ext = img.mimeType.includes("jpeg") ? "jpg" : "png";
-          const key = `drama/chat/${req.params.id}/${Date.now()}_${generatedImages.length}.${ext}`;
-          await storage.bucket(RECEIPTS_BUCKET).file(key).save(Buffer.from(img.data, "base64"), { contentType: img.mimeType, resumable: false });
-          const [url] = await storage.bucket(RECEIPTS_BUCKET).file(key)
-            .getSignedUrl({ action: "read", expires: Date.now() + 7 * 24 * 60 * 60 * 1000 });
-          generatedImages.push(url);
-        } else {
-          generatedImages.push(`data:${img.mimeType};base64,${img.data}`); // ローカル dev 用
-        }
-      } catch (e) {
-        console.warn("[drama] chat image gen failed:", e.message);
-        reply += `\n(画像生成に失敗: ${e.message})`;
-      }
-    }
-    if (markers.length) reply = reply.replace(/\[画像生成:\s*[\s\S]*?\]/g, "").trim();
-
-    // <<<ACTIONS [...] ACTIONS>>> ブロック = AI による設定の CRUD。実行して結果を通知
-    let applied = [];
-    const actionsMatch = reply.match(/<<<ACTIONS([\s\S]*?)ACTIONS>>>/);
-    if (actionsMatch) {
-      reply = reply.replace(/<<<ACTIONS[\s\S]*?ACTIONS>>>/g, "").trim();
-      try {
-        const raw = actionsMatch[1].trim();
-        const s = raw.indexOf("[");
-        const e = raw.lastIndexOf("]");
-        const jsonText = dramaEscapeCtrlInJsonStrings(raw.slice(s, e + 1)).replace(/,(\s*[}\]])/g, "$1");
-        const actions = JSON.parse(jsonText);
-        applied = await dramaExecuteActions(p, req.params.id, actions);
-        if (applied.length) reply += `\n\n⚙ 実行: ${applied.join(" / ")}`;
-      } catch (e) {
-        console.warn("[drama] actions parse failed:", e.message);
-        reply += `\n(設定操作の解析に失敗: ${e.message.slice(0, 80)})`;
-      }
-    }
-
-    await p.query(
-      `INSERT INTO drama_chat_messages (project_id, episode_id, role, content, images) VALUES ($1,$2,'user',$3,$4)`,
+    const { rows: userRows } = await p.query(
+      `INSERT INTO drama_chat_messages (project_id, episode_id, role, content, images)
+       VALUES ($1,$2,'user',$3,$4) RETURNING id`,
       [req.params.id, episodeId || null, message || "", JSON.stringify(imageUrls.slice(0, DRAMA_CHAT_MAX_IMAGES))]
     );
-    await p.query(
-      `INSERT INTO drama_chat_messages (project_id, episode_id, role, content, images) VALUES ($1,$2,'assistant',$3,$4)`,
-      [req.params.id, episodeId || null, reply, JSON.stringify(generatedImages)]
+    const { rows: asstRows } = await p.query(
+      `INSERT INTO drama_chat_messages (project_id, episode_id, role, content, images, status)
+       VALUES ($1,$2,'assistant','','[]','pending') RETURNING id`,
+      [req.params.id, episodeId || null]
     );
-    res.json({ reply, images: generatedImages, applied, missingInfo });
+    const job = {
+      projectId: req.params.id, episodeId: episodeId || null,
+      message: message || "", imageUrls: imageUrls.slice(0, DRAMA_CHAT_MAX_IMAGES),
+      userMessageId: userRows[0].id, assistantMessageId: asstRows[0].id,
+    };
+
+    try {
+      const taskName = await enqueueDramaChatWork(job);
+      if (taskName) return res.json({ pendingId: asstRows[0].id });
+    } catch (e) {
+      console.warn("[drama] chat enqueue failed, falling back to sync:", e.message);
+    }
+    // Cloud Tasks が使えない環境 (ローカル等) は同期処理。
+    // 失敗時も pending 行を孤児にしない (エラーを行に書いて返す)
+    try {
+      const result = await dramaProcessChat(p, job);
+      res.json({ ...result, messageId: asstRows[0].id });
+    } catch (e) {
+      const msg = `(エラー: ${String(e.message || e).slice(0, 300)})`;
+      await p.query(`UPDATE drama_chat_messages SET content=$1, status='done' WHERE id=$2`, [msg, asstRows[0].id]).catch(() => {});
+      res.json({ reply: msg, images: [], applied: [], messageId: asstRows[0].id });
+    }
   } catch (err) {
     console.error("[drama] chat", err);
-    res.status(500).json({ error: err.message });
+    res.status(err.status || 500).json({ error: err.message });
   }
+});
+
+// Cloud Tasks からのコールバック (x-tick-secret 認証は /api middleware が処理)。
+// 失敗も assistant 行に書いて 200 を返す (Cloud Tasks の自動リトライで二重処理させない)
+app.post("/api/internal/drama/chat-work", async (req, res) => {
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  const job = req.body || {};
+  try {
+    await dramaProcessChat(p, job);
+  } catch (e) {
+    console.error("[drama] chat-work failed:", e);
+    try {
+      await p.query(
+        `UPDATE drama_chat_messages SET content=$1, status='done' WHERE id=$2`,
+        [`(エラー: ${String(e.message || e).slice(0, 300)})`, job.assistantMessageId]
+      );
+    } catch (_) {}
+  }
+  res.json({ ok: true });
 });
 
 if (DEV) {

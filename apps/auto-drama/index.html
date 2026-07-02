@@ -1326,9 +1326,42 @@ const App = {
       chatOpen.value = true;
       try {
         const qs = chatEpisodeId ? `?episodeId=${chatEpisodeId}` : "";
-        chatMessages.value = await apiFetch(`/api/drama/projects/${currentProject.value.id}/chat${qs}`);
+        const msgs = await apiFetch(`/api/drama/projects/${currentProject.value.id}/chat${qs}`);
+        const pending = msgs.find((m) => m.status === "pending");
+        chatMessages.value = msgs.filter((m) => m.status !== "pending");
         nextTick(scrollChatToBottom);
+        if (pending) {
+          // 前回の応答がまだ処理中 → インジケーターを出して追いかけ再開
+          chatSending.value = true;
+          pollForReply(pending.id).finally(() => { chatSending.value = false; });
+        }
       } catch (e) { err.value = e.message; }
+    }
+
+    // pending の assistant 行が done になるまでポーリング (2.5秒間隔・最大3分)
+    async function pollForReply(pendingId) {
+      const startedAt = Date.now();
+      const qs = chatEpisodeId ? `?episodeId=${chatEpisodeId}` : "";
+      while (Date.now() - startedAt < 180000) {
+        await new Promise((r) => setTimeout(r, 2500));
+        if (!chatOpen.value) return; // シートを閉じたら中断 (開き直しで再開する)
+        try {
+          const msgs = await apiFetch(`/api/drama/projects/${currentProject.value.id}/chat${qs}`);
+          const row = msgs.find((m) => String(m.id) === String(pendingId));
+          if (row && row.status !== "pending") {
+            chatMessages.value = msgs.filter((m) => m.status !== "pending");
+            nextTick(scrollChatToBottom);
+            // 設定操作が実行された可能性があるので画面データを追従
+            apiFetch(`/api/drama/projects/${currentProject.value.id}`)
+              .then((proj) => { currentProject.value = proj; }).catch(() => {});
+            if (view.value === "episode" && currentEpisode.value) {
+              refreshEpisode().then(() => { scriptEdit.value = currentEpisode.value.script || ""; }).catch(() => {});
+            }
+            return;
+          }
+        } catch (_) { /* 次の周回で再試行 */ }
+      }
+      chatMessages.value.push({ role: "assistant", content: "(まだ処理中です。しばらくしてチャットを開き直すと反映されています)" });
     }
     function scrollChatToBottom() {
       if (chatLogEl.value) chatLogEl.value.scrollTop = chatLogEl.value.scrollHeight;
@@ -1357,6 +1390,11 @@ const App = {
         const res = await apiFetch(`/api/drama/projects/${currentProject.value.id}/chat`, {
           method: "POST", body: { message, episodeId: chatEpisodeId, imageUrls },
         });
+        if (res.pendingId) {
+          // 非同期処理 (Cloud Tasks)。done になるまでポーリング
+          await pollForReply(res.pendingId);
+          return;
+        }
         chatMessages.value.push({ role: "assistant", content: res.reply, images: res.images || [] });
         nextTick(scrollChatToBottom);
         // AI が設定を書き換えた場合、画面のデータも追従させる (ビューは動かさない)
