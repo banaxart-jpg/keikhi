@@ -114,6 +114,8 @@ ${missingBlock}
 - 原作本文が上に与えられている場合は、章番号を引きながら具体的に答える
   (「第3章のこの描写だと…」)。与えられていない場合は章 index の要約を使う。
 - 日本語・簡潔・具体的な次の一手で答える。前置きの相槌は最小限に。
+- チャット UI はマークダウンを描画しない。見出し記号 (#) や強調 (**) は使わず、
+  プレーンテキスト + 改行 + 箇条書きは「・」だけで書く。
 
 キャラクター登録を手伝うとき:
 - 原作本文が与えられていればまずそれを根拠にする。青空文庫等で公開されている作品は
@@ -133,7 +135,9 @@ export async function chatOnce(callGemini, systemPrompt, history, userMessage, i
   const content = imageParts.length ? [prompt, ...imageParts] : prompt;
   const { result } = await callGemini(content, {
     primaryModel: "gemini-2.5-flash",
-    maxOutputTokens: 1500,
+    // 2.5 系は thinking トークンも上限に含まれるため、少ないと本文が途中で切れる
+    // (実際に切れた)。余裕を持たせる
+    maxOutputTokens: 8000,
     // Gemini は googleSearch tool と画像 (inlineData) の併用が不安定なため、
     // 画像付きメッセージの時だけ検索を切る
     useGoogleSearch: imageParts.length === 0,
