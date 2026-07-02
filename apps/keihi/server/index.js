@@ -89,6 +89,7 @@ app.get("/api/drama/inspect/:id", async (req, res) => {
     await ensureSchema();
     const { rows: projRows } = await p.query(
       `SELECT id, title, author, world_setting AS "worldSetting", style_guide AS "styleGuide",
+              ai_notes AS "aiNotes",
               length(COALESCE(source_text,'')) AS "sourceTextChars", created_at AS "createdAt"
          FROM drama_projects WHERE id=$1`,
       [req.params.id]
@@ -1105,6 +1106,9 @@ async function ensureSchema() {
       )
     `);
     await p.query("CREATE INDEX IF NOT EXISTS drama_ep_project_idx ON drama_episodes (project_id)");
+    // AI の制作メモ (長期記憶)。チャットの update_notes 操作で AI 自身が維持し、
+    // 毎回システムプロンプトに注入される (作画の趣向・細かい設定・決定した方向性)
+    await p.query(`ALTER TABLE drama_projects ADD COLUMN IF NOT EXISTS ai_notes TEXT`);
     // アニメ制作工程対応: シリーズ構成 (章→話の割当・緩急) と脚本を話単位で持つ
     await p.query(`ALTER TABLE drama_episodes ADD COLUMN IF NOT EXISTS chapter_numbers JSONB NOT NULL DEFAULT '[]'::jsonb`);
     await p.query(`ALTER TABLE drama_episodes ADD COLUMN IF NOT EXISTS pacing TEXT`);   // 'compress'|'normal'|'stretch'
@@ -7601,7 +7605,7 @@ app.get("/api/drama/projects/:id", async (req, res) => {
   try {
     const { rows } = await p.query(
       `SELECT id, title, author, source_text AS "sourceText", world_setting AS "worldSetting",
-              style_guide AS "styleGuide", default_video_model AS "defaultVideoModel",
+              style_guide AS "styleGuide", default_video_model AS "defaultVideoModel", ai_notes AS "aiNotes",
               created_by AS "createdBy", created_at AS "createdAt", updated_at AS "updatedAt"
          FROM drama_projects WHERE id=$1`,
       [req.params.id]
@@ -7658,9 +7662,9 @@ app.patch("/api/drama/projects/:id", async (req, res) => {
       `UPDATE drama_projects SET
          title=COALESCE($1,title), author=COALESCE($2,author), source_text=COALESCE($3,source_text),
          world_setting=COALESCE($4,world_setting), style_guide=COALESCE($5,style_guide),
-         default_video_model=COALESCE($6,default_video_model), updated_at=now()
-       WHERE id=$7`,
-      [b.title, b.author, b.sourceText, b.worldSetting, b.styleGuide, b.defaultVideoModel, req.params.id]
+         default_video_model=COALESCE($6,default_video_model), ai_notes=COALESCE($7,ai_notes), updated_at=now()
+       WHERE id=$8`,
+      [b.title, b.author, b.sourceText, b.worldSetting, b.styleGuide, b.defaultVideoModel, b.aiNotes, req.params.id]
     );
     if (!rowCount) return res.status(404).json({ error: "not found" });
     res.json({ ok: true });
@@ -8121,11 +8125,24 @@ app.post("/api/drama/projects/:id/compose-series", async (req, res) => {
       targetDurationSec: Number(req.body?.targetDurationSec) || 60,
     });
     if (req.body?.force) await p.query(`DELETE FROM drama_episodes WHERE project_id=$1`, [req.params.id]);
+
+    // 出演キャラの自動設定: 割当章の出演 index (章解析の character_names) と
+    // 登録済みキャラを名前で突き合わせる
+    const { rows: chapNames } = await p.query(
+      `SELECT number, character_names AS "characterNames" FROM drama_chapters WHERE project_id=$1`, [req.params.id]
+    );
+    const namesByChapter = new Map(chapNames.map((c) => [Number(c.number), c.characterNames || []]));
+    const { rows: regChars } = await p.query(`SELECT id, name FROM drama_characters WHERE project_id=$1`, [req.params.id]);
+    const nameMatch = (a, b) => a && b && (a === b || a.includes(b) || b.includes(a));
+
     for (const e of episodes) {
+      const chapterCast = new Set();
+      for (const n of e.chapterNumbers) for (const nm of (namesByChapter.get(Number(n)) || [])) chapterCast.add(nm);
+      const appearing = regChars.filter((c) => [...chapterCast].some((nm) => nameMatch(c.name, nm))).map((c) => String(c.id));
       await p.query(
-        `INSERT INTO drama_episodes (project_id, number, title, chapter_numbers, pacing, focus)
-         VALUES ($1,$2,$3,$4,$5,$6)`,
-        [req.params.id, e.number, e.title, JSON.stringify(e.chapterNumbers), e.pacing, e.focus]
+        `INSERT INTO drama_episodes (project_id, number, title, chapter_numbers, pacing, focus, appearing_character_ids)
+         VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+        [req.params.id, e.number, e.title, JSON.stringify(e.chapterNumbers), e.pacing, e.focus, JSON.stringify(appearing)]
       );
     }
     res.json({ ok: true, episodeCount: episodes.length, episodes });
@@ -8202,17 +8219,27 @@ app.post("/api/drama/episodes/:id/compose-cuts", async (req, res) => {
     if (req.body?.force) await p.query(`DELETE FROM drama_cuts WHERE episode_id=$1`, [req.params.id]);
     const validCharIds = new Set(characters.map((c) => String(c.id)));
     const validLocIds = new Set(locations.map((l) => String(l.id)));
+    const usedCharIds = new Set();
     let order = 1;
     for (const c of cuts) {
+      const charIds = c.characterIds.filter((id) => validCharIds.has(id));
+      charIds.forEach((id) => usedCharIds.add(id));
       await p.query(
         `INSERT INTO drama_cuts (episode_id, "order", duration_sec, prompt, character_ids, location_id, narration, subtitle)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
         [req.params.id, order++, c.durationSec, c.prompt,
-         JSON.stringify(c.characterIds.filter((id) => validCharIds.has(id))),
+         JSON.stringify(charIds),
          validLocIds.has(c.locationId) ? c.locationId : null,
          c.narration || null, c.subtitle || null]
       );
     }
+    // 話の出演キャラをカットの実使用から自動更新 (既存の選択とマージ)
+    const { rows: epCast } = await p.query(
+      `SELECT appearing_character_ids AS "appearingCharacterIds" FROM drama_episodes WHERE id=$1`, [req.params.id]
+    );
+    const merged = new Set([...(epCast[0]?.appearingCharacterIds || []).map(String), ...usedCharIds]);
+    await p.query(`UPDATE drama_episodes SET appearing_character_ids=$1, updated_at=now() WHERE id=$2`,
+      [JSON.stringify([...merged]), req.params.id]);
     await dramaRecomputeState(p, req.params.id);
     res.json({ ok: true, cutCount: cuts.length });
   } catch (err) {
@@ -8650,6 +8677,111 @@ app.get("/api/drama/projects/:id/chat", async (req, res) => {
   }
 });
 
+// ── チャット AI の設定操作 (CRUD)。<<<ACTIONS [...] ACTIONS>>> ブロックを実行する ──
+// 対象: プロジェクト設定 (styleGuide/worldSetting)・制作メモ (ai_notes)・キャラ・場所。
+// キャラ/場所は名前で特定 (プロジェクト内)。結果は日本語サマリで返してチャットに表示する。
+// LLM が文字列リテラル内に生の改行を書きがち (メモの箇条書き等) なので、
+// JSON.parse 前に文字列内の制御文字をエスケープする
+function dramaEscapeCtrlInJsonStrings(s) {
+  let out = "", inStr = false, esc = false;
+  for (const ch of s) {
+    if (inStr) {
+      if (esc) { out += ch; esc = false; continue; }
+      if (ch === "\\") { out += ch; esc = true; continue; }
+      if (ch === '"') { inStr = false; out += ch; continue; }
+      if (ch === "\n") { out += "\\n"; continue; }
+      if (ch === "\r") continue;
+      if (ch === "\t") { out += "\\t"; continue; }
+      out += ch;
+    } else {
+      if (ch === '"') inStr = true;
+      out += ch;
+    }
+  }
+  return out;
+}
+
+async function dramaExecuteActions(p, projectId, actions) {
+  const applied = [];
+  const strOr = (v, max) => (v === undefined || v === null) ? undefined : String(v).slice(0, max);
+  const tokensOr = (v) => Array.isArray(v) ? JSON.stringify(v.map((s) => String(s).slice(0, 30)).slice(0, 6)) : undefined;
+  for (const a of (actions || []).slice(0, 10)) {
+    try {
+      if (a.action === "update_project") {
+        await p.query(
+          `UPDATE drama_projects SET
+             style_guide = COALESCE($1, style_guide),
+             world_setting = COALESCE($2, world_setting),
+             updated_at = now()
+           WHERE id=$3`,
+          [strOr(a.styleGuide, 500), strOr(a.worldSetting, 1000), projectId]
+        );
+        applied.push("プロジェクト設定を更新");
+      } else if (a.action === "update_notes") {
+        await p.query(`UPDATE drama_projects SET ai_notes=$1, updated_at=now() WHERE id=$2`, [strOr(a.notes, 4000) || "", projectId]);
+        applied.push("制作メモを更新");
+      } else if (a.action === "create_character" && a.name) {
+        await p.query(
+          `INSERT INTO drama_characters (project_id, name, reading, description, appearance_prompt, identity_tokens, status)
+           VALUES ($1,$2,$3,$4,$5,$6,'draft')`,
+          [projectId, strOr(a.name, 50), strOr(a.reading, 50) || null, strOr(a.description, 500) || null,
+           strOr(a.appearancePrompt, 500) || null, tokensOr(a.identityTokens) || "[]"]
+        );
+        applied.push(`キャラ「${a.name}」を作成`);
+      } else if (a.action === "update_character" && a.name) {
+        const { rowCount } = await p.query(
+          `UPDATE drama_characters SET
+             reading = COALESCE($1, reading),
+             description = COALESCE($2, description),
+             appearance_prompt = COALESCE($3, appearance_prompt),
+             identity_tokens = COALESCE($4::jsonb, identity_tokens),
+             status = COALESCE($5, status),
+             updated_at = now()
+           WHERE project_id=$6 AND name=$7`,
+          [strOr(a.reading, 50), strOr(a.description, 500), strOr(a.appearancePrompt, 500),
+           tokensOr(a.identityTokens) || null, ["draft", "confirmed"].includes(a.status) ? a.status : null,
+           projectId, strOr(a.name, 50)]
+        );
+        applied.push(rowCount ? `キャラ「${a.name}」を更新` : `キャラ「${a.name}」が見つからず更新失敗`);
+      } else if (a.action === "delete_character" && a.name) {
+        const { rowCount } = await p.query(`DELETE FROM drama_characters WHERE project_id=$1 AND name=$2`, [projectId, strOr(a.name, 50)]);
+        applied.push(rowCount ? `キャラ「${a.name}」を削除` : `キャラ「${a.name}」が見つからず削除失敗`);
+      } else if (a.action === "create_location" && a.name) {
+        await p.query(
+          `INSERT INTO drama_locations (project_id, name, description, appearance_prompt, identity_tokens, status)
+           VALUES ($1,$2,$3,$4,$5,'draft')`,
+          [projectId, strOr(a.name, 50), strOr(a.description, 500) || null,
+           strOr(a.appearancePrompt, 500) || null, tokensOr(a.identityTokens) || "[]"]
+        );
+        applied.push(`場所「${a.name}」を作成`);
+      } else if (a.action === "update_location" && a.name) {
+        const { rowCount } = await p.query(
+          `UPDATE drama_locations SET
+             description = COALESCE($1, description),
+             appearance_prompt = COALESCE($2, appearance_prompt),
+             identity_tokens = COALESCE($3::jsonb, identity_tokens),
+             status = COALESCE($4, status),
+             updated_at = now()
+           WHERE project_id=$5 AND name=$6`,
+          [strOr(a.description, 500), strOr(a.appearancePrompt, 500),
+           tokensOr(a.identityTokens) || null, ["draft", "confirmed"].includes(a.status) ? a.status : null,
+           projectId, strOr(a.name, 50)]
+        );
+        applied.push(rowCount ? `場所「${a.name}」を更新` : `場所「${a.name}」が見つからず更新失敗`);
+      } else if (a.action === "delete_location" && a.name) {
+        const { rowCount } = await p.query(`DELETE FROM drama_locations WHERE project_id=$1 AND name=$2`, [projectId, strOr(a.name, 50)]);
+        applied.push(rowCount ? `場所「${a.name}」を削除` : `場所「${a.name}」が見つからず削除失敗`);
+      } else {
+        applied.push(`不明な操作: ${a.action || "(なし)"}`);
+      }
+    } catch (e) {
+      console.warn(`[drama] action ${a.action} failed:`, e.message);
+      applied.push(`${a.action} 失敗: ${e.message.slice(0, 80)}`);
+    }
+  }
+  return applied;
+}
+
 // チャット添付画像: Firebase Storage の download URL からバイト列を取って
 // Gemini の inlineData に変換する。https 限定 + 枚数/サイズ上限。
 const DRAMA_CHAT_MAX_IMAGES = 4;
@@ -8680,7 +8812,8 @@ app.post("/api/drama/projects/:id/chat", async (req, res) => {
     if (!message && !imageUrls.length) return res.status(400).json({ error: "message is required" });
 
     const { rows: projRows } = await p.query(
-      `SELECT id, title, author, style_guide AS "styleGuide", world_setting AS "worldSetting", source_text AS "sourceText"
+      `SELECT id, title, author, style_guide AS "styleGuide", world_setting AS "worldSetting",
+              source_text AS "sourceText", ai_notes AS "aiNotes"
          FROM drama_projects WHERE id=$1`,
       [req.params.id]
     );
@@ -8718,7 +8851,10 @@ app.post("/api/drama/projects/:id/chat", async (req, res) => {
       }
     }
     const missingInfo = computeMissingInfo({ project: projRows[0], characters, episode, cuts, locations });
-    const systemPrompt = dramaBuildSystemPrompt({ project: projRows[0], characters, episode, cuts, missingInfo, chapters, locations });
+    const systemPrompt = dramaBuildSystemPrompt({
+      project: projRows[0], characters, episode, cuts, missingInfo, chapters, locations,
+      aiNotes: projRows[0].aiNotes || "",
+    });
 
     const { rows: history } = await p.query(
       episodeId
@@ -8755,6 +8891,25 @@ app.post("/api/drama/projects/:id/chat", async (req, res) => {
     }
     if (markers.length) reply = reply.replace(/\[画像生成:\s*[\s\S]*?\]/g, "").trim();
 
+    // <<<ACTIONS [...] ACTIONS>>> ブロック = AI による設定の CRUD。実行して結果を通知
+    let applied = [];
+    const actionsMatch = reply.match(/<<<ACTIONS([\s\S]*?)ACTIONS>>>/);
+    if (actionsMatch) {
+      reply = reply.replace(/<<<ACTIONS[\s\S]*?ACTIONS>>>/g, "").trim();
+      try {
+        const raw = actionsMatch[1].trim();
+        const s = raw.indexOf("[");
+        const e = raw.lastIndexOf("]");
+        const jsonText = dramaEscapeCtrlInJsonStrings(raw.slice(s, e + 1)).replace(/,(\s*[}\]])/g, "$1");
+        const actions = JSON.parse(jsonText);
+        applied = await dramaExecuteActions(p, req.params.id, actions);
+        if (applied.length) reply += `\n\n⚙ 実行: ${applied.join(" / ")}`;
+      } catch (e) {
+        console.warn("[drama] actions parse failed:", e.message);
+        reply += `\n(設定操作の解析に失敗: ${e.message.slice(0, 80)})`;
+      }
+    }
+
     await p.query(
       `INSERT INTO drama_chat_messages (project_id, episode_id, role, content, images) VALUES ($1,$2,'user',$3,$4)`,
       [req.params.id, episodeId || null, message || "", JSON.stringify(imageUrls.slice(0, DRAMA_CHAT_MAX_IMAGES))]
@@ -8763,7 +8918,7 @@ app.post("/api/drama/projects/:id/chat", async (req, res) => {
       `INSERT INTO drama_chat_messages (project_id, episode_id, role, content, images) VALUES ($1,$2,'assistant',$3,$4)`,
       [req.params.id, episodeId || null, reply, JSON.stringify(generatedImages)]
     );
-    res.json({ reply, images: generatedImages, missingInfo });
+    res.json({ reply, images: generatedImages, applied, missingInfo });
   } catch (err) {
     console.error("[drama] chat", err);
     res.status(500).json({ error: err.message });

@@ -322,6 +322,10 @@ const TEMPLATE = `
         <div class="field-label">作画設定 (styleGuide — 絵柄・画風の統一指示)</div>
         <textarea class="field-input" v-model="settingsEdit.styleGuide"></textarea>
       </div>
+      <div>
+        <div class="field-label">AI の制作メモ (チャットの AI が自分で書き足す長期記憶。手直しも可)</div>
+        <textarea class="field-input" v-model="settingsEdit.aiNotes" style="min-height:130px;" placeholder="チャットで方向性が決まると AI がここに記録していきます"></textarea>
+      </div>
       <div class="actions-row">
         <button class="primary" @click="saveSettings" :disabled="settingsSaving">{{ settingsSaving ? '保存中…' : '保存' }}</button>
       </div>
@@ -477,7 +481,7 @@ const TEMPLATE = `
       <ul><li v-for="m in currentEpisode.missingInfo" :key="m">{{ m }}</li></ul>
     </div>
 
-    <div class="section-title">登場キャラクター</div>
+    <div class="section-title">登場キャラクター (タップで選択、色付き = この話に出演)</div>
     <div class="list" style="padding-top:0;">
       <div style="display:flex; flex-wrap:wrap; gap:8px; padding: 0 16px;">
         <label v-for="c in currentProject.characters" :key="c.id" class="chip" :style="isAppearing(c.id) ? { background: 'var(--accent)', color: 'white' } : {}">
@@ -918,6 +922,7 @@ const App = {
       settingsEdit.value = {
         worldSetting: currentProject.value.worldSetting || "",
         styleGuide: currentProject.value.styleGuide || "",
+        aiNotes: currentProject.value.aiNotes || "",
       };
       usage.value = null;
       apiFetch(`/api/drama/projects/${currentProject.value.id}/usage`)
@@ -930,10 +935,11 @@ const App = {
       try {
         await apiFetch(`/api/drama/projects/${currentProject.value.id}`, {
           method: "PATCH",
-          body: { worldSetting: settingsEdit.value.worldSetting, styleGuide: settingsEdit.value.styleGuide },
+          body: { worldSetting: settingsEdit.value.worldSetting, styleGuide: settingsEdit.value.styleGuide, aiNotes: settingsEdit.value.aiNotes },
         });
         currentProject.value.worldSetting = settingsEdit.value.worldSetting;
         currentProject.value.styleGuide = settingsEdit.value.styleGuide;
+        currentProject.value.aiNotes = settingsEdit.value.aiNotes;
       } catch (e) { err.value = e.message; } finally { settingsSaving.value = false; }
     }
     async function toggleChapter(ch) {
@@ -1299,6 +1305,12 @@ const App = {
         });
         chatMessages.value.push({ role: "assistant", content: res.reply, images: res.images || [] });
         nextTick(scrollChatToBottom);
+        // AI が設定を書き換えた場合、画面のデータも追従させる (ビューは動かさない)
+        if ((res.applied || []).length && currentProject.value) {
+          apiFetch(`/api/drama/projects/${currentProject.value.id}`)
+            .then((proj) => { currentProject.value = proj; })
+            .catch(() => {});
+        }
       } catch (e) {
         chatMessages.value.push({ role: "assistant", content: "(エラー: " + e.message + ")" });
       } finally { chatSending.value = false; }

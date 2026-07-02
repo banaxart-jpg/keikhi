@@ -22,7 +22,7 @@ const SOURCE_TEXT_CAP = 60000;
 // 制作アシスタントのシステムプロンプトを毎回組み立てる。
 // missingInfo (state.js の computeMissingInfo) を埋め込むことで、
 // 「素材が揃うまで動画生成に進ませない」を AI にも徹底させる。
-export function buildSystemPrompt({ project, characters, episode, cuts, missingInfo, chapters = [], locations = [] }) {
+export function buildSystemPrompt({ project, characters, episode, cuts, missingInfo, chapters = [], locations = [], aiNotes = "" }) {
   const charLines = characters.length
     ? characters.map((c) => {
         const tokens = (c.identityTokens || []).join("、");
@@ -87,6 +87,9 @@ export function buildSystemPrompt({ project, characters, episode, cuts, missingI
 絵柄方針: ${project.styleGuide || "(未設定)"}
 世界観・トーン: ${project.worldSetting || "(未設定)"}
 
+制作メモ (あなたが管理する長期記憶。細かい設定・作画の趣向・決定済みの方向性):
+${aiNotes || "(まだ何も記録されていません)"}
+
 登録済みキャラクター:
 ${charLines}
 
@@ -125,9 +128,34 @@ ${missingBlock}
 - 原作本文が与えられていればまずそれを根拠にする。青空文庫等で公開されている作品は
   Web 検索で補足調査して description / identityTokens / appearancePrompt の草案を提案してよい。
 - 検索結果は自分の言葉で要約して提示する (原文の長い引用はしない)。出典が分かれば
-  一言添える。最終確認と確定操作は必ずユーザーに委ねる。
+  一言添える。
 - ユーザーが画像を添付してきたら、その画像の内容 (雰囲気・構図・スタイル) を読み取って
-  プロンプトや参照画像の方針に反映する。`;
+  プロンプトや参照画像の方針に反映する。
+
+設定の操作 (あなたは提案するだけでなく、実際に設定を書き換えられる):
+ユーザーと方向性・設定が決まったら、口頭案内で終わらせず実際に操作を実行する。
+返答本文の最後に次のブロックを書くと、システムが実行して結果をユーザーに通知する:
+
+<<<ACTIONS
+[
+  {"action":"update_project","styleGuide":"新しい絵柄方針","worldSetting":"新しい時代背景"},
+  {"action":"update_notes","notes":"制作メモの全文"},
+  {"action":"create_character","name":"名前","reading":"よみ","description":"人物像","identityTokens":["識別子"],"appearancePrompt":"画像生成プロンプト"},
+  {"action":"update_character","name":"既存キャラ名","description":"変更したいフィールドだけ書く"},
+  {"action":"delete_character","name":"名前"},
+  {"action":"create_location","name":"場所名","description":"説明","identityTokens":["識別子"],"appearancePrompt":"背景プロンプト"},
+  {"action":"update_location","name":"既存の場所名","identityTokens":["新しい識別子"]},
+  {"action":"delete_location","name":"場所名"}
+]
+ACTIONS>>>
+
+ルール:
+- 操作が不要な返答では書かない。update/create は決まったらためらわず実行してよい。
+- delete 系はユーザーが明示的に削除を頼んだ時だけ。
+- update_project / update_character 等の反映は即時。実行したら本文でも一言触れる。
+- update_notes はあなたの長期記憶の全文置き換え。決定事項が増えるたびに、これまでの
+  内容と統合して書き直す (箇条書き・2000字以内)。作画の趣向・キャラの細かい設定・
+  トーンの決定・やらないと決めたこと、を残す。`;
 }
 
 // userMessage: string、imageParts: [{ inlineData: { data(base64), mimeType } }]
