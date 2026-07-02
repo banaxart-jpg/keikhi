@@ -600,7 +600,7 @@ const TEMPLATE = `
         </div>
         <div v-for="m in chatMessages" :key="m.id || m.content" class="msg" :class="m.role">
           <div v-if="(m.images || []).length" style="display:flex; gap:6px; flex-wrap:wrap; margin-bottom:6px;">
-            <img v-for="(u,i) in m.images" :key="i" :src="u" class="thumb" style="width:88px; height:88px;">
+            <img v-for="(u,i) in m.images" :key="i" :src="u" style="width:100%; max-width:240px; height:auto; border-radius:10px; display:block;">
           </div>{{ m.content }}</div>
       </div>
       <div v-if="chatAttach.length" style="display:flex; gap:6px; padding:4px 0; flex-wrap:wrap;">
@@ -1297,7 +1297,7 @@ const App = {
         const res = await apiFetch(`/api/drama/projects/${currentProject.value.id}/chat`, {
           method: "POST", body: { message, episodeId: chatEpisodeId, imageUrls },
         });
-        chatMessages.value.push({ role: "assistant", content: res.reply });
+        chatMessages.value.push({ role: "assistant", content: res.reply, images: res.images || [] });
         nextTick(scrollChatToBottom);
       } catch (e) {
         chatMessages.value.push({ role: "assistant", content: "(エラー: " + e.message + ")" });

@@ -140,6 +140,16 @@ app.get("/api/drama/inspect/:id", async (req, res) => {
     const { rows: chatCount } = await p.query(
       `SELECT COUNT(*)::int AS n FROM drama_chat_messages WHERE project_id=$1`, [req.params.id]
     );
+    // ?chat=1 でチャット本文も返す (小西の明示要望。直近 100 件)
+    let chat = null;
+    if (req.query.chat) {
+      const { rows: chatRows } = await p.query(
+        `SELECT id, episode_id AS "episodeId", role, content, images, created_at AS "createdAt"
+           FROM drama_chat_messages WHERE project_id=$1 ORDER BY id DESC LIMIT 100`,
+        [req.params.id]
+      );
+      chat = chatRows.reverse();
+    }
     const { rows: usage } = await p.query(
       `SELECT provider, COALESCE(SUM(cost_yen),0)::float AS "costYen", COUNT(*)::int AS calls
          FROM drama_api_usage WHERE project_id=$1 GROUP BY provider`,
@@ -163,6 +173,7 @@ app.get("/api/drama/inspect/:id", async (req, res) => {
       chapters,
       chapterContent,
       episodes,
+      chat,
     });
   } catch (err) {
     console.error("[drama] inspect", err);
@@ -8714,17 +8725,41 @@ app.post("/api/drama/projects/:id/chat", async (req, res) => {
     history.reverse();
 
     const imageParts = await dramaFetchImageParts(imageUrls);
-    const reply = await dramaChatOnce(dramaTrackedGemini(req.params.id, "chat"), systemPrompt, history, message || "(画像を確認して)", imageParts);
+    let reply = await dramaChatOnce(dramaTrackedGemini(req.params.id, "chat"), systemPrompt, history, message || "(画像を確認して)", imageParts);
+
+    // [画像生成: プロンプト] マーカーを検出したら実際に画像を作って返す (最大2枚)
+    const generatedImages = [];
+    const markers = [...reply.matchAll(/\[画像生成:\s*([\s\S]*?)\]/g)].slice(0, 2);
+    for (const mk of markers) {
+      try {
+        const img = await dramaGenerateImage(mk[1].trim());
+        dramaRecordUsage({ projectId: req.params.id, provider: "gemini", kind: "chat_image", model: DRAMA_GEMINI_IMAGE_MODEL, costYen: DRAMA_GEMINI_IMAGE_YEN });
+        if (storage && RECEIPTS_BUCKET) {
+          const ext = img.mimeType.includes("jpeg") ? "jpg" : "png";
+          const key = `drama/chat/${req.params.id}/${Date.now()}_${generatedImages.length}.${ext}`;
+          await storage.bucket(RECEIPTS_BUCKET).file(key).save(Buffer.from(img.data, "base64"), { contentType: img.mimeType, resumable: false });
+          const [url] = await storage.bucket(RECEIPTS_BUCKET).file(key)
+            .getSignedUrl({ action: "read", expires: Date.now() + 7 * 24 * 60 * 60 * 1000 });
+          generatedImages.push(url);
+        } else {
+          generatedImages.push(`data:${img.mimeType};base64,${img.data}`); // ローカル dev 用
+        }
+      } catch (e) {
+        console.warn("[drama] chat image gen failed:", e.message);
+        reply += `\n(画像生成に失敗: ${e.message})`;
+      }
+    }
+    if (markers.length) reply = reply.replace(/\[画像生成:\s*[\s\S]*?\]/g, "").trim();
 
     await p.query(
       `INSERT INTO drama_chat_messages (project_id, episode_id, role, content, images) VALUES ($1,$2,'user',$3,$4)`,
       [req.params.id, episodeId || null, message || "", JSON.stringify(imageUrls.slice(0, DRAMA_CHAT_MAX_IMAGES))]
     );
     await p.query(
-      `INSERT INTO drama_chat_messages (project_id, episode_id, role, content) VALUES ($1,$2,'assistant',$3)`,
-      [req.params.id, episodeId || null, reply]
+      `INSERT INTO drama_chat_messages (project_id, episode_id, role, content, images) VALUES ($1,$2,'assistant',$3,$4)`,
+      [req.params.id, episodeId || null, reply, JSON.stringify(generatedImages)]
     );
-    res.json({ reply, missingInfo });
+    res.json({ reply, images: generatedImages, missingInfo });
   } catch (err) {
     console.error("[drama] chat", err);
     res.status(500).json({ error: err.message });
