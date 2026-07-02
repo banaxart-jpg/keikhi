@@ -9403,10 +9403,7 @@ async function dramaProcessChat(p, { projectId, episodeId, message, imageUrls = 
   });
   // [画像検索: 検索語1 / 検索語2 ...] = web (Wikimedia Commons / Openverse) から
   // 参考画像を探して出典付きで貼る。API キー不要・無料。1 返答 1 回まで
-  const webSearchM = reply.match(/\[画像検索:\s*([\s\S]*?)\]/);
-  if (webSearchM) {
-    reply = reply.replace(/\[画像検索:\s*[\s\S]*?\]/g, "").trim();
-    const queries = webSearchM[1].split(/[/／]/).map((s) => s.trim().slice(0, 80)).filter(Boolean);
+  const runWebImageSearch = async (queries) => {
     try {
       const found = await dramaSearchWebImages(queries, 4);
       if (found.length) {
@@ -9418,6 +9415,32 @@ async function dramaProcessChat(p, { projectId, episodeId, message, imageUrls = 
       }
     } catch (e) {
       reply += `\n\n(画像検索に失敗: ${String(e.message).slice(0, 80)})`;
+    }
+  };
+  const webSearchM = reply.match(/\[画像検索:\s*([\s\S]*?)\]/);
+  if (webSearchM) {
+    reply = reply.replace(/\[画像検索:\s*[\s\S]*?\]/g, "").trim();
+    await runWebImageSearch(webSearchM[1].split(/[/／]/).map((s) => s.trim().slice(0, 80)).filter(Boolean));
+  } else if (
+    // 保険: 「画像探して」系の依頼なのにモデルがマーカーを書かず、Google 検索の
+    // 文章要約だけで完結してしまうことがある (実測)。その時は返答内容から検索
+    // クエリを起こして画像検索を実行する
+    /(画像|写真).{0,15}(探|検索)|(探|検索).{0,15}(画像|写真)/.test(message || "") &&
+    !generatedImages.length && !/\[画像(生成|編集):/.test(reply)
+  ) {
+    try {
+      const { result } = await dramaTrackedGemini(projectId, K + "imgquery")(
+        `ユーザーの依頼: ${(message || "").slice(0, 300)}\nアシスタントの回答: ${reply.slice(0, 1500)}\n\n` +
+        `この依頼の参考画像を Wikimedia Commons / Openverse で探すための検索クエリを、` +
+        `具体的→広い の順で3案。英語推奨・各2〜4語。JSON の文字列配列だけを返す。`,
+        { primaryModel: "gemini-2.5-flash-lite", maxOutputTokens: 500, jsonMode: true }
+      );
+      const t = (result.response.text() || "").trim();
+      const arr = JSON.parse(t.slice(t.indexOf("["), t.lastIndexOf("]") + 1));
+      const queries = (Array.isArray(arr) ? arr : []).map((s) => String(s).trim().slice(0, 80)).filter(Boolean).slice(0, 3);
+      if (queries.length) await runWebImageSearch(queries);
+    } catch (e) {
+      console.warn("[drama] imgquery fallback failed:", e.message);
     }
   }
   // [画像生成: ...] = 新規生成 / [画像編集: ...] = 直前の画像 (引用 > 添付 > 会話の最後の画像) を編集
