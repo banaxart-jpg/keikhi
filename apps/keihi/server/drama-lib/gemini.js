@@ -156,6 +156,8 @@ ${missingBlock}
   {"action":"delete_episode","number":5},
   {"action":"generate_script","episodeNumber":5},
   {"action":"generate_cuts","episodeNumber":5},
+  {"action":"confirm_character","name":"キャラ名"},
+  {"action":"confirm_location","name":"場所名"},
   {"action":"set_style_reference"},
   {"action":"clear_style_reference"},
   {"action":"save_asset","name":"人物対比図","note":"全キャラのサイズ確認用"},
@@ -176,6 +178,10 @@ ACTIONS>>>
 - set_style_reference / save_asset は「今回のメッセージに添付された画像」を保存する。
   ユーザーが見本や資料 (対比図・小物・美術ボード等) を添付してきたら保存を提案し、
   同意があれば (または保存の意図が明確なら) 実行する。
+- confirm_character / confirm_location: ユーザーが「これで確定」と言ったら実行する。
+  対象の画像 (この返答で生成した画像 > 今回の添付 > 直近の会話の画像 の優先順) が
+  そのキャラ/場所の参照画像として保存され、status が確定になる。
+  確定の解除やステータス変更は update_character / update_location の status で行う。
 
 会話の作法 (重要):
 - 画像生成 ([画像生成:] マーカー) はユーザーが明示的に画像を求めた時だけ。

@@ -7545,11 +7545,15 @@ const DRAMA_GEMINI_IMAGE_MODEL = "gemini-2.5-flash-image";
 const DRAMA_GEMINI_IMAGE_YEN = 6; // 1 枚 ≈ $0.039
 // refParts: 絵柄を寄せるための参照画像 (inlineData 配列)。作画基準画像・添付画像・
 // キャラ参照画像を渡す。文章だけで絵柄を再現させると毎回ガチャになるため必須。
-async function dramaGenerateImage(prompt, refParts = []) {
+// opts.refNote: 参照画像の扱いの指示 (既定は「絵柄基準としてそのまま使う」)
+// opts.aspectRatio: "9:16" 等。テキストでの縦横指定は無視されがちなので API 設定で強制
+async function dramaGenerateImage(prompt, refParts = [], opts = {}) {
   if (!GEMINI_API_KEY) throw new Error("Gemini not configured");
-  const text = refParts.length
-    ? `${prompt}\n\n(添付画像は絵柄・キャラデザインの基準。この絵柄・タッチ・線の質感に忠実に合わせて描くこと)`
-    : prompt;
+  const refNote = opts.refNote
+    || "添付画像は絵柄・キャラデザインの基準。新しい絵柄を発明せず、添付のキャラクター・タッチ・線の質感・塗りをそのまま使って、指示のシーンに描き直すこと";
+  const text = refParts.length ? `${prompt}\n\n(${refNote})` : prompt;
+  const generationConfig = { responseModalities: ["TEXT", "IMAGE"] };
+  if (opts.aspectRatio) generationConfig.imageConfig = { aspectRatio: opts.aspectRatio };
   const res = await fetch(
     `https://generativelanguage.googleapis.com/v1beta/models/${DRAMA_GEMINI_IMAGE_MODEL}:generateContent?key=${GEMINI_API_KEY}`,
     {
@@ -7557,7 +7561,7 @@ async function dramaGenerateImage(prompt, refParts = []) {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         contents: [{ parts: [{ text }, ...refParts] }],
-        generationConfig: { responseModalities: ["TEXT", "IMAGE"] },
+        generationConfig,
       }),
     }
   );
@@ -8286,7 +8290,8 @@ ${charDesc ? `登場人物: ${charDesc}\n` : ""}${loc ? `場所: ${loc.name} (${
     if (loc && (loc.referenceImages || []).length) refUrls.push(loc.referenceImages[0].url);
     const refParts = await dramaFetchImagePartsSafe(refUrls, 4);
 
-    const img = await dramaGenerateImage(prompt, refParts);
+    // 9:16 は API 設定で強制 (テキスト指示だけだと正方形が返りがち)
+    const img = await dramaGenerateImage(prompt, refParts, { aspectRatio: "9:16" });
     dramaRecordUsage({ projectId: cut.projectId, provider: "gemini", kind: "storyboard", model: DRAMA_GEMINI_IMAGE_MODEL, costYen: DRAMA_GEMINI_IMAGE_YEN });
 
     let url;
@@ -8907,6 +8912,26 @@ async function dramaExecuteActions(p, projectId, actions, ctx = {}) {
       } else if (a.action === "delete_episode" && a.number) {
         const { rowCount } = await p.query(`DELETE FROM drama_episodes WHERE project_id=$1 AND number=$2`, [projectId, Number(a.number)]);
         applied.push(rowCount ? `第${a.number}話を削除` : `第${a.number}話が見つからず削除失敗`);
+      } else if ((a.action === "confirm_character" || a.action === "confirm_location") && a.name) {
+        // 「これで確定」: 対象の画像 (優先: この返答で生成 > 今回の添付 > 直近の会話の画像) を
+        // 参照画像として保存し、status を confirmed にする
+        const table = a.action === "confirm_character" ? "drama_characters" : "drama_locations";
+        const label = a.action === "confirm_character" ? "キャラ" : "場所";
+        const gen = ctx.generatedImageUrls || [];
+        const recent = ctx.recentImageUrls || [];
+        const url = gen[gen.length - 1] || attached[0] || recent[recent.length - 1];
+        if (!url) { applied.push(`${label}「${a.name}」の確定失敗 (対象の画像が見つかりません)`); continue; }
+        const { rows: found } = await p.query(
+          `SELECT id, reference_images AS "referenceImages" FROM ${table} WHERE project_id=$1 AND name=$2`,
+          [projectId, strOr(a.name, 60)]
+        );
+        if (!found.length) { applied.push(`${label}「${a.name}」が見つからず確定失敗`); continue; }
+        const refs = [...(found[0].referenceImages || []), { url, kind: "full", note: "チャットで確定" }].slice(-4);
+        await p.query(
+          `UPDATE ${table} SET reference_images=$1, status='confirmed', updated_at=now() WHERE id=$2`,
+          [JSON.stringify(refs), found[0].id]
+        );
+        applied.push(`${label}「${a.name}」を確定 (参照画像 ${refs.length}枚)`);
       } else if (a.action === "set_style_reference") {
         if (!attached.length) { applied.push("基準画像の登録失敗 (このメッセージに画像が添付されていません)"); continue; }
         await p.query(`UPDATE drama_projects SET style_ref_images=$1, updated_at=now() WHERE id=$2`,
@@ -9082,9 +9107,18 @@ async function dramaProcessChat(p, { projectId, episodeId, message, imageUrls = 
       }
       let img = null;
       let attempts = 0;
+      let editInstruction = null; // 2回目以降は「前の画像の問題点だけ直す」編集モード (絵柄が保たれ収束が速い)
       const MAX_REMAKES = 2; // 初回 + 作り直し2回 = 最大3生成
       while (true) {
-        img = await dramaGenerateImage(imgPrompt, refParts.slice(0, 4));
+        if (editInstruction && img) {
+          img = await dramaGenerateImage(
+            `添付の 1 枚目の画像を修正してください。キャラクター・絵柄・構図は保ったまま、次の問題だけ直す: ${editInstruction}\n(元の意図: ${imgPrompt})`,
+            [{ inlineData: { data: img.data, mimeType: img.mimeType } }, ...refParts.slice(0, 3)],
+            { refNote: "1枚目が修正対象の画像。2枚目以降は絵柄・キャラデザインの基準" }
+          );
+        } else {
+          img = await dramaGenerateImage(imgPrompt, refParts.slice(0, 4));
+        }
         dramaRecordUsage({ projectId, provider: "gemini", kind: "chat_image", model: DRAMA_GEMINI_IMAGE_MODEL, costYen: DRAMA_GEMINI_IMAGE_YEN });
         attempts++;
         if (attempts > MAX_REMAKES) break;
@@ -9096,7 +9130,7 @@ async function dramaProcessChat(p, { projectId, episodeId, message, imageUrls = 
           });
           if (review.ok) break;
           console.log(`[drama] image self-review NG (attempt ${attempts}): ${review.problems}`);
-          if (review.revisedPrompt) imgPrompt = review.revisedPrompt;
+          editInstruction = [review.problems, review.revisedPrompt].filter(Boolean).join(" / ");
         } catch (e) {
           console.warn("[drama] image review failed, keeping image:", e.message);
           break;
@@ -9131,7 +9165,11 @@ async function dramaProcessChat(p, { projectId, episodeId, message, imageUrls = 
       const e = raw.lastIndexOf("]");
       const jsonText = dramaEscapeCtrlInJsonStrings(raw.slice(s, e + 1)).replace(/,(\s*[}\]])/g, "$1");
       const actions = JSON.parse(jsonText);
-      applied = await dramaExecuteActions(p, projectId, actions, { attachedImageUrls: imageUrls });
+      applied = await dramaExecuteActions(p, projectId, actions, {
+        attachedImageUrls: imageUrls,
+        generatedImageUrls: generatedImages,
+        recentImageUrls: historyImageUrls,
+      });
       if (applied.length) reply += `\n\n⚙ 実行: ${applied.join(" / ")}`;
     } catch (e) {
       console.warn("[drama] actions parse failed:", e.message);
