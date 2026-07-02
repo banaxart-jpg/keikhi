@@ -24,6 +24,7 @@ import {
 import { fetchAozoraText as dramaFetchAozora, splitChapters as dramaSplitChapters, searchAozoraCatalog as dramaSearchCatalog } from "./drama-lib/aozora.js";
 import { analyzeWorkSetup as dramaAnalyzeWorkSetup, searchAozora as dramaSearchAozora } from "./drama-lib/gemini.js";
 import { composeSeries as dramaComposeSeries, writeScript as dramaWriteScript, composeCuts as dramaComposeCuts } from "./drama-lib/gemini.js";
+import { reviewGeneratedImage as dramaReviewImage } from "./drama-lib/gemini.js";
 import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -8941,13 +8942,35 @@ async function dramaProcessChat(p, { projectId, episodeId, message, imageUrls = 
   const imageParts = await dramaFetchImageParts(imageUrls);
   let reply = await dramaChatOnce(dramaTrackedGemini(projectId, "chat"), systemPrompt, history, message || "(画像を確認して)", imageParts);
 
-  // [画像生成: プロンプト] マーカーを検出したら実際に画像を作って返す (最大2枚)
+  // [画像生成: プロンプト] マーカーを検出したら実際に画像を作って返す (最大2枚)。
+  // 生成後に AI 自身が意図どおりか審査し、NG なら修正プロンプトで作り直す (最大2回まで)。
   const generatedImages = [];
   const markers = [...reply.matchAll(/\[画像生成:\s*([\s\S]*?)\]/g)].slice(0, 2);
   for (const mk of markers) {
     try {
-      const img = await dramaGenerateImage(mk[1].trim());
-      dramaRecordUsage({ projectId, provider: "gemini", kind: "chat_image", model: DRAMA_GEMINI_IMAGE_MODEL, costYen: DRAMA_GEMINI_IMAGE_YEN });
+      let imgPrompt = mk[1].trim();
+      let img = null;
+      let attempts = 0;
+      const MAX_REMAKES = 2; // 初回 + 作り直し2回 = 最大3生成
+      while (true) {
+        img = await dramaGenerateImage(imgPrompt);
+        dramaRecordUsage({ projectId, provider: "gemini", kind: "chat_image", model: DRAMA_GEMINI_IMAGE_MODEL, costYen: DRAMA_GEMINI_IMAGE_YEN });
+        attempts++;
+        if (attempts > MAX_REMAKES) break;
+        try {
+          const review = await dramaReviewImage(dramaTrackedGemini(projectId, "image_review"), {
+            prompt: imgPrompt, styleGuide: projRows[0].styleGuide,
+            imageBase64: img.data, mimeType: img.mimeType,
+          });
+          if (review.ok) break;
+          console.log(`[drama] image self-review NG (attempt ${attempts}): ${review.problems}`);
+          if (review.revisedPrompt) imgPrompt = review.revisedPrompt;
+        } catch (e) {
+          console.warn("[drama] image review failed, keeping image:", e.message);
+          break;
+        }
+      }
+      if (attempts > 1) reply += `\n(画像を自己チェックして ${attempts - 1} 回作り直しました)`;
       if (storage && RECEIPTS_BUCKET) {
         const ext = img.mimeType.includes("jpeg") ? "jpg" : "png";
         const key = `drama/chat/${projectId}/${Date.now()}_${generatedImages.length}.${ext}`;

@@ -410,6 +410,36 @@ JSON のみで返す (前置き禁止):
   }));
 }
 
+// 生成画像のセルフレビュー: 意図 (プロンプト・絵柄) と合っているか AI 自身が見て判定。
+// NG なら修正版プロンプトを返す (呼び出し側が最大2回まで作り直す)。
+export async function reviewGeneratedImage(callGemini, { prompt, styleGuide, imageBase64, mimeType }) {
+  const ask = `この画像は次の指示で生成されました。意図どおりか審査してください。
+
+生成指示: ${prompt}
+${styleGuide ? `絵柄方針: ${styleGuide}` : ""}
+
+チェック観点: 指示した内容が描けているか / 絵柄方針と合っているか / 破綻 (手・顔・文字化け等) がないか / 縦 9:16 のショート動画素材として使えるか。
+
+JSON のみで返す (前置き禁止):
+{
+  "ok": true か false,
+  "problems": "NG の場合、何が問題か 1-2 文",
+  "revisedPrompt": "NG の場合、問題を直した生成プロンプト全文 (OK なら空文字)"
+}
+軽微な違いは ok=true でよい。明らかに意図とズレている・破綻している時だけ false。`;
+  const { result } = await callGemini(
+    [ask, { inlineData: { data: imageBase64, mimeType: mimeType || "image/png" } }],
+    { primaryModel: "gemini-2.5-flash", maxOutputTokens: 4000, jsonMode: true }
+  );
+  const j = parseJsonLoose((result.response.text() || "").trim());
+  if (!j) return { ok: true, problems: "", revisedPrompt: "" }; // 審査不能なら作り直さない
+  return {
+    ok: j.ok !== false,
+    problems: String(j.problems || "").slice(0, 300),
+    revisedPrompt: String(j.revisedPrompt || "").slice(0, 1000),
+  };
+}
+
 // 章の AI 解析: 要約 + 出演キャラ名を JSON で返す
 export async function analyzeChapter(callGemini, { projectTitle, author, chapter, knownCharacterNames = [] }) {
   const prompt = `「${projectTitle}」(${author || "作者不明"}) の第${chapter.number}章「${chapter.title}」の本文です。
