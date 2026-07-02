@@ -121,6 +121,7 @@ textarea.field-input { min-height: 70px; resize: vertical; }
 
 /* 引用 (リプライ) */
 .quote-btn { border: none; background: none; padding: 2px 4px; margin-top: 6px; cursor: pointer; color: inherit; opacity: 0.45; font-size: 12px; font-weight: 700; display: inline-flex; align-items: center; gap: 3px; font-family: inherit; }
+.msg a { color: inherit; text-decoration: underline; word-break: break-all; }
 .quote-box { display: flex; align-items: center; gap: 8px; padding: 6px 9px; border-radius: 9px; background: rgba(0,0,0,0.08); margin-bottom: 6px; border-left: 3px solid rgba(0,0,0,0.18); }
 .msg.user .quote-box { background: rgba(255,255,255,0.18); border-left-color: rgba(255,255,255,0.5); }
 .quote-box img { width: 34px; height: 34px; border-radius: 6px; object-fit: cover; flex-shrink: 0; }
@@ -730,8 +731,10 @@ const TEMPLATE = `
           </div>
           <div v-if="(m.images || []).length" style="display:flex; gap:6px; flex-wrap:wrap; margin-bottom:6px;">
             <img v-for="(u,i) in m.images" :key="i" :src="u" class="zoomable" style="width:100%; max-width:240px; height:auto; border-radius:10px; display:block;" @click="openChatImage(u)">
-          </div>{{ m.content }}<div v-if="m.id">
+          </div><span v-html="linkify(m.content)"></span><div v-if="m.id">
             <button class="quote-btn" @click="quoteMsg(m)"><span class="icon" style="font-size:13px;">reply</span>引用</button>
+            <button class="quote-btn" @click="copyMsg(m)"><span class="icon" style="font-size:13px;">content_copy</span>{{ copiedMsgId === m.id ? 'コピー済' : 'コピー' }}</button>
+            <button class="quote-btn" @click="deleteChatMsg(m)"><span class="icon" style="font-size:13px;">delete</span>取消</button>
           </div></div>
         <div v-if="chatSending" class="msg assistant">
           <div class="typing-dots"><span></span><span></span><span></span></div>
@@ -949,6 +952,27 @@ const App = {
     const quoting = ref(null);  // 引用中のメッセージ { id, content, images }
     function quoteMsg(m) {
       quoting.value = { id: m.id, content: (m.content || "").slice(0, 80), images: m.images || [] };
+    }
+    // 本文中の URL をリンク化 (v-html に入れるので先に HTML エスケープ)
+    function linkify(text) {
+      const esc = String(text || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+      return esc.replace(/https?:\/\/[^\s<>"']+/g, (u) => `<a href="${u}" target="_blank" rel="noopener">${u}</a>`);
+    }
+    const copiedMsgId = ref(null);
+    async function copyMsg(m) {
+      try {
+        await navigator.clipboard.writeText(m.content || "");
+        copiedMsgId.value = m.id;
+        setTimeout(() => { if (copiedMsgId.value === m.id) copiedMsgId.value = null; }, 1500);
+      } catch (_) { /* clipboard 不許可環境は無視 */ }
+    }
+    // 送信取消 (LINE 相当)。DB から消えるので AI の記憶からも消える
+    async function deleteChatMsg(m) {
+      if (!confirm("このメッセージを取り消しますか？(AI の記憶からも消えます)")) return;
+      try {
+        await apiFetch(`/api/drama/chat/${m.id}`, { method: "DELETE" });
+        chatMessages.value = chatMessages.value.filter((x) => x.id !== m.id);
+      } catch (e) { err.value = e.message; }
     }
     let chatEpisodeId = null;
 
@@ -1788,7 +1812,7 @@ const App = {
       isAppearing, toggleAppearing, onKeyVisualPick,
       exporting, exportErr, exportEpisode,
       chatOpen, chatExpanded, viewer, lbStyle, openViewer, closeViewer, lbGo, lbDown, lbMove, lbUp, openChatImage, chatMessages, chatInput, chatSending, chatLogEl, chatAttach, quoting, quoteMsg, openChat, sendChat, onChatImagePick,
-      viewerQuoteTarget, quoteFromViewer, jumpToMessage,
+      viewerQuoteTarget, quoteFromViewer, jumpToMessage, linkify, copyMsg, copiedMsgId, deleteChatMsg,
       chapters, chapterOpenId, chapterContent, aozoraUrl, importing, analyzing, analyzeProgress,
       setupAnalyzing, runSetupAnalysis, settingsEdit, settingsSaving, usage, openSettingsTab, saveSettings,
       newAssetName, onStyleRefPick, clearStyleRef, onAssetPick, deleteAsset,

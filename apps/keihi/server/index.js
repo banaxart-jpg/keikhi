@@ -8863,6 +8863,20 @@ app.get("/api/drama/projects/:id/chat", async (req, res) => {
   }
 });
 
+// メッセージの送信取消 (LINE 相当)。DB から消えるので AI の文脈からも消える
+app.delete("/api/drama/chat/:messageId", async (req, res) => {
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  try {
+    const { rowCount } = await p.query(`DELETE FROM drama_chat_messages WHERE id=$1`, [req.params.messageId]);
+    if (!rowCount) return res.status(404).json({ error: "message not found" });
+    res.json({ ok: true });
+  } catch (err) {
+    console.error("[drama] chat delete", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // 章 index (character_names) と登録キャラを名前で突き合わせて出演キャラ id を出す
 async function dramaCastFromChapters(p, projectId, chapterNumbers) {
   const { rows: chapNames } = await p.query(
@@ -9300,9 +9314,9 @@ async function dramaProcessChat(p, { projectId, episodeId, message, imageUrls = 
   // 履歴: 今回の user メッセージ自身と pending 行は除外
   const { rows: history } = await p.query(
     episodeId
-      ? `SELECT role, content, images FROM drama_chat_messages
+      ? `SELECT id, role, content, images FROM drama_chat_messages
            WHERE project_id=$1 AND episode_id=$2 AND id < $3 AND status='done' ORDER BY id DESC LIMIT 20`
-      : `SELECT role, content, images FROM drama_chat_messages
+      : `SELECT id, role, content, images FROM drama_chat_messages
            WHERE project_id=$1 AND episode_id IS NULL AND id < $2 AND status='done' ORDER BY id DESC LIMIT 20`,
     episodeId ? [projectId, episodeId, userMessageId] : [projectId, userMessageId]
   );
@@ -9423,10 +9437,10 @@ async function dramaProcessChat(p, { projectId, episodeId, message, imageUrls = 
     await runWebImageSearch(webSearchM[1].split(/[/／]/).map((s) => s.trim().slice(0, 80)).filter(Boolean));
   } else if (
     // 保険: 「画像探して」系の依頼なのにモデルがマーカーを書かず、Google 検索の
-    // 文章要約だけで完結してしまうことがある (実測)。その時は返答内容から検索
-    // クエリを起こして画像検索を実行する
+    // 文章要約や [画像生成] で代用してしまうことがある (両方実測)。その時は
+    // 返答内容から検索クエリを起こして web 画像検索も実行する
     /(画像|写真).{0,15}(探|検索)|(探|検索).{0,15}(画像|写真)/.test(message || "") &&
-    !generatedImages.length && !/\[画像(生成|編集):/.test(reply)
+    !generatedImages.length
   ) {
     try {
       const { result } = await dramaTrackedGemini(projectId, K + "imgquery")(
@@ -9443,6 +9457,14 @@ async function dramaProcessChat(p, { projectId, episodeId, message, imageUrls = 
       console.warn("[drama] imgquery fallback failed:", e.message);
     }
   }
+  // [引用: メッセージ番号] = LINE の返信のように過去メッセージを引用表示する。
+  // 番号は会話ログの (#n)。履歴に無い番号は無視 (適当な引用を防ぐ)
+  let replyQuotedMessageId = null;
+  reply = reply.replace(/\[引用:\s*#?(\d+)\s*\]/g, (m, idStr) => {
+    const id = Number(idStr);
+    if (!replyQuotedMessageId && history.some((h) => Number(h.id) === id)) replyQuotedMessageId = id;
+    return "";
+  }).trim();
   // [画像生成: ...] = 新規生成 / [画像編集: ...] = 直前の画像 (引用 > 添付 > 会話の最後の画像) を編集
   let markers = [...reply.matchAll(/\[画像(生成|編集):\s*([\s\S]*?)\]/g)].slice(0, 2);
   const markerInfo = markers.map((m) => ({ mode: m[1], prompt: m[2].trim().slice(0, 300) }));
@@ -9580,9 +9602,17 @@ async function dramaProcessChat(p, { projectId, episodeId, message, imageUrls = 
     }
   }
 
+  // [メッセージ区切り] = LINE のように複数の吹き出しに分けて送る (最大 3 通)。
+  // 画像と ⚙ 実行行は最後の吹き出しに付く
+  let bubbles = reply.split(/\s*\[メッセージ区切り\]\s*/).map((s) => s.trim()).filter(Boolean);
+  if (bubbles.length > 3) bubbles = [...bubbles.slice(0, 2), bubbles.slice(2).join("\n\n")];
+  if (!bubbles.length) bubbles = [reply];
+  reply = bubbles.join("\n\n"); // 戻り値・debug 表示用は結合したもの
+
   if (debug) {
     return {
       reply, images: generatedImages, markers: markerInfo, imageRuns, actionsParsed, actionsRaw,
+      quotedMessageId: replyQuotedMessageId, bubbles: bubbles.length,
       timings, systemPromptChars: systemPrompt.length,
       historyImagesSent: historyImageParts.length, currentImagesSent: imageParts.length,
       quoted: { text: quoted.text, images: quoted.imageUrls.length },
@@ -9590,10 +9620,20 @@ async function dramaProcessChat(p, { projectId, episodeId, message, imageUrls = 
     };
   }
 
+  const imagesJson = JSON.stringify(generatedImages);
   await p.query(
-    `UPDATE drama_chat_messages SET content=$1, images=$2, status='done' WHERE id=$3`,
-    [reply, JSON.stringify(generatedImages), assistantMessageId]
+    `UPDATE drama_chat_messages
+        SET content=$1, images=$2, status='done', quoted_message_id=COALESCE($4, quoted_message_id)
+      WHERE id=$3`,
+    [bubbles[0], bubbles.length > 1 ? "[]" : imagesJson, assistantMessageId, replyQuotedMessageId]
   );
+  for (let i = 1; i < bubbles.length; i++) {
+    await p.query(
+      `INSERT INTO drama_chat_messages (project_id, episode_id, role, content, images, status)
+       VALUES ($1,$2,'assistant',$3,$4,'done')`,
+      [projectId, episodeId || null, bubbles[i], i === bubbles.length - 1 ? imagesJson : "[]"]
+    );
+  }
   return { reply, images: generatedImages, applied };
 }
 

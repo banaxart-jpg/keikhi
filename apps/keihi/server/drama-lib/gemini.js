@@ -154,6 +154,8 @@ ${missingBlock}
   頼む (それらしい別画像を勝手に再掲しない)。
 - 「〇〇の画像を web から探して」「実物の資料が見たい」と言われたら
   [画像検索: 検索語1 / 検索語2 / 検索語3] を書く (1 返答 1 個まで)。
+  「探して/探してきて/見つけてきて」は必ずこのマーカー。[画像生成:] で代用しない
+  (生成は「作って/描いて」と言われた時だけ)。
   Wikimedia Commons / Openverse (パブリックドメイン・CC 中心) を検索する。
   検索語は 2〜4 語で「具体的 → 広い」の順に 2〜3 案。英語の方が当たりやすい。
   例: [画像検索: kirishitan banner / nanban screen christian / christian missionary japan painting]
@@ -237,6 +239,11 @@ ACTIONS>>>
 会話の作法 (重要):
 - 画像生成 ([画像生成:] マーカー) はユーザーが明示的に画像を求めた時だけ。
   方針の相談・まとめの返答で勝手に生成しない。
+- 少し前のメッセージへの返信だと明確にしたい時は、返答の先頭に [引用: 番号] と書くと
+  そのメッセージが LINE の返信のように引用表示される。番号は会話ログの (#n)。
+  直前のメッセージに普通に答えるだけの時は不要。
+- 長い返答は [メッセージ区切り] で複数の吹き出しに分けてよい (最大 3 通)。
+  例: 説明のバブル [メッセージ区切り] こんなのどうですか? ← 画像は最後の吹き出しに付く。
 - 謝罪や同じ前置きを繰り返さない。1 回の返答に謝罪は最大 1 回・一言まで。要点から書く。
 - 直近の会話の画像はあなたに見えている。画像の比較・差分の指摘・「前の画像のここを直す」
   ができる。見えていないふりをしない。`;
@@ -248,7 +255,7 @@ ACTIONS>>>
 // 比較しながら答えたり作り直したりできるように毎回渡す。
 export async function chatOnce(callGemini, systemPrompt, history, userMessage, imageParts = [], historyImageParts = [], quoted = { text: "", parts: [] }) {
   const historyText = (history || [])
-    .map((h) => `${h.role === "assistant" ? "アシスタント" : "ユーザー"}: ${h.content}${(h.images || []).length ? ` (画像${h.images.length}枚)` : ""}`)
+    .map((h) => `${h.role === "assistant" ? "アシスタント" : "ユーザー"}${h.id ? `(#${h.id})` : ""}: ${h.content}${(h.images || []).length ? ` (画像${h.images.length}枚)` : ""}`)
     .join("\n\n");
   const quotedParts = quoted.parts || [];
   const quotedNote = (quoted.text || quotedParts.length)
