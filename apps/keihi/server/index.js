@@ -8617,19 +8617,25 @@ ${panels.join("\n")}`;
       // モデルは 3×3 指定でも 3×4 等で描くことがある (実測)。生成後に実際の行列を
       // 視覚検出して切り出しに使う。コマ数がカット数に足りなければ 1 回だけ作り直す
       const detectLayout = async (image) => {
+        // flash-lite は行数を数え間違えた実績あり (15コマを 3×3 と回答) → flash +
+        // 総コマ数とのクロスチェックで精度を上げる。検出不能なら null (= 切り出さない)
         try {
           const { result } = await dramaTrackedGemini(episode.projectId, kindPrefix + "grid_layout")(
-            ['この画像は絵コンテのグリッドページです。何行×何列に分割されているか JSON だけで返す: {"rows":3,"cols":3}',
+            ["この画像は絵コンテのグリッドページです。コマ (パネル) の並びを注意深く数えてください。\n" +
+             "1. まず縦方向に「行」がいくつあるか (上から下へ)\n2. 次に横方向に「列」がいくつあるか (左から右へ)\n" +
+             '3. 総コマ数\nJSON だけで返す: {"rows":N,"cols":N,"panels":N}',
              { inlineData: { data: image.data, mimeType: image.mimeType } }],
-            { primaryModel: "gemini-2.5-flash-lite", maxOutputTokens: 200, jsonMode: true }
+            { primaryModel: "gemini-2.5-flash", maxOutputTokens: 500, jsonMode: true }
           );
           const t = (result.response.text() || "").trim();
           const j = JSON.parse(t.slice(t.indexOf("{"), t.lastIndexOf("}") + 1));
-          if (Number.isInteger(j.rows) && Number.isInteger(j.cols) && j.rows >= 1 && j.cols >= 1 && j.rows * j.cols <= 30) {
+          if (Number.isInteger(j.rows) && Number.isInteger(j.cols) && j.rows >= 1 && j.cols >= 1 &&
+              j.rows * j.cols <= 30 && j.rows * j.cols === Number(j.panels)) {
             return { rows: j.rows, cols: j.cols };
           }
+          console.warn(`[drama] grid layout 検出が不整合: ${t.slice(0, 120)}`);
         } catch (e) { console.warn("[drama] grid layout detect failed:", e.message); }
-        return { rows: 3, cols: 3 }; // 検出不能なら指示どおりとみなす
+        return null; // 自信が持てない時は切り出さずページ全体を表示 (ズレた切り出しより安全)
       };
       let img, layout;
       for (let attempt = 0; attempt < 2; attempt++) {
@@ -8639,8 +8645,8 @@ ${panels.join("\n")}`;
         });
         dramaRecordUsage({ projectId: episode.projectId, provider: "gemini", kind: kindPrefix + "storyboard_grid", model: DRAMA_GEMINI_IMAGE_MODEL, costYen: DRAMA_GEMINI_IMAGE_YEN });
         layout = await detectLayout(img);
-        if (layout.rows * layout.cols >= pageCuts.length) break;
-        console.log(`[drama] grid layout ${layout.rows}x${layout.cols} < ${pageCuts.length}コマ、作り直し (attempt ${attempt + 1})`);
+        if (layout && layout.rows * layout.cols >= pageCuts.length) break;
+        console.log(`[drama] grid layout ${layout ? layout.rows + "x" + layout.cols : "検出不能"} < ${pageCuts.length}コマ、作り直し (attempt ${attempt + 1})`);
       }
       let url;
       if (storage && RECEIPTS_BUCKET) {
@@ -8653,10 +8659,10 @@ ${panels.join("\n")}`;
         url = `data:${img.mimeType};base64,${img.data}`;
       }
       pageUrls.push(url);
-      const capacity = layout.rows * layout.cols;
+      const capacity = layout ? layout.rows * layout.cols : 0;
       for (let i = 0; i < pageCuts.length; i++) {
-        // 検出した実レイアウトで切り出す。収まらないコマは切り出さずページ全体を表示
-        const crop = i < capacity
+        // 検出した実レイアウトで切り出す。検出不能・収まらないコマはページ全体を表示
+        const crop = layout && i < capacity
           ? { rows: layout.rows, cols: layout.cols, row: Math.floor(i / layout.cols), col: i % layout.cols, page: pi + 1 }
           : null;
         await p.query(`UPDATE drama_cuts SET storyboard_url=$1, storyboard_crop=$2, updated_at=now() WHERE id=$3`,

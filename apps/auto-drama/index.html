@@ -1574,7 +1574,8 @@ const App = {
         await refreshEpisode();
       } catch (e) { err.value = e.message; } finally { gridding.value = false; }
     }
-    // グリッドページから自分のコマだけを CSS で切り出して表示する
+    // グリッドページから自分のコマだけを CSS で切り出して表示する。
+    // コマの縦横比はレイアウト依存 (ページは 9:16 固定 → コマは (9/cols):(16/rows))
     function sbCropStyle(cut) {
       const c = cut.storyboardCrop;
       if (!c || !cut.storyboardUrl) return {};
@@ -1582,6 +1583,7 @@ const App = {
         backgroundImage: `url(${cut.storyboardUrl})`,
         backgroundSize: `${c.cols * 100}% ${c.rows * 100}%`,
         backgroundPosition: `${c.cols > 1 ? (c.col / (c.cols - 1)) * 100 : 0}% ${c.rows > 1 ? (c.row / (c.rows - 1)) * 100 : 0}%`,
+        aspectRatio: `${9 * c.rows} / ${16 * c.cols}`,
       };
     }
 
