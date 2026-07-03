@@ -227,15 +227,17 @@ app.post("/api/drama/inspect/:id/run", async (req, res) => {
         if (!cutRows.length) return res.status(404).json({ error: `カット${b.cutOrder}が見つかりません` });
         const cut = cutRows[0];
         if (!cut.prompt) return res.status(400).json({ error: "プロンプト未設定" });
+        // model はデフォルト固定だが、開通済みモデルが別 ID の場合に差し替えられるようにする
+        const videoModel = (typeof b.model === "string" && b.model.trim()) ? b.model.trim() : DRAMA_SEEDANCE_MODEL;
         const { taskId } = await dramaCreateVideoTask({
           prompt: cut.prompt,
           referenceImageUrls: [cut.storyboardUrl].filter(Boolean),
-          durationSec: cut.durationSec, model: DRAMA_SEEDANCE_MODEL,
+          durationSec: cut.durationSec, model: videoModel,
         });
-        dramaRecordSeedanceUsage(req.params.id, Math.max(4, Math.min(15, Math.round(cut.durationSec || 8))), DRAMA_SEEDANCE_MODEL, kindPrefix);
+        dramaRecordSeedanceUsage(req.params.id, Math.max(4, Math.min(15, Math.round(cut.durationSec || 8))), videoModel, kindPrefix);
         const generation = {
           status: "queued", providerTaskId: taskId, videoUrl: null,
-          prompt: cut.prompt, revisionNote: "絵コンテ参照 (claude code)", model: DRAMA_SEEDANCE_MODEL,
+          prompt: cut.prompt, revisionNote: "絵コンテ参照 (claude code)", model: videoModel,
           createdAt: new Date().toISOString(),
         };
         const generations = [...(cut.generations || []), generation];
