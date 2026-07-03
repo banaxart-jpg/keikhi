@@ -8636,7 +8636,7 @@ async function dramaRunStoryboardGrid(p, episodeId, { kindPrefix = "" } = {}) {
       const prompt = `縦 9:16 の「アニメ絵コンテのグリッドページ」を 1 枚の画像として描く。
 画面を正確に 3 行 × 3 列 = 9 コマに均等分割する (各コマも縦 9:16 の画)。
 12 コマや 15 コマなど他の分割は禁止。コマの間は細い白い枠線。
-各コマの左上に小さく通し番号 (1〜9 を 1 回ずつ。同じ番号を複数コマに付けない)。
+コマの中に番号・文字・注釈は入れない (画だけ)。
 9 コマすべてで絵柄・キャラクターデザイン・色調を完全に統一する (同じ作品の連続カット)。
 絵柄: ${projRows[0]?.styleGuide || "シネマティック"}
 ${pageChars.length ? `登場人物 (全コマで同一人物として描く): ${pageChars.map((c) => `${c.name} (${(c.identityTokens || []).join("、")})`).join(" / ")}\n` : ""}${pageLocs.length ? `場所: ${pageLocs.map((l) => `${l.name} (${(l.identityTokens || []).join("、")})`).join(" / ")}\n` : ""}各コマの内容:
