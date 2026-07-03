@@ -8478,20 +8478,18 @@ app.post("/api/drama/episodes/:id/compose-cuts", async (req, res) => {
   }
 });
 
-// ③' 絵コンテ静止画: 動画 (¥150) の前に静止画 (¥6) で構図を確認するゲート
-app.post("/api/drama/cuts/:id/storyboard", async (req, res) => {
-  const p = getPool();
-  if (!p) return res.status(503).json({ error: "DB not configured" });
-  try {
+// 単体絵コンテの本体 (ルート・グリッドの端数フォールバックの両方から使う)
+async function dramaRunStoryboardCut(p, cutId, { kindPrefix = "" } = {}) {
+  {
     const { rows } = await p.query(
       `SELECT c.id, c.prompt, c.character_ids AS "characterIds", c.location_id AS "locationId",
               e.project_id AS "projectId"
          FROM drama_cuts c JOIN drama_episodes e ON e.id = c.episode_id WHERE c.id=$1`,
-      [req.params.id]
+      [cutId]
     );
-    if (!rows.length) return res.status(404).json({ error: "not found" });
+    if (!rows.length) { const e = new Error("カットが見つかりません"); e.status = 404; throw e; }
     const cut = rows[0];
-    if (!cut.prompt) return res.status(400).json({ error: "プロンプトが未設定です" });
+    if (!cut.prompt) { const e = new Error("プロンプトが未設定です"); e.status = 400; throw e; }
     const { rows: projRows } = await p.query(
       `SELECT style_guide AS "styleGuide", style_ref_images AS "styleRefImages" FROM drama_projects WHERE id=$1`, [cut.projectId]
     );
@@ -8520,7 +8518,7 @@ ${charDesc ? `登場人物: ${charDesc}\n` : ""}${loc ? `場所: ${loc.name} (${
 
     // 9:16 は API 設定で強制 (テキスト指示だけだと正方形が返りがち)
     const img = await dramaGenerateImage(prompt, refParts, { aspectRatio: "9:16" });
-    dramaRecordUsage({ projectId: cut.projectId, provider: "gemini", kind: "storyboard", model: DRAMA_GEMINI_IMAGE_MODEL, costYen: DRAMA_GEMINI_IMAGE_YEN });
+    dramaRecordUsage({ projectId: cut.projectId, provider: "gemini", kind: kindPrefix + "storyboard", model: DRAMA_GEMINI_IMAGE_MODEL, costYen: DRAMA_GEMINI_IMAGE_YEN });
 
     let url;
     if (storage && RECEIPTS_BUCKET) {
@@ -8532,11 +8530,21 @@ ${charDesc ? `登場人物: ${charDesc}\n` : ""}${loc ? `場所: ${loc.name} (${
     } else {
       url = `data:${img.mimeType};base64,${img.data}`; // ローカル dev 用フォールバック
     }
-    await p.query(`UPDATE drama_cuts SET storyboard_url=$1, storyboard_crop=NULL, updated_at=now() WHERE id=$2`, [url, req.params.id]);
+    await p.query(`UPDATE drama_cuts SET storyboard_url=$1, storyboard_crop=NULL, updated_at=now() WHERE id=$2`, [url, cutId]);
+    return url;
+  }
+}
+
+// ③' 絵コンテ静止画: 動画 (¥150) の前に静止画 (¥6) で構図を確認するゲート
+app.post("/api/drama/cuts/:id/storyboard", async (req, res) => {
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  try {
+    const url = await dramaRunStoryboardCut(p, req.params.id);
     res.json({ ok: true, storyboardUrl: url });
   } catch (err) {
     console.error("[drama] storyboard", err);
-    res.status(500).json({ error: err.message });
+    res.status(err.status || 500).json({ error: err.message });
   }
 });
 
@@ -8570,8 +8578,15 @@ async function dramaRunStoryboardGrid(p, episodeId, { kindPrefix = "" } = {}) {
       `SELECT id, name, identity_tokens AS "identityTokens" FROM drama_locations WHERE project_id=$1`,
       [episode.projectId]
     );
+    // 9 カットずつページに割る。端数が 4 未満のページはグリッドにせず単体生成に回す
+    // (1〜3 コマ + 予備埋めのグリッドは同じ絵の繰り返しに崩れる — 実測)
     const pages = [];
-    for (let i = 0; i < cuts.length; i += 9) pages.push(cuts.slice(i, i + 9));
+    let singles = [];
+    for (let i = 0; i < cuts.length; i += 9) {
+      const chunk = cuts.slice(i, i + 9);
+      if (chunk.length < 4) singles = chunk;
+      else pages.push(chunk);
+    }
     const pageUrls = [];
     for (let pi = 0; pi < pages.length; pi++) {
       const pageCuts = pages[pi];
@@ -8585,8 +8600,9 @@ async function dramaRunStoryboardGrid(p, episodeId, { kindPrefix = "" } = {}) {
       // 端数ページの余りコマは予備アングルで埋める (空白コマは崩れやすい)
       for (let i = pageCuts.length; i < 9; i++) panels.push(`${i + 1}. 直前のコマと同じシーンの別アングル (予備)`);
       const prompt = `縦 9:16 の「アニメ絵コンテのグリッドページ」を 1 枚の画像として描く。
-画面を均等な 3×3 の 9 コマに分割する (各コマも縦 9:16 の画)。コマの間は細い白い枠線。
-各コマの左上に小さく通し番号 (1〜9)。
+画面を正確に 3 行 × 3 列 = 9 コマに均等分割する (各コマも縦 9:16 の画)。
+12 コマや 15 コマなど他の分割は禁止。コマの間は細い白い枠線。
+各コマの左上に小さく通し番号 (1〜9 を 1 回ずつ。同じ番号を複数コマに付けない)。
 9 コマすべてで絵柄・キャラクターデザイン・色調を完全に統一する (同じ作品の連続カット)。
 絵柄: ${projRows[0]?.styleGuide || "シネマティック"}
 ${pageChars.length ? `登場人物 (全コマで同一人物として描く): ${pageChars.map((c) => `${c.name} (${(c.identityTokens || []).join("、")})`).join(" / ")}\n` : ""}${pageLocs.length ? `場所: ${pageLocs.map((l) => `${l.name} (${(l.identityTokens || []).join("、")})`).join(" / ")}\n` : ""}各コマの内容:
@@ -8597,11 +8613,34 @@ ${panels.join("\n")}`;
         if ((c.referenceImages || []).length) refUrls.push(c.referenceImages[0].url);
       }
       const refParts = await dramaFetchImagePartsSafe(refUrls, 4);
-      const img = await dramaGenerateImage(prompt, refParts, {
-        aspectRatio: "9:16",
-        refNote: "参照画像は絵柄・キャラクターデザインの基準。グリッドの各コマにこのデザインを統一して使う",
-      });
-      dramaRecordUsage({ projectId: episode.projectId, provider: "gemini", kind: kindPrefix + "storyboard_grid", model: DRAMA_GEMINI_IMAGE_MODEL, costYen: DRAMA_GEMINI_IMAGE_YEN });
+      // モデルは 3×3 指定でも 3×4 等で描くことがある (実測)。生成後に実際の行列を
+      // 視覚検出して切り出しに使う。コマ数がカット数に足りなければ 1 回だけ作り直す
+      const detectLayout = async (image) => {
+        try {
+          const { result } = await dramaTrackedGemini(episode.projectId, kindPrefix + "grid_layout")(
+            ['この画像は絵コンテのグリッドページです。何行×何列に分割されているか JSON だけで返す: {"rows":3,"cols":3}',
+             { inlineData: { data: image.data, mimeType: image.mimeType } }],
+            { primaryModel: "gemini-2.5-flash-lite", maxOutputTokens: 200, jsonMode: true }
+          );
+          const t = (result.response.text() || "").trim();
+          const j = JSON.parse(t.slice(t.indexOf("{"), t.lastIndexOf("}") + 1));
+          if (Number.isInteger(j.rows) && Number.isInteger(j.cols) && j.rows >= 1 && j.cols >= 1 && j.rows * j.cols <= 30) {
+            return { rows: j.rows, cols: j.cols };
+          }
+        } catch (e) { console.warn("[drama] grid layout detect failed:", e.message); }
+        return { rows: 3, cols: 3 }; // 検出不能なら指示どおりとみなす
+      };
+      let img, layout;
+      for (let attempt = 0; attempt < 2; attempt++) {
+        img = await dramaGenerateImage(prompt, refParts, {
+          aspectRatio: "9:16",
+          refNote: "参照画像は絵柄・キャラクターデザインの基準。グリッドの各コマにこのデザインを統一して使う",
+        });
+        dramaRecordUsage({ projectId: episode.projectId, provider: "gemini", kind: kindPrefix + "storyboard_grid", model: DRAMA_GEMINI_IMAGE_MODEL, costYen: DRAMA_GEMINI_IMAGE_YEN });
+        layout = await detectLayout(img);
+        if (layout.rows * layout.cols >= pageCuts.length) break;
+        console.log(`[drama] grid layout ${layout.rows}x${layout.cols} < ${pageCuts.length}コマ、作り直し (attempt ${attempt + 1})`);
+      }
       let url;
       if (storage && RECEIPTS_BUCKET) {
         const ext = img.mimeType.includes("jpeg") ? "jpg" : "png";
@@ -8613,13 +8652,19 @@ ${panels.join("\n")}`;
         url = `data:${img.mimeType};base64,${img.data}`;
       }
       pageUrls.push(url);
+      const capacity = layout.rows * layout.cols;
       for (let i = 0; i < pageCuts.length; i++) {
-        const crop = { rows: 3, cols: 3, row: Math.floor(i / 3), col: i % 3, page: pi + 1 };
+        // 検出した実レイアウトで切り出す。収まらないコマは切り出さずページ全体を表示
+        const crop = i < capacity
+          ? { rows: layout.rows, cols: layout.cols, row: Math.floor(i / layout.cols), col: i % layout.cols, page: pi + 1 }
+          : null;
         await p.query(`UPDATE drama_cuts SET storyboard_url=$1, storyboard_crop=$2, updated_at=now() WHERE id=$3`,
-          [url, JSON.stringify(crop), pageCuts[i].id]);
+          [url, crop ? JSON.stringify(crop) : null, pageCuts[i].id]);
       }
     }
-    return { pages: pageUrls.length, pageUrls, cuts: cuts.length };
+    // 端数カットは単体絵コンテ (¥6/枚) で生成
+    for (const c of singles) await dramaRunStoryboardCut(p, c.id, { kindPrefix });
+    return { pages: pageUrls.length, pageUrls, cuts: cuts.length, singles: singles.length };
   }
 }
 
