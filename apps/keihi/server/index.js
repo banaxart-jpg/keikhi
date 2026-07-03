@@ -1275,6 +1275,8 @@ async function ensureSchema() {
     await p.query(`ALTER TABLE drama_cuts ADD COLUMN IF NOT EXISTS location_id BIGINT REFERENCES drama_locations(id) ON DELETE SET NULL`);
     // 絵コンテ (動画生成前の静止画確認。承認なしに作画へ進まない実制作の流儀)
     await p.query(`ALTER TABLE drama_cuts ADD COLUMN IF NOT EXISTS storyboard_url TEXT`);
+    // 3×3 グリッド絵コンテのコマ位置 ({rows, cols, row, col, page})。null なら単独絵コンテ
+    await p.query(`ALTER TABLE drama_cuts ADD COLUMN IF NOT EXISTS storyboard_crop JSONB`);
     await p.query(`
       CREATE TABLE IF NOT EXISTS drama_timelines (
         episode_id         BIGINT PRIMARY KEY REFERENCES drama_episodes(id) ON DELETE CASCADE,
@@ -8467,10 +8469,97 @@ ${charDesc ? `登場人物: ${charDesc}\n` : ""}${loc ? `場所: ${loc.name} (${
     } else {
       url = `data:${img.mimeType};base64,${img.data}`; // ローカル dev 用フォールバック
     }
-    await p.query(`UPDATE drama_cuts SET storyboard_url=$1, updated_at=now() WHERE id=$2`, [url, req.params.id]);
+    await p.query(`UPDATE drama_cuts SET storyboard_url=$1, storyboard_crop=NULL, updated_at=now() WHERE id=$2`, [url, req.params.id]);
     res.json({ ok: true, storyboardUrl: url });
   } catch (err) {
     console.error("[drama] storyboard", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 絵コンテ一括 (3×3 グリッド): 9 カットを 1 枚の画像として生成する。
+// 1 枚 ¥6 で 9 コマ + 同一生成内なのでコマ間の絵柄・キャラが揃う (バラ生成の絵柄ブレ対策)。
+// 9:16 のコマ × 3×3 = ページ全体も 9:16 になるので生成も素直。
+// 各カットには ページ URL + 自分のコマ位置 (storyboard_crop) を保存し、UI 側で切り出し表示する
+app.post("/api/drama/episodes/:id/storyboard-grid", async (req, res) => {
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  try {
+    const { rows: epRows } = await p.query(
+      `SELECT id, number, project_id AS "projectId" FROM drama_episodes WHERE id=$1`, [req.params.id]
+    );
+    if (!epRows.length) return res.status(404).json({ error: "not found" });
+    const episode = epRows[0];
+    const { rows: cuts } = await p.query(
+      `SELECT id, "order", prompt, character_ids AS "characterIds", location_id AS "locationId"
+         FROM drama_cuts WHERE episode_id=$1 ORDER BY "order"`,
+      [req.params.id]
+    );
+    if (!cuts.length) return res.status(400).json({ error: "カットがありません (先にカット割りを)" });
+    const { rows: projRows } = await p.query(
+      `SELECT style_guide AS "styleGuide", style_ref_images AS "styleRefImages" FROM drama_projects WHERE id=$1`,
+      [episode.projectId]
+    );
+    const { rows: characters } = await p.query(
+      `SELECT id, name, identity_tokens AS "identityTokens", reference_images AS "referenceImages"
+         FROM drama_characters WHERE project_id=$1`, [episode.projectId]
+    );
+    const { rows: locations } = await p.query(
+      `SELECT id, name, identity_tokens AS "identityTokens" FROM drama_locations WHERE project_id=$1`,
+      [episode.projectId]
+    );
+    const pages = [];
+    for (let i = 0; i < cuts.length; i += 9) pages.push(cuts.slice(i, i + 9));
+    const pageUrls = [];
+    for (let pi = 0; pi < pages.length; pi++) {
+      const pageCuts = pages[pi];
+      // このページに出るキャラ・場所 (全コマ共通の同一人物として描かせる)
+      const charIds = [...new Set(pageCuts.flatMap((c) => c.characterIds || []).map(String))];
+      const pageChars = charIds.map((cid) => characters.find((c) => String(c.id) === cid)).filter(Boolean);
+      const locIds = [...new Set(pageCuts.map((c) => c.locationId).filter(Boolean).map(String))];
+      const pageLocs = locIds.map((lid) => locations.find((l) => String(l.id) === lid)).filter(Boolean);
+      const panels = pageCuts.map((c, i) =>
+        `${i + 1}. ${String(c.prompt || "").replace(/\s+/g, " ").slice(0, 160)}`);
+      // 端数ページの余りコマは予備アングルで埋める (空白コマは崩れやすい)
+      for (let i = pageCuts.length; i < 9; i++) panels.push(`${i + 1}. 直前のコマと同じシーンの別アングル (予備)`);
+      const prompt = `縦 9:16 の「アニメ絵コンテのグリッドページ」を 1 枚の画像として描く。
+画面を均等な 3×3 の 9 コマに分割する (各コマも縦 9:16 の画)。コマの間は細い白い枠線。
+各コマの左上に小さく通し番号 (1〜9)。
+9 コマすべてで絵柄・キャラクターデザイン・色調を完全に統一する (同じ作品の連続カット)。
+絵柄: ${projRows[0]?.styleGuide || "シネマティック"}
+${pageChars.length ? `登場人物 (全コマで同一人物として描く): ${pageChars.map((c) => `${c.name} (${(c.identityTokens || []).join("、")})`).join(" / ")}\n` : ""}${pageLocs.length ? `場所: ${pageLocs.map((l) => `${l.name} (${(l.identityTokens || []).join("、")})`).join(" / ")}\n` : ""}各コマの内容:
+${panels.join("\n")}`;
+      const refUrls = [...(projRows[0]?.styleRefImages || []).slice(0, 2)];
+      for (const c of pageChars) {
+        if (refUrls.length >= 4) break;
+        if ((c.referenceImages || []).length) refUrls.push(c.referenceImages[0].url);
+      }
+      const refParts = await dramaFetchImagePartsSafe(refUrls, 4);
+      const img = await dramaGenerateImage(prompt, refParts, {
+        aspectRatio: "9:16",
+        refNote: "参照画像は絵柄・キャラクターデザインの基準。グリッドの各コマにこのデザインを統一して使う",
+      });
+      dramaRecordUsage({ projectId: episode.projectId, provider: "gemini", kind: "storyboard_grid", model: DRAMA_GEMINI_IMAGE_MODEL, costYen: DRAMA_GEMINI_IMAGE_YEN });
+      let url;
+      if (storage && RECEIPTS_BUCKET) {
+        const ext = img.mimeType.includes("jpeg") ? "jpg" : "png";
+        const key = `drama/storyboards/grid/${episode.id}/${Date.now()}_p${pi + 1}.${ext}`;
+        await storage.bucket(RECEIPTS_BUCKET).file(key).save(Buffer.from(img.data, "base64"), { contentType: img.mimeType, resumable: false });
+        [url] = await storage.bucket(RECEIPTS_BUCKET).file(key)
+          .getSignedUrl({ action: "read", expires: Date.now() + 7 * 24 * 60 * 60 * 1000 });
+      } else {
+        url = `data:${img.mimeType};base64,${img.data}`;
+      }
+      pageUrls.push(url);
+      for (let i = 0; i < pageCuts.length; i++) {
+        const crop = { rows: 3, cols: 3, row: Math.floor(i / 3), col: i % 3, page: pi + 1 };
+        await p.query(`UPDATE drama_cuts SET storyboard_url=$1, storyboard_crop=$2, updated_at=now() WHERE id=$3`,
+          [url, JSON.stringify(crop), pageCuts[i].id]);
+      }
+    }
+    res.json({ ok: true, pages: pageUrls.length, pageUrls, cuts: cuts.length });
+  } catch (err) {
+    console.error("[drama] storyboard grid", err);
     res.status(500).json({ error: err.message });
   }
 });
@@ -8512,7 +8601,7 @@ app.get("/api/drama/episodes/:id", async (req, res) => {
     const episode = rows[0];
     const { rows: cuts } = await p.query(
       `SELECT id, "order", duration_sec AS "durationSec", prompt, character_ids AS "characterIds",
-              location_id AS "locationId", storyboard_url AS "storyboardUrl",
+              location_id AS "locationId", storyboard_url AS "storyboardUrl", storyboard_crop AS "storyboardCrop",
               generations, selected_generation_index AS "selectedGenerationIndex", narration, subtitle
          FROM drama_cuts WHERE episode_id=$1 ORDER BY "order"`,
       [req.params.id]

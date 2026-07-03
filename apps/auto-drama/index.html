@@ -167,6 +167,7 @@ textarea.field-input { min-height: 70px; resize: vertical; }
 .msg-flash { animation: msgFlash 1.4s ease; }
 @keyframes msgFlash { 0%, 55% { outline: 3px solid var(--accent); outline-offset: 2px; } 100% { outline: 3px solid transparent; outline-offset: 2px; } }
 .zoomable { cursor: zoom-in; }
+.sb-crop { width: 100%; aspect-ratio: 9 / 16; border-radius: 12px; background-repeat: no-repeat; }
 .chat-input-row { display: flex; gap: 8px; padding-top: 6px; }
 .chat-input-row textarea { flex: 1; min-height: 42px; max-height: 120px; }
 .chat-send { width: 42px; height: 42px; border-radius: 21px; border: none; background: linear-gradient(145deg, var(--accent2), var(--accent)); color: white; font-family: 'Material Symbols Outlined'; font-size: 20px; cursor: pointer; flex-shrink: 0; }
@@ -621,6 +622,11 @@ const TEMPLATE = `
         <button @click="composeCutsFn" :disabled="composingCuts">
           {{ composingCuts ? 'AIがカットを割ってます…' : (currentEpisode.cuts.length ? 'AIでカットを割り直す (脚本から)' : 'AIでカット割り (脚本から)') }}</button>
       </div>
+      <div class="actions-row" v-if="currentEpisode.cuts.length">
+        <button @click="generateStoryboardGrid" :disabled="gridding">
+          {{ gridding ? 'グリッド生成中… (1ページ≈30秒)' : ('絵コンテ一括 (3×3グリッド・' + Math.ceil(currentEpisode.cuts.length / 9) + 'ページ ≈¥' + (Math.ceil(currentEpisode.cuts.length / 9) * 6) + ')') }}</button>
+      </div>
+      <div class="card-sub" style="padding:0 16px;" v-if="currentEpisode.cuts.length">9カット=1枚で生成するのでコマ間の絵柄が揃い、1コマあたり ≈¥0.7。コマをタップすると全体ページ表示</div>
     </div>
     <div class="list">
       <div v-for="(cut, idx) in currentEpisode.cuts" :key="cut.id" class="card" :class="{ open: cutOpenId === cut.id }">
@@ -658,8 +664,9 @@ const TEMPLATE = `
             <button @click="saveCut(cut)" :disabled="cutSaving">{{ cutSaving ? '保存中…' : '保存' }}</button>
           </div>
           <div v-if="cut.storyboardUrl">
-            <div class="field-label">絵コンテ (構図確認用の静止画)</div>
-            <img :src="cut.storyboardUrl" class="zoomable" style="width:100%; border-radius:12px;" @click="openViewer([cut.storyboardUrl])">
+            <div class="field-label">絵コンテ (構図確認用の静止画{{ cut.storyboardCrop ? (' — グリッドP' + cut.storyboardCrop.page + ' の ' + (cut.storyboardCrop.row * cut.storyboardCrop.cols + cut.storyboardCrop.col + 1) + 'コマ目') : '' }})</div>
+            <div v-if="cut.storyboardCrop" class="sb-crop zoomable" :style="sbCropStyle(cut)" @click="openViewer([cut.storyboardUrl])"></div>
+            <img v-else :src="cut.storyboardUrl" class="zoomable" style="width:100%; border-radius:12px;" @click="openViewer([cut.storyboardUrl])">
           </div>
           <div class="actions-row">
             <button @click="generateStoryboard(cut)" :disabled="storyboardingCutId === cut.id">
@@ -1557,6 +1564,26 @@ const App = {
         await refreshEpisode();
       } catch (e) { err.value = e.message; } finally { storyboardingCutId.value = null; }
     }
+    // 絵コンテ一括: 9 カット = 3×3 グリッド 1 枚で生成 (絵柄が揃う + 1コマ ≈¥0.7)
+    const gridding = ref(false);
+    async function generateStoryboardGrid() {
+      gridding.value = true;
+      err.value = "";
+      try {
+        await apiFetch(`/api/drama/episodes/${currentEpisode.value.id}/storyboard-grid`, { method: "POST", body: {} });
+        await refreshEpisode();
+      } catch (e) { err.value = e.message; } finally { gridding.value = false; }
+    }
+    // グリッドページから自分のコマだけを CSS で切り出して表示する
+    function sbCropStyle(cut) {
+      const c = cut.storyboardCrop;
+      if (!c || !cut.storyboardUrl) return {};
+      return {
+        backgroundImage: `url(${cut.storyboardUrl})`,
+        backgroundSize: `${c.cols * 100}% ${c.rows * 100}%`,
+        backgroundPosition: `${c.cols > 1 ? (c.col / (c.cols - 1)) * 100 : 0}% ${c.rows > 1 ? (c.row / (c.rows - 1)) * 100 : 0}%`,
+      };
+    }
 
     // ── カット ──
     function toggleCut(cut) {
@@ -1808,6 +1835,7 @@ const App = {
       generatingCutId, genError, genErrorFor, generateCut, selectGeneration, refreshGeneration,
       composingSeries, composeSeriesFn, scriptEdit, scriptWriting, scriptSaving, writeScriptFn, saveScript,
       composingCuts, composeCutsFn, storyboardingCutId, generateStoryboard,
+      gridding, generateStoryboardGrid, sbCropStyle,
       editingCast, appearingCharacters, autoBuilding, autoBuildStage, autoBuildEpisode,
       isAppearing, toggleAppearing, onKeyVisualPick,
       exporting, exportErr, exportEpisode,
