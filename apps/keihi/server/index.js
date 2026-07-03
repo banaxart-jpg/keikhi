@@ -216,6 +216,39 @@ app.post("/api/drama/inspect/:id/run", async (req, res) => {
         result = { cuts: n };
       } else if (b.op === "storyboard_grid") {
         result = await dramaRunStoryboardGrid(p, episodeId, { kindPrefix });
+      } else if (b.op === "generate_cut") {
+        // Seedance 動画生成 (¥150/8秒)。小西の明示承認済み (「動画まで作ってよ」)。
+        // 参照は絵コンテのコマ画像 — 承認済みの構図に寄せる (未確定キャラゲートの代替)
+        if (!dramaSeedanceConfigured()) return res.status(503).json({ error: "Seedance 未設定" });
+        const { rows: cutRows } = await p.query(
+          `SELECT id, "order", prompt, duration_sec AS "durationSec", storyboard_url AS "storyboardUrl", generations
+             FROM drama_cuts WHERE episode_id=$1 AND "order"=$2`, [episodeId, Number(b.cutOrder)]
+        );
+        if (!cutRows.length) return res.status(404).json({ error: `カット${b.cutOrder}が見つかりません` });
+        const cut = cutRows[0];
+        if (!cut.prompt) return res.status(400).json({ error: "プロンプト未設定" });
+        const { taskId } = await dramaCreateVideoTask({
+          prompt: cut.prompt,
+          referenceImageUrls: [cut.storyboardUrl].filter(Boolean),
+          durationSec: cut.durationSec, model: DRAMA_SEEDANCE_MODEL,
+        });
+        dramaRecordSeedanceUsage(req.params.id, Math.max(4, Math.min(15, Math.round(cut.durationSec || 8))), DRAMA_SEEDANCE_MODEL, kindPrefix);
+        const generation = {
+          status: "queued", providerTaskId: taskId, videoUrl: null,
+          prompt: cut.prompt, revisionNote: "絵コンテ参照 (claude code)", model: DRAMA_SEEDANCE_MODEL,
+          createdAt: new Date().toISOString(),
+        };
+        const generations = [...(cut.generations || []), generation];
+        await p.query(`UPDATE drama_cuts SET generations=$1, updated_at=now() WHERE id=$2`,
+          [JSON.stringify(generations), cut.id]);
+        result = { cutOrder: cut.order, gi: generations.length - 1, taskId };
+      } else if (b.op === "refresh_cut") {
+        const { rows: cutRows } = await p.query(
+          `SELECT id FROM drama_cuts WHERE episode_id=$1 AND "order"=$2`, [episodeId, Number(b.cutOrder)]
+        );
+        if (!cutRows.length) return res.status(404).json({ error: `カット${b.cutOrder}が見つかりません` });
+        const gen = await dramaRefreshGeneration(p, cutRows[0].id, Number(b.gi));
+        result = { cutOrder: Number(b.cutOrder), gi: Number(b.gi), status: gen.status, videoUrl: gen.videoUrl || null, note: gen.note || null };
       } else {
         return res.status(400).json({ error: `不明な op: ${b.op}` });
       }
@@ -306,10 +339,9 @@ app.get("/api/drama/inspect/:id", async (req, res) => {
     );
     for (const ep of episodes) {
       const { rows: cuts } = await p.query(
-        `SELECT "order", duration_sec AS "durationSec", length(COALESCE(prompt,'')) AS "promptChars",
+        `SELECT "order", duration_sec AS "durationSec", prompt, narration, subtitle,
                 character_ids AS "characterIds", jsonb_array_length(generations) AS "generationCount",
-                selected_generation_index AS "selectedGenerationIndex",
-                length(COALESCE(narration,'')) AS "narrationChars", subtitle,
+                selected_generation_index AS "selectedGenerationIndex", generations,
                 storyboard_url AS "storyboardUrl", storyboard_crop AS "storyboardCrop"
            FROM drama_cuts WHERE episode_id=$1 ORDER BY "order"`,
         [ep.id]
@@ -7714,10 +7746,10 @@ function dramaTrackedGemini(projectId, kind) {
   };
 }
 
-function dramaRecordSeedanceUsage(projectId, seconds, model) {
+function dramaRecordSeedanceUsage(projectId, seconds, model, kindPrefix = "") {
   const tokens = DRAMA_SEEDANCE_TOKENS_PER_SEC * seconds;
   const costYen = (tokens * DRAMA_SEEDANCE_USD_PER_1M / 1e6) * DRAMA_USD_JPY;
-  dramaRecordUsage({ projectId, provider: "seedance", kind: "video", model, videoSeconds: seconds, costYen });
+  dramaRecordUsage({ projectId, provider: "seedance", kind: kindPrefix + "video", model, videoSeconds: seconds, costYen });
 }
 
 // 絵コンテ用の静止画生成 (Gemini image)。動画 ¥150 を撃つ前に ¥6 で構図確認する用。
@@ -8919,24 +8951,19 @@ app.post("/api/drama/cuts/:id/generate", async (req, res) => {
   }
 });
 
-// 生成タスクの進捗確認 + 完了処理。フロントが数秒おきに叩く。
-//  - succeeded: 動画を GCS に保存 (provider URL は 24h で切れるため)、署名 URL を videoUrl に
-//  - 保存済みで URL が切れた時も、これを叩き直せば署名 URL を再発行する
-app.post("/api/drama/cuts/:id/generations/:gi/refresh", async (req, res) => {
-  const p = getPool();
-  if (!p) return res.status(503).json({ error: "DB not configured" });
-  try {
-    const gi = Number(req.params.gi);
+// 生成タスクの進捗確認 + 完了処理の本体 (ルートと Claude Code 用工程実行の両方から使う)
+async function dramaRefreshGeneration(p, cutId, gi) {
+  {
     const { rows } = await p.query(
       `SELECT id, episode_id AS "episodeId", generations, selected_generation_index AS "selectedGenerationIndex"
          FROM drama_cuts WHERE id=$1`,
-      [req.params.id]
+      [cutId]
     );
-    if (!rows.length) return res.status(404).json({ error: "not found" });
+    if (!rows.length) { const e = new Error("カットが見つかりません"); e.status = 404; throw e; }
     const cut = rows[0];
     const generations = [...(cut.generations || [])];
     const gen = generations[gi];
-    if (!gen) return res.status(404).json({ error: "generation not found" });
+    if (!gen) { const e = new Error("generation not found"); e.status = 404; throw e; }
 
     const signGcs = async (gsUrl) => {
       const [, , bucket, ...rest] = gsUrl.split("/");
@@ -8978,13 +9005,22 @@ app.post("/api/drama/cuts/:id/generations/:gi/refresh", async (req, res) => {
     if (gen.status === "done" && newIndex === -1) newIndex = gi;
     await p.query(
       `UPDATE drama_cuts SET generations=$1, selected_generation_index=$2, updated_at=now() WHERE id=$3`,
-      [JSON.stringify(generations), newIndex, req.params.id]
+      [JSON.stringify(generations), newIndex, cutId]
     );
     await dramaRecomputeState(p, cut.episodeId);
-    res.json({ ok: true, generation: gen, index: gi });
+    return gen;
+  }
+}
+
+app.post("/api/drama/cuts/:id/generations/:gi/refresh", async (req, res) => {
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  try {
+    const gen = await dramaRefreshGeneration(p, req.params.id, Number(req.params.gi));
+    res.json({ ok: true, generation: gen, index: Number(req.params.gi) });
   } catch (err) {
     console.error("[drama] generation refresh", err);
-    res.status(500).json({ error: err.message });
+    res.status(err.status || 500).json({ error: err.message });
   }
 });
 
