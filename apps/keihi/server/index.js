@@ -175,6 +175,60 @@ app.post("/api/drama/inspect/create-from-aozora", async (req, res) => {
   }
 });
 
+// Claude Code 用の工程実行 (debug 予算 ¥1000 の管理下)。
+// アニメ工程 (シリーズ構成 → 脚本 → カット割り → グリッド絵コンテ) を外から回せる。
+// Seedance (動画生成・¥150/カット) は含めない — 高額なので明示の承認が要る。
+// body: { op: "compose_series"|"write_script"|"compose_cuts"|"storyboard_grid",
+//         episodeNumber?, force?, targetDurationSec? }
+app.post("/api/drama/inspect/:id/run", async (req, res) => {
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  if (!genAI) return res.status(503).json({ error: "Gemini not configured" });
+  try {
+    await ensureSchema();
+    const { rows: spent } = await p.query(
+      `SELECT COALESCE(SUM(cost_yen),0)::float AS y FROM drama_api_usage WHERE kind LIKE 'debug%'`
+    );
+    if (spent[0].y >= DRAMA_DEBUG_BUDGET_YEN) {
+      return res.status(403).json({ error: `デバッグ予算 (¥${DRAMA_DEBUG_BUDGET_YEN}) を使い切りました`, spentYen: spent[0].y });
+    }
+    const b = req.body || {};
+    const kindPrefix = "debug_";
+    let result;
+    if (b.op === "compose_series") {
+      const episodes = await dramaRunComposeSeries(p, req.params.id, {
+        targetDurationSec: b.targetDurationSec, force: !!b.force, kindPrefix,
+      });
+      result = { episodeCount: episodes.length, episodes };
+    } else {
+      const { rows: epRows } = await p.query(
+        `SELECT id FROM drama_episodes WHERE project_id=$1 AND number=$2`,
+        [req.params.id, Number(b.episodeNumber)]
+      );
+      if (!epRows.length) return res.status(404).json({ error: `第${b.episodeNumber}話が見つかりません` });
+      const episodeId = epRows[0].id;
+      if (b.op === "write_script") {
+        const script = await dramaRunWriteScript(p, episodeId, { kindPrefix });
+        result = { scriptChars: script.length, scriptHead: script.slice(0, 600) };
+      } else if (b.op === "compose_cuts") {
+        const n = await dramaRunComposeCuts(p, episodeId, { force: !!b.force, kindPrefix });
+        result = { cuts: n };
+      } else if (b.op === "storyboard_grid") {
+        result = await dramaRunStoryboardGrid(p, episodeId, { kindPrefix });
+      } else {
+        return res.status(400).json({ error: `不明な op: ${b.op}` });
+      }
+    }
+    const { rows: spentAfter } = await p.query(
+      `SELECT COALESCE(SUM(cost_yen),0)::float AS y FROM drama_api_usage WHERE kind LIKE 'debug%'`
+    );
+    res.json({ ok: true, op: b.op, ...result, debugBudget: { spentYen: spentAfter[0].y, capYen: DRAMA_DEBUG_BUDGET_YEN } });
+  } catch (err) {
+    console.error("[drama] debug run", err);
+    res.status(err.status || 500).json({ error: err.message });
+  }
+});
+
 // チャット配線の dry-run (公開・read-only・Gemini 課金なし)。
 // 「モデルに実際に何が渡るか」(画像枚数・基準画像・引用・メモ等) を返す。
 // Claude Code が本番の配線をプッシュ後に検証する用。DB への書き込みは一切しない。
@@ -8335,54 +8389,63 @@ app.delete("/api/drama/locations/:id", async (req, res) => {
 
 // ① シリーズ構成: 章一覧から話数割りを AI 提案 → episodes を一括作成。
 // 緩急重視 (1章=1話にしない)。既に話がある場合は force=true で作り直し (既存の話とカットは消える)。
+// シリーズ構成の本体 (ルートと Claude Code 用の工程実行の両方から使う)
+async function dramaRunComposeSeries(p, projectId, { targetDurationSec = 60, force = false, kindPrefix = "" } = {}) {
+  const { rows: projRows } = await p.query(
+    `SELECT title, author, style_guide AS "styleGuide", world_setting AS "worldSetting", ai_notes AS "aiNotes"
+       FROM drama_projects WHERE id=$1`, [projectId]);
+  if (!projRows.length) { const e = new Error("プロジェクトが見つかりません"); e.status = 404; throw e; }
+  const { rows: chapters } = await p.query(
+    `SELECT number, title, length(content) AS "charCount", summary FROM drama_chapters WHERE project_id=$1 ORDER BY number`,
+    [projectId]
+  );
+  if (!chapters.length) { const e = new Error("章がありません。先に原作を取り込んでください"); e.status = 400; throw e; }
+  const { rows: existing } = await p.query(`SELECT COUNT(*)::int AS n FROM drama_episodes WHERE project_id=$1`, [projectId]);
+  if (existing[0].n > 0 && !force) {
+    const e = new Error("既に話があります。作り直す場合は force を指定 (既存の話とカットは消えます)");
+    e.status = 409; throw e;
+  }
+  const episodes = await dramaComposeSeries(dramaTrackedGemini(projectId, kindPrefix + "compose_series"), {
+    title: projRows[0].title, author: projRows[0].author, chapters,
+    targetDurationSec: Number(targetDurationSec) || 60,
+    styleGuide: projRows[0].styleGuide, worldSetting: projRows[0].worldSetting, aiNotes: projRows[0].aiNotes,
+  });
+  if (force) await p.query(`DELETE FROM drama_episodes WHERE project_id=$1`, [projectId]);
+
+  // 出演キャラの自動設定: 割当章の出演 index (章解析の character_names) と
+  // 登録済みキャラを名前で突き合わせる
+  const { rows: chapNames } = await p.query(
+    `SELECT number, character_names AS "characterNames" FROM drama_chapters WHERE project_id=$1`, [projectId]
+  );
+  const namesByChapter = new Map(chapNames.map((c) => [Number(c.number), c.characterNames || []]));
+  const { rows: regChars } = await p.query(`SELECT id, name FROM drama_characters WHERE project_id=$1`, [projectId]);
+  const nameMatch = (a, b) => a && b && (a === b || a.includes(b) || b.includes(a));
+
+  for (const e of episodes) {
+    const chapterCast = new Set();
+    for (const n of e.chapterNumbers) for (const nm of (namesByChapter.get(Number(n)) || [])) chapterCast.add(nm);
+    const appearing = regChars.filter((c) => [...chapterCast].some((nm) => nameMatch(c.name, nm))).map((c) => String(c.id));
+    await p.query(
+      `INSERT INTO drama_episodes (project_id, number, title, chapter_numbers, pacing, focus, appearing_character_ids)
+       VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+      [projectId, e.number, e.title, JSON.stringify(e.chapterNumbers), e.pacing, e.focus, JSON.stringify(appearing)]
+    );
+  }
+  return episodes;
+}
+
 app.post("/api/drama/projects/:id/compose-series", async (req, res) => {
   const p = getPool();
   if (!p) return res.status(503).json({ error: "DB not configured" });
   if (!genAI) return res.status(503).json({ error: "Gemini not configured" });
   try {
-    const { rows: projRows } = await p.query(
-      `SELECT title, author, style_guide AS "styleGuide", world_setting AS "worldSetting", ai_notes AS "aiNotes"
-         FROM drama_projects WHERE id=$1`, [req.params.id]);
-    if (!projRows.length) return res.status(404).json({ error: "not found" });
-    const { rows: chapters } = await p.query(
-      `SELECT number, title, length(content) AS "charCount", summary FROM drama_chapters WHERE project_id=$1 ORDER BY number`,
-      [req.params.id]
-    );
-    if (!chapters.length) return res.status(400).json({ error: "章がありません。先に原作を取り込んでください" });
-    const { rows: existing } = await p.query(`SELECT COUNT(*)::int AS n FROM drama_episodes WHERE project_id=$1`, [req.params.id]);
-    if (existing[0].n > 0 && !req.body?.force) {
-      return res.status(409).json({ error: "既に話があります。作り直す場合は force を指定 (既存の話とカットは消えます)" });
-    }
-    const episodes = await dramaComposeSeries(dramaTrackedGemini(req.params.id, "compose_series"), {
-      title: projRows[0].title, author: projRows[0].author, chapters,
-      targetDurationSec: Number(req.body?.targetDurationSec) || 60,
-      styleGuide: projRows[0].styleGuide, worldSetting: projRows[0].worldSetting, aiNotes: projRows[0].aiNotes,
+    const episodes = await dramaRunComposeSeries(p, req.params.id, {
+      targetDurationSec: req.body?.targetDurationSec, force: !!req.body?.force,
     });
-    if (req.body?.force) await p.query(`DELETE FROM drama_episodes WHERE project_id=$1`, [req.params.id]);
-
-    // 出演キャラの自動設定: 割当章の出演 index (章解析の character_names) と
-    // 登録済みキャラを名前で突き合わせる
-    const { rows: chapNames } = await p.query(
-      `SELECT number, character_names AS "characterNames" FROM drama_chapters WHERE project_id=$1`, [req.params.id]
-    );
-    const namesByChapter = new Map(chapNames.map((c) => [Number(c.number), c.characterNames || []]));
-    const { rows: regChars } = await p.query(`SELECT id, name FROM drama_characters WHERE project_id=$1`, [req.params.id]);
-    const nameMatch = (a, b) => a && b && (a === b || a.includes(b) || b.includes(a));
-
-    for (const e of episodes) {
-      const chapterCast = new Set();
-      for (const n of e.chapterNumbers) for (const nm of (namesByChapter.get(Number(n)) || [])) chapterCast.add(nm);
-      const appearing = regChars.filter((c) => [...chapterCast].some((nm) => nameMatch(c.name, nm))).map((c) => String(c.id));
-      await p.query(
-        `INSERT INTO drama_episodes (project_id, number, title, chapter_numbers, pacing, focus, appearing_character_ids)
-         VALUES ($1,$2,$3,$4,$5,$6,$7)`,
-        [req.params.id, e.number, e.title, JSON.stringify(e.chapterNumbers), e.pacing, e.focus, JSON.stringify(appearing)]
-      );
-    }
     res.json({ ok: true, episodeCount: episodes.length, episodes });
   } catch (err) {
     console.error("[drama] compose-series", err);
-    res.status(500).json({ error: err.message });
+    res.status(err.status || 500).json({ error: err.message });
   }
 });
 
@@ -8481,21 +8544,20 @@ ${charDesc ? `登場人物: ${charDesc}\n` : ""}${loc ? `場所: ${loc.name} (${
 // 1 枚 ¥6 で 9 コマ + 同一生成内なのでコマ間の絵柄・キャラが揃う (バラ生成の絵柄ブレ対策)。
 // 9:16 のコマ × 3×3 = ページ全体も 9:16 になるので生成も素直。
 // 各カットには ページ URL + 自分のコマ位置 (storyboard_crop) を保存し、UI 側で切り出し表示する
-app.post("/api/drama/episodes/:id/storyboard-grid", async (req, res) => {
-  const p = getPool();
-  if (!p) return res.status(503).json({ error: "DB not configured" });
-  try {
+// グリッド絵コンテの本体 (ルートと Claude Code 用の工程実行の両方から使う)
+async function dramaRunStoryboardGrid(p, episodeId, { kindPrefix = "" } = {}) {
+  {
     const { rows: epRows } = await p.query(
-      `SELECT id, number, project_id AS "projectId" FROM drama_episodes WHERE id=$1`, [req.params.id]
+      `SELECT id, number, project_id AS "projectId" FROM drama_episodes WHERE id=$1`, [episodeId]
     );
-    if (!epRows.length) return res.status(404).json({ error: "not found" });
+    if (!epRows.length) { const e = new Error("話が見つかりません"); e.status = 404; throw e; }
     const episode = epRows[0];
     const { rows: cuts } = await p.query(
       `SELECT id, "order", prompt, character_ids AS "characterIds", location_id AS "locationId"
          FROM drama_cuts WHERE episode_id=$1 ORDER BY "order"`,
-      [req.params.id]
+      [episodeId]
     );
-    if (!cuts.length) return res.status(400).json({ error: "カットがありません (先にカット割りを)" });
+    if (!cuts.length) { const e = new Error("カットがありません (先にカット割りを)"); e.status = 400; throw e; }
     const { rows: projRows } = await p.query(
       `SELECT style_guide AS "styleGuide", style_ref_images AS "styleRefImages" FROM drama_projects WHERE id=$1`,
       [episode.projectId]
@@ -8539,7 +8601,7 @@ ${panels.join("\n")}`;
         aspectRatio: "9:16",
         refNote: "参照画像は絵柄・キャラクターデザインの基準。グリッドの各コマにこのデザインを統一して使う",
       });
-      dramaRecordUsage({ projectId: episode.projectId, provider: "gemini", kind: "storyboard_grid", model: DRAMA_GEMINI_IMAGE_MODEL, costYen: DRAMA_GEMINI_IMAGE_YEN });
+      dramaRecordUsage({ projectId: episode.projectId, provider: "gemini", kind: kindPrefix + "storyboard_grid", model: DRAMA_GEMINI_IMAGE_MODEL, costYen: DRAMA_GEMINI_IMAGE_YEN });
       let url;
       if (storage && RECEIPTS_BUCKET) {
         const ext = img.mimeType.includes("jpeg") ? "jpg" : "png";
@@ -8557,10 +8619,19 @@ ${panels.join("\n")}`;
           [url, JSON.stringify(crop), pageCuts[i].id]);
       }
     }
-    res.json({ ok: true, pages: pageUrls.length, pageUrls, cuts: cuts.length });
+    return { pages: pageUrls.length, pageUrls, cuts: cuts.length };
+  }
+}
+
+app.post("/api/drama/episodes/:id/storyboard-grid", async (req, res) => {
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  try {
+    const result = await dramaRunStoryboardGrid(p, req.params.id);
+    res.json({ ok: true, ...result });
   } catch (err) {
     console.error("[drama] storyboard grid", err);
-    res.status(500).json({ error: err.message });
+    res.status(err.status || 500).json({ error: err.message });
   }
 });
 
@@ -8980,7 +9051,7 @@ async function dramaCastFromChapters(p, projectId, chapterNumbers) {
 }
 
 // 脚本生成の本体 (ルートとチャット ACTIONS の両方から使う)
-async function dramaRunWriteScript(p, episodeId) {
+async function dramaRunWriteScript(p, episodeId, { kindPrefix = "" } = {}) {
   const { rows: epRows } = await p.query(
     `SELECT id, project_id AS "projectId", number, title, target_duration_sec AS "targetDurationSec",
             chapter_numbers AS "chapterNumbers", pacing, focus
@@ -9001,7 +9072,7 @@ async function dramaRunWriteScript(p, episodeId) {
   );
   const { rows: characters } = await p.query(`SELECT id, name FROM drama_characters WHERE project_id=$1`, [episode.projectId]);
   const chapterTexts = chapterRows.map((c) => `【第${c.number}章 ${c.title}】\n${c.content}`).join("\n\n");
-  const script = await dramaWriteScript(dramaTrackedGemini(episode.projectId, "write_script"), {
+  const script = await dramaWriteScript(dramaTrackedGemini(episode.projectId, kindPrefix + "write_script"), {
     title: projRows[0].title, author: projRows[0].author, styleGuide: projRows[0].styleGuide,
     worldSetting: projRows[0].worldSetting, aiNotes: projRows[0].aiNotes,
     episode, chapterTexts, characters,
@@ -9011,7 +9082,7 @@ async function dramaRunWriteScript(p, episodeId) {
 }
 
 // カット割り生成の本体 (ルートとチャット ACTIONS の両方から使う)
-async function dramaRunComposeCuts(p, episodeId, { force = false } = {}) {
+async function dramaRunComposeCuts(p, episodeId, { force = false, kindPrefix = "" } = {}) {
   const { rows: epRows } = await p.query(
     `SELECT id, project_id AS "projectId", number, title, target_duration_sec AS "targetDurationSec", pacing, focus, script
        FROM drama_episodes WHERE id=$1`,
@@ -9031,7 +9102,7 @@ async function dramaRunComposeCuts(p, episodeId, { force = false } = {}) {
   );
   const { rows: characters } = await p.query(`SELECT id, name FROM drama_characters WHERE project_id=$1`, [episode.projectId]);
   const { rows: locations } = await p.query(`SELECT id, name FROM drama_locations WHERE project_id=$1`, [episode.projectId]);
-  const cuts = await dramaComposeCuts(dramaTrackedGemini(episode.projectId, "compose_cuts"), {
+  const cuts = await dramaComposeCuts(dramaTrackedGemini(episode.projectId, kindPrefix + "compose_cuts"), {
     title: projRows[0].title, styleGuide: projRows[0].styleGuide,
     worldSetting: projRows[0].worldSetting, aiNotes: projRows[0].aiNotes,
     episode, script: episode.script, characters, locations,
