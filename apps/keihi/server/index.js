@@ -308,7 +308,8 @@ app.get("/api/drama/inspect/:id", async (req, res) => {
         `SELECT "order", duration_sec AS "durationSec", length(COALESCE(prompt,'')) AS "promptChars",
                 character_ids AS "characterIds", jsonb_array_length(generations) AS "generationCount",
                 selected_generation_index AS "selectedGenerationIndex",
-                length(COALESCE(narration,'')) AS "narrationChars", subtitle
+                length(COALESCE(narration,'')) AS "narrationChars", subtitle,
+                storyboard_url AS "storyboardUrl", storyboard_crop AS "storyboardCrop"
            FROM drama_cuts WHERE episode_id=$1 ORDER BY "order"`,
         [ep.id]
       );
