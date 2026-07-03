@@ -26,6 +26,7 @@ import { analyzeWorkSetup as dramaAnalyzeWorkSetup, searchAozora as dramaSearchA
 import { composeSeries as dramaComposeSeries, writeScript as dramaWriteScript, composeCuts as dramaComposeCuts } from "./drama-lib/gemini.js";
 import { reviewGeneratedImage as dramaReviewImage } from "./drama-lib/gemini.js";
 import { searchWebImages as dramaSearchWebImages } from "./drama-lib/websearch.js";
+import { splitGridImage as dramaSplitGridImage } from "./drama-lib/gridsplit.js";
 import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -8614,59 +8615,46 @@ ${panels.join("\n")}`;
         if ((c.referenceImages || []).length) refUrls.push(c.referenceImages[0].url);
       }
       const refParts = await dramaFetchImagePartsSafe(refUrls, 4);
-      // モデルは 3×3 指定でも 3×4 等で描くことがある (実測)。生成後に実際の行列を
-      // 視覚検出して切り出しに使う。コマ数がカット数に足りなければ 1 回だけ作り直す
-      const detectLayout = async (image) => {
-        // flash-lite は行数を数え間違えた実績あり (15コマを 3×3 と回答) → flash +
-        // 総コマ数とのクロスチェックで精度を上げる。検出不能なら null (= 切り出さない)
-        try {
-          const { result } = await dramaTrackedGemini(episode.projectId, kindPrefix + "grid_layout")(
-            ["この画像は絵コンテのグリッドページです。コマ (パネル) の並びを注意深く数えてください。\n" +
-             "1. まず縦方向に「行」がいくつあるか (上から下へ)\n2. 次に横方向に「列」がいくつあるか (左から右へ)\n" +
-             '3. 総コマ数\nJSON だけで返す: {"rows":N,"cols":N,"panels":N}',
-             { inlineData: { data: image.data, mimeType: image.mimeType } }],
-            { primaryModel: "gemini-2.5-flash", maxOutputTokens: 500, jsonMode: true }
-          );
-          const t = (result.response.text() || "").trim();
-          const j = JSON.parse(t.slice(t.indexOf("{"), t.lastIndexOf("}") + 1));
-          if (Number.isInteger(j.rows) && Number.isInteger(j.cols) && j.rows >= 1 && j.cols >= 1 &&
-              j.rows * j.cols <= 30 && j.rows * j.cols === Number(j.panels)) {
-            return { rows: j.rows, cols: j.cols };
-          }
-          console.warn(`[drama] grid layout 検出が不整合: ${t.slice(0, 120)}`);
-        } catch (e) { console.warn("[drama] grid layout detect failed:", e.message); }
-        return null; // 自信が持てない時は切り出さずページ全体を表示 (ズレた切り出しより安全)
-      };
-      let img, layout;
+      // モデルは 3×3 指定でも 12/15/18 コマ等で描いてくる (実測・プロンプトでは直らない)。
+      // 生成後に白い罫線をピクセル検出して実際に分割し、各カットにコマ単体の画像を持たせる。
+      // コマ数がカット数に足りない / 検出不能なら 1 回だけ作り直し、それでもダメなら
+      // ページ全体をそのまま各カットに載せる (安全側)
+      let img, split = null;
       for (let attempt = 0; attempt < 2; attempt++) {
         img = await dramaGenerateImage(prompt, refParts, {
           aspectRatio: "9:16",
           refNote: "参照画像は絵柄・キャラクターデザインの基準。グリッドの各コマにこのデザインを統一して使う",
         });
         dramaRecordUsage({ projectId: episode.projectId, provider: "gemini", kind: kindPrefix + "storyboard_grid", model: DRAMA_GEMINI_IMAGE_MODEL, costYen: DRAMA_GEMINI_IMAGE_YEN });
-        layout = await detectLayout(img);
-        if (layout && layout.rows * layout.cols >= pageCuts.length) break;
-        console.log(`[drama] grid layout ${layout ? layout.rows + "x" + layout.cols : "検出不能"} < ${pageCuts.length}コマ、作り直し (attempt ${attempt + 1})`);
+        try {
+          split = await dramaSplitGridImage(Buffer.from(img.data, "base64"));
+        } catch (e) { console.warn("[drama] grid split failed:", e.message); split = null; }
+        if (split && split.panels.length >= pageCuts.length) break;
+        console.log(`[drama] grid split ${split ? split.panels.length + "コマ" : "検出不能"} < ${pageCuts.length}カット、作り直し (attempt ${attempt + 1})`);
       }
-      let url;
-      if (storage && RECEIPTS_BUCKET) {
-        const ext = img.mimeType.includes("jpeg") ? "jpg" : "png";
-        const key = `drama/storyboards/grid/${episode.id}/${Date.now()}_p${pi + 1}.${ext}`;
-        await storage.bucket(RECEIPTS_BUCKET).file(key).save(Buffer.from(img.data, "base64"), { contentType: img.mimeType, resumable: false });
-        [url] = await storage.bucket(RECEIPTS_BUCKET).file(key)
-          .getSignedUrl({ action: "read", expires: Date.now() + 7 * 24 * 60 * 60 * 1000 });
-      } else {
-        url = `data:${img.mimeType};base64,${img.data}`;
-      }
-      pageUrls.push(url);
-      const capacity = layout ? layout.rows * layout.cols : 0;
+      const saveImage = async (buffer, contentType, key) => {
+        if (storage && RECEIPTS_BUCKET) {
+          await storage.bucket(RECEIPTS_BUCKET).file(key).save(buffer, { contentType, resumable: false });
+          const [u] = await storage.bucket(RECEIPTS_BUCKET).file(key)
+            .getSignedUrl({ action: "read", expires: Date.now() + 7 * 24 * 60 * 60 * 1000 });
+          return u;
+        }
+        return `data:${contentType};base64,${buffer.toString("base64")}`;
+      };
+      const ts = Date.now();
+      const ext = img.mimeType.includes("jpeg") ? "jpg" : "png";
+      const pageUrl = await saveImage(Buffer.from(img.data, "base64"), img.mimeType,
+        `drama/storyboards/grid/${episode.id}/${ts}_p${pi + 1}.${ext}`);
+      pageUrls.push(pageUrl);
+      const usable = split && split.panels.length >= pageCuts.length;
       for (let i = 0; i < pageCuts.length; i++) {
-        // 検出した実レイアウトで切り出す。検出不能・収まらないコマはページ全体を表示
-        const crop = layout && i < capacity
-          ? { rows: layout.rows, cols: layout.cols, row: Math.floor(i / layout.cols), col: i % layout.cols, page: pi + 1 }
-          : null;
-        await p.query(`UPDATE drama_cuts SET storyboard_url=$1, storyboard_crop=$2, updated_at=now() WHERE id=$3`,
-          [url, crop ? JSON.stringify(crop) : null, pageCuts[i].id]);
+        // 分割できたらコマ単体を各カットの絵コンテに。できなければページ全体で我慢
+        const cutUrl = usable
+          ? await saveImage(split.panels[i], "image/png",
+              `drama/storyboards/grid/${episode.id}/${ts}_p${pi + 1}_c${pageCuts[i].order}.png`)
+          : pageUrl;
+        await p.query(`UPDATE drama_cuts SET storyboard_url=$1, storyboard_crop=NULL, updated_at=now() WHERE id=$2`,
+          [cutUrl, pageCuts[i].id]);
       }
     }
     // 端数カットは単体絵コンテ (¥6/枚) で生成

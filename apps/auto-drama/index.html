@@ -626,7 +626,7 @@ const TEMPLATE = `
         <button @click="generateStoryboardGrid" :disabled="gridding">
           {{ gridding ? 'グリッド生成中… (1ページ≈30秒)' : ('絵コンテ一括 (3×3グリッド・' + Math.ceil(currentEpisode.cuts.length / 9) + 'ページ ≈¥' + (Math.ceil(currentEpisode.cuts.length / 9) * 6) + ')') }}</button>
       </div>
-      <div class="card-sub" style="padding:0 16px;" v-if="currentEpisode.cuts.length">9カット=1枚で生成するのでコマ間の絵柄が揃い、1コマあたり ≈¥0.7。コマをタップすると全体ページ表示</div>
+      <div class="card-sub" style="padding:0 16px;" v-if="currentEpisode.cuts.length">9カット=1枚で生成してコマごとに自動分割。絵柄が揃って1コマ ≈¥0.7 (端数カットは単体生成)</div>
     </div>
     <div class="list">
       <div v-for="(cut, idx) in currentEpisode.cuts" :key="cut.id" class="card" :class="{ open: cutOpenId === cut.id }">
