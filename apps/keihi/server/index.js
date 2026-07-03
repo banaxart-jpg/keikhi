@@ -9548,6 +9548,7 @@ async function dramaProcessChat(p, { projectId, episodeId, message, imageUrls = 
       let img = null;
       let attempts = 0;
       let editInstruction = null; // 2回目以降は「前の画像の問題点だけ直す」編集モード (絵柄が保たれ収束が速い)
+      let remakeReason = "";      // 最初に NG になった理由 (ユーザーに見せる)
       const MAX_REMAKES = 2; // 初回 + 作り直し2回 = 最大3生成
       while (true) {
         if (editInstruction && img) {
@@ -9570,20 +9571,24 @@ async function dramaProcessChat(p, { projectId, episodeId, message, imageUrls = 
         if (attempts > MAX_REMAKES) break;
         try {
           const review = await dramaReviewImage(dramaTrackedGemini(projectId, K + "image_review"), {
-            prompt: imgPrompt, styleGuide: projRows[0].styleGuide,
+            prompt: imgPrompt,
+            userRequest: (message || "").slice(0, 400),
+            styleGuide: projRows[0].styleGuide,
             imageBase64: img.data, mimeType: img.mimeType,
             styleRefParts,
+            baseImagePart: editBaseParts[0] || null,
           });
           if (review.ok) break;
           console.log(`[drama] image self-review NG (attempt ${attempts}): ${review.problems}`);
-          editInstruction = [review.problems, review.revisedPrompt].filter(Boolean).join(" / ");
+          if (!remakeReason) remakeReason = review.problems;
+          editInstruction = review.fixInstruction || review.problems;
         } catch (e) {
           console.warn("[drama] image review failed, keeping image:", e.message);
           break;
         }
       }
-      if (attempts > 1) reply += `\n(画像を自己チェックして ${attempts - 1} 回作り直しました)`;
-      imageRuns.push({ mode: isEdit ? "編集" : "生成", refImagesUsed: refParts.length, attempts, editBaseFound: !isEdit || editBaseParts.length > 0 });
+      if (attempts > 1) reply += `\n(自己チェック:「${remakeReason.slice(0, 120)}」を直すため ${attempts - 1} 回作り直しました)`;
+      imageRuns.push({ mode: isEdit ? "編集" : "生成", refImagesUsed: refParts.length, attempts, remakeReason, editBaseFound: !isEdit || editBaseParts.length > 0 });
       if (storage && RECEIPTS_BUCKET) {
         const ext = img.mimeType.includes("jpeg") ? "jpg" : "png";
         const key = `drama/chat/${projectId}/${Date.now()}_${generatedImages.length}.${ext}`;

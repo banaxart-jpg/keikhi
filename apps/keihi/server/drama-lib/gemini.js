@@ -507,34 +507,49 @@ JSON のみで返す (前置き禁止):
   }));
 }
 
-// 生成画像のセルフレビュー: 意図 (プロンプト・絵柄) と合っているか AI 自身が見て判定。
-// NG なら修正版プロンプトを返す (呼び出し側が最大2回まで作り直す)。
-export async function reviewGeneratedImage(callGemini, { prompt, styleGuide, imageBase64, mimeType, styleRefParts = [] }) {
-  const ask = `${styleRefParts.length ? `最初の ${styleRefParts.length} 枚は「作画基準画像」(目指すべき絵柄の見本)。最後の 1 枚が今回の生成結果です。` : "添付は今回の生成結果です。"}
-この生成結果が次の指示と意図どおりか審査してください。
+// 生成画像のセルフレビュー: 「ユーザーの依頼」を正として AI 自身が見て判定。
+// NG なら前の画像への具体的な修正指示を返す (呼び出し側が編集モードで最大2回作り直す)。
+// 意味のない作り直しを避けるため:
+//  - 判定の正はユーザーの依頼文 (AI が組んだ生成指示ではなく)
+//  - 編集の時は元画像も渡して「頼まれた変更以外が変わってないか」を見る
+//  - 絵柄はタッチ・線・色調だけ (基準画像がキャラシートで生成物が小物、は正常)
+export async function reviewGeneratedImage(callGemini, { prompt, userRequest, styleGuide, imageBase64, mimeType, styleRefParts = [], baseImagePart = null }) {
+  const layout = [];
+  if (baseImagePart) layout.push("最初の 1 枚は「編集前の元画像」");
+  if (styleRefParts.length) layout.push(`${baseImagePart ? "続く" : "最初の"} ${styleRefParts.length} 枚は「作画基準画像」(絵柄の見本)`);
+  const ask = `${layout.length ? layout.join("、") + "、" : ""}最後の 1 枚が今回の生成結果です。
+この生成結果を審査してください。
 
-生成指示: ${prompt}
+${userRequest ? `ユーザーの依頼 (これが正): ${userRequest}\n` : ""}生成指示: ${prompt}
 ${styleGuide ? `絵柄方針: ${styleGuide}` : ""}
 
-チェック観点: 指示した内容が描けているか / ${styleRefParts.length ? "基準画像の絵柄・タッチ・線の質感に寄っているか / " : ""}絵柄方針と合っているか / 破綻 (手・顔・文字化け等) がないか / 指示していないのにキャラクターシート風のレイアウト・注釈文字・複数キャラの一覧になっていないか (1 シーンの画として成立しているか)。
+チェック観点 (重要な順):
+1. ユーザーの依頼が満たされているか。特に「頼まれていない要素 (キャラクター・背景・
+   文字・別の小物) が勝手に入っていないか」「頼まれた被写体・変更が反映されているか」
+${baseImagePart ? `2. 編集前の元画像のデザイン・構図・キャラが保たれているか (指示された変更以外が
+   変わっていないか)
+` : ""}3. 破綻 (手・顔・文字化け等) / キャラクターシート風のレイアウト・注釈文字・
+   複数ポーズ一覧になっていないか
+4. 絵柄はタッチ・線・色調だけ見る。被写体が基準画像と違うのは問題にしない
+   (小物単体の依頼で基準がキャラ画像、など)
 
 JSON のみで返す (前置き禁止):
 {
   "ok": true か false,
-  "problems": "NG の場合、何が問題か 1-2 文",
-  "revisedPrompt": "NG の場合、問題を直した生成プロンプト全文 (OK なら空文字)"
+  "problems": "NG の場合、ユーザーの依頼に対して何がダメか 1-2 文 (ユーザーにそのまま見せる文)",
+  "fixInstruction": "NG の場合、前の画像への具体的な修正指示 1-2 文 (例: キャラクターを消してのぼり単体にする / 髭は残したまま唇だけ薄くする)"
 }
-軽微な違いは ok=true でよい。明らかに意図とズレている・破綻している時だけ false。`;
+ユーザーが見て不満に思うレベルの時だけ false。絵柄の軽微な違い・好みの範囲は ok=true。`;
   const { result } = await callGemini(
-    [ask, ...styleRefParts, { inlineData: { data: imageBase64, mimeType: mimeType || "image/png" } }],
+    [ask, ...(baseImagePart ? [baseImagePart] : []), ...styleRefParts, { inlineData: { data: imageBase64, mimeType: mimeType || "image/png" } }],
     { primaryModel: "gemini-2.5-flash", maxOutputTokens: 4000, jsonMode: true }
   );
   const j = parseJsonLoose((result.response.text() || "").trim());
-  if (!j) return { ok: true, problems: "", revisedPrompt: "" }; // 審査不能なら作り直さない
+  if (!j) return { ok: true, problems: "", fixInstruction: "" }; // 審査不能なら作り直さない
   return {
     ok: j.ok !== false,
     problems: String(j.problems || "").slice(0, 300),
-    revisedPrompt: String(j.revisedPrompt || "").slice(0, 1000),
+    fixInstruction: String(j.fixInstruction || j.revisedPrompt || "").slice(0, 500),
   };
 }
 
