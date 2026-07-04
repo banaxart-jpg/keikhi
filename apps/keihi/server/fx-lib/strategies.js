@@ -189,6 +189,100 @@ const carry_hold = {
   },
 };
 
+// ─── 戦略 6: Wemof (BB±3σ 平均回帰スキャル) ───
+// わっきゃい氏の手法「Wemof」の機械化。BB(20, ±3σ) を突き抜けた「行き過ぎ」の
+// 翌足で勢い低下 (実体縮小・高安更新なし) を確認してから逆張り。
+// 想定運用: granularity M5、利確 1-2 pips / 損切り 3-8 pips (バックテスト設定側で指定)。
+// 本家の「説明のつく動きには乗らない」は次の機械近似で再現:
+//  - 直近 N 本の高値/安値ブレイクで説明がつくスパイク → skip
+//  - キリ番 (.00/.50) 付近への到達で説明がつく → skip
+//  - 翌足がまだ高安更新中 (バンドウォーク候補) → skip
+//  - EMA50 の傾きが強い (上位足強トレンドの代理) → skip
+// 指標前後 30 分・スプレッド拡大の回避はローソクデータに無いので運用側 (稼働時間) で制御。
+// ⚠ 利幅 1-2 pips に対して round-trip cost ≈1 pip が重い構造。バックテストの
+//   cost_pips を必ず現実値にして評価すること (勝率 8 割超えないと期待値が出ない)。
+function emaSlopePips(closes, pip, period = 50, span = 12) {
+  const e = ema(closes, period);
+  const a = e[e.length - 1], b = e[e.length - 1 - span];
+  return (a != null && b != null) ? (a - b) / pip : 0;
+}
+
+const wemof = {
+  name: "Wemof (BB3σ 逆張りスキャル)",
+  description: "BB±3σ 突き抜け + RSI 極値 + 翌足の勢い低下で逆張り。M5・利確1-2pips想定。ブレイク/キリ番/加速中/強トレンドはスキップ。",
+  defaultParams: {
+    period: 20, mult: 3.0, rsi_period: 14, oversold: 30, overbought: 70,
+    body_shrink: 0.8, breakout_lookback: 96, kiriban_pips: 5,
+    max_trend_pips: 12, min_band_pips: 4, conf_base: 0.7,
+  },
+  paramSchema: [
+    { key: "period", label: "BB 期間", min: 10, max: 60, step: 1 },
+    { key: "mult", label: "σ 倍率", min: 2.0, max: 4.0, step: 0.1 },
+    { key: "rsi_period", label: "RSI 期間", min: 5, max: 30, step: 1 },
+    { key: "oversold", label: "RSI 売られ過ぎ", min: 10, max: 40, step: 1 },
+    { key: "overbought", label: "RSI 買われ過ぎ", min: 60, max: 90, step: 1 },
+    { key: "body_shrink", label: "実体縮小率 (翌足/スパイク)", min: 0.3, max: 1.0, step: 0.05 },
+    { key: "breakout_lookback", label: "ブレイク判定の遡り本数", min: 12, max: 288, step: 12 },
+    { key: "kiriban_pips", label: "キリ番回避幅 (pips)", min: 0, max: 20, step: 1 },
+    { key: "max_trend_pips", label: "EMA50 傾き上限 (pips/12本)", min: 0, max: 50, step: 1 },
+    { key: "min_band_pips", label: "BB 幅の下限 (pips)", min: 0, max: 30, step: 0.5 },
+    { key: "conf_base", label: "基本 confidence", min: 0.5, max: 0.95, step: 0.05 },
+  ],
+  decide(candles, params, instrument) {
+    const p = { ...wemof.defaultParams, ...params };
+    const need = Math.max(p.period, p.rsi_period + 1, p.breakout_lookback + 2, 50 + 13);
+    const n = candles.length;
+    if (n < need) return pass("初期化中");
+    const closes = candles.map((c) => c.c);
+    const bb = bollingerBands(closes, p.period, p.mult);
+    const r = rsi(closes, p.rsi_period);
+    const pip = pipSize(instrument);
+    const spike = candles[n - 2];   // 行き過ぎた足
+    const confirm = candles[n - 1]; // 勢い低下を確認するシグナル足
+    const bbS = bb[n - 2];
+    const rsiS = r[n - 2];
+    if (!bbS || rsiS == null) return pass("指標初期化中");
+
+    // σ≈0 の閑散相場では ±3σ がノイズ幅になる → バンド幅の下限で門前払い
+    if ((bbS.upper - bbS.lower) / pip < p.min_band_pips) {
+      return pass(`BB 幅 ${((bbS.upper - bbS.lower) / pip).toFixed(1)} pips < ${p.min_band_pips} (閑散相場)`);
+    }
+    const body = (c) => Math.abs(c.c - c.o);
+    const shrink = body(confirm) <= body(spike) * p.body_shrink;
+    // キリ番 (.00/.50) までの距離 (pips)
+    const kiriDist = (price) => {
+      const grid = pip * 50;
+      const m = ((price % grid) + grid) % grid;
+      return Math.min(m, grid - m) / pip;
+    };
+    const trend = emaSlopePips(closes, pip);
+
+    if (spike.h > bbS.upper && rsiS >= p.overbought) {
+      if (!shrink) return pass("翌足の実体が縮小してない (勢い継続)");
+      if (confirm.h > spike.h) return pass("翌足がまだ高値更新中 (バンドウォーク候補)");
+      const prevHigh = Math.max(...candles.slice(n - 2 - p.breakout_lookback, n - 2).map((c) => c.h));
+      if (spike.h > prevHigh) return pass(`直近${p.breakout_lookback}本の高値ブレイク (説明のつく動き)`);
+      if (kiriDist(spike.h) < p.kiriban_pips) return pass("キリ番付近への到達 (説明のつく動き)");
+      if (trend > p.max_trend_pips) return pass(`上昇トレンドが強い (EMA50 +${trend.toFixed(1)} pips/12本)`);
+      const excess = (spike.h - bbS.upper) / pip;
+      const conf = Math.min(0.95, p.conf_base + Math.min(0.2, excess / 20) + Math.min(0.05, (rsiS - p.overbought) / 200));
+      return { decision: "SHORT", confidence: conf, reasoning: `+3σ超え ${excess.toFixed(1)} pips / RSI ${rsiS.toFixed(0)} / 翌足で勢い低下 → 平均回帰狙い` };
+    }
+    if (spike.l < bbS.lower && rsiS <= p.oversold) {
+      if (!shrink) return pass("翌足の実体が縮小してない (勢い継続)");
+      if (confirm.l < spike.l) return pass("翌足がまだ安値更新中 (バンドウォーク候補)");
+      const prevLow = Math.min(...candles.slice(n - 2 - p.breakout_lookback, n - 2).map((c) => c.l));
+      if (spike.l < prevLow) return pass(`直近${p.breakout_lookback}本の安値ブレイク (説明のつく動き)`);
+      if (kiriDist(spike.l) < p.kiriban_pips) return pass("キリ番付近への到達 (説明のつく動き)");
+      if (trend < -p.max_trend_pips) return pass(`下降トレンドが強い (EMA50 ${trend.toFixed(1)} pips/12本)`);
+      const excess = (bbS.lower - spike.l) / pip;
+      const conf = Math.min(0.95, p.conf_base + Math.min(0.2, excess / 20) + Math.min(0.05, (p.oversold - rsiS) / 200));
+      return { decision: "LONG", confidence: conf, reasoning: `-3σ超え ${excess.toFixed(1)} pips / RSI ${rsiS.toFixed(0)} / 翌足で勢い低下 → 平均回帰狙い` };
+    }
+    return pass("±3σ 到達なし (または RSI 極値未達)");
+  },
+};
+
 function pass(reason) {
   return { decision: "PASS", confidence: 0, reasoning: reason || "" };
 }
@@ -197,6 +291,7 @@ export const STRATEGIES = {
   ema_crossover,
   rsi_mean_revert,
   bb_breakout,
+  wemof,
   carry_hold,
   ai_vision,
 };
