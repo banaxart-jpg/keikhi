@@ -126,7 +126,8 @@ body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); 
 .input-row input.name { flex: 1; min-width: 0; }
 .input-row .qty { width: 64px; text-align: center; }
 .input-row input.unit, .input-row select.unit { width: 70px; text-align: center; font-size: 13px; }
-.input-row select.unit {
+/* セレクトは qty / unit 共通で input と同じ neumorphic に (ネイティブの白い楕円を消す) */
+.input-row select {
   padding: 12px 8px; border: none; border-radius: 22px; font-size: 13px;
   font-family: inherit; color: var(--text); background: var(--bg);
   box-shadow: inset 4px 4px 10px var(--sd), inset -3px -3px 8px var(--sl);
