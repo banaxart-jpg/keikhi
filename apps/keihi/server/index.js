@@ -1043,10 +1043,13 @@ async function ensureSchema() {
         answer TEXT NOT NULL DEFAULT '',
         created_by TEXT,
         answered_by TEXT,
+        ack_sig TEXT,
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       )
     `);
+    // 既存テーブル向け: 「確認済み」署名列 (回答の未読判定用)
+    await p.query("ALTER TABLE sekkei_questions ADD COLUMN IF NOT EXISTS ack_sig TEXT");
     // yado: Beds24 予約のローカルキャッシュ + 同期メタ
     await p.query(`
       CREATE TABLE IF NOT EXISTS yado_bookings (
@@ -7733,6 +7736,7 @@ app.get("/api/sekkei", async (req, res) => {
       `SELECT id, title, body, status, pins, answer,
               (image_data IS NOT NULL) AS "hasImage",
               created_by AS "createdBy", answered_by AS "answeredBy",
+              ack_sig AS "ackSig",
               created_at AS "createdAt", updated_at AS "updatedAt"
          FROM sekkei_questions
         ORDER BY updated_at DESC, id DESC LIMIT 500`
@@ -7794,6 +7798,7 @@ app.put("/api/sekkei/:id", async (req, res) => {
          pins   = COALESCE($5::jsonb, pins),
          answer = COALESCE($6, answer),
          answered_by = CASE WHEN $7 THEN $8 ELSE answered_by END,
+         ack_sig = COALESCE($9, ack_sig),
          updated_at = NOW()
        WHERE id = $1
        RETURNING id, updated_at AS "updatedAt"`,
@@ -7802,6 +7807,7 @@ app.put("/api/sekkei/:id", async (req, res) => {
         b.title ?? null, b.body ?? null, status,
         b.pins != null ? JSON.stringify(b.pins) : null,
         b.answer ?? null, markAnswered, req.user?.email || "",
+        b.ackSig ?? null,
       ]
     );
     if (!rows.length) return res.status(404).json({ error: "not found" });

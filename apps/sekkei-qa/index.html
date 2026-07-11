@@ -85,6 +85,28 @@ textarea.inp { min-height: 76px; line-height: 1.5; }
 .actions .pill { flex: 1; text-align: center; padding: 13px; font-size: 14px; }
 .danger { color: #b04040; }
 
+/* OK/NO 回答 */
+.verdict-row { display: flex; gap: 8px; margin-bottom: 10px; }
+.verdict-row button { flex: 1; padding: 12px; border-radius: 12px; border: none; font-size: 15px; font-weight: 900; font-family: inherit; background: var(--bg); box-shadow: 3px 3px 8px var(--sd), -3px -3px 8px var(--sl); cursor: pointer; letter-spacing: 0.05em; }
+.verdict-row button.ok { color: #2a8c3a; }
+.verdict-row button.no { color: #b04040; }
+.verdict-row button.ok.on { background: #2a8c3a; color: #fff; box-shadow: inset 3px 3px 8px rgba(0,0,0,0.18); }
+.verdict-row button.no.on { background: #b04040; color: #fff; box-shadow: inset 3px 3px 8px rgba(0,0,0,0.18); }
+.vbadge { display: inline-block; font-size: 11px; font-weight: 900; padding: 2px 8px; border-radius: 8px; margin-right: 6px; letter-spacing: 0.05em; }
+.vbadge.ok { color: #2a8c3a; background: rgba(42,140,58,0.16); }
+.vbadge.no { color: #b04040; background: rgba(176,64,64,0.16); }
+
+/* 未読 (LINE 風) */
+.unread-dot { width: 10px; height: 10px; border-radius: 50%; background: #ef4444; box-shadow: 0 0 0 2px var(--bg); flex-shrink: 0; }
+.q-card.unread { box-shadow: 5px 5px 12px var(--sd), -4px -4px 10px var(--sl), inset 0 0 0 2px rgba(239,68,68,0.5); }
+.unread-pill { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 800; color: #ef4444; background: rgba(239,68,68,0.12); padding: 6px 12px; border-radius: 20px; margin-bottom: 14px; }
+.unread-pill .icon { vertical-align: 0; font-size: 16px; }
+.ans-banner { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 12px 14px; border-radius: 14px; margin-bottom: 14px; background: rgba(239,68,68,0.12); }
+.ans-banner .lbl { font-size: 13px; font-weight: 800; color: #d33; }
+.ans-banner .lbl .icon { vertical-align: -0.18em; }
+.ans-banner button { flex-shrink: 0; padding: 9px 14px; border-radius: 18px; border: none; font-size: 12px; font-weight: 800; font-family: inherit; background: #ef4444; color: #fff; cursor: pointer; }
+.ans-banner button:active { transform: scale(0.97); }
+
 /* ボトムシート (ピン編集) */
 .sheet-modal { position: fixed; inset: 0; z-index: 300; display: flex; align-items: flex-end; justify-content: center; background: rgba(180,184,205,0); visibility: hidden; opacity: 0; transition: background .2s, opacity .2s, visibility 0s linear .2s; }
 .sheet-modal.open { background: rgba(180,184,205,0.42); visibility: visible; opacity: 1; transition: background .2s, opacity .2s; }
@@ -155,6 +177,22 @@ const STATUS_META = {
   "確認中": { color: "#3b6ea5", icon: "visibility" },
   "回答済み": { color: "#2a8c3a", icon: "check_circle" },
 };
+
+// ピンが回答済みか (OK/NO のワンタップ or 自由入力のどちらか)
+function pinAnswered(p) { return p.verdict === "OK" || p.verdict === "NO" || (p.answer || "").trim() !== ""; }
+// 回答内容の署名。設計屋が回答すると変わる → 「確認済み」署名 (ackSig) と食い違えば未読。
+function answerSig(pins) {
+  return (pins || []).filter(pinAnswered).map((p) => `${p.verdict || ""}:${(p.answer || "").trim()}`).join("~");
+}
+function isUnread(q) {
+  const sig = answerSig(q.pins);
+  return sig !== "" && sig !== (q.ackSig || "");
+}
+function pinColor(p) {
+  if (p.verdict === "NO") return "#b04040";
+  if (pinAnswered(p)) return "#2a8c3a";
+  return "var(--accent)";
+}
 
 let questions = [];
 let filter = "すべて";
@@ -242,19 +280,24 @@ function renderList() {
   ).join("");
   document.querySelectorAll(".tab").forEach((t) => t.addEventListener("click", () => { filter = t.dataset.s; renderList(); }));
 
+  const unreadCount = questions.filter(isUnread).length;
   const items = questions.filter((q) => filter === "すべて" || q.status === filter);
+  const pill = unreadCount > 0
+    ? `<div class="unread-pill"><span class="icon">mark_chat_unread</span> 未読の回答 ${unreadCount} 件</div>`
+    : "";
   if (items.length === 0) {
-    $("list").innerHTML = `<div class="list-empty">${filter === "すべて" ? "まだ質問はありません。右上の「＋質問」から。" : "この状態の質問はありません。"}</div>`;
+    $("list").innerHTML = pill + `<div class="list-empty">${filter === "すべて" ? "まだ質問はありません。右上の「＋質問」から。" : "この状態の質問はありません。"}</div>`;
     return;
   }
-  $("list").innerHTML = items.map((q) => {
+  $("list").innerHTML = pill + items.map((q) => {
     const m = STATUS_META[q.status] || STATUS_META["検討中"];
     const pinN = Array.isArray(q.pins) ? q.pins.length : 0;
-    const answeredN = Array.isArray(q.pins) ? q.pins.filter((p) => (p.answer || "").trim()).length : 0;
+    const answeredN = Array.isArray(q.pins) ? q.pins.filter(pinAnswered).length : 0;
+    const unread = isUnread(q);
     const title = (q.title || "").trim() || (q.body || "").trim().split("\n")[0] || "(無題)";
     return `
-      <div class="q-card" data-id="${q.id}">
-        <div class="q-thumb"><span class="icon">${q.hasImage ? "image" : "help"}</span></div>
+      <div class="q-card ${unread ? "unread" : ""}" data-id="${q.id}">
+        <div class="q-thumb">${unread ? `<span class="unread-dot"></span>` : `<span class="icon">${q.hasImage ? "image" : "help"}</span>`}</div>
         <div class="q-main">
           <div class="q-title">${escapeHtml(title)}</div>
           <div class="q-meta">${pinN > 0 ? `印${pinN} (回答${answeredN}) · ` : ""}${relTime(q.updatedAt)}${q.createdBy ? " · " + escapeHtml((q.createdBy || "").split("@")[0]) : ""}</div>
@@ -308,7 +351,7 @@ function renderDetail() {
     ? `<div class="canvas-wrap">
          <img src="${cur.imageDataUrl}" alt="">
          <div class="pin-layer ${addingPin ? "adding" : ""}" id="pinLayer">
-           ${cur.pins.map((p, i) => `<div class="pin ${(p.answer || "").trim() ? "answered" : ""}" data-i="${i}" style="left:${p.x * 100}%;top:${p.y * 100}%;">${i + 1}</div>`).join("")}
+           ${cur.pins.map((p, i) => `<div class="pin" data-i="${i}" style="left:${p.x * 100}%;top:${p.y * 100}%;background:${pinColor(p)};">${i + 1}</div>`).join("")}
          </div>
        </div>`
     : (cur.hasImage
@@ -330,15 +373,25 @@ function renderDetail() {
     ? `<div class="field-label">印（${cur.pins.length}）</div>
        <div class="pin-list">${cur.pins.map((p, i) => `
          <div class="pin-item" data-i="${i}">
-           <div class="pin-num ${(p.answer || "").trim() ? "answered" : ""}">${i + 1}</div>
+           <div class="pin-num" style="background:${pinColor(p)};">${i + 1}</div>
            <div>
              <div class="pin-q">${escapeHtml(p.note || "(質問未入力)")}</div>
-             <div class="pin-a ${(p.answer || "").trim() ? "" : "empty"}">${(p.answer || "").trim() ? "回答: " + escapeHtml(p.answer) : "回答待ち"}</div>
+             <div class="pin-a ${pinAnswered(p) ? "" : "empty"}">${
+               p.verdict === "OK" ? `<span class="vbadge ok">OK</span>` : p.verdict === "NO" ? `<span class="vbadge no">NO</span>` : ""
+             }${(p.answer || "").trim() ? escapeHtml(p.answer) : (pinAnswered(p) ? "" : "回答待ち")}</div>
            </div>
          </div>`).join("")}</div>`
     : "";
 
+  const banner = (cur.id && isUnread(cur))
+    ? `<div class="ans-banner">
+         <span class="lbl"><span class="icon">mark_chat_read</span> 設計屋さんから回答が届いています</span>
+         <button id="ackBtn" type="button">確認済みにする</button>
+       </div>`
+    : "";
+
   $("detailBody").innerHTML = `
+    ${banner}
     ${imgHtml}
     ${loadRow}
     <div class="field-label">質問内容</div>
@@ -361,6 +414,7 @@ function renderDetail() {
   document.querySelectorAll("#statusSeg button").forEach((b) =>
     b.addEventListener("click", () => { cur.status = b.dataset.s; renderDetail(); }));
   $("saveBtn").addEventListener("click", saveQuestion);
+  $("ackBtn")?.addEventListener("click", acknowledge);
 
   if (cur.imageDataUrl) {
     $("addPinBtn").addEventListener("click", () => { addingPin = !addingPin; renderDetail(); });
@@ -449,6 +503,20 @@ async function deleteQuestion() {
   catch (e) { toast("削除失敗: " + e.message, true); }
 }
 
+// 「確認済み」: 今の回答内容を確認済み署名として記録 → 未読マークが消える (チーム共有)
+async function acknowledge() {
+  if (!cur?.id) return;
+  const sig = answerSig(cur.pins);
+  try {
+    await api("PUT", `/api/sekkei/${cur.id}`, { ackSig: sig });
+    cur.ackSig = sig;
+    toast("確認済みにしました");
+    const q = questions.find((x) => x.id === cur.id);
+    if (q) q.ackSig = sig;
+    renderDetail();
+  } catch (e) { toast("失敗: " + e.message, true); }
+}
+
 // ───────── ピン編集シート ─────────
 function openPinSheet(idx) {
   editingPinIdx = idx;
@@ -456,14 +524,25 @@ function openPinSheet(idx) {
   $("pinSheetBody").innerHTML = `
     <h3>印 ${idx + 1}</h3>
     <div class="field-label">質問（この場所について）</div>
-    <textarea class="inp" id="pinNote" placeholder="例：ここの寸法は？">${escapeHtml(p.note || "")}</textarea>
+    <textarea class="inp" id="pinNote" placeholder="例：ここの寸法は？ / これでいい？">${escapeHtml(p.note || "")}</textarea>
     <div class="field-label">回答 <span style="font-weight:600;color:var(--text3);">（設計屋さんが記入）</span></div>
-    <input class="inp" id="pinAnswer" placeholder="例：W1650" value="${escapeHtml(p.answer || "")}">
+    <div class="verdict-row">
+      <button class="ok ${p.verdict === "OK" ? "on" : ""}" id="vOK" type="button">OK</button>
+      <button class="no ${p.verdict === "NO" ? "on" : ""}" id="vNO" type="button">NO</button>
+    </div>
+    <input class="inp" id="pinAnswer" placeholder="補足・寸法など（例：W1650）" value="${escapeHtml(p.answer || "")}">
     <div class="actions">
       <button class="pill danger" id="pinDelBtn" type="button"><span class="icon">delete</span> 印を削除</button>
       <button class="pill primary" id="pinOkBtn" type="button">OK</button>
     </div>
   `;
+  const setVerdict = (v) => {
+    cur.pins[idx].verdict = (cur.pins[idx].verdict === v) ? "" : v;  // 再タップで解除
+    $("vOK").classList.toggle("on", cur.pins[idx].verdict === "OK");
+    $("vNO").classList.toggle("on", cur.pins[idx].verdict === "NO");
+  };
+  $("vOK").addEventListener("click", () => setVerdict("OK"));
+  $("vNO").addEventListener("click", () => setVerdict("NO"));
   $("pinNote").addEventListener("input", (e) => { cur.pins[idx].note = e.target.value; });
   $("pinAnswer").addEventListener("input", (e) => { cur.pins[idx].answer = e.target.value; });
   $("pinOkBtn").addEventListener("click", () => { closePinSheet(); renderDetail(); });
