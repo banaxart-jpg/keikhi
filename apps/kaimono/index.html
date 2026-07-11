@@ -285,6 +285,21 @@ const TEMPLATE = `
 
           <!-- 編集モード -->
           <template v-if="editingDetailId === item.id">
+            <div class="input-row" style="margin-bottom:8px;">
+              <input class="name" v-model="editName" placeholder="品名" :disabled="savingDetail">
+              <input class="qty" v-model="editQty" type="number" min="1" placeholder="数" :disabled="savingDetail">
+              <select class="unit" v-model="editUnit" :disabled="savingDetail">
+                <option>個</option>
+                <option>箱</option>
+                <option>セット</option>
+                <option>m</option>
+                <option>平米</option>
+                <option>束</option>
+                <option>本</option>
+                <option>枚</option>
+                <option>数量</option>
+              </select>
+            </div>
             <textarea class="detail-textarea" v-model="editNote" placeholder="説明・メモ (型番・サイズ・備考など)"></textarea>
             <select v-if="tasksForCurrentSite.length" v-model="editTaskId" class="detail-task-sel" :disabled="savingDetail">
               <option value="">タスクなし</option>
@@ -445,6 +460,9 @@ const App = {
     const expandedId = ref(null);   // 詳細展開中の item id (一度に1つ)
     const editingDetailId = ref(null); // 編集モード中の item id
     const editNote = ref("");
+    const editName = ref("");
+    const editQty = ref("");
+    const editUnit = ref("個");
     const editFile = ref(null);
     const editPreview = ref("");     // 画像プレビュー (dataURL or existing imageUrl)
     const editTaskId = ref("");      // 編集中アイテムに紐付けるタスク id
@@ -734,6 +752,9 @@ const App = {
     }
     function startDetailEdit(item) {
       editingDetailId.value = item.id;
+      editName.value = displayName(item);
+      editQty.value = item.qty != null ? String(item.qty) : "";
+      editUnit.value = item.unit || "個";
       editNote.value = item.note || "";
       editFile.value = null;
       editPreview.value = item.imageUrl || "";
@@ -743,6 +764,9 @@ const App = {
       editingDetailId.value = null;
       editFile.value = null;
       editPreview.value = "";
+      editName.value = "";
+      editQty.value = "";
+      editUnit.value = "個";
       editNote.value = "";
       editTaskId.value = "";
     }
@@ -758,9 +782,14 @@ const App = {
       if (savingDetail.value) return;
       savingDetail.value = true;
       try {
+        const qty = Number(editQty.value);
         const updates = {
           note: editNote.value.trim() || null,
           taskId: editTaskId.value || null,
+          // 品名は空にできない (空で保存したら元の名前を維持)
+          name: editName.value.trim() || displayName(item),
+          qty: qty > 0 ? qty : null,
+          unit: qty > 0 ? editUnit.value : null,
         };
         if (editFile.value) {
           // Firebase Storage に kaimono/<itemId>/<ts>_<filename> でアップ
@@ -945,7 +974,7 @@ const App = {
       tasks, tasksForCurrentSite, taskTitle,
       adding, seeding, showInput,
       inputExpanded, newNote, newFile, newPreview, onNewFilePick,
-      expandedId, editingDetailId, editNote, editFile, editPreview, editTaskId, savingDetail,
+      expandedId, editingDetailId, editNote, editName, editQty, editUnit, editFile, editPreview, editTaskId, savingDetail,
       showArchive, archExpandedId, archivedByDay, restore,
       isOwner, canSeedKomagome,
       filteredItems, countBySite, hasChecked, checkedCount, inputPlaceholder,
