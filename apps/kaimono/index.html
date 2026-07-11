@@ -124,7 +124,7 @@ body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); 
   box-shadow: inset 4px 4px 10px var(--sd), inset -3px -3px 8px var(--sl); outline: none;
 }
 .input-row input.name { flex: 1; min-width: 0; }
-.input-row input.qty { width: 56px; text-align: center; }
+.input-row .qty { width: 64px; text-align: center; }
 .input-row input.unit, .input-row select.unit { width: 70px; text-align: center; font-size: 13px; }
 .input-row select.unit {
   padding: 12px 8px; border: none; border-radius: 22px; font-size: 13px;
@@ -287,7 +287,13 @@ const TEMPLATE = `
           <template v-if="editingDetailId === item.id">
             <div class="input-row" style="margin-bottom:8px;">
               <input class="name" v-model="editName" placeholder="品名" :disabled="savingDetail">
-              <input class="qty" v-model="editQty" type="number" min="1" placeholder="数" :disabled="savingDetail">
+              <select class="qty" v-model="editQty" :disabled="savingDetail">
+                <option value="">数</option>
+                <option v-for="n in 30" :key="n" :value="n">{{ n }}</option>
+                <option :value="40">40</option>
+                <option :value="50">50</option>
+                <option :value="100">100</option>
+              </select>
               <select class="unit" v-model="editUnit" :disabled="savingDetail">
                 <option>個</option>
                 <option>箱</option>
@@ -354,7 +360,13 @@ const TEMPLATE = `
     <form @submit.prevent="add" class="input-form">
       <div class="input-row">
         <input class="name" v-model="newName" :placeholder="inputPlaceholder" :disabled="adding || !canAdd" autocomplete="off" ref="nameInput">
-        <input class="qty" v-model="newQty" type="number" min="1" placeholder="数" :disabled="adding || !canAdd">
+        <select class="qty" v-model="newQty" :disabled="adding || !canAdd">
+          <option value="">数</option>
+          <option v-for="n in 30" :key="n" :value="n">{{ n }}</option>
+          <option :value="40">40</option>
+          <option :value="50">50</option>
+          <option :value="100">100</option>
+        </select>
         <select class="unit" v-model="newUnit" :disabled="adding || !canAdd">
           <option>個</option>
           <option>箱</option>
@@ -753,7 +765,8 @@ const App = {
     function startDetailEdit(item) {
       editingDetailId.value = item.id;
       editName.value = displayName(item);
-      editQty.value = item.qty != null ? String(item.qty) : "";
+      // セレクトの option は数値 value なので型を揃える (文字列だと未選択表示になる)
+      editQty.value = item.qty != null ? Number(item.qty) : "";
       editUnit.value = item.unit || "個";
       editNote.value = item.note || "";
       editFile.value = null;
