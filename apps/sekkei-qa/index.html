@@ -1,0 +1,506 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="設計質問">
+<link rel="apple-touch-icon" href="/icon.png">
+<title>設計質問</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@24,400,0,0">
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+:root {
+  --bg: #e4e6ee; --bg2: #d8dae4; --sl: rgba(255,255,255,1); --sd: rgba(168,172,192,0.75);
+  --text: #42455e; --text2: rgba(66,69,94,0.52); --text3: rgba(66,69,94,0.28);
+  --accent: #3b6ea5;
+}
+body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; padding-bottom: 40px; }
+.icon { font-family: 'Material Symbols Outlined'; font-weight: normal; font-size: 1.1em; display: inline-block; line-height: 1; vertical-align: -0.18em; }
+
+.bar { display: flex; justify-content: space-between; align-items: center; padding: 40px 18px 0; gap: 8px; }
+.pill { padding: 8px 15px; border-radius: 24px; font-size: 12px; font-weight: 700; border: none; color: var(--text2); background: var(--bg); box-shadow: 4px 4px 10px var(--sd), -4px -4px 10px var(--sl); cursor: pointer; font-family: inherit; text-decoration: none; }
+.pill:active { box-shadow: inset 3px 3px 8px var(--sd), inset -3px -3px 8px var(--sl); transform: scale(0.97); }
+.pill.primary { background: var(--accent); color: #fff; }
+.pill:disabled { opacity: 0.5; }
+
+.wrap { padding: 16px 16px 40px; max-width: 640px; margin: 0 auto; }
+.title { font-size: 24px; font-weight: 800; }
+.subtitle { font-size: 12px; color: var(--text2); font-weight: 600; margin-top: 2px; margin-bottom: 16px; }
+
+/* フィルタタブ */
+.tabs { display: flex; gap: 8px; margin-bottom: 16px; overflow-x: auto; scrollbar-width: none; }
+.tabs::-webkit-scrollbar { display: none; }
+.tab { flex: 0 0 auto; padding: 8px 14px; border-radius: 20px; font-size: 12px; font-weight: 800; border: none; background: var(--bg); color: var(--text2); box-shadow: 3px 3px 8px var(--sd), -3px -3px 8px var(--sl); cursor: pointer; font-family: inherit; }
+.tab.active { color: #fff; background: var(--accent); }
+
+/* リスト */
+.q-card { display: grid; grid-template-columns: 40px 1fr auto; align-items: center; gap: 12px; padding: 14px; border-radius: 16px; background: var(--bg); box-shadow: 5px 5px 12px var(--sd), -4px -4px 10px var(--sl); margin-bottom: 10px; cursor: pointer; }
+.q-card:active { transform: scale(0.99); box-shadow: inset 4px 4px 10px var(--sd), inset -3px -3px 8px var(--sl); }
+.q-thumb { width: 40px; height: 40px; border-radius: 10px; background: var(--bg2); display: flex; align-items: center; justify-content: center; box-shadow: inset 2px 2px 5px var(--sd), inset -2px -2px 5px var(--sl); }
+.q-thumb .icon { font-size: 20px; color: var(--text3); vertical-align: 0; }
+.q-main { min-width: 0; }
+.q-title { font-size: 14px; font-weight: 800; line-height: 1.35; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.q-meta { font-size: 10px; color: var(--text2); font-weight: 600; margin-top: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.status-chip { font-size: 10px; font-weight: 800; padding: 5px 9px; border-radius: 10px; white-space: nowrap; }
+.list-empty { text-align: center; color: var(--text2); font-weight: 600; font-size: 13px; padding: 40px 20px; }
+
+/* 詳細 / マークアップ */
+.canvas-wrap { position: relative; display: block; width: 100%; border-radius: 16px; overflow: hidden; background: var(--bg2); box-shadow: inset 3px 3px 8px var(--sd), inset -3px -3px 8px var(--sl); margin-bottom: 12px; }
+.canvas-wrap img { display: block; width: 100%; height: auto; }
+.pin-layer { position: absolute; inset: 0; }
+.pin-layer.adding { cursor: crosshair; }
+.pin { position: absolute; transform: translate(-50%, -50%); width: 26px; height: 26px; border-radius: 50%; background: var(--accent); color: #fff; font-size: 13px; font-weight: 900; display: flex; align-items: center; justify-content: center; border: 2px solid #fff; box-shadow: 0 2px 6px rgba(0,0,0,0.4); cursor: pointer; }
+.pin.answered { background: #2a8c3a; }
+.no-image { text-align: center; padding: 34px 20px; }
+.no-image .icon { font-size: 42px; color: var(--text3); vertical-align: 0; }
+.no-image .nt { font-size: 13px; color: var(--text2); font-weight: 700; margin-top: 10px; }
+
+.load-row { display: flex; gap: 10px; margin-bottom: 12px; }
+.load-row .pill { flex: 1; text-align: center; }
+.mk-toolbar { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
+.mk-toolbar .hint { font-size: 11px; color: var(--text2); font-weight: 600; }
+
+.field-label { font-size: 11px; font-weight: 800; letter-spacing: 0.1em; text-transform: uppercase; color: var(--text2); margin: 14px 2px 8px; }
+textarea.inp, input.inp { width: 100%; padding: 12px 14px; border-radius: 14px; border: none; font-size: 14px; font-family: inherit; color: var(--text); background: var(--bg); box-shadow: inset 3px 3px 8px var(--sd), inset -3px -3px 8px var(--sl); outline: none; resize: vertical; }
+textarea.inp { min-height: 76px; line-height: 1.5; }
+
+.seg { display: flex; gap: 6px; }
+.seg button { flex: 1; padding: 11px 6px; border-radius: 12px; border: none; font-size: 12px; font-weight: 800; font-family: inherit; background: var(--bg); color: var(--text2); box-shadow: 3px 3px 8px var(--sd), -3px -3px 8px var(--sl); cursor: pointer; }
+.seg button.on { color: #fff; }
+
+/* ピン一覧 */
+.pin-list { margin-top: 6px; }
+.pin-item { display: grid; grid-template-columns: 26px 1fr; gap: 10px; align-items: start; padding: 12px; border-radius: 14px; background: var(--bg); box-shadow: 4px 4px 10px var(--sd), -3px -3px 8px var(--sl); margin-bottom: 8px; cursor: pointer; }
+.pin-num { width: 26px; height: 26px; border-radius: 50%; background: var(--accent); color: #fff; font-weight: 900; font-size: 13px; display: flex; align-items: center; justify-content: center; }
+.pin-num.answered { background: #2a8c3a; }
+.pin-q { font-size: 13px; font-weight: 700; line-height: 1.4; }
+.pin-a { font-size: 13px; font-weight: 800; color: #2a8c3a; margin-top: 4px; }
+.pin-a.empty { color: var(--text3); font-weight: 600; }
+
+.actions { display: flex; gap: 10px; margin-top: 20px; }
+.actions .pill { flex: 1; text-align: center; padding: 13px; font-size: 14px; }
+.danger { color: #b04040; }
+
+/* ボトムシート (ピン編集) */
+.sheet-modal { position: fixed; inset: 0; z-index: 300; display: flex; align-items: flex-end; justify-content: center; background: rgba(180,184,205,0); visibility: hidden; opacity: 0; transition: background .2s, opacity .2s, visibility 0s linear .2s; }
+.sheet-modal.open { background: rgba(180,184,205,0.42); visibility: visible; opacity: 1; transition: background .2s, opacity .2s; }
+.sheet { background: var(--bg); border-radius: 28px 28px 0 0; width: 100%; max-width: 640px; max-height: 88vh; overflow-y: auto; padding: 6px 18px calc(24px + env(safe-area-inset-bottom)); transform: translateY(100%); transition: transform .2s cubic-bezier(.2,.8,.2,1); box-shadow: -2px -10px 30px rgba(148,152,176,0.35); }
+.sheet-modal.open .sheet { transform: translateY(0); }
+.grab { padding: 14px 18px 8px; margin: 0 -18px 4px; touch-action: none; user-select: none; -webkit-user-select: none; }
+.grab .handle { width: 46px; height: 5px; border-radius: 3px; background: rgba(168,172,192,0.45); margin: 0 auto; }
+.sheet h3 { font-size: 15px; font-weight: 800; margin: 4px 2px 10px; }
+
+.toast { position: fixed; left: 50%; bottom: 30px; transform: translateX(-50%); background: var(--text); color: #fff; padding: 11px 18px; border-radius: 20px; font-size: 13px; font-weight: 700; z-index: 500; display: none; box-shadow: 0 6px 20px rgba(0,0,0,0.25); }
+.toast.err { background: #b04040; }
+
+#signinOverlay { display: none; position: fixed; inset: 0; z-index: 400; background: var(--bg); flex-direction: column; align-items: center; justify-content: center; padding: 32px; text-align: center; gap: 18px; }
+</style>
+</head>
+<body>
+<div id="signinOverlay">
+  <div style="font-size:24px;font-weight:800;">設計質問</div>
+  <a class="pill" href="/" style="text-decoration:none;">トップに戻る</a>
+  <div id="signinErr" style="font-size:11px;color:#b04040;font-family:monospace;"></div>
+</div>
+
+<div id="app" style="display:none;">
+  <!-- 一覧 -->
+  <div id="listScreen">
+    <div class="bar">
+      <a class="pill" href="/"><span class="icon">arrow_back</span> 戻る</a>
+      <span style="font-size:11px;letter-spacing:0.22em;color:var(--text3);font-weight:700;text-transform:uppercase;">SEKKEI Q&amp;A</span>
+      <button class="pill primary" id="newBtn" type="button"><span class="icon">add</span> 質問</button>
+    </div>
+    <div class="wrap">
+      <div class="title">設計質問</div>
+      <div class="subtitle">図面や写真に印をつけて設計屋さんに質問。</div>
+      <div class="tabs" id="tabs"></div>
+      <div id="list"></div>
+    </div>
+  </div>
+
+  <!-- 詳細 / マークアップ -->
+  <div id="detailScreen" style="display:none;">
+    <div class="bar">
+      <button class="pill" id="backBtn" type="button"><span class="icon">arrow_back</span> 一覧</button>
+      <span id="detailStatusLbl" style="font-size:11px;letter-spacing:0.16em;color:var(--text3);font-weight:800;text-transform:uppercase;"></span>
+      <button class="pill danger" id="deleteBtn" type="button"><span class="icon">delete</span></button>
+    </div>
+    <div class="wrap" id="detailBody"></div>
+  </div>
+</div>
+
+<!-- ピン編集シート -->
+<div class="sheet-modal" id="pinModal">
+  <div class="sheet" id="pinSheet">
+    <div class="grab" id="pinGrab"><div class="handle"></div></div>
+    <div id="pinSheetBody"></div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script src="/config.js"></script>
+<script type="module">
+import { initAuthBoot, api } from "/api-auth.js";
+
+const $ = (id) => document.getElementById(id);
+const STATUSES = ["検討中", "確認中", "回答済み"];
+const STATUS_META = {
+  "検討中": { color: "#b0813f", icon: "pending" },
+  "確認中": { color: "#3b6ea5", icon: "visibility" },
+  "回答済み": { color: "#2a8c3a", icon: "check_circle" },
+};
+
+let questions = [];
+let filter = "すべて";
+let cur = null;              // 編集中の質問 (null=一覧)
+let addingPin = false;       // ピン追加モード
+let editingPinIdx = null;    // シートで編集中のピン index
+
+// ───────── utils ─────────
+let _toastT = null;
+function toast(msg, isErr = false) {
+  const t = $("toast"); t.textContent = msg; t.classList.toggle("err", !!isErr);
+  t.style.display = "block"; clearTimeout(_toastT);
+  _toastT = setTimeout(() => { t.style.display = "none"; }, isErr ? 4000 : 1800);
+}
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+function relTime(iso) {
+  if (!iso) return "";
+  const d = new Date(iso), now = new Date();
+  const s = Math.floor((now - d) / 1000);
+  if (s < 60) return "たった今";
+  if (s < 3600) return `${Math.floor(s / 60)}分前`;
+  if (s < 86400) return `${Math.floor(s / 3600)}時間前`;
+  if (s < 86400 * 7) return `${Math.floor(s / 86400)}日前`;
+  return iso.slice(0, 10);
+}
+
+// PDF → 1ページ目 JPEG blob (keihi2 と同方式)
+let pdfjsLib = null;
+async function ensurePdfJs() {
+  if (pdfjsLib) return pdfjsLib;
+  pdfjsLib = await import("https://cdn.jsdelivr.net/npm/pdfjs-dist@4.4.168/build/pdf.min.mjs");
+  pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdn.jsdelivr.net/npm/pdfjs-dist@4.4.168/build/pdf.worker.min.mjs";
+  return pdfjsLib;
+}
+async function pdfFirstPageToBlob(file, maxW = 1600) {
+  const lib = await ensurePdfJs();
+  const doc = await lib.getDocument({ data: await file.arrayBuffer(), useSystemFonts: true }).promise;
+  const page = await doc.getPage(1);
+  const v0 = page.getViewport({ scale: 1 });
+  const scale = Math.min(2.5, maxW / v0.width);
+  const vp = page.getViewport({ scale });
+  const canvas = document.createElement("canvas");
+  canvas.width = vp.width; canvas.height = vp.height;
+  const ctx = canvas.getContext("2d");
+  ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, canvas.width, canvas.height);
+  await page.render({ canvasContext: ctx, viewport: vp }).promise;
+  return await new Promise((r) => canvas.toBlob((b) => r(b), "image/jpeg", 0.7));
+}
+// 画像/ blob を縮小して base64 (プレフィックス無し) に
+function toBase64(fileOrBlob, maxSize = 1500, quality = 0.65) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    const url = URL.createObjectURL(fileOrBlob);
+    img.onload = () => {
+      const ratio = Math.min(maxSize / img.width, maxSize / img.height, 1);
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.round(img.width * ratio);
+      canvas.height = Math.round(img.height * ratio);
+      canvas.getContext("2d").drawImage(img, 0, 0, canvas.width, canvas.height);
+      URL.revokeObjectURL(url);
+      resolve(canvas.toDataURL("image/jpeg", quality).split(",")[1]);
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error("画像読込失敗")); };
+    img.src = url;
+  });
+}
+
+// ───────── 一覧 ─────────
+async function loadList() {
+  try {
+    questions = await api("GET", "/api/sekkei");
+  } catch (e) { toast("読み込み失敗: " + e.message, true); questions = []; }
+  renderList();
+}
+function renderList() {
+  cur = null;
+  $("listScreen").style.display = "";
+  $("detailScreen").style.display = "none";
+  const counts = { "すべて": questions.length };
+  STATUSES.forEach((s) => { counts[s] = questions.filter((q) => q.status === s).length; });
+  $("tabs").innerHTML = ["すべて", ...STATUSES].map((s) =>
+    `<button class="tab ${filter === s ? "active" : ""}" data-s="${s}" type="button">${s} ${counts[s] || 0}</button>`
+  ).join("");
+  document.querySelectorAll(".tab").forEach((t) => t.addEventListener("click", () => { filter = t.dataset.s; renderList(); }));
+
+  const items = questions.filter((q) => filter === "すべて" || q.status === filter);
+  if (items.length === 0) {
+    $("list").innerHTML = `<div class="list-empty">${filter === "すべて" ? "まだ質問はありません。右上の「＋質問」から。" : "この状態の質問はありません。"}</div>`;
+    return;
+  }
+  $("list").innerHTML = items.map((q) => {
+    const m = STATUS_META[q.status] || STATUS_META["検討中"];
+    const pinN = Array.isArray(q.pins) ? q.pins.length : 0;
+    const answeredN = Array.isArray(q.pins) ? q.pins.filter((p) => (p.answer || "").trim()).length : 0;
+    const title = (q.title || "").trim() || (q.body || "").trim().split("\n")[0] || "(無題)";
+    return `
+      <div class="q-card" data-id="${q.id}">
+        <div class="q-thumb"><span class="icon">${q.hasImage ? "image" : "help"}</span></div>
+        <div class="q-main">
+          <div class="q-title">${escapeHtml(title)}</div>
+          <div class="q-meta">${pinN > 0 ? `印${pinN} (回答${answeredN}) · ` : ""}${relTime(q.updatedAt)}${q.createdBy ? " · " + escapeHtml((q.createdBy || "").split("@")[0]) : ""}</div>
+        </div>
+        <div class="status-chip" style="color:${m.color};background:${hexA(m.color, 0.14)};">${q.status}</div>
+      </div>`;
+  }).join("");
+  document.querySelectorAll(".q-card").forEach((c) =>
+    c.addEventListener("click", () => openDetail(c.dataset.id)));
+}
+function hexA(hex, a) {
+  const n = parseInt(hex.slice(1), 16);
+  return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${a})`;
+}
+
+// ───────── 詳細 / 新規 ─────────
+function newQuestion() {
+  cur = { id: null, title: "", body: "", status: "検討中", pins: [], answer: "", imageBase64: "", imageDataUrl: "", _dirtyImage: false };
+  addingPin = true;
+  showDetail();
+}
+async function openDetail(id) {
+  const q = questions.find((x) => x.id === id);
+  if (!q) return;
+  cur = { ...q, pins: Array.isArray(q.pins) ? JSON.parse(JSON.stringify(q.pins)) : [], imageBase64: "", imageDataUrl: "", _dirtyImage: false };
+  addingPin = false;
+  showDetail();
+  if (q.hasImage) {
+    try {
+      const { imageBase64 } = await api("GET", `/api/sekkei/${id}/image`);
+      if (imageBase64 && cur && cur.id === id) {
+        cur.imageDataUrl = "data:image/jpeg;base64," + imageBase64;
+        renderDetail();
+      }
+    } catch (e) { console.warn("image load failed", e.message); }
+  }
+}
+function showDetail() {
+  $("listScreen").style.display = "none";
+  $("detailScreen").style.display = "";
+  renderDetail();
+}
+function renderDetail() {
+  if (!cur) return;
+  const m = STATUS_META[cur.status] || STATUS_META["検討中"];
+  $("detailStatusLbl").textContent = cur.status;
+  $("detailStatusLbl").style.color = m.color;
+  $("deleteBtn").style.display = cur.id ? "" : "none";
+
+  const imgHtml = cur.imageDataUrl
+    ? `<div class="canvas-wrap">
+         <img src="${cur.imageDataUrl}" alt="">
+         <div class="pin-layer ${addingPin ? "adding" : ""}" id="pinLayer">
+           ${cur.pins.map((p, i) => `<div class="pin ${(p.answer || "").trim() ? "answered" : ""}" data-i="${i}" style="left:${p.x * 100}%;top:${p.y * 100}%;">${i + 1}</div>`).join("")}
+         </div>
+       </div>`
+    : (cur.hasImage
+        ? `<div class="canvas-wrap"><div class="no-image"><span class="icon">hourglass_top</span><div class="nt">画像を読み込み中…</div></div></div>`
+        : `<div class="canvas-wrap"><div class="no-image"><span class="icon">image</span><div class="nt">図面か写真を読み込んでください</div></div></div>`);
+
+  const loadRow = cur.imageDataUrl
+    ? `<div class="mk-toolbar">
+         <button class="pill ${addingPin ? "primary" : ""}" id="addPinBtn" type="button"><span class="icon">add_location</span> ${addingPin ? "印を打つ: ON" : "印を打つ"}</button>
+         <span class="hint">${addingPin ? "画像をタップで印" : "印をタップで質問/回答"}</span>
+       </div>`
+    : `<div class="load-row">
+         <button class="pill" id="camBtn" type="button"><span class="icon">photo_camera</span> カメラ</button>
+         <button class="pill" id="albumBtn" type="button"><span class="icon">photo_library</span> 写真</button>
+         <button class="pill" id="fileBtn" type="button"><span class="icon">attach_file</span> ファイル/PDF</button>
+       </div>`;
+
+  const pinsList = cur.pins.length
+    ? `<div class="field-label">印（${cur.pins.length}）</div>
+       <div class="pin-list">${cur.pins.map((p, i) => `
+         <div class="pin-item" data-i="${i}">
+           <div class="pin-num ${(p.answer || "").trim() ? "answered" : ""}">${i + 1}</div>
+           <div>
+             <div class="pin-q">${escapeHtml(p.note || "(質問未入力)")}</div>
+             <div class="pin-a ${(p.answer || "").trim() ? "" : "empty"}">${(p.answer || "").trim() ? "回答: " + escapeHtml(p.answer) : "回答待ち"}</div>
+           </div>
+         </div>`).join("")}</div>`
+    : "";
+
+  $("detailBody").innerHTML = `
+    ${imgHtml}
+    ${loadRow}
+    <div class="field-label">質問内容</div>
+    <textarea class="inp" id="bodyInp" placeholder="例：2階洋室の窓、ここの寸法を知りたい">${escapeHtml(cur.body || "")}</textarea>
+    ${pinsList}
+    <div class="field-label">状態</div>
+    <div class="seg" id="statusSeg">
+      ${STATUSES.map((s) => { const mm = STATUS_META[s]; return `<button data-s="${s}" class="${cur.status === s ? "on" : ""}" type="button" style="${cur.status === s ? `background:${mm.color};` : ""}">${s}</button>`; }).join("")}
+    </div>
+    <div class="actions">
+      <button class="pill primary" id="saveBtn" type="button"><span class="icon">save</span> ${cur.id ? "保存" : "登録"}</button>
+    </div>
+    <input type="file" id="camIn" accept="image/*" capture="environment" style="display:none">
+    <input type="file" id="albumIn" accept="image/*" style="display:none">
+    <input type="file" id="fileIn" accept="image/*,application/pdf" style="display:none">
+  `;
+
+  // wiring
+  $("bodyInp").addEventListener("input", (e) => { cur.body = e.target.value; });
+  document.querySelectorAll("#statusSeg button").forEach((b) =>
+    b.addEventListener("click", () => { cur.status = b.dataset.s; renderDetail(); }));
+  $("saveBtn").addEventListener("click", saveQuestion);
+
+  if (cur.imageDataUrl) {
+    $("addPinBtn").addEventListener("click", () => { addingPin = !addingPin; renderDetail(); });
+    const layer = $("pinLayer");
+    layer.addEventListener("click", (e) => {
+      const pinEl = e.target.closest(".pin");
+      if (pinEl) { e.stopPropagation(); openPinSheet(Number(pinEl.dataset.i)); return; }
+      if (!addingPin) return;
+      const rect = layer.getBoundingClientRect();
+      const x = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
+      const y = Math.min(1, Math.max(0, (e.clientY - rect.top) / rect.height));
+      cur.pins.push({ x, y, note: "", answer: "" });
+      renderDetail();
+      openPinSheet(cur.pins.length - 1);
+    });
+  } else {
+    $("camBtn").addEventListener("click", () => $("camIn").click());
+    $("albumBtn").addEventListener("click", () => $("albumIn").click());
+    $("fileBtn").addEventListener("click", () => $("fileIn").click());
+  }
+  document.querySelectorAll(".pin-item").forEach((it) =>
+    it.addEventListener("click", () => openPinSheet(Number(it.dataset.i))));
+  const onFile = async (ev) => {
+    const file = ev.target.files?.[0]; ev.target.value = "";
+    if (!file) return;
+    await loadImageFile(file);
+  };
+  $("camIn").addEventListener("change", onFile);
+  $("albumIn").addEventListener("change", onFile);
+  $("fileIn").addEventListener("change", onFile);
+}
+
+async function loadImageFile(file) {
+  toast("画像を処理中…");
+  try {
+    let base64;
+    if (file.type === "application/pdf") {
+      const blob = await pdfFirstPageToBlob(file);
+      base64 = await toBase64(blob);
+    } else {
+      base64 = await toBase64(file);
+    }
+    // Firestore doc ではなく DB TEXT なので緩めだが、往復を軽くするため ~1MB 目安に収める
+    if (base64.length > 1_400_000) base64 = await toBase64(file, 1100, 0.55);
+    cur.imageBase64 = base64;
+    cur.imageDataUrl = "data:image/jpeg;base64," + base64;
+    cur._dirtyImage = true;
+    addingPin = true;
+    renderDetail();
+  } catch (e) { toast("画像の読み込みに失敗: " + e.message, true); }
+}
+
+async function saveQuestion() {
+  if (!cur) return;
+  const btn = $("saveBtn"); btn.disabled = true;
+  try {
+    if (!cur.id) {
+      // 新規: AI タイトル (失敗したら本文冒頭)
+      let title = "";
+      if ((cur.body || "").trim()) {
+        try { title = (await api("POST", "/api/sekkei/title", { body: cur.body })).title || ""; } catch (_) {}
+      }
+      if (!title) title = (cur.body || "").trim().split("\n")[0].slice(0, 20) || "無題の質問";
+      const saved = await api("POST", "/api/sekkei", {
+        title, body: cur.body || "", status: cur.status,
+        imageBase64: cur._dirtyImage ? cur.imageBase64 : "", pins: cur.pins,
+      });
+      cur.id = saved.id;
+      toast("登録しました");
+    } else {
+      await api("PUT", `/api/sekkei/${cur.id}`, {
+        body: cur.body || "", status: cur.status, pins: cur.pins,
+      });
+      toast("保存しました");
+    }
+    await loadList();
+  } catch (e) {
+    toast("保存失敗: " + e.message, true); btn.disabled = false;
+  }
+}
+
+async function deleteQuestion() {
+  if (!cur?.id) return;
+  if (!confirm("この質問を削除しますか？")) return;
+  try { await api("DELETE", `/api/sekkei/${cur.id}`); toast("削除しました"); await loadList(); }
+  catch (e) { toast("削除失敗: " + e.message, true); }
+}
+
+// ───────── ピン編集シート ─────────
+function openPinSheet(idx) {
+  editingPinIdx = idx;
+  const p = cur.pins[idx];
+  $("pinSheetBody").innerHTML = `
+    <h3>印 ${idx + 1}</h3>
+    <div class="field-label">質問（この場所について）</div>
+    <textarea class="inp" id="pinNote" placeholder="例：ここの寸法は？">${escapeHtml(p.note || "")}</textarea>
+    <div class="field-label">回答 <span style="font-weight:600;color:var(--text3);">（設計屋さんが記入）</span></div>
+    <input class="inp" id="pinAnswer" placeholder="例：W1650" value="${escapeHtml(p.answer || "")}">
+    <div class="actions">
+      <button class="pill danger" id="pinDelBtn" type="button"><span class="icon">delete</span> 印を削除</button>
+      <button class="pill primary" id="pinOkBtn" type="button">OK</button>
+    </div>
+  `;
+  $("pinNote").addEventListener("input", (e) => { cur.pins[idx].note = e.target.value; });
+  $("pinAnswer").addEventListener("input", (e) => { cur.pins[idx].answer = e.target.value; });
+  $("pinOkBtn").addEventListener("click", () => { closePinSheet(); renderDetail(); });
+  $("pinDelBtn").addEventListener("click", () => {
+    cur.pins.splice(idx, 1); closePinSheet(); renderDetail();
+  });
+  $("pinModal").classList.add("open");
+}
+function closePinSheet() {
+  $("pinModal").classList.remove("open");
+  $("pinSheet").style.transition = ""; $("pinSheet").style.transform = "";
+  editingPinIdx = null;
+}
+$("pinModal").addEventListener("click", (e) => { if (e.target === $("pinModal")) closePinSheet(); });
+(() => {
+  const grab = $("pinGrab"), sheet = $("pinSheet");
+  let sy = null, dy = 0;
+  grab.addEventListener("pointerdown", (e) => { sy = e.clientY; dy = 0; sheet.style.transition = "none"; try { grab.setPointerCapture(e.pointerId); } catch (_) {} });
+  grab.addEventListener("pointermove", (e) => { if (sy === null) return; dy = e.clientY - sy; if (dy > 0) sheet.style.transform = `translateY(${dy}px)`; });
+  const end = () => { if (sy === null) return; sy = null; sheet.style.transition = ""; if (dy > 100) closePinSheet(); else sheet.style.transform = ""; dy = 0; };
+  grab.addEventListener("pointerup", end);
+  grab.addEventListener("pointercancel", end);
+})();
+
+// ───────── nav ─────────
+$("newBtn").addEventListener("click", newQuestion);
+$("backBtn").addEventListener("click", () => { renderList(); });
+$("deleteBtn").addEventListener("click", deleteQuestion);
+
+initAuthBoot({
+  returnPath: "/sekkei-qa/",
+  onReady: async () => {
+    $("app").style.display = "";
+    $("list").innerHTML = '<div class="list-empty">読み込み中…</div>';
+    await loadList();
+  },
+});
+</script>
+</body>
+</html>
