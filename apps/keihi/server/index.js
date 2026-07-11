@@ -1030,6 +1030,23 @@ async function ensureSchema() {
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       )
     `);
+    // 設計質問 (sekkei-qa): 図面/写真にピンを打って設計屋に質問 → 回答済み管理。
+    // pins = [{ x, y, note, answer }] (x,y は画像内の 0〜1 正規化座標)。全員共有 (records/tasks と同じ)。
+    await p.query(`
+      CREATE TABLE IF NOT EXISTS sekkei_questions (
+        id TEXT PRIMARY KEY,
+        title TEXT NOT NULL DEFAULT '',
+        body TEXT NOT NULL DEFAULT '',
+        status TEXT NOT NULL DEFAULT '検討中',
+        image_data TEXT,
+        pins JSONB NOT NULL DEFAULT '[]',
+        answer TEXT NOT NULL DEFAULT '',
+        created_by TEXT,
+        answered_by TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `);
     // yado: Beds24 予約のローカルキャッシュ + 同期メタ
     await p.query(`
       CREATE TABLE IF NOT EXISTS yado_bookings (
@@ -7698,6 +7715,132 @@ app.get("/api/records/:id/image", async (req, res) => {
   } catch (err) {
     console.error("image url error", err);
     res.status(500).json({ error: err.message });
+  }
+});
+
+// ─────────────────────────────
+// 設計質問 (sekkei-qa): 図面/写真にピンを打って設計屋に質問 → 回答管理
+// 全員共有 (records/tasks と同型、ユーザーで絞らない)。
+// ─────────────────────────────
+const SEKKEI_STATUSES = ["検討中", "確認中", "回答済み"];
+
+// 一覧: 画像本体 (image_data) は重いので返さない。has_image / pin 件数だけ。
+app.get("/api/sekkei", async (req, res) => {
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  try {
+    const { rows } = await p.query(
+      `SELECT id, title, body, status, pins, answer,
+              (image_data IS NOT NULL) AS "hasImage",
+              created_by AS "createdBy", answered_by AS "answeredBy",
+              created_at AS "createdAt", updated_at AS "updatedAt"
+         FROM sekkei_questions
+        ORDER BY updated_at DESC, id DESC LIMIT 500`
+    );
+    res.json(rows);
+  } catch (err) {
+    console.error("sekkei list error", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 画像本体 (base64) を単体で取得
+app.get("/api/sekkei/:id/image", async (req, res) => {
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  try {
+    const { rows } = await p.query("SELECT image_data FROM sekkei_questions WHERE id=$1", [req.params.id]);
+    if (!rows.length) return res.status(404).json({ error: "not found" });
+    res.json({ imageBase64: rows[0].image_data || "" });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post("/api/sekkei", async (req, res) => {
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  try {
+    const b = req.body || {};
+    const id = b.id || (Date.now().toString(36) + Math.random().toString(36).slice(2, 8));
+    const status = SEKKEI_STATUSES.includes(b.status) ? b.status : "検討中";
+    const pins = Array.isArray(b.pins) ? JSON.stringify(b.pins) : "[]";
+    const { rows } = await p.query(
+      `INSERT INTO sekkei_questions (id, title, body, status, image_data, pins, answer, created_by)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+       RETURNING id, created_at AS "createdAt", updated_at AS "updatedAt"`,
+      [id, b.title || "", b.body || "", status, b.imageBase64 || null, pins, b.answer || "", req.user?.email || ""]
+    );
+    res.status(201).json(rows[0]);
+  } catch (err) {
+    console.error("sekkei insert error", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.put("/api/sekkei/:id", async (req, res) => {
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  try {
+    const b = req.body || {};
+    const status = SEKKEI_STATUSES.includes(b.status) ? b.status : null;
+    // 回答済みに変わったら回答者を記録
+    const markAnswered = status === "回答済み";
+    const { rows } = await p.query(
+      `UPDATE sekkei_questions SET
+         title  = COALESCE($2, title),
+         body   = COALESCE($3, body),
+         status = COALESCE($4, status),
+         pins   = COALESCE($5::jsonb, pins),
+         answer = COALESCE($6, answer),
+         answered_by = CASE WHEN $7 THEN $8 ELSE answered_by END,
+         updated_at = NOW()
+       WHERE id = $1
+       RETURNING id, updated_at AS "updatedAt"`,
+      [
+        req.params.id,
+        b.title ?? null, b.body ?? null, status,
+        b.pins != null ? JSON.stringify(b.pins) : null,
+        b.answer ?? null, markAnswered, req.user?.email || "",
+      ]
+    );
+    if (!rows.length) return res.status(404).json({ error: "not found" });
+    res.json(rows[0]);
+  } catch (err) {
+    console.error("sekkei update error", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete("/api/sekkei/:id", async (req, res) => {
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  try {
+    await p.query("DELETE FROM sekkei_questions WHERE id = $1", [req.params.id]);
+    res.status(204).end();
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 質問内容から短いタイトルを AI で生成 (best-effort、失敗時はクライアント側で本文冒頭に fallback)
+app.post("/api/sekkei/title", async (req, res) => {
+  try {
+    if (!genAI) return res.status(503).json({ error: "GEMINI_API_KEY not configured" });
+    const body = String(req.body?.body || "").trim();
+    if (!body) return res.status(400).json({ error: "body is required" });
+    const prompt = `次は建築・設計の現場から設計事務所への質問メモです。一覧に出す短い見出しを1つだけ作ってください。
+条件: 日本語で16文字以内、体言止め、記号や引用符・接頭辞を付けない、見出しの文字列だけを返す。
+質問メモ:
+${body.slice(0, 500)}`;
+    const { result } = await callGeminiWithFallback(prompt, {
+      maxOutputTokens: 40, primaryModel: "gemini-2.5-flash",
+    });
+    let title = (result.response.text() || "").trim().replace(/^["'「『]|["'」』]$/g, "").split("\n")[0].slice(0, 24);
+    res.json({ title });
+  } catch (err) {
+    console.error("sekkei title error", err);
+    res.status(500).json({ error: String(err?.message || err) });
   }
 });
 
