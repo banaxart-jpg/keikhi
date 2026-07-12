@@ -1,0 +1,473 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="現場質問">
+<title>現場質問</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@24,400,0,0">
+<script src="/config.js"></script>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+:root {
+  --bg: #e4e6ee; --bg2: #d8dae4;
+  --sl: rgba(255,255,255,1); --sd: rgba(168,172,192,0.75);
+  --text: #42455e; --text2: rgba(66,69,94,0.5); --text3: rgba(66,69,94,0.28);
+  --accent: #3b6ea5; --accent2: #4d84c0;   /* 質問アプリの青 */
+  --done: #2a8c3a;
+  --danger: #b04040;
+}
+html, body { height: 100%; }
+body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; overflow-x: hidden; padding-bottom: 110px; }
+.icon { font-family: 'Material Symbols Outlined'; font-size: 1.1em; display: inline-block; vertical-align: -0.18em; font-variation-settings: 'FILL' 0, 'wght' 500, 'GRAD' 0, 'opsz' 20; }
+
+.header-fix { position: sticky; top: 0; z-index: 10; background: var(--bg); box-shadow: 0 2px 10px rgba(168,172,192,0.18); }
+.top { display: flex; justify-content: space-between; align-items: center; padding: 54px 18px 12px; }
+.title { font-size: 22px; font-weight: 800; letter-spacing: -0.3px; }
+.pill { padding: 8px 16px; border-radius: 24px; font-size: 12px; font-weight: 700; border: none; color: var(--text2); background: var(--bg); box-shadow: 4px 4px 10px var(--sd), -4px -4px 10px var(--sl); cursor: pointer; font-family: inherit; }
+.pill:active { box-shadow: inset 3px 3px 8px var(--sd), inset -3px -3px 8px var(--sl); transform: scale(0.97); }
+
+.tabs { display: flex; gap: 8px; padding: 2px 18px 10px; overflow-x: auto; scrollbar-width: none; }
+.tabs::-webkit-scrollbar { display: none; }
+.tab { padding: 9px 16px; border-radius: 18px; font-size: 13px; font-weight: 700; border: none; color: var(--text2); background: var(--bg); box-shadow: 4px 4px 10px var(--sd), -4px -4px 10px var(--sl); cursor: pointer; flex-shrink: 0; font-family: inherit; }
+.tab.on { color: white; background: linear-gradient(145deg, var(--accent2), var(--accent)); box-shadow: 6px 6px 14px rgba(59,110,165,0.35), -3px -3px 10px var(--sl); }
+.tab .n { font-size: 11px; opacity: 0.75; margin-left: 5px; }
+
+/* 質問中 / 回答完了 の大タブ */
+.bigtabs { display: flex; gap: 10px; padding: 2px 18px 14px; }
+.bigtab { flex: 1; padding: 12px; border-radius: 16px; font-size: 14px; font-weight: 800; border: none; color: var(--text2); background: var(--bg); box-shadow: 4px 4px 10px var(--sd), -4px -4px 10px var(--sl); cursor: pointer; font-family: inherit; }
+.bigtab.on-open { color: white; background: linear-gradient(145deg, var(--accent2), var(--accent)); }
+.bigtab.on-done { color: white; background: linear-gradient(145deg, #3aaa4a, var(--done)); }
+
+.list { display: flex; flex-direction: column; gap: 12px; padding: 4px 18px; }
+.card { background: var(--bg); border-radius: 18px; box-shadow: 6px 6px 14px var(--sd), -5px -5px 12px var(--sl); padding: 14px 16px; cursor: pointer; }
+.card .q { font-size: 14px; font-weight: 700; line-height: 1.5; word-break: break-word; }
+.card .meta { display: flex; align-items: center; gap: 8px; margin-top: 8px; font-size: 11px; color: var(--text2); flex-wrap: wrap; }
+.chip { font-size: 10px; font-weight: 800; padding: 4px 9px; border-radius: 10px; white-space: nowrap; }
+.chip.kento { color: #b0813f; background: rgba(176,129,63,0.14); }
+.chip.kakunin { color: #3b6ea5; background: rgba(59,110,165,0.14); }
+.chip.done { color: var(--done); background: rgba(42,140,58,0.14); }
+.site-tag { font-size: 10px; font-weight: 700; color: var(--text2); background: var(--bg2); border-radius: 8px; padding: 3px 8px; }
+.last { margin-top: 6px; font-size: 12px; color: var(--text2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.empty { text-align: center; color: var(--text3); padding: 60px 20px; font-size: 13px; font-weight: 600; }
+
+.fab { position: fixed; right: 22px; bottom: calc(24px + env(safe-area-inset-bottom)); width: 60px; height: 60px; border-radius: 30px; border: none; color: white; font-size: 30px; line-height: 1; background: linear-gradient(145deg, var(--accent2), var(--accent)); box-shadow: 8px 8px 20px rgba(59,110,165,0.4), -4px -4px 12px var(--sl); cursor: pointer; z-index: 20; }
+
+/* ── スレッド画面 (全画面) ── */
+.thread { position: fixed; inset: 0; background: var(--bg); z-index: 30; display: flex; flex-direction: column; }
+.thread-head { padding: 54px 16px 10px; background: var(--bg); box-shadow: 0 2px 10px rgba(168,172,192,0.2); }
+.thread-head .row1 { display: flex; align-items: flex-start; gap: 10px; }
+.thread-head .q { flex: 1; font-size: 14px; font-weight: 800; line-height: 1.5; word-break: break-word; }
+.thread-head .meta2 { display: flex; gap: 8px; align-items: center; margin-top: 8px; flex-wrap: wrap; }
+.back-btn { border: none; background: var(--bg); border-radius: 14px; width: 40px; height: 40px; box-shadow: 4px 4px 10px var(--sd), -4px -4px 10px var(--sl); cursor: pointer; color: var(--text2); font-size: 18px; flex-shrink: 0; }
+.chat-log { flex: 1; overflow-y: auto; padding: 14px 14px 10px; display: flex; flex-direction: column; gap: 10px; }
+.msg { max-width: 86%; padding: 10px 14px; border-radius: 14px; font-size: 13px; line-height: 1.6; white-space: pre-wrap; word-break: break-word; }
+.msg.mine { align-self: flex-end; background: linear-gradient(145deg, var(--accent2), var(--accent)); color: white; border-bottom-right-radius: 4px; }
+.msg.other { align-self: flex-start; background: var(--bg); box-shadow: 4px 4px 10px var(--sd), -3px -3px 8px var(--sl); border-bottom-left-radius: 4px; }
+.msg .who { font-size: 10px; font-weight: 800; opacity: 0.6; margin-bottom: 3px; }
+.msg img { width: 100%; max-width: 240px; border-radius: 10px; display: block; margin-top: 6px; cursor: zoom-in; }
+.msg.sys { align-self: center; background: none; color: var(--text2); font-size: 11px; font-weight: 700; padding: 2px 8px; }
+.thread-actions { display: flex; gap: 10px; padding: 8px 14px; }
+.act-btn { flex: 1; padding: 12px; border-radius: 16px; border: none; font-size: 13px; font-weight: 800; font-family: inherit; cursor: pointer; color: white; }
+.act-btn.done { background: linear-gradient(145deg, #3aaa4a, var(--done)); }
+.act-btn.reopen { background: var(--bg); color: var(--danger); box-shadow: 4px 4px 10px var(--sd), -4px -4px 10px var(--sl); }
+.chat-input-row { display: flex; gap: 8px; padding: 8px 14px calc(14px + env(safe-area-inset-bottom)); align-items: flex-end; }
+.chat-input-row textarea { flex: 1; min-height: 44px; max-height: 120px; padding: 12px 14px; border: none; border-radius: 18px; font-size: 14px; font-family: inherit; color: var(--text); background: var(--bg); box-shadow: inset 4px 4px 10px var(--sd), inset -3px -3px 8px var(--sl); outline: none; resize: none; }
+.chat-btn { width: 44px; height: 44px; border-radius: 22px; border: none; color: white; background: linear-gradient(145deg, var(--accent2), var(--accent)); cursor: pointer; flex-shrink: 0; font-size: 18px; }
+.chat-btn.ghost { background: var(--bg); color: var(--text2); box-shadow: 4px 4px 10px var(--sd), -4px -4px 10px var(--sl); }
+.chat-btn:disabled { opacity: 0.5; }
+.attach-strip { display: flex; gap: 6px; padding: 0 14px; flex-wrap: wrap; }
+.attach-strip .th { position: relative; }
+.attach-strip img { width: 54px; height: 54px; border-radius: 10px; object-fit: cover; }
+.attach-strip button { position: absolute; top: -6px; right: -6px; width: 20px; height: 20px; border-radius: 10px; border: none; background: var(--danger); color: white; font-size: 12px; cursor: pointer; line-height: 1; }
+
+/* 起票モーダル / 名前モーダル */
+.sheet-bg { position: fixed; inset: 0; background: rgba(40,42,60,0.35); z-index: 40; display: flex; align-items: flex-end; }
+.sheet { width: 100%; background: var(--bg); border-radius: 22px 22px 0 0; padding: 18px 18px calc(22px + env(safe-area-inset-bottom)); display: flex; flex-direction: column; gap: 12px; }
+.sheet h3 { font-size: 15px; font-weight: 800; }
+.sheet textarea, .sheet input, .sheet select { padding: 12px 14px; border: none; border-radius: 16px; font-size: 14px; font-family: inherit; color: var(--text); background: var(--bg); box-shadow: inset 4px 4px 10px var(--sd), inset -3px -3px 8px var(--sl); outline: none; }
+.sheet textarea { min-height: 90px; resize: vertical; }
+.sheet .row { display: flex; gap: 10px; }
+.sheet .primary { flex: 1; padding: 13px; border-radius: 16px; border: none; color: white; font-size: 14px; font-weight: 800; font-family: inherit; background: linear-gradient(145deg, var(--accent2), var(--accent)); cursor: pointer; }
+.sheet .primary:disabled { opacity: 0.5; }
+.sheet .ghost { padding: 13px 18px; border-radius: 16px; border: none; color: var(--text2); font-size: 13px; font-weight: 700; font-family: inherit; background: var(--bg); box-shadow: 4px 4px 10px var(--sd), -4px -4px 10px var(--sl); cursor: pointer; }
+.filepick { display: inline-flex; align-items: center; gap: 6px; padding: 10px 14px; border-radius: 14px; background: var(--bg); box-shadow: 4px 4px 10px var(--sd), -3px -3px 8px var(--sl); cursor: pointer; font-size: 12px; font-weight: 700; color: var(--text2); align-self: flex-start; }
+.filepick input { display: none; }
+
+.lightbox { position: fixed; inset: 0; background: rgba(20,22,34,0.92); z-index: 60; display: flex; align-items: center; justify-content: center; }
+.lightbox img { max-width: 96vw; max-height: 92vh; border-radius: 10px; }
+.err { color: var(--danger); font-size: 12px; font-weight: 700; padding: 8px 18px; }
+.loading { text-align: center; color: var(--text3); padding: 80px 0; font-weight: 700; }
+</style>
+</head>
+<body>
+<div id="app"></div>
+<script type="module">
+import { createApp, ref, computed, onMounted, onBeforeUnmount, nextTick } from "https://unpkg.com/vue@3.4.27/dist/vue.esm-browser.prod.js";
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js";
+import {
+  getAuth, onAuthStateChanged, setPersistence, browserLocalPersistence,
+} from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
+
+const ALL_KEY = "すべて";
+
+const TEMPLATE = `
+<div v-if="!ready" class="loading">読み込み中…</div>
+<template v-else>
+  <div class="header-fix">
+    <div class="top">
+      <div class="title"><span class="icon" style="color:var(--accent);">forum</span> 現場質問</div>
+      <button class="pill" onclick="location.href='/'">← 戻る</button>
+    </div>
+    <div class="tabs">
+      <button class="tab" :class="{ on: activeSite === ALL_KEY }" @click="setSite(ALL_KEY)">{{ ALL_KEY }}<span class="n">{{ threads.length }}</span></button>
+      <button v-for="s in sites" :key="s" class="tab" :class="{ on: activeSite === s }" @click="setSite(s)">{{ s }}<span class="n">{{ countBySite(s) }}</span></button>
+    </div>
+    <div class="bigtabs">
+      <button class="bigtab" :class="{ 'on-open': bigTab === 'open' }" @click="bigTab = 'open'">質問中 {{ openThreads.length }}</button>
+      <button class="bigtab" :class="{ 'on-done': bigTab === 'done' }" @click="bigTab = 'done'">回答完了 {{ doneThreads.length }}</button>
+    </div>
+  </div>
+
+  <div class="list">
+    <div v-if="visibleThreads.length === 0" class="empty">{{ bigTab === 'open' ? 'いま質問中の項目はありません' : '完了した項目はまだありません' }}</div>
+    <div v-for="t in visibleThreads" :key="t.id" class="card" @click="openThread(t.id)">
+      <div class="q">{{ t.question }}</div>
+      <div class="meta">
+        <span v-if="t.status === 'done'" class="chip done">完了</span>
+        <span v-else class="chip" :class="t.subStatus === '確認中' ? 'kakunin' : 'kento'">{{ t.subStatus }}</span>
+        <span v-if="activeSite === ALL_KEY && t.site" class="site-tag">{{ t.site }}</span>
+        <span>{{ t.createdName }} · {{ fmtDate(t.createdAt) }}</span>
+        <span v-if="t.messageCount > 1"><span class="icon" style="font-size:13px;">chat_bubble</span> {{ t.messageCount }}</span>
+      </div>
+      <div v-if="t.lastBody && t.messageCount > 1" class="last">{{ t.lastName }}: {{ t.lastBody }}</div>
+    </div>
+  </div>
+  <div class="err" v-if="err">{{ err }}</div>
+
+  <button class="fab" @click="startCreate">+</button>
+
+  <!-- スレッド (チャット) -->
+  <div v-if="thread" class="thread">
+    <div class="thread-head">
+      <div class="row1">
+        <button class="back-btn" @click="closeThread"><span class="icon">arrow_back</span></button>
+        <div style="flex:1;">
+          <div class="q">{{ thread.question }}</div>
+          <div class="meta2">
+            <template v-if="thread.status === 'open'">
+              <button class="chip" :class="thread.subStatus === '検討中' ? 'kento' : 'kakunin'" style="border:none;cursor:pointer;font-family:inherit;" @click="toggleSub">{{ thread.subStatus }} ⇄</button>
+            </template>
+            <span v-else class="chip done">完了</span>
+            <span v-if="thread.site" class="site-tag">{{ thread.site }}</span>
+            <span style="font-size:11px;color:var(--text2);">{{ thread.createdName }} · {{ fmtDate(thread.createdAt) }}</span>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="chat-log" ref="logEl">
+      <template v-for="m in thread.messages" :key="m.id">
+        <div v-if="m.kind === 'system'" class="msg sys">— {{ m.body }} —</div>
+        <div v-else class="msg" :class="m.authorEmail === myEmail ? 'mine' : 'other'">
+          <div v-if="m.authorEmail !== myEmail" class="who">{{ m.authorName }}</div>
+          <template v-if="m.body">{{ m.body }}</template>
+          <img v-for="(im, i) in (m.images || [])" :key="i" :src="im" @click="viewImage = im">
+        </div>
+      </template>
+    </div>
+    <div class="attach-strip" v-if="attach.length">
+      <div v-for="(a, i) in attach" :key="i" class="th"><img :src="a"><button @click="attach.splice(i, 1)">×</button></div>
+    </div>
+    <div class="thread-actions">
+      <button v-if="thread.status === 'open'" class="act-btn done" @click="markDone" :disabled="acting"><span class="icon">check</span> 完了にする</button>
+      <button v-else class="act-btn reopen" @click="reopen" :disabled="acting"><span class="icon">undo</span> 未回答に戻す</button>
+    </div>
+    <div class="chat-input-row">
+      <label class="chat-btn ghost" style="display:flex;align-items:center;justify-content:center;cursor:pointer;">
+        <input type="file" accept="image/*" multiple style="display:none;" @change="onPick">
+        <span class="icon">add_photo_alternate</span>
+      </label>
+      <textarea v-model="draft" placeholder="返信…"></textarea>
+      <button class="chat-btn" @click="send" :disabled="sending || (!draft.trim() && !attach.length)"><span class="icon">{{ sending ? 'hourglass_top' : 'send' }}</span></button>
+    </div>
+  </div>
+
+  <!-- 起票 -->
+  <div v-if="showCreate" class="sheet-bg" @click.self="showCreate = false">
+    <div class="sheet">
+      <h3>質問をあげる</h3>
+      <select v-model="newSite">
+        <option value="">現場を選ぶ…</option>
+        <option v-for="s in sites" :key="s" :value="s">{{ s }}</option>
+      </select>
+      <textarea v-model="newQuestion" placeholder="質問・確認したいこと (この文がそのままタイトルになります)"></textarea>
+      <div class="attach-strip" v-if="newImages.length" style="padding:0;">
+        <div v-for="(a, i) in newImages" :key="i" class="th"><img :src="a"><button @click="newImages.splice(i, 1)">×</button></div>
+      </div>
+      <label class="filepick"><input type="file" accept="image/*" multiple @change="onPickNew"><span class="icon">add_photo_alternate</span>画像を付ける</label>
+      <div class="row">
+        <button class="ghost" @click="showCreate = false">キャンセル</button>
+        <button class="primary" @click="create" :disabled="creating || !newQuestion.trim()">{{ creating ? '作成中…' : '質問をあげる' }}</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 名前入力 (初回だけ) -->
+  <div v-if="askName" class="sheet-bg">
+    <div class="sheet">
+      <h3>名前を入れてください (チャットに表示されます)</h3>
+      <input v-model="nameDraft" placeholder="例: 田中 (設計)" @keydown.enter="saveName">
+      <div class="row"><button class="primary" @click="saveName" :disabled="!nameDraft.trim()">これで始める</button></div>
+    </div>
+  </div>
+
+  <div v-if="viewImage" class="lightbox" @click="viewImage = null"><img :src="viewImage"></div>
+</template>
+`;
+
+const App = {
+  template: TEMPLATE,
+  setup() {
+    const ready = ref(false);
+    const err = ref("");
+    const myEmail = ref("");
+    let token = "";
+    let fbApp = null;
+
+    const sites = ref([]);
+    const activeSite = ref(localStorage.getItem("genbaqa_site") || ALL_KEY);
+    const bigTab = ref("open");
+    const threads = ref([]);          // activeSite でサーバー絞り込み済み (すべて時は全件)
+    const allThreads = ref([]);       // 件数バッジ用 (常に全件)
+
+    const thread = ref(null);         // 開いてるスレッド (messages 込み)
+    const logEl = ref(null);
+    const draft = ref("");
+    const attach = ref([]);           // dataURL[]
+    const sending = ref(false);
+    const acting = ref(false);
+    let pollTimer = null;
+
+    const showCreate = ref(false);
+    const newSite = ref("");
+    const newQuestion = ref("");
+    const newImages = ref([]);
+    const creating = ref(false);
+
+    const askName = ref(false);
+    const nameDraft = ref("");
+    const myName = ref(localStorage.getItem("genbaqa_name") || "");
+    const viewImage = ref(null);
+
+    async function api(method, path, body) {
+      const res = await fetch((window.API_BASE || "") + path, {
+        method,
+        headers: { "content-type": "application/json", authorization: "Bearer " + token },
+        body: body ? JSON.stringify(body) : undefined,
+      });
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}));
+        throw new Error(j.error || ("HTTP " + res.status));
+      }
+      return res.status === 204 ? null : res.json();
+    }
+
+    const openThreads = computed(() => threads.value.filter((t) => t.status === "open"));
+    const doneThreads = computed(() => threads.value.filter((t) => t.status === "done"));
+    const visibleThreads = computed(() => (bigTab.value === "open" ? openThreads.value : doneThreads.value));
+    function countBySite(s) { return allThreads.value.filter((t) => t.site === s).length; }
+
+    async function loadSites() {
+      try {
+        const list = await api("GET", "/api/sites");
+        sites.value = (list || []).map((s) => s.name || s).filter(Boolean);
+      } catch (_) { sites.value = []; }
+    }
+    async function loadThreads() {
+      try {
+        const site = activeSite.value === ALL_KEY ? "" : activeSite.value;
+        threads.value = await api("GET", "/api/genba-qa" + (site ? "?site=" + encodeURIComponent(site) : ""));
+        if (!site) allThreads.value = threads.value;
+        else api("GET", "/api/genba-qa").then((r) => { allThreads.value = r; }).catch(() => {});
+      } catch (e) { err.value = e.message; }
+    }
+    function setSite(s) {
+      activeSite.value = s;
+      localStorage.setItem("genbaqa_site", s);
+      loadThreads();
+    }
+
+    // ── 名前 (初回だけ聞いて端末に記憶) ──
+    function needName() {
+      if (myName.value) return false;
+      nameDraft.value = "";
+      askName.value = true;
+      return true;
+    }
+    function saveName() {
+      const n = nameDraft.value.trim();
+      if (!n) return;
+      myName.value = n;
+      localStorage.setItem("genbaqa_name", n);
+      askName.value = false;
+    }
+
+    // ── 画像: 縮小して dataURL に (sekkei-qa と同じ DB base64 方式) ──
+    function shrink(file) {
+      return new Promise((resolve, reject) => {
+        const img = new Image();
+        img.onload = () => {
+          const MAX = 1280;
+          const sc = Math.min(1, MAX / Math.max(img.width, img.height));
+          const canvas = document.createElement("canvas");
+          canvas.width = Math.round(img.width * sc);
+          canvas.height = Math.round(img.height * sc);
+          canvas.getContext("2d").drawImage(img, 0, 0, canvas.width, canvas.height);
+          resolve(canvas.toDataURL("image/jpeg", 0.82));
+        };
+        img.onerror = reject;
+        img.src = URL.createObjectURL(file);
+      });
+    }
+    async function onPick(e) {
+      for (const f of e.target.files || []) {
+        if (attach.value.length >= 4) break;
+        try { attach.value.push(await shrink(f)); } catch (_) {}
+      }
+      e.target.value = "";
+    }
+    async function onPickNew(e) {
+      for (const f of e.target.files || []) {
+        if (newImages.value.length >= 4) break;
+        try { newImages.value.push(await shrink(f)); } catch (_) {}
+      }
+      e.target.value = "";
+    }
+
+    // ── 起票 ──
+    function startCreate() {
+      if (needName()) return;
+      newSite.value = activeSite.value === ALL_KEY ? "" : activeSite.value;
+      newQuestion.value = "";
+      newImages.value = [];
+      showCreate.value = true;
+    }
+    async function create() {
+      creating.value = true;
+      err.value = "";
+      try {
+        const { id } = await api("POST", "/api/genba-qa", {
+          site: newSite.value, question: newQuestion.value.trim(),
+          images: newImages.value, name: myName.value,
+        });
+        showCreate.value = false;
+        await loadThreads();
+        openThread(id);
+      } catch (e) { err.value = e.message; } finally { creating.value = false; }
+    }
+
+    // ── スレッド ──
+    async function openThread(id) {
+      if (needName()) return;
+      try {
+        thread.value = await api("GET", "/api/genba-qa/" + id);
+        draft.value = ""; attach.value = [];
+        nextTick(scrollBottom);
+        startPolling();
+      } catch (e) { err.value = e.message; }
+    }
+    function closeThread() {
+      thread.value = null;
+      stopPolling();
+      loadThreads();
+    }
+    function scrollBottom() { if (logEl.value) logEl.value.scrollTop = logEl.value.scrollHeight; }
+    function startPolling() {
+      stopPolling();
+      pollTimer = setInterval(async () => {
+        if (!thread.value) return;
+        try {
+          const t = await api("GET", "/api/genba-qa/" + thread.value.id);
+          const grew = t.messages.length !== thread.value.messages.length;
+          thread.value = t;
+          if (grew) nextTick(scrollBottom);
+        } catch (_) {}
+      }, 5000);
+    }
+    function stopPolling() { if (pollTimer) { clearInterval(pollTimer); pollTimer = null; } }
+
+    async function send() {
+      if (sending.value) return;
+      sending.value = true;
+      err.value = "";
+      try {
+        await api("POST", "/api/genba-qa/" + thread.value.id + "/messages", {
+          body: draft.value.trim(), images: attach.value, name: myName.value,
+        });
+        draft.value = ""; attach.value = [];
+        thread.value = await api("GET", "/api/genba-qa/" + thread.value.id);
+        nextTick(scrollBottom);
+      } catch (e) { err.value = e.message; } finally { sending.value = false; }
+    }
+    async function markDone() { await setStatus("done"); }
+    async function reopen() { await setStatus("reopen"); }
+    async function setStatus(action) {
+      acting.value = true;
+      err.value = "";
+      try {
+        await api("POST", "/api/genba-qa/" + thread.value.id + "/status", { action, name: myName.value });
+        thread.value = await api("GET", "/api/genba-qa/" + thread.value.id);
+        nextTick(scrollBottom);
+      } catch (e) { err.value = e.message; } finally { acting.value = false; }
+    }
+    async function toggleSub() {
+      const next = thread.value.subStatus === "検討中" ? "確認中" : "検討中";
+      try {
+        await api("POST", "/api/genba-qa/" + thread.value.id + "/status", { subStatus: next });
+        thread.value.subStatus = next;
+      } catch (e) { err.value = e.message; }
+    }
+
+    function fmtDate(s) {
+      const d = new Date(s);
+      return (d.getMonth() + 1) + "/" + d.getDate() + " " + d.getHours() + ":" + String(d.getMinutes()).padStart(2, "0");
+    }
+
+    onMounted(async () => {
+      try {
+        const cfg = await fetch("/__/firebase/init.json").then((r) => r.json());
+        cfg.authDomain = location.hostname;
+        fbApp = initializeApp(cfg);
+        const auth = getAuth(fbApp);
+        await setPersistence(auth, browserLocalPersistence);
+        onAuthStateChanged(auth, async (u) => {
+          if (!u) { location.href = "/?next=" + encodeURIComponent(location.pathname); return; }
+          myEmail.value = u.email || "";
+          token = await u.getIdToken();
+          setInterval(async () => { token = await u.getIdToken(); }, 30 * 60 * 1000);
+          ready.value = true;
+          await Promise.all([loadSites(), loadThreads()]);
+        });
+      } catch (e) { err.value = "初期化に失敗: " + e.message; }
+    });
+    onBeforeUnmount(stopPolling);
+
+    return {
+      ready, err, myEmail, ALL_KEY, sites, activeSite, bigTab, threads,
+      openThreads, doneThreads, visibleThreads, countBySite, setSite,
+      thread, logEl, draft, attach, sending, acting,
+      openThread, closeThread, send, markDone, reopen, toggleSub, onPick,
+      showCreate, newSite, newQuestion, newImages, creating, startCreate, create, onPickNew,
+      askName, nameDraft, saveName, viewImage, fmtDate,
+    };
+  },
+};
+
+createApp(App).mount("#app");
+</script>
+</body>
+</html>

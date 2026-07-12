@@ -430,8 +430,10 @@ app.use("/api", async (req, res, next) => {
     //   手配リスト (kaimono) が誰でも入れる仕様で、現場タブを構築するのに /sites
     //   の読み取りだけは要る (POST/DELETE は社内限定のまま)
     const isKotonoha = req.path.startsWith("/kotonoha/");
+    // 現場質問 (/genba-qa) は外部 (設計屋・お客さん) も Google ログインで参加できる
+    const isGenbaQa = req.path.startsWith("/genba-qa");
     const isPublicSitesRead = req.method === "GET" && req.path === "/sites";
-    if (!isKotonoha && !isPublicSitesRead && allowList.length && !allowList.includes((decoded.email || "").toLowerCase())) {
+    if (!isKotonoha && !isGenbaQa && !isPublicSitesRead && allowList.length && !allowList.includes((decoded.email || "").toLowerCase())) {
       return res.status(403).json({ error: `権限がありません (${decoded.email || "?"})` });
     }
     req.user = decoded;
@@ -1050,6 +1052,37 @@ async function ensureSchema() {
     `);
     // 既存テーブル向け: 「確認済み」署名列 (回答の未読判定用)
     await p.query("ALTER TABLE sekkei_questions ADD COLUMN IF NOT EXISTS ack_sig TEXT");
+    // ── 現場質問 (/genba-qa/): 現場ごとの確認事項をチャット形式で回す ──
+    // 外部 (設計屋・お客さん) も Google ログインすれば参加できる想定なので、
+    // 認証 middleware に /genba-qa の例外がある (kotonoha と同じ扱い)
+    await p.query(`
+      CREATE TABLE IF NOT EXISTS genba_qa_threads (
+        id TEXT PRIMARY KEY,
+        site TEXT NOT NULL DEFAULT '',
+        question TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'open',       -- open | done
+        sub_status TEXT NOT NULL DEFAULT '検討中',  -- 質問中タブ内のチップ (検討中/確認中)
+        created_by TEXT,
+        created_name TEXT,
+        done_by TEXT,
+        done_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `);
+    await p.query(`
+      CREATE TABLE IF NOT EXISTS genba_qa_messages (
+        id BIGSERIAL PRIMARY KEY,
+        thread_id TEXT NOT NULL REFERENCES genba_qa_threads(id) ON DELETE CASCADE,
+        author_email TEXT,
+        author_name TEXT,
+        body TEXT NOT NULL DEFAULT '',
+        images JSONB NOT NULL DEFAULT '[]',   -- 縮小 base64 の配列 (sekkei-qa と同じ方式)
+        kind TEXT NOT NULL DEFAULT 'normal',  -- normal | system (完了/差し戻しの記録)
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `);
+    await p.query("CREATE INDEX IF NOT EXISTS genba_qa_msg_thread_idx ON genba_qa_messages (thread_id, id)");
     // yado: Beds24 予約のローカルキャッシュ + 同期メタ
     await p.query(`
       CREATE TABLE IF NOT EXISTS yado_bookings (
@@ -7823,6 +7856,166 @@ app.delete("/api/sekkei/:id", async (req, res) => {
   if (!p) return res.status(503).json({ error: "DB not configured" });
   try {
     await p.query("DELETE FROM sekkei_questions WHERE id = $1", [req.params.id]);
+    res.status(204).end();
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── 現場質問 (/genba-qa/): 確認事項ごとのチャットスレッド ───
+// 質問文そのものがタイトル。完了/差し戻しは system メッセージとして履歴に残る。
+// 外部ユーザーも Google ログインで参加できる (認証 middleware に例外あり)。
+const GENBA_QA_SUB = ["検討中", "確認中"];
+const genbaQaName = (req, b) => String(b?.name || "").trim().slice(0, 30) || (req.user?.email || "").split("@")[0] || "名無し";
+const genbaQaImages = (v) => JSON.stringify(
+  (Array.isArray(v) ? v : []).slice(0, 4).map((s) => String(s)).filter((s) => /^data:image\//.test(s) && s.length < 900_000)
+);
+
+// 一覧: サイト絞り込み + タブ別件数。メッセージ数と最終発言もカードに出す
+app.get("/api/genba-qa", async (req, res) => {
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  try {
+    const site = String(req.query.site || "");
+    const { rows } = await p.query(
+      `SELECT t.id, t.site, t.question, t.status, t.sub_status AS "subStatus",
+              t.created_by AS "createdBy", t.created_name AS "createdName",
+              t.done_by AS "doneBy", t.done_at AS "doneAt",
+              t.created_at AS "createdAt", t.updated_at AS "updatedAt",
+              (SELECT COUNT(*)::int FROM genba_qa_messages m WHERE m.thread_id = t.id AND m.kind = 'normal') AS "messageCount",
+              (SELECT m.body FROM genba_qa_messages m WHERE m.thread_id = t.id AND m.kind = 'normal' ORDER BY m.id DESC LIMIT 1) AS "lastBody",
+              (SELECT m.author_name FROM genba_qa_messages m WHERE m.thread_id = t.id AND m.kind = 'normal' ORDER BY m.id DESC LIMIT 1) AS "lastName"
+         FROM genba_qa_threads t
+        WHERE ($1 = '' OR t.site = $1)
+        ORDER BY t.updated_at DESC LIMIT 300`,
+      [site]
+    );
+    res.json(rows);
+  } catch (err) {
+    console.error("[genba-qa] list", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 起票: 質問文 + 画像 (最初のメッセージとしても記録)
+app.post("/api/genba-qa", async (req, res) => {
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  try {
+    const b = req.body || {};
+    const question = String(b.question || "").trim().slice(0, 500);
+    if (!question) return res.status(400).json({ error: "質問内容を入れてください" });
+    const id = Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+    const name = genbaQaName(req, b);
+    await p.query(
+      `INSERT INTO genba_qa_threads (id, site, question, created_by, created_name)
+       VALUES ($1,$2,$3,$4,$5)`,
+      [id, String(b.site || "").slice(0, 60), question, req.user?.email || "", name]
+    );
+    await p.query(
+      `INSERT INTO genba_qa_messages (thread_id, author_email, author_name, body, images)
+       VALUES ($1,$2,$3,$4,$5)`,
+      [id, req.user?.email || "", name, question, genbaQaImages(b.images)]
+    );
+    res.status(201).json({ id });
+  } catch (err) {
+    console.error("[genba-qa] create", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// スレッド詳細 (メッセージ込み)
+app.get("/api/genba-qa/:id", async (req, res) => {
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  try {
+    const { rows: tRows } = await p.query(
+      `SELECT id, site, question, status, sub_status AS "subStatus",
+              created_by AS "createdBy", created_name AS "createdName",
+              done_by AS "doneBy", done_at AS "doneAt", created_at AS "createdAt"
+         FROM genba_qa_threads WHERE id=$1`, [req.params.id]
+    );
+    if (!tRows.length) return res.status(404).json({ error: "not found" });
+    const { rows: msgs } = await p.query(
+      `SELECT id, author_email AS "authorEmail", author_name AS "authorName",
+              body, images, kind, created_at AS "createdAt"
+         FROM genba_qa_messages WHERE thread_id=$1 ORDER BY id`, [req.params.id]
+    );
+    res.json({ ...tRows[0], messages: msgs });
+  } catch (err) {
+    console.error("[genba-qa] detail", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 返信 (テキスト or 画像、どちらかは必須)
+app.post("/api/genba-qa/:id/messages", async (req, res) => {
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  try {
+    const b = req.body || {};
+    const body = String(b.body || "").trim().slice(0, 2000);
+    const images = genbaQaImages(b.images);
+    if (!body && images === "[]") return res.status(400).json({ error: "本文か画像を入れてください" });
+    const { rows } = await p.query(
+      `INSERT INTO genba_qa_messages (thread_id, author_email, author_name, body, images)
+       VALUES ($1,$2,$3,$4,$5) RETURNING id`,
+      [req.params.id, req.user?.email || "", genbaQaName(req, b), body, images]
+    );
+    await p.query(`UPDATE genba_qa_threads SET updated_at=NOW() WHERE id=$1`, [req.params.id]);
+    res.status(201).json({ id: rows[0].id });
+  } catch (err) {
+    console.error("[genba-qa] message", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 完了 / 差し戻し / チップ変更。完了・差し戻しは system メッセージで経緯を残す
+app.post("/api/genba-qa/:id/status", async (req, res) => {
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  try {
+    const b = req.body || {};
+    const name = genbaQaName(req, b);
+    if (b.action === "done" || b.action === "reopen") {
+      const done = b.action === "done";
+      const { rowCount } = await p.query(
+        `UPDATE genba_qa_threads SET status=$2, done_by=$3, done_at=$4, updated_at=NOW() WHERE id=$1`,
+        [req.params.id, done ? "done" : "open", done ? (req.user?.email || "") : null, done ? new Date() : null]
+      );
+      if (!rowCount) return res.status(404).json({ error: "not found" });
+      await p.query(
+        `INSERT INTO genba_qa_messages (thread_id, author_email, author_name, body, kind)
+         VALUES ($1,$2,$3,$4,'system')`,
+        [req.params.id, req.user?.email || "", name,
+         done ? `${name} が完了にしました` : `${name} が未回答に戻しました`]
+      );
+      return res.json({ ok: true, status: done ? "done" : "open" });
+    }
+    if (GENBA_QA_SUB.includes(b.subStatus)) {
+      const { rowCount } = await p.query(
+        `UPDATE genba_qa_threads SET sub_status=$2, updated_at=NOW() WHERE id=$1`,
+        [req.params.id, b.subStatus]
+      );
+      if (!rowCount) return res.status(404).json({ error: "not found" });
+      return res.json({ ok: true, subStatus: b.subStatus });
+    }
+    res.status(400).json({ error: "action (done/reopen) か subStatus を指定" });
+  } catch (err) {
+    console.error("[genba-qa] status", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 削除は社内のみ (外部ユーザーの誤爆・悪意対策)
+app.delete("/api/genba-qa/:id", async (req, res) => {
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  if (allowList.length && !allowList.includes((req.user?.email || "").toLowerCase())) {
+    return res.status(403).json({ error: "削除は社内メンバーのみ" });
+  }
+  try {
+    await p.query("DELETE FROM genba_qa_threads WHERE id=$1", [req.params.id]);
     res.status(204).end();
   } catch (err) {
     res.status(500).json({ error: err.message });
