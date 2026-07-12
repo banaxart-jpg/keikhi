@@ -297,6 +297,7 @@ import {
   serverTimestamp,
 } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
 import { BottomSheet } from "/bottom-sheet.js";
+import { SiteTabs, fetchSiteNames } from "/site-tabs.js";
 
 const API_BASE = (window.API_BASE || "").replace(/\/$/, "");
 const LAST_SEEN_KEY = "task_last_seen";
@@ -336,13 +337,7 @@ const TEMPLATE = `
     </div>
     <div class="me-pill"><span class="me-dot"></span><span>{{ meLabel }}</span></div>
 
-    <div class="tabs">
-      <button v-for="tab in tabs" :key="tab.key"
-              class="tab" :class="{ on: currentSite === tab.key }"
-              @click="onTabClick(tab.key)">
-        {{ tab.label }}<span v-if="tabCount(tab.key)" class="count">{{ tabCount(tab.key) }}</span>
-      </button>
-    </div>
+    <site-tabs :items="tabItems" :model-value="currentSite" @update:model-value="onTabClick" />
 
     <div class="list">
       <div v-if="!sortedTasks.length" class="empty">「{{ currentLabel }}」のタスクはありません</div>
@@ -647,6 +642,8 @@ const App = {
       // 「すべて」は MRU と無関係に常に先頭固定 (全現場横断ビュー)。
       return [{ key: ALL_KEY, label: "すべて" }, ...all.map((k) => ({ key: k, label: k || "雑務" }))];
     });
+    // 共通 <site-tabs> 用: 件数を載せた表示アイテム
+    const tabItems = computed(() => tabs.value.map((t) => ({ ...t, count: tabCount(t.key) })));
     const currentLabel = computed(() => {
       if (currentSite.value === ALL_KEY) return "すべて";
       return currentSite.value || "雑務";
@@ -1056,14 +1053,11 @@ const App = {
       // 現場一覧 (失敗しても tabs は雑務だけ出る)
       try {
         const token = fbAuth?.currentUser ? await fbAuth.currentUser.getIdToken() : null;
-        const r = await fetch(API_BASE + "/api/sites", {
-          headers: token ? { authorization: "Bearer " + token } : {},
+        // 完了現場 (doneAt 有り) の除外込みで共通ヘルパ (/site-tabs.js) に一本化
+        sites.value = await fetchSiteNames(async (p) => {
+          const r = await fetch(API_BASE + p, { headers: token ? { authorization: "Bearer " + token } : {} });
+          return r.ok ? r.json() : [];
         });
-        if (r.ok) {
-          const sj = await r.json();
-          // 完了した現場 (doneAt 有り) はタブに出さない。再開すれば genba 側で doneAt が NULL に戻り再表示される。
-          sites.value = (Array.isArray(sj) ? sj : []).filter((s) => !s.doneAt).map((s) => s.name).filter(Boolean);
-        }
       } catch (e) { console.warn("[task] sites fetch failed", e); sites.value = []; }
       // 初期 currentSite: MRU 最上位 (= 最後に開いた現場)。無ければ "" (雑務)。
       // 「すべて」は MRU 対象外なので除いてから先頭を取る。
@@ -1173,7 +1167,7 @@ const App = {
       signedIn, authChecked, signinErr, me, partner, tasks, sites, currentSite,
       pickerOpenId, expandedId, modalOpen, editingId, form, saving, migrating,
       titleInput, swipe,
-      meLabel, tabs, currentLabel, tabCount, sortedTasks, doneInView,
+      meLabel, tabs, tabItems, currentLabel, tabCount, sortedTasks, doneInView,
       posOf, emailOfPos, roleLabel, colorKey,
       fmtDate, fmtTime, deadlineClass, isUnread, linkedFor, availableFor,
       onAttachMaterial, onDetachMaterial, linkedItemOpenId,
@@ -1188,7 +1182,7 @@ const App = {
   },
 };
 
-createApp(App).component("bottom-sheet", BottomSheet).mount("#app");
+createApp(App).component("bottom-sheet", BottomSheet).component("site-tabs", SiteTabs).mount("#app");
 </script>
 </body>
 </html>

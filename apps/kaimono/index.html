@@ -225,6 +225,7 @@ import {
   getStorage, ref as storageRef, uploadBytes, getDownloadURL,
 } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-storage.js";
 import { BottomSheet } from "/bottom-sheet.js";
+import { SiteTabs, fetchSiteNames } from "/site-tabs.js";
 // 現場は keihi2 と同じソース (/api/sites = Cloud SQL の sites テーブル) から取る。
 // 並び順は「最近そのタブで動きがあった順」(items の createdAt/checkedAt の max)。
 // 初回 fetch までは空配列 → タブも出ず、ロード中表示のみ。
@@ -241,15 +242,7 @@ const TEMPLATE = `
       </div>
     </div>
 
-    <div class="tabs">
-      <button
-        v-for="s in tabKeys" :key="s"
-        class="tab" :class="{ on: activeSite === s }"
-        @click="selectSite(s)"
-      >
-        {{ s === ALL_KEY ? "すべて" : s }}<span class="count" v-if="countBySite[s]">{{ countBySite[s] }}</span>
-      </button>
-    </div>
+    <site-tabs :items="tabItems" :model-value="activeSite" @update:model-value="selectSite" />
   </div>
 
   <div v-if="!ready" class="loading"><span class="realtime-dot"></span>接続中…</div>
@@ -515,8 +508,11 @@ const App = {
         return idx.get(a) - idx.get(b);
       });
     });
-    // タブ列: 「すべて」を先頭固定 + 現場 (MRU 順)
+    // タブ列: 「すべて」を先頭固定 + 現場 (MRU 順)。表示は共通の <site-tabs>
     const tabKeys = computed(() => [ALL_KEY, ...sortedSites.value]);
+    const tabItems = computed(() => tabKeys.value.map((s) => ({
+      key: s, label: s === ALL_KEY ? "すべて" : s, count: countBySite.value[s] || 0,
+    })));
 
     // チェックして 1 時間経過したらアーカイブ扱い (= 一覧から消す)。
     // cron/Cloud Functions 使わず、誰かが画面を見たタイミングで判定。
@@ -857,12 +853,11 @@ const App = {
         //    (現場の追加は /genba/ アプリ独占ポリシー)
         try {
           const token = await user.value.getIdToken();
-          const r = await fetch((window.API_BASE || "") + "/api/sites", {
-            headers: { authorization: "Bearer " + token },
+          sites.value = await fetchSiteNames(async (p) => {
+            const r = await fetch((window.API_BASE || "") + p, { headers: { authorization: "Bearer " + token } });
+            return r.ok ? r.json() : [];
           });
-          if (r.ok) {
-            const rows = await r.json();
-            sites.value = (Array.isArray(rows) ? rows : []).filter((x) => !x.doneAt).map((x) => x.name).filter(Boolean);
+          {
             if (!sites.value.includes("駒込")) {
               alert("『駒込』が現場アプリに登録されていません。先に /genba/ で作成してください。");
               seeding.value = false;
@@ -918,17 +913,13 @@ const App = {
           }
           user.value = u;
           loadMru();   // ユーザー単位の現場 MRU を読み込み (sortedSites 並び順に反映)
-          // 1) /api/sites (Cloud SQL) から現場一覧。keihi2 と同じソース。
+          // 1) /api/sites (Cloud SQL) から現場一覧 (完了現場の除外込みで共通ヘルパに一本化)
           try {
             const token = await u.getIdToken();
-            const res = await fetch((window.API_BASE || "") + "/api/sites", {
-              headers: { authorization: "Bearer " + token },
+            sites.value = await fetchSiteNames(async (p) => {
+              const res = await fetch((window.API_BASE || "") + p, { headers: { authorization: "Bearer " + token } });
+              return res.ok ? res.json() : [];
             });
-            if (res.ok) {
-              const rows = await res.json();
-              // /api/sites は [{ id, name, doneAt, ... }] を返す。完了現場 (doneAt 有り) はタブから除外。
-              sites.value = (Array.isArray(rows) ? rows : []).filter((r) => !r.doneAt).map((r) => r.name).filter(Boolean);
-            }
           } catch (e) { /* タブ取得失敗は致命じゃない、Firestore は購読続行 */ }
           // 2) Firestore リアルタイム購読 (shopping_items)
           const q = query(collection(db, SHOPPING), orderBy("createdAt", "desc"));
@@ -991,7 +982,7 @@ const App = {
       expandedId, editingDetailId, editNote, editName, editQty, editUnit, editFile, editPreview, editTaskId, savingDetail,
       showArchive, archExpandedId, archivedByDay, restore,
       isOwner, canSeedKomagome,
-      filteredItems, countBySite, hasChecked, checkedCount, inputPlaceholder,
+      filteredItems, countBySite, tabItems, hasChecked, checkedCount, inputPlaceholder,
       formatMeta, displayName, catClass, hasDetail,
       colorForEmail, displayNameOf, formatTimeShort,
       add, toggle, del, clearChecked, back, seedKomagome,
@@ -1000,7 +991,7 @@ const App = {
   },
 };
 
-createApp(App).component("bottom-sheet", BottomSheet).mount("#app");
+createApp(App).component("bottom-sheet", BottomSheet).component("site-tabs", SiteTabs).mount("#app");
 </script>
 </body>
 </html>

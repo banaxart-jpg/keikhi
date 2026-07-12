@@ -79,6 +79,7 @@ body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); 
 <script src="/config.js"></script>
 <script type="module">
 import { createApp, ref, computed, watch, onMounted, onBeforeUnmount, nextTick } from "https://unpkg.com/vue@3.4.27/dist/vue.esm-browser.prod.js";
+import { SiteTabs, fetchSiteNames } from "/site-tabs.js";
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js";
 import {
   getAuth, setPersistence, browserLocalPersistence, onAuthStateChanged, signOut,
@@ -117,9 +118,7 @@ const TEMPLATE = `
       <span class="title"><span class="icon">edit_note</span> 現場メモ</span>
       <button class="pill" @click="doSignOut" title="サインアウト"><span class="icon">logout</span></button>
     </div>
-    <div v-if="sortedSites.length" class="tabs sites">
-      <button v-for="s in sortedSites" :key="s" class="tab" :class="{ on: activeSite === s }" @click="selectSite(s)">{{ s }}</button>
-    </div>
+    <site-tabs v-if="sortedSites.length" :items="sortedSites" :model-value="activeSite" @update:model-value="selectSite" />
     <div v-if="activeSite && dateTabs.length" class="tabs dates">
       <button v-for="d in dateTabs" :key="d.date" class="tab dates-tab" :class="{ on: currentDate === d.date }" @click="selectDate(d.date)">
         <span v-if="d.hasMemo" class="dot"></span>
@@ -309,14 +308,11 @@ const App = {
       // 現場一覧 (失敗しても続行)
       try {
         const token = await u.getIdToken();
-        const r = await fetch(API_BASE + "/api/sites", {
-          headers: { authorization: "Bearer " + token },
+        // 完了現場 (doneAt 有り) の除外込みで共通ヘルパ (/site-tabs.js) に一本化
+        sites.value = await fetchSiteNames(async (p) => {
+          const r = await fetch(API_BASE + p, { headers: { authorization: "Bearer " + token } });
+          return r.ok ? r.json() : [];
         });
-        if (r.ok) {
-          const sj = await r.json();
-          // 完了した現場 (doneAt 有り) はタブから除外。再開すれば genba 側で doneAt が NULL に戻り再表示される。
-          sites.value = (Array.isArray(sj) ? sj : []).filter((s) => !s.doneAt).map((s) => s.name).filter(Boolean);
-        }
       } catch (e) { console.warn("[memo] sites fetch failed", e); }
       // 初期 active site: MRU 最上位 or sortedSites[0]
       if (!activeSite.value && sortedSites.value.length) {
@@ -393,7 +389,7 @@ const App = {
   },
 };
 
-createApp(App).mount("#app");
+createApp(App).component("site-tabs", SiteTabs).mount("#app");
 </script>
 </body>
 </html>

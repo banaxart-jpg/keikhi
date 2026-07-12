@@ -31,11 +31,7 @@ body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); 
 .pill { padding: 8px 16px; border-radius: 24px; font-size: 12px; font-weight: 700; border: none; color: var(--text2); background: var(--bg); box-shadow: 4px 4px 10px var(--sd), -4px -4px 10px var(--sl); cursor: pointer; font-family: inherit; }
 .pill:active { box-shadow: inset 3px 3px 8px var(--sd), inset -3px -3px 8px var(--sl); transform: scale(0.97); }
 
-.tabs { display: flex; gap: 8px; padding: 2px 18px 10px; overflow-x: auto; scrollbar-width: none; }
-.tabs::-webkit-scrollbar { display: none; }
-.tab { padding: 9px 16px; border-radius: 18px; font-size: 13px; font-weight: 700; border: none; color: var(--text2); background: var(--bg); box-shadow: 4px 4px 10px var(--sd), -4px -4px 10px var(--sl); cursor: pointer; flex-shrink: 0; font-family: inherit; }
-.tab.on { color: white; background: linear-gradient(145deg, var(--accent2), var(--accent)); box-shadow: 6px 6px 14px rgba(59,110,165,0.35), -3px -3px 10px var(--sl); }
-.tab .n { font-size: 11px; opacity: 0.75; margin-left: 5px; }
+/* 現場タブは共通コンポーネント (/site-tabs.js) が CSS ごと提供する */
 
 /* 質問中 / 回答完了 の大タブ */
 .bigtabs { display: flex; gap: 10px; padding: 2px 18px 14px; }
@@ -119,6 +115,7 @@ import { initializeApp } from "https://www.gstatic.com/firebasejs/10.14.1/fireba
 import {
   getAuth, onAuthStateChanged, setPersistence, browserLocalPersistence,
 } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
+import { SiteTabs, fetchSiteNames } from "/site-tabs.js";
 
 const ALL_KEY = "すべて";
 
@@ -130,10 +127,7 @@ const TEMPLATE = `
       <div class="title"><span class="icon" style="color:var(--accent);">forum</span> 現場質問</div>
       <button class="pill" onclick="location.href='/'">← 戻る</button>
     </div>
-    <div class="tabs">
-      <button class="tab" :class="{ on: activeSite === ALL_KEY }" @click="setSite(ALL_KEY)">{{ ALL_KEY }}<span class="n">{{ threads.length }}</span></button>
-      <button v-for="s in sites" :key="s" class="tab" :class="{ on: activeSite === s }" @click="setSite(s)">{{ s }}<span class="n">{{ countBySite(s) }}</span></button>
-    </div>
+    <site-tabs :items="tabItems" :model-value="activeSite" @update:model-value="setSite" />
     <div class="bigtabs">
       <button class="bigtab" :class="{ 'on-open': bigTab === 'open' }" @click="bigTab = 'open'">質問中 {{ openThreads.length }}</button>
       <button class="bigtab" :class="{ 'on-done': bigTab === 'done' }" @click="bigTab = 'done'">回答完了 {{ doneThreads.length }}</button>
@@ -323,12 +317,14 @@ const App = {
     const doneThreads = computed(() => threads.value.filter((t) => t.status === "done"));
     const visibleThreads = computed(() => (bigTab.value === "open" ? openThreads.value : doneThreads.value));
     function countBySite(s) { return allThreads.value.filter((t) => t.site === s).length; }
+    const tabItems = computed(() => [
+      { key: ALL_KEY, label: ALL_KEY, count: threads.value.length },
+      ...sites.value.map((s) => ({ key: s, label: s, count: countBySite(s) })),
+    ]);
 
     async function loadSites() {
       try {
-        const list = await api("GET", "/api/sites");
-        // 完了した現場 (doneAt あり) はタブに出さない (task/kaimono と同じ扱い)
-        sites.value = (list || []).filter((s) => !s.doneAt).map((s) => s.name || s).filter(Boolean);
+        sites.value = await fetchSiteNames((p) => api("GET", p));
       } catch (_) { sites.value = []; }
     }
     async function loadThreads() {
@@ -547,7 +543,7 @@ const App = {
 
     return {
       ready, err, myEmail, ALL_KEY, sites, activeSite, bigTab, threads,
-      openThreads, doneThreads, visibleThreads, countBySite, setSite,
+      openThreads, doneThreads, visibleThreads, tabItems, setSite,
       thread, logEl, draft, attach, sending, acting,
       openThread, closeThread, send, markDone, reopen, toggleSub, onPick,
       showCreate, newSite, newQuestion, newImages, creating, startCreate, create, onPickNew,
@@ -557,7 +553,7 @@ const App = {
   },
 };
 
-createApp(App).mount("#app");
+createApp(App).component("site-tabs", SiteTabs).mount("#app");
 </script>
 </body>
 </html>
