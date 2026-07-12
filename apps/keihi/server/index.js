@@ -7948,6 +7948,28 @@ app.get("/api/genba-qa/:id", async (req, res) => {
   }
 });
 
+// 質問文の修正 (起票者 or 社内のみ)
+app.patch("/api/genba-qa/:id", async (req, res) => {
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  try {
+    const question = String(req.body?.question || "").trim().slice(0, 500);
+    if (!question) return res.status(400).json({ error: "質問内容を入れてください" });
+    const { rows } = await p.query(`SELECT created_by AS "createdBy" FROM genba_qa_threads WHERE id=$1`, [req.params.id]);
+    if (!rows.length) return res.status(404).json({ error: "not found" });
+    const me = (req.user?.email || "").toLowerCase();
+    const isInternal = allowList.length && allowList.includes(me);
+    if ((rows[0].createdBy || "").toLowerCase() !== me && !isInternal) {
+      return res.status(403).json({ error: "編集できるのは起票者か社内メンバーだけです" });
+    }
+    await p.query(`UPDATE genba_qa_threads SET question=$2, updated_at=NOW() WHERE id=$1`, [req.params.id, question]);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error("[genba-qa] edit", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // 返信 (テキスト or 画像、どちらかは必須)
 app.post("/api/genba-qa/:id/messages", async (req, res) => {
   const p = getPool();
@@ -7957,6 +7979,8 @@ app.post("/api/genba-qa/:id/messages", async (req, res) => {
     const body = String(b.body || "").trim().slice(0, 2000);
     const images = genbaQaImages(b.images);
     if (!body && images === "[]") return res.status(400).json({ error: "本文か画像を入れてください" });
+    const { rowCount: exists } = await p.query(`SELECT 1 FROM genba_qa_threads WHERE id=$1`, [req.params.id]);
+    if (!exists) return res.status(404).json({ error: "質問が見つかりません (削除された可能性)" });
     const { rows } = await p.query(
       `INSERT INTO genba_qa_messages (thread_id, author_email, author_name, body, images)
        VALUES ($1,$2,$3,$4,$5) RETURNING id`,

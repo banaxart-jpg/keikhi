@@ -43,9 +43,12 @@ body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); 
 .bigtab.on-open { color: white; background: linear-gradient(145deg, var(--accent2), var(--accent)); }
 .bigtab.on-done { color: white; background: linear-gradient(145deg, #3aaa4a, var(--done)); }
 
-.list { display: flex; flex-direction: column; gap: 12px; padding: 4px 18px; }
-.card { background: var(--bg); border-radius: 18px; box-shadow: 6px 6px 14px var(--sd), -5px -5px 12px var(--sl); padding: 14px 16px; cursor: pointer; }
-.card .q { font-size: 14px; font-weight: 700; line-height: 1.5; word-break: break-word; }
+.list { display: flex; flex-direction: column; gap: 12px; padding: 4px 18px; max-width: 720px; margin: 0 auto; }
+.header-fix > * { max-width: 720px; margin-left: auto; margin-right: auto; }
+.card { background: var(--bg); border-radius: 18px; box-shadow: 6px 6px 14px var(--sd), -5px -5px 12px var(--sl); padding: 14px 16px; cursor: pointer; position: relative; }
+.card:active { transform: scale(0.99); }
+.card .unread { position: absolute; top: 12px; right: 14px; width: 10px; height: 10px; border-radius: 5px; background: var(--danger); box-shadow: 0 0 0 3px rgba(176,64,64,0.18); }
+.card .q { font-size: 14px; font-weight: 700; line-height: 1.5; word-break: break-word; padding-right: 16px; }
 .card .meta { display: flex; align-items: center; gap: 8px; margin-top: 8px; font-size: 11px; color: var(--text2); flex-wrap: wrap; }
 .chip { font-size: 10px; font-weight: 800; padding: 4px 9px; border-radius: 10px; white-space: nowrap; }
 .chip.kento { color: #b0813f; background: rgba(176,129,63,0.14); }
@@ -65,6 +68,10 @@ body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); 
 .thread-head .meta2 { display: flex; gap: 8px; align-items: center; margin-top: 8px; flex-wrap: wrap; }
 .back-btn { border: none; background: var(--bg); border-radius: 14px; width: 40px; height: 40px; box-shadow: 4px 4px 10px var(--sd), -4px -4px 10px var(--sl); cursor: pointer; color: var(--text2); font-size: 18px; flex-shrink: 0; }
 .chat-log { flex: 1; overflow-y: auto; padding: 14px 14px 10px; display: flex; flex-direction: column; gap: 10px; }
+.thread-head .row1, .chat-log, .thread-actions, .chat-input-row, .attach-strip { max-width: 720px; margin-left: auto; margin-right: auto; width: 100%; }
+.head-btns { display: flex; gap: 8px; flex-shrink: 0; }
+.head-icon-btn { border: none; background: var(--bg); border-radius: 12px; width: 36px; height: 36px; box-shadow: 3px 3px 8px var(--sd), -3px -3px 8px var(--sl); cursor: pointer; color: var(--text2); font-size: 15px; }
+.head-icon-btn.danger { color: var(--danger); }
 .msg { max-width: 86%; padding: 10px 14px; border-radius: 14px; font-size: 13px; line-height: 1.6; white-space: pre-wrap; word-break: break-word; }
 .msg.mine { align-self: flex-end; background: linear-gradient(145deg, var(--accent2), var(--accent)); color: white; border-bottom-right-radius: 4px; }
 .msg.other { align-self: flex-start; background: var(--bg); box-shadow: 4px 4px 10px var(--sd), -3px -3px 8px var(--sl); border-bottom-left-radius: 4px; }
@@ -136,6 +143,7 @@ const TEMPLATE = `
   <div class="list">
     <div v-if="visibleThreads.length === 0" class="empty">{{ bigTab === 'open' ? 'いま質問中の項目はありません' : '完了した項目はまだありません' }}</div>
     <div v-for="t in visibleThreads" :key="t.id" class="card" @click="openThread(t.id)">
+      <span v-if="isUnread(t)" class="unread"></span>
       <div class="q">{{ t.question }}</div>
       <div class="meta">
         <span v-if="t.status === 'done'" class="chip done">完了</span>
@@ -166,6 +174,10 @@ const TEMPLATE = `
             <span v-if="thread.site" class="site-tag">{{ thread.site }}</span>
             <span style="font-size:11px;color:var(--text2);">{{ thread.createdName }} · {{ fmtDate(thread.createdAt) }}</span>
           </div>
+        </div>
+        <div class="head-btns">
+          <button v-if="canEdit" class="head-icon-btn" @click="startEditQ" title="質問文を編集"><span class="icon">edit</span></button>
+          <button v-if="isInternal" class="head-icon-btn danger" @click="delThread" title="削除"><span class="icon">delete</span></button>
         </div>
       </div>
     </div>
@@ -216,12 +228,24 @@ const TEMPLATE = `
     </div>
   </div>
 
-  <!-- 名前入力 (初回だけ) -->
+  <!-- 名前入力 (初回の発言・完了操作の前だけ) -->
   <div v-if="askName" class="sheet-bg">
     <div class="sheet">
       <h3>名前を入れてください (チャットに表示されます)</h3>
       <input v-model="nameDraft" placeholder="例: 田中 (設計)" @keydown.enter="saveName">
-      <div class="row"><button class="primary" @click="saveName" :disabled="!nameDraft.trim()">これで始める</button></div>
+      <div class="row"><button class="primary" @click="saveName" :disabled="!nameDraft.trim()">これで参加する</button></div>
+    </div>
+  </div>
+
+  <!-- 質問文の編集 (起票者・社内のみ) -->
+  <div v-if="editingQ" class="sheet-bg" @click.self="editingQ = false">
+    <div class="sheet">
+      <h3>質問文を編集</h3>
+      <textarea v-model="editQDraft"></textarea>
+      <div class="row">
+        <button class="ghost" @click="editingQ = false">キャンセル</button>
+        <button class="primary" @click="saveEditQ" :disabled="!editQDraft.trim() || savingQ">{{ savingQ ? '保存中…' : '保存' }}</button>
+      </div>
     </div>
   </div>
 
@@ -262,6 +286,25 @@ const App = {
     const nameDraft = ref("");
     const myName = ref(localStorage.getItem("genbaqa_name") || "");
     const viewImage = ref(null);
+    const editingQ = ref(false);
+    const editQDraft = ref("");
+    const savingQ = ref(false);
+    // 社内判定 (削除ボタンの表示用。サーバー側でも同じ判定で弾く)
+    const INTERNAL = new Set(["info@banax.tokyo", "konishi0221@gmail.com", "banaxart@gmail.com"]);
+    const isInternal = computed(() => INTERNAL.has((myEmail.value || "").toLowerCase()));
+    const canEdit = computed(() => thread.value &&
+      (isInternal.value || (thread.value.createdBy || "").toLowerCase() === (myEmail.value || "").toLowerCase()));
+    // 未読 (端末ローカル): 見た時点の返信数を覚えて、増えてたら赤ドット
+    let seen = {};
+    try { seen = JSON.parse(localStorage.getItem("genbaqa_seen") || "{}") || {}; } catch (_) { seen = {}; }
+    function isUnread(t) {
+      if (t.id in seen) return t.messageCount > seen[t.id];
+      return (t.createdBy || "").toLowerCase() !== (myEmail.value || "").toLowerCase(); // 未見の他人の質問
+    }
+    function markSeen(id, count) {
+      seen[id] = count;
+      localStorage.setItem("genbaqa_seen", JSON.stringify(seen));
+    }
 
     async function api(method, path, body) {
       const res = await fetch((window.API_BASE || "") + path, {
@@ -284,7 +327,8 @@ const App = {
     async function loadSites() {
       try {
         const list = await api("GET", "/api/sites");
-        sites.value = (list || []).map((s) => s.name || s).filter(Boolean);
+        // 完了した現場 (doneAt あり) はタブに出さない (task/kaimono と同じ扱い)
+        sites.value = (list || []).filter((s) => !s.doneAt).map((s) => s.name || s).filter(Boolean);
       } catch (_) { sites.value = []; }
     }
     async function loadThreads() {
@@ -370,13 +414,14 @@ const App = {
       } catch (e) { err.value = e.message; } finally { creating.value = false; }
     }
 
-    // ── スレッド ──
+    // ── スレッド (閲覧は名前入力なしで OK。発言・完了の時だけ聞く) ──
+    function normalCount(t) { return (t.messages || []).filter((m) => m.kind === "normal").length; }
     async function openThread(id) {
-      if (needName()) return;
       try {
         thread.value = await api("GET", "/api/genba-qa/" + id);
         draft.value = ""; attach.value = [];
-        nextTick(scrollBottom);
+        markSeen(id, normalCount(thread.value));
+        scrollBottomHard();
         startPolling();
       } catch (e) { err.value = e.message; }
     }
@@ -386,6 +431,12 @@ const App = {
       loadThreads();
     }
     function scrollBottom() { if (logEl.value) logEl.value.scrollTop = logEl.value.scrollHeight; }
+    // 画像の読み込みで高さが後から伸びるので、数回に分けて張り付き直す
+    function scrollBottomHard() {
+      nextTick(scrollBottom);
+      setTimeout(scrollBottom, 250);
+      setTimeout(scrollBottom, 800);
+    }
     function startPolling() {
       stopPolling();
       pollTimer = setInterval(async () => {
@@ -394,14 +445,15 @@ const App = {
           const t = await api("GET", "/api/genba-qa/" + thread.value.id);
           const grew = t.messages.length !== thread.value.messages.length;
           thread.value = t;
-          if (grew) nextTick(scrollBottom);
+          markSeen(t.id, normalCount(t));
+          if (grew) scrollBottomHard();
         } catch (_) {}
       }, 5000);
     }
     function stopPolling() { if (pollTimer) { clearInterval(pollTimer); pollTimer = null; } }
 
     async function send() {
-      if (sending.value) return;
+      if (sending.value || needName()) return;
       sending.value = true;
       err.value = "";
       try {
@@ -410,19 +462,50 @@ const App = {
         });
         draft.value = ""; attach.value = [];
         thread.value = await api("GET", "/api/genba-qa/" + thread.value.id);
-        nextTick(scrollBottom);
+        markSeen(thread.value.id, normalCount(thread.value));
+        scrollBottomHard();
       } catch (e) { err.value = e.message; } finally { sending.value = false; }
     }
-    async function markDone() { await setStatus("done"); }
-    async function reopen() { await setStatus("reopen"); }
+    async function markDone() {
+      if (needName()) return;
+      if (!confirm("この質問を完了にしますか？")) return;
+      await setStatus("done");
+    }
+    async function reopen() {
+      if (needName()) return;
+      await setStatus("reopen");
+    }
     async function setStatus(action) {
       acting.value = true;
       err.value = "";
       try {
         await api("POST", "/api/genba-qa/" + thread.value.id + "/status", { action, name: myName.value });
         thread.value = await api("GET", "/api/genba-qa/" + thread.value.id);
-        nextTick(scrollBottom);
+        markSeen(thread.value.id, normalCount(thread.value));
+        scrollBottomHard();
       } catch (e) { err.value = e.message; } finally { acting.value = false; }
+    }
+    // 質問文の編集 (起票者・社内のみ。ボタン自体も canEdit で出し分け)
+    function startEditQ() {
+      editQDraft.value = thread.value.question;
+      editingQ.value = true;
+    }
+    async function saveEditQ() {
+      savingQ.value = true;
+      err.value = "";
+      try {
+        await api("PATCH", "/api/genba-qa/" + thread.value.id, { question: editQDraft.value.trim() });
+        thread.value.question = editQDraft.value.trim();
+        editingQ.value = false;
+      } catch (e) { err.value = e.message; } finally { savingQ.value = false; }
+    }
+    // 削除 (社内のみ)。スレッドごと消える不可逆操作なので必ず確認
+    async function delThread() {
+      if (!confirm("この質問をチャットごと削除しますか？(元に戻せません)")) return;
+      try {
+        await api("DELETE", "/api/genba-qa/" + thread.value.id);
+        closeThread();
+      } catch (e) { err.value = e.message; }
     }
     async function toggleSub() {
       const next = thread.value.subStatus === "検討中" ? "確認中" : "検討中";
@@ -451,10 +534,16 @@ const App = {
           setInterval(async () => { token = await u.getIdToken(); }, 30 * 60 * 1000);
           ready.value = true;
           await Promise.all([loadSites(), loadThreads()]);
+          // 一覧はゆっくり自動更新 (スレッドを開いてない時だけ) + 画面復帰時
+          listTimer = setInterval(() => { if (!thread.value) loadThreads(); }, 30000);
+          document.addEventListener("visibilitychange", () => {
+            if (document.visibilityState === "visible" && !thread.value) loadThreads();
+          });
         });
       } catch (e) { err.value = "初期化に失敗: " + e.message; }
     });
-    onBeforeUnmount(stopPolling);
+    let listTimer = null;
+    onBeforeUnmount(() => { stopPolling(); if (listTimer) clearInterval(listTimer); });
 
     return {
       ready, err, myEmail, ALL_KEY, sites, activeSite, bigTab, threads,
@@ -463,6 +552,7 @@ const App = {
       openThread, closeThread, send, markDone, reopen, toggleSub, onPick,
       showCreate, newSite, newQuestion, newImages, creating, startCreate, create, onPickNew,
       askName, nameDraft, saveName, viewImage, fmtDate,
+      isUnread, isInternal, canEdit, startEditQ, saveEditQ, delThread, editingQ, editQDraft, savingQ,
     };
   },
 };
