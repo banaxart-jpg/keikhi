@@ -1083,6 +1083,20 @@ async function ensureSchema() {
       )
     `);
     await p.query("CREATE INDEX IF NOT EXISTS genba_qa_msg_thread_idx ON genba_qa_messages (thread_id, id)");
+    // 原価計算 (genka): 現場ごとに見積金額 - 各業者の金額 = 利益 を出す。金額は「万」単位で保持。
+    // vendors = [{ name, amount }] (amount は万)。全員共有 (records/tasks と同じ)。
+    await p.query(`
+      CREATE TABLE IF NOT EXISTS genka_projects (
+        id TEXT PRIMARY KEY,
+        site TEXT NOT NULL DEFAULT '',
+        quote NUMERIC NOT NULL DEFAULT 0,
+        vendors JSONB NOT NULL DEFAULT '[]',
+        memo TEXT NOT NULL DEFAULT '',
+        created_by TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `);
     // yado: Beds24 予約のローカルキャッシュ + 同期メタ
     await p.query(`
       CREATE TABLE IF NOT EXISTS yado_bookings (
@@ -8064,6 +8078,87 @@ ${body.slice(0, 500)}`;
   } catch (err) {
     console.error("sekkei title error", err);
     res.status(500).json({ error: String(err?.message || err) });
+  }
+});
+
+// ─────────────────────────────
+// 原価計算 (genka): 現場ごとに 見積 - 各業者金額 = 利益。金額は「万」単位。
+// 全員共有 (records/tasks と同型)。vendors = [{ name, amount }]。
+// ─────────────────────────────
+app.get("/api/genka", async (req, res) => {
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  try {
+    const { rows } = await p.query(
+      `SELECT id, site, quote::float8 AS quote, vendors, memo,
+              created_by AS "createdBy", created_at AS "createdAt", updated_at AS "updatedAt"
+         FROM genka_projects
+        ORDER BY updated_at DESC, id DESC LIMIT 500`
+    );
+    res.json(rows);
+  } catch (err) {
+    console.error("genka list error", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post("/api/genka", async (req, res) => {
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  try {
+    const b = req.body || {};
+    const id = b.id || (Date.now().toString(36) + Math.random().toString(36).slice(2, 8));
+    const vendors = Array.isArray(b.vendors) ? JSON.stringify(b.vendors) : "[]";
+    const { rows } = await p.query(
+      `INSERT INTO genka_projects (id, site, quote, vendors, memo, created_by)
+       VALUES ($1,$2,$3,$4,$5,$6)
+       RETURNING id, created_at AS "createdAt", updated_at AS "updatedAt"`,
+      [id, b.site || "", Number(b.quote) || 0, vendors, b.memo || "", req.user?.email || ""]
+    );
+    res.status(201).json(rows[0]);
+  } catch (err) {
+    console.error("genka insert error", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.put("/api/genka/:id", async (req, res) => {
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  try {
+    const b = req.body || {};
+    const { rows } = await p.query(
+      `UPDATE genka_projects SET
+         site   = COALESCE($2, site),
+         quote  = COALESCE($3, quote),
+         vendors = COALESCE($4::jsonb, vendors),
+         memo   = COALESCE($5, memo),
+         updated_at = NOW()
+       WHERE id = $1
+       RETURNING id, updated_at AS "updatedAt"`,
+      [
+        req.params.id, b.site ?? null,
+        b.quote != null ? Number(b.quote) : null,
+        b.vendors != null ? JSON.stringify(b.vendors) : null,
+        b.memo ?? null,
+      ]
+    );
+    if (!rows.length) return res.status(404).json({ error: "not found" });
+    res.json(rows[0]);
+  } catch (err) {
+    console.error("genka update error", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete("/api/genka/:id", async (req, res) => {
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  try {
+    await p.query("DELETE FROM genka_projects WHERE id = $1", [req.params.id]);
+    res.status(204).end();
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
 });
 

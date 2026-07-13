@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="原価計算">
+<link rel="apple-touch-icon" href="/icon.png">
+<title>原価計算</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@24,400,0,0">
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+:root {
+  --bg: #e4e6ee; --bg2: #d8dae4; --sl: rgba(255,255,255,1); --sd: rgba(168,172,192,0.75);
+  --text: #42455e; --text2: rgba(66,69,94,0.52); --text3: rgba(66,69,94,0.28);
+  --accent: #059669; --profit: #2a8c3a; --loss: #b04040;
+}
+body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; padding-bottom: 40px; }
+.icon { font-family: 'Material Symbols Outlined'; font-weight: normal; font-size: 1.1em; display: inline-block; line-height: 1; vertical-align: -0.18em; }
+
+.bar { display: flex; justify-content: space-between; align-items: center; padding: 40px 18px 0; gap: 8px; }
+.pill { padding: 8px 15px; border-radius: 24px; font-size: 12px; font-weight: 700; border: none; color: var(--text2); background: var(--bg); box-shadow: 4px 4px 10px var(--sd), -4px -4px 10px var(--sl); cursor: pointer; font-family: inherit; text-decoration: none; }
+.pill:active { box-shadow: inset 3px 3px 8px var(--sd), inset -3px -3px 8px var(--sl); transform: scale(0.97); }
+.pill.primary { background: var(--accent); color: #fff; }
+.pill:disabled { opacity: 0.5; }
+
+.wrap { padding: 16px 16px 40px; max-width: 640px; margin: 0 auto; }
+.title { font-size: 24px; font-weight: 800; }
+.subtitle { font-size: 12px; color: var(--text2); font-weight: 600; margin-top: 2px; margin-bottom: 16px; }
+
+/* 合計サマリー (一覧上部) */
+.totals { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; margin-bottom: 18px; }
+.tcell { padding: 12px 10px; border-radius: 14px; background: var(--bg); box-shadow: inset 3px 3px 8px var(--sd), inset -3px -3px 8px var(--sl); text-align: center; }
+.tcell .n { font-size: 18px; font-weight: 900; line-height: 1; }
+.tcell .l { font-size: 9px; font-weight: 800; letter-spacing: 0.1em; color: var(--text2); margin-top: 5px; }
+
+/* 現場カード */
+.card { display: grid; grid-template-columns: 1fr auto; gap: 10px; align-items: center; padding: 16px; border-radius: 16px; background: var(--bg); box-shadow: 5px 5px 12px var(--sd), -4px -4px 10px var(--sl); margin-bottom: 10px; cursor: pointer; }
+.card:active { transform: scale(0.99); }
+.card .site { font-size: 15px; font-weight: 800; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.card .breakdown { font-size: 11px; color: var(--text2); font-weight: 600; margin-top: 4px; }
+.card .profit { text-align: right; }
+.card .profit .p { font-size: 19px; font-weight: 900; line-height: 1; }
+.card .profit .rate { font-size: 11px; font-weight: 800; margin-top: 4px; }
+.pos { color: var(--profit); } .neg { color: var(--loss); }
+.list-empty { text-align: center; color: var(--text2); font-weight: 600; font-size: 13px; padding: 40px 20px; }
+
+/* 詳細 */
+.field-label { font-size: 11px; font-weight: 800; letter-spacing: 0.1em; text-transform: uppercase; color: var(--text2); margin: 16px 2px 8px; }
+input.inp { width: 100%; padding: 12px 14px; border-radius: 14px; border: none; font-size: 15px; font-family: inherit; color: var(--text); background: var(--bg); box-shadow: inset 3px 3px 8px var(--sd), inset -3px -3px 8px var(--sl); outline: none; }
+.amt-wrap { position: relative; }
+.amt-wrap input { padding-right: 42px; text-align: right; font-weight: 800; }
+.amt-wrap .unit { position: absolute; right: 14px; top: 50%; transform: translateY(-50%); font-size: 13px; font-weight: 800; color: var(--text2); }
+
+.vendor-row { display: grid; grid-template-columns: 1fr 110px 34px; gap: 8px; align-items: center; margin-bottom: 8px; }
+.vendor-row .amt-wrap input { font-size: 14px; }
+.vrm { width: 34px; height: 34px; border-radius: 10px; border: none; background: var(--bg); color: var(--loss); box-shadow: 3px 3px 8px var(--sd), -3px -3px 8px var(--sl); cursor: pointer; display: flex; align-items: center; justify-content: center; }
+.vrm .icon { font-size: 18px; vertical-align: 0; }
+.add-vendor { width: 100%; padding: 12px; border-radius: 14px; border: 1px dashed var(--accent); background: transparent; color: var(--accent); font-size: 13px; font-weight: 800; font-family: inherit; cursor: pointer; margin-top: 4px; }
+
+/* 詳細サマリー */
+.summary { margin-top: 20px; padding: 18px; border-radius: 18px; background: var(--bg); box-shadow: 6px 6px 14px var(--sd), -5px -5px 12px var(--sl); }
+.srow { display: flex; justify-content: space-between; align-items: baseline; padding: 7px 0; font-size: 14px; }
+.srow.total { border-top: 1px solid rgba(154,160,184,0.3); margin-top: 6px; padding-top: 14px; }
+.srow .lbl { color: var(--text2); font-weight: 700; }
+.srow .val { font-weight: 800; }
+.srow.profit .val { font-size: 26px; font-weight: 900; }
+.srow .yen { font-size: 10px; color: var(--text3); font-weight: 600; margin-left: 6px; }
+
+.actions { display: flex; gap: 10px; margin-top: 20px; }
+.actions .pill { flex: 1; text-align: center; padding: 13px; font-size: 14px; }
+.danger { color: var(--loss); }
+
+.toast { position: fixed; left: 50%; bottom: 30px; transform: translateX(-50%); background: var(--text); color: #fff; padding: 11px 18px; border-radius: 20px; font-size: 13px; font-weight: 700; z-index: 500; display: none; box-shadow: 0 6px 20px rgba(0,0,0,0.25); }
+.toast.err { background: #b04040; }
+
+#signinOverlay { display: none; position: fixed; inset: 0; z-index: 400; background: var(--bg); flex-direction: column; align-items: center; justify-content: center; padding: 32px; text-align: center; gap: 18px; }
+</style>
+</head>
+<body>
+<div id="signinOverlay">
+  <div style="font-size:24px;font-weight:800;">原価計算</div>
+  <a class="pill" href="/" style="text-decoration:none;">トップに戻る</a>
+  <div id="signinErr" style="font-size:11px;color:#b04040;font-family:monospace;"></div>
+</div>
+
+<div id="app" style="display:none;">
+  <!-- 一覧 -->
+  <div id="listScreen">
+    <div class="bar">
+      <a class="pill" href="/"><span class="icon">arrow_back</span> 戻る</a>
+      <span style="font-size:11px;letter-spacing:0.22em;color:var(--text3);font-weight:700;text-transform:uppercase;">GENKA</span>
+      <button class="pill primary" id="newBtn" type="button"><span class="icon">add</span> 現場</button>
+    </div>
+    <div class="wrap">
+      <div class="title">原価計算</div>
+      <div class="subtitle">現場ごとに 見積 − 業者の金額 = 利益。金額は万単位。</div>
+      <div class="totals" id="totals"></div>
+      <div id="list"></div>
+    </div>
+  </div>
+
+  <!-- 詳細 -->
+  <div id="detailScreen" style="display:none;">
+    <div class="bar">
+      <button class="pill" id="backBtn" type="button"><span class="icon">arrow_back</span> 一覧</button>
+      <span style="font-size:11px;letter-spacing:0.16em;color:var(--text3);font-weight:800;text-transform:uppercase;">原価計算</span>
+      <button class="pill danger" id="deleteBtn" type="button"><span class="icon">delete</span></button>
+    </div>
+    <div class="wrap" id="detailBody"></div>
+  </div>
+</div>
+
+<datalist id="siteList"></datalist>
+<div class="toast" id="toast"></div>
+
+<script src="/config.js"></script>
+<script type="module">
+import { initAuthBoot, api } from "/api-auth.js";
+
+const $ = (id) => document.getElementById(id);
+let projects = [];
+let siteNames = [];
+let cur = null;
+
+// ───────── utils ─────────
+let _tt = null;
+function toast(msg, isErr = false) {
+  const t = $("toast"); t.textContent = msg; t.classList.toggle("err", !!isErr);
+  t.style.display = "block"; clearTimeout(_tt);
+  _tt = setTimeout(() => { t.style.display = "none"; }, isErr ? 4000 : 1800);
+}
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+const num = (v) => { const n = Number(v); return isFinite(n) ? n : 0; };
+function costOf(p) { return (p.vendors || []).reduce((s, v) => s + num(v.amount), 0); }
+function profitOf(p) { return num(p.quote) - costOf(p); }
+function rateOf(p) { const q = num(p.quote); return q > 0 ? (profitOf(p) / q) * 100 : 0; }
+// 万 → 表示。整数はそのまま、小数は 1 桁まで
+function fmtMan(v) {
+  const n = num(v);
+  const s = Number.isInteger(n) ? String(n) : n.toFixed(1);
+  return s.replace(/\.0$/, "") + "万";
+}
+function yen(vMan) { return "¥" + Math.round(num(vMan) * 10000).toLocaleString(); }
+
+// ───────── 一覧 ─────────
+async function loadList() {
+  try {
+    const [ps, sites] = await Promise.all([
+      api("GET", "/api/genka"),
+      api("GET", "/api/sites").catch(() => []),
+    ]);
+    projects = ps || [];
+    siteNames = (sites || []).map((s) => s.name).filter(Boolean);
+    $("siteList").innerHTML = siteNames.map((n) => `<option value="${escapeHtml(n)}">`).join("");
+  } catch (e) { toast("読み込み失敗: " + e.message, true); projects = []; }
+  renderList();
+}
+function renderList() {
+  cur = null;
+  $("listScreen").style.display = ""; $("detailScreen").style.display = "none";
+  const totalQuote = projects.reduce((s, p) => s + num(p.quote), 0);
+  const totalCost = projects.reduce((s, p) => s + costOf(p), 0);
+  const totalProfit = totalQuote - totalCost;
+  $("totals").innerHTML = `
+    <div class="tcell"><div class="n">${fmtMan(totalQuote)}</div><div class="l">見積合計</div></div>
+    <div class="tcell"><div class="n">${fmtMan(totalCost)}</div><div class="l">原価合計</div></div>
+    <div class="tcell"><div class="n ${totalProfit >= 0 ? "pos" : "neg"}">${totalProfit >= 0 ? "+" : ""}${fmtMan(totalProfit)}</div><div class="l">利益合計</div></div>
+  `;
+  if (projects.length === 0) {
+    $("list").innerHTML = `<div class="list-empty">まだありません。右上の「＋現場」から追加。</div>`;
+    return;
+  }
+  $("list").innerHTML = projects.map((p) => {
+    const prof = profitOf(p), rate = rateOf(p);
+    const cls = prof >= 0 ? "pos" : "neg";
+    return `
+      <div class="card" data-id="${p.id}">
+        <div>
+          <div class="site">${escapeHtml(p.site || "(現場名なし)")}</div>
+          <div class="breakdown">見積 ${fmtMan(p.quote)} · 原価 ${fmtMan(costOf(p))} · 業者${(p.vendors || []).length}社</div>
+        </div>
+        <div class="profit">
+          <div class="p ${cls}">${prof >= 0 ? "+" : ""}${fmtMan(prof)}</div>
+          <div class="rate ${cls}">利益率 ${rate.toFixed(0)}%</div>
+        </div>
+      </div>`;
+  }).join("");
+  document.querySelectorAll(".card").forEach((c) =>
+    c.addEventListener("click", () => openDetail(c.dataset.id)));
+}
+
+// ───────── 詳細 ─────────
+function newProject() {
+  cur = { id: null, site: "", quote: 0, vendors: [{ name: "", amount: "" }], memo: "" };
+  showDetail();
+}
+function openDetail(id) {
+  const p = projects.find((x) => x.id === id);
+  if (!p) return;
+  cur = { id: p.id, site: p.site || "", quote: p.quote || 0, memo: p.memo || "",
+          vendors: Array.isArray(p.vendors) ? JSON.parse(JSON.stringify(p.vendors)) : [] };
+  if (cur.vendors.length === 0) cur.vendors.push({ name: "", amount: "" });
+  showDetail();
+}
+function showDetail() { $("listScreen").style.display = "none"; $("detailScreen").style.display = ""; renderDetail(); }
+
+function renderDetail() {
+  if (!cur) return;
+  $("deleteBtn").style.display = cur.id ? "" : "none";
+  $("detailBody").innerHTML = `
+    <div class="field-label">現場名</div>
+    <input class="inp" id="siteInp" list="siteList" placeholder="例：田中様邸 新築" value="${escapeHtml(cur.site || "")}">
+
+    <div class="field-label">見積金額（お客さんに出した額）</div>
+    <div class="amt-wrap"><input class="inp" id="quoteInp" type="number" inputmode="decimal" placeholder="0" value="${cur.quote || ""}"><span class="unit">万</span></div>
+
+    <div class="field-label">業者（原価）</div>
+    <div id="vendorList">${cur.vendors.map((v, i) => vendorRow(v, i)).join("")}</div>
+    <button class="add-vendor" id="addVendorBtn" type="button"><span class="icon">add</span> 業者を追加</button>
+
+    <div class="summary">
+      <div class="srow"><span class="lbl">見積</span><span class="val" id="sQuote"></span></div>
+      <div class="srow"><span class="lbl">原価合計</span><span class="val" id="sCost"></span></div>
+      <div class="srow total profit"><span class="lbl">利益</span><span class="val" id="sProfit"></span></div>
+      <div class="srow"><span class="lbl">利益率</span><span class="val" id="sRate"></span></div>
+    </div>
+
+    <div class="field-label">メモ（任意）</div>
+    <input class="inp" id="memoInp" placeholder="補足があれば" value="${escapeHtml(cur.memo || "")}">
+
+    <div class="actions">
+      <button class="pill primary" id="saveBtn" type="button"><span class="icon">save</span> ${cur.id ? "保存" : "登録"}</button>
+    </div>
+  `;
+  $("siteInp").addEventListener("input", (e) => { cur.site = e.target.value; });
+  $("quoteInp").addEventListener("input", (e) => { cur.quote = num(e.target.value); updateSummary(); });
+  $("memoInp").addEventListener("input", (e) => { cur.memo = e.target.value; });
+  $("addVendorBtn").addEventListener("click", () => { cur.vendors.push({ name: "", amount: "" }); renderDetail(); });
+  $("saveBtn").addEventListener("click", saveProject);
+  wireVendors();
+  updateSummary();
+}
+function vendorRow(v, i) {
+  return `
+    <div class="vendor-row" data-i="${i}">
+      <input class="inp vname" placeholder="業者名（例：○○電気）" value="${escapeHtml(v.name || "")}">
+      <div class="amt-wrap"><input class="inp vamt" type="number" inputmode="decimal" placeholder="0" value="${v.amount ?? ""}"><span class="unit">万</span></div>
+      <button class="vrm" type="button" title="削除"><span class="icon">close</span></button>
+    </div>`;
+}
+function wireVendors() {
+  document.querySelectorAll(".vendor-row").forEach((row) => {
+    const i = Number(row.dataset.i);
+    row.querySelector(".vname").addEventListener("input", (e) => { cur.vendors[i].name = e.target.value; });
+    row.querySelector(".vamt").addEventListener("input", (e) => { cur.vendors[i].amount = e.target.value; updateSummary(); });
+    row.querySelector(".vrm").addEventListener("click", () => { cur.vendors.splice(i, 1); if (cur.vendors.length === 0) cur.vendors.push({ name: "", amount: "" }); renderDetail(); });
+  });
+}
+function updateSummary() {
+  const cost = costOf(cur), prof = profitOf(cur), rate = rateOf(cur);
+  const cls = prof >= 0 ? "pos" : "neg";
+  $("sQuote").innerHTML = `${fmtMan(cur.quote)}<span class="yen">${yen(cur.quote)}</span>`;
+  $("sCost").innerHTML = `${fmtMan(cost)}<span class="yen">${yen(cost)}</span>`;
+  $("sProfit").className = `val ${cls}`;
+  $("sProfit").innerHTML = `${prof >= 0 ? "+" : ""}${fmtMan(prof)}<span class="yen">${yen(prof)}</span>`;
+  $("sRate").className = `val ${cls}`;
+  $("sRate").textContent = `${rate.toFixed(0)}%`;
+}
+
+async function saveProject() {
+  if (!cur) return;
+  // 空の業者行は落とす
+  const vendors = cur.vendors
+    .map((v) => ({ name: (v.name || "").trim(), amount: num(v.amount) }))
+    .filter((v) => v.name || v.amount);
+  const payload = { site: cur.site || "", quote: num(cur.quote), vendors, memo: cur.memo || "" };
+  const btn = $("saveBtn"); btn.disabled = true;
+  try {
+    if (!cur.id) {
+      const saved = await api("POST", "/api/genka", payload);
+      cur.id = saved.id; toast("登録しました");
+    } else {
+      await api("PUT", `/api/genka/${cur.id}`, payload); toast("保存しました");
+    }
+    await loadList();
+  } catch (e) { toast("保存失敗: " + e.message, true); btn.disabled = false; }
+}
+
+async function deleteProject() {
+  if (!cur?.id) return;
+  if (!confirm("この現場を削除しますか？")) return;
+  try { await api("DELETE", `/api/genka/${cur.id}`); toast("削除しました"); await loadList(); }
+  catch (e) { toast("削除失敗: " + e.message, true); }
+}
+
+$("newBtn").addEventListener("click", newProject);
+$("backBtn").addEventListener("click", renderList);
+$("deleteBtn").addEventListener("click", deleteProject);
+
+initAuthBoot({
+  returnPath: "/genka/",
+  onReady: async () => {
+    $("app").style.display = "";
+    $("list").innerHTML = '<div class="list-empty">読み込み中…</div>';
+    await loadList();
+  },
+});
+</script>
+</body>
+</html>
