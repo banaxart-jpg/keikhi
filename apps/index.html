@@ -560,7 +560,9 @@ let fbAuth = null;
   // dev プレビュー: cloudshell.dev で Firebase ログイン不可のためスキップ。
   if (window.DEV_NO_AUTH) {
     document.getElementById("signinOverlay").style.display = "none";
-    document.getElementById("app").style.display = "block";
+    // インライン style を消して stylesheet の display:flex に戻す
+    // ("block" を書くと縦 flex レイアウトが壊れて画面上半分に潰れる — 実測)
+    document.getElementById("app").style.display = "";
     document.getElementById("who").textContent = "dev@local";
     renderGrid();
     return;
@@ -601,7 +603,8 @@ let fbAuth = null;
       // 元のミニアプリへ自動復帰（ログイン後に経費へ戻る等）
       if (nextUrl && nextUrl.startsWith("/")) { location.replace(nextUrl); return; }
       document.getElementById("signinOverlay").style.display = "none";
-      document.getElementById("app").style.display = "block";
+      // インライン style を消して stylesheet の display:flex に戻す (block だと縦 flex が壊れる)
+      document.getElementById("app").style.display = "";
       document.getElementById("who").textContent = user?.email || "サインイン済み";
       renderGrid();
       // バッジ + ユーザー設定 (Firestore) は後追いで取得 → 取れたら再 render
