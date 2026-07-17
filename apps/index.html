@@ -53,9 +53,12 @@ body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); 
 .app-name { font-size: 10.5px; font-weight: 700; margin-top: 7px; line-height: 1.3; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; word-break: break-all; }
 .app-badge { position: absolute; bottom: -5px; left: 50%; transform: translateX(-50%); font-size: 8px; font-weight: 800; letter-spacing: 0.08em; color: var(--text3); background: var(--bg); border-radius: 6px; padding: 1px 5px; box-shadow: 2px 2px 6px var(--sd); }
 
-/* ───── 編集モード (iOS 風 jiggle + × で非表示、‹ › でカテゴリー内手動並べ替え) ───── */
-body.edit-mode .app-card { animation: jiggle 0.25s ease-in-out infinite alternate; cursor: default; }
-body.edit-mode .app-card.hidden-tile { opacity: 0.42; filter: grayscale(0.6); animation-delay: 0.12s; }
+/* ───── 編集モード (iOS 風 jiggle + × で非表示、ドラッグでカテゴリー内手動並べ替え) ───── */
+/* jiggle は .tile 側に掛ける (.app-card の transform を FLIP 移動アニメに空けておくため) */
+body.edit-mode .app-card .tile { animation: jiggle 0.25s ease-in-out infinite alternate; }
+body.edit-mode .app-card { cursor: default; touch-action: none; -webkit-touch-callout: none; }
+body.edit-mode .app-card.hidden-tile { opacity: 0.42; filter: grayscale(0.6); }
+body.edit-mode .app-card.hidden-tile .tile { animation-delay: 0.12s; }
 @keyframes jiggle {
   from { transform: rotate(-0.7deg); }
   to   { transform: rotate(0.7deg); }
@@ -72,19 +75,22 @@ body.edit-mode .app-card .hide-btn { display: flex; }
 body.edit-mode .app-card { user-select: none; -webkit-user-select: none; }
 body.edit-mode #editBtn { background: var(--bulb2); color: white; box-shadow: inset 3px 3px 8px rgba(0,0,0,0.15); }
 
-/* 並べ替え (カテゴリーページ内のみ・手動順序。ホームページは常に MRU 自動) */
-.app-card .order-btn {
-  position: absolute; bottom: -8px; width: 22px; height: 22px; border-radius: 11px;
-  background: var(--bg); color: var(--text2); border: 2px solid var(--bg);
-  display: none; align-items: center; justify-content: center;
-  box-shadow: 3px 3px 8px var(--sd), -3px -3px 8px var(--sl);
-  font-size: 14px; font-weight: 900; line-height: 1; padding: 0; cursor: pointer; z-index: 3;
-  font-family: -apple-system, sans-serif;
+/* ドラッグ並べ替え (カテゴリーページ内のみ・手動順序。ホームページは常に MRU 自動)
+   iPhone と同じ: 編集モード中にタイルを掴んで動かす → 他のタイルが FLIP で避ける */
+.tg-move { transition: transform 0.22s cubic-bezier(0.2, 0.7, 0.3, 1); }
+.app-card.drag-src { opacity: 0; }
+.drag-ghost {
+  position: fixed; z-index: 500; width: 84px; pointer-events: none;
+  text-align: center; font-family: 'Outfit', sans-serif; color: var(--text);
+  transform: translate(-50%, -30px) scale(1.12);
+  filter: drop-shadow(0 12px 20px rgba(0,0,0,0.25));
 }
-.app-card .order-btn.order-prev { left: -8px; }
-.app-card .order-btn.order-next { right: -8px; }
-.app-card .order-btn:disabled { opacity: 0.28; cursor: default; }
-body.edit-mode .app-card .order-btn { display: flex; }
+.drag-ghost .tile {
+  width: 60px; height: 60px; margin: 0 auto; border-radius: 18px; background: var(--bg);
+  box-shadow: 6px 6px 14px var(--sd), -5px -5px 12px var(--sl);
+  display: flex; align-items: center; justify-content: center;
+}
+.drag-ghost .app-name { font-size: 10.5px; font-weight: 700; margin-top: 7px; line-height: 1.3; }
 
 #signinOverlay { display: none; position: fixed; inset: 0; z-index: 400; background: var(--bg); flex-direction: column; align-items: center; justify-content: center; padding: 32px; text-align: center; gap: 18px; }
 #signinOverlay .title { font-size: 26px; font-weight: 800; }
@@ -164,7 +170,7 @@ const APPS = [
 ];
 
 // カテゴリーページの順序と表示名。先頭は MRU 上位 8 件を横断表示する「よく使う」。
-// 各カテゴリー内の並びは MRU 自動 → 編集モードの ‹ › ボタンで手動調整すると
+// 各カテゴリー内の並びは MRU 自動 → 編集モードでタイルをドラッグして手動調整すると
 // それ以降そのカテゴリーは手動順優先になる (launcher_prefs.catOrder に保存)。
 const CATEGORIES = [
   { id: "home",   name: "よく使う" },
@@ -191,26 +197,26 @@ const TEMPLATE = `
 <div class="pager-scroll" ref="pagerEl" @scroll.passive="onPagerScroll">
   <section v-for="pg in pages" :key="pg.cat.id" class="page" :data-cat="pg.cat.id">
     <div class="page-label">{{ pg.cat.name }}</div>
-    <div class="grid">
+    <TransitionGroup tag="div" name="tg" class="grid">
       <button v-for="a in pg.list" :key="a.id"
-        class="app-card" :class="{ soon: a.soon, 'hidden-tile': isHidden(a.id) }"
+        class="app-card" :class="{ soon: a.soon, 'hidden-tile': isHidden(a.id), 'drag-src': drag.active && drag.app.id === a.id && drag.catId === pg.cat.id }"
         :style="a.accent ? { '--accent': a.accent } : null"
-        @pointerdown="onDown($event, a)" @pointermove="onMove($event)"
+        @pointerdown="onDown($event, a, pg)" @pointermove="onMove($event)"
         @pointerup="onUp($event, a)" @pointercancel="onCancel">
         <div class="tile">
           <button class="hide-btn" :class="{ 'show-btn': isHidden(a.id) }" @click.stop="toggleHidden(a.id)">{{ isHidden(a.id) ? '+' : '−' }}</button>
-          <template v-if="!isHidden(a.id) && pg.cat.id !== 'home'">
-            <button class="order-btn order-prev" :disabled="visIndex(pg, a.id) <= 0" @click.stop="moveApp(pg.cat.id, a.id, -1)">‹</button>
-            <button class="order-btn order-next" :disabled="visIndex(pg, a.id) >= pg.visibleIds.length - 1" @click.stop="moveApp(pg.cat.id, a.id, 1)">›</button>
-          </template>
           <div class="app-icon">{{ a.icon }}</div>
           <div v-if="a.soon" class="app-badge">SOON</div>
           <div v-if="badges[a.id]" class="warn-badge">{{ badges[a.id] }}</div>
         </div>
         <div class="app-name">{{ a.name }}</div>
       </button>
-    </div>
+    </TransitionGroup>
   </section>
+</div>
+<div v-if="drag.active" class="drag-ghost" :style="ghostStyle">
+  <div class="tile"><div class="app-icon">{{ drag.app.icon }}</div></div>
+  <div class="app-name">{{ drag.app.name }}</div>
 </div>
 <div class="dots">
   <button v-for="(pg, pi) in pages" :key="pg.cat.id" class="dot" :class="{ active: currentPage === pi }" :aria-label="pg.cat.name" @click="scrollToPage(pi)"></button>
@@ -280,7 +286,6 @@ const App = {
       }
       return { cat, list, visibleIds: list.filter((a) => !isHidden(a.id)).map((a) => a.id) };
     }));
-    const visIndex = (pg, id) => pg.visibleIds.indexOf(id);
 
     // ── prefs の Firestore 同期 (localStorage と last-write-wins merge) ──
     let prefsSaveTimer = null;
@@ -360,14 +365,68 @@ const App = {
       else prefs.hidden = [...prefs.hidden, id];
       savePrefs();
     }
-    function moveApp(catId, appId, dir) {
-      const ids = categoryOrderedApps(catId).filter((a) => !isHidden(a.id)).map((a) => a.id);
-      const i = ids.indexOf(appId);
-      const j = i + dir;
-      if (i < 0 || j < 0 || j >= ids.length) return;
-      [ids[i], ids[j]] = [ids[j], ids[i]];
-      prefs.catOrder = { ...(prefs.catOrder || {}), [catId]: ids };
-      savePrefs();
+    // ── ドラッグ並べ替え (iPhone 風。編集モード中・カテゴリーページのみ) ──
+    // pointerdown で「掴む候補」を覚え、TAP_MAX_MOVE 超の移動でドラッグ開始。
+    // 掴んだタイルは fixed のゴーストで指に追従、元タイルは opacity:0 の空き枠になり、
+    // 指の位置に最も近いスロットへ catOrder を随時更新 → TransitionGroup が FLIP で避ける。
+    const drag = reactive({ active: false, app: null, catId: null, x: 0, y: 0 });
+    const ghostStyle = computed(() => {
+      const s = { left: drag.x + "px", top: drag.y + "px" };
+      if (drag.app && drag.app.accent) s["--accent"] = drag.app.accent;
+      return s;
+    });
+    let dragCtx = null; // 非 reactive な内部状態 { appId, catId, ids, slots, grabDx, grabDy, card }
+
+    function armDrag(e, a, pg) {
+      dragCtx = {
+        appId: a.id, app: a, catId: pg.cat.id, ids: pg.visibleIds.slice(),
+        card: e.currentTarget, pointerId: e.pointerId, slots: null, grabDx: 0, grabDy: 0,
+      };
+    }
+    function activateDrag(e) {
+      const ctx = dragCtx;
+      const grid = ctx.card.closest(".grid");
+      if (!grid) { dragCtx = null; return; }
+      // スロット位置は掴んだ瞬間のタイル中心座標で固定 (枠自体は動かないので snapshot でよい)
+      const cards = [...grid.children].filter((el) => el.classList && el.classList.contains("app-card"));
+      ctx.slots = cards.slice(0, ctx.ids.length).map((el) => {
+        const r = (el.querySelector(".tile") || el).getBoundingClientRect();
+        return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+      });
+      const tr = (ctx.card.querySelector(".tile") || ctx.card).getBoundingClientRect();
+      ctx.grabDx = e.clientX - (tr.left + tr.width / 2);
+      ctx.grabDy = e.clientY - (tr.top + tr.height / 2);
+      try { ctx.card.setPointerCapture(ctx.pointerId); } catch (_) {}
+      drag.app = ctx.app;
+      drag.catId = ctx.catId;
+      drag.x = e.clientX - ctx.grabDx;
+      drag.y = e.clientY - ctx.grabDy;
+      drag.active = true;
+      if (navigator.vibrate) navigator.vibrate(10);
+    }
+    function dragMoveTo(e) {
+      const ctx = dragCtx;
+      drag.x = e.clientX - ctx.grabDx;
+      drag.y = e.clientY - ctx.grabDy;
+      let best = 0, bd = Infinity;
+      for (let i = 0; i < ctx.slots.length; i++) {
+        const c = ctx.slots[i];
+        const d = (drag.x - c.x) * (drag.x - c.x) + (drag.y - c.y) * (drag.y - c.y);
+        if (d < bd) { bd = d; best = i; }
+      }
+      const cur = ctx.ids.indexOf(ctx.appId);
+      if (best !== cur) {
+        ctx.ids.splice(cur, 1);
+        ctx.ids.splice(best, 0, ctx.appId);
+        prefs.catOrder = { ...(prefs.catOrder || {}), [ctx.catId]: ctx.ids.slice() };
+      }
+    }
+    function endDrag(commit) {
+      if (drag.active && commit) savePrefs();
+      drag.active = false;
+      drag.app = null;
+      drag.catId = null;
+      dragCtx = null;
     }
 
     // ── ページャ (スワイプ + ドット) ──
@@ -390,13 +449,14 @@ const App = {
       if (el) el.scrollTo({ left: idx * el.clientWidth, behavior: "smooth" });
     }
 
-    // ── 長押し → 編集モード (iPhone 風)。短タップ → 起動 ──
+    // ── 長押し → 編集モード (iPhone 風)。短タップ → 起動。編集中ドラッグ → 並べ替え ──
     const LONGPRESS_MS = 450;
     const TAP_MAX_MOVE = 8;
     let pressTimer = null, pressX = 0, pressY = 0, moved = false;
-    function onDown(e, a) {
+    function onDown(e, a, pg) {
       if (a.soon) return;
-      if (e.target.closest(".hide-btn") || e.target.closest(".order-btn")) return;
+      if (drag.active || dragCtx) return; // ドラッグ中に別の指で触っても無視
+      if (e.target.closest(".hide-btn")) return;
       pressX = e.clientX; pressY = e.clientY; moved = false;
       if (!editMode.value) {
         pressTimer = setTimeout(() => {
@@ -404,14 +464,26 @@ const App = {
           toggleEditMode();
           if (navigator.vibrate) navigator.vibrate(20);
         }, LONGPRESS_MS);
+      } else if (pg.cat.id !== "home" && !isHidden(a.id)) {
+        armDrag(e, a, pg); // 実際のドラッグ開始は onMove で移動を検知してから
       }
     }
     function onMove(e) {
+      if (drag.active) {
+        if (dragCtx && e.pointerId === dragCtx.pointerId) dragMoveTo(e);
+        return;
+      }
       const dx = Math.abs(e.clientX - pressX), dy = Math.abs(e.clientY - pressY);
       if (dx > TAP_MAX_MOVE || dy > TAP_MAX_MOVE) moved = true;
       if (pressTimer && moved) { clearTimeout(pressTimer); pressTimer = null; }
+      if (dragCtx && moved && e.pointerId === dragCtx.pointerId) activateDrag(e);
     }
     function onUp(e, a) {
+      if (drag.active) {
+        if (dragCtx && e.pointerId === dragCtx.pointerId) endDrag(true);
+        return;
+      }
+      dragCtx = null;
       if (pressTimer) {
         clearTimeout(pressTimer);
         pressTimer = null;
@@ -421,7 +493,12 @@ const App = {
         }
       }
     }
-    function onCancel() {
+    function onCancel(e) {
+      if (drag.active) {
+        if (dragCtx && e.pointerId === dragCtx.pointerId) endDrag(true);
+        return;
+      }
+      dragCtx = null;
       if (pressTimer) { clearTimeout(pressTimer); pressTimer = null; }
     }
 
@@ -439,8 +516,8 @@ const App = {
     window.__launcherDev = () => { userEmail.value = "dev@local"; };
 
     return {
-      editMode, currentPage, pagerEl, badges, pages,
-      isHidden, visIndex, toggleEditMode, toggleHidden, moveApp,
+      editMode, currentPage, pagerEl, badges, pages, drag, ghostStyle,
+      isHidden, toggleEditMode, toggleHidden,
       onPagerScroll, scrollToPage, onDown, onMove, onUp, onCancel, doSignOut,
     };
   },
