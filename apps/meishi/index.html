@@ -1,0 +1,295 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="名刺">
+<link rel="apple-touch-icon" href="/icon.png">
+<title>名刺</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@24,400,0,0">
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+:root {
+  --bg: #e4e6ee; --bg2: #d8dae4; --sl: rgba(255,255,255,1); --sd: rgba(168,172,192,0.75);
+  --text: #42455e; --text2: rgba(66,69,94,0.52); --text3: rgba(66,69,94,0.28);
+  --accent: #6d5bd0;
+}
+body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; padding-bottom: 40px; }
+.icon { font-family: 'Material Symbols Outlined'; font-weight: normal; font-size: 1.1em; display: inline-block; line-height: 1; vertical-align: -0.18em; }
+
+.bar { display: flex; justify-content: space-between; align-items: center; padding: 40px 18px 0; gap: 8px; }
+.pill { padding: 8px 15px; border-radius: 24px; font-size: 12px; font-weight: 700; border: none; color: var(--text2); background: var(--bg); box-shadow: 4px 4px 10px var(--sd), -4px -4px 10px var(--sl); cursor: pointer; font-family: inherit; text-decoration: none; }
+.pill:active { box-shadow: inset 3px 3px 8px var(--sd), inset -3px -3px 8px var(--sl); transform: scale(0.97); }
+.pill.primary { background: var(--accent); color: #fff; }
+.pill:disabled { opacity: 0.5; }
+
+.wrap { padding: 16px 16px 40px; max-width: 640px; margin: 0 auto; }
+.title { font-size: 24px; font-weight: 800; }
+.subtitle { font-size: 12px; color: var(--text2); font-weight: 600; margin-top: 2px; margin-bottom: 14px; }
+
+.search { width: 100%; padding: 12px 14px; border-radius: 14px; border: none; font-size: 14px; font-family: inherit; color: var(--text); background: var(--bg); box-shadow: inset 3px 3px 8px var(--sd), inset -3px -3px 8px var(--sl); outline: none; margin-bottom: 14px; }
+
+.c-card { display: grid; grid-template-columns: 42px 1fr; gap: 12px; align-items: center; padding: 14px; border-radius: 16px; background: var(--bg); box-shadow: 5px 5px 12px var(--sd), -4px -4px 10px var(--sl); margin-bottom: 10px; cursor: pointer; }
+.c-card:active { transform: scale(0.99); }
+.avatar { width: 42px; height: 42px; border-radius: 12px; background: var(--accent); color: #fff; display: flex; align-items: center; justify-content: center; font-size: 17px; font-weight: 800; }
+.c-name { font-size: 15px; font-weight: 800; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.c-sub { font-size: 11px; color: var(--text2); font-weight: 600; margin-top: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.list-empty { text-align: center; color: var(--text2); font-weight: 600; font-size: 13px; padding: 40px 20px; line-height: 1.7; }
+
+/* 詳細 */
+.scan-box { display: flex; gap: 10px; margin-bottom: 14px; }
+.scan-box .pill { flex: 1; text-align: center; }
+.card-img { width: 100%; border-radius: 14px; margin-bottom: 14px; box-shadow: 4px 4px 10px var(--sd); display: block; }
+.field-label { font-size: 11px; font-weight: 800; letter-spacing: 0.08em; color: var(--text2); margin: 12px 2px 6px; }
+input.inp { width: 100%; padding: 11px 14px; border-radius: 12px; border: none; font-size: 14px; font-family: inherit; color: var(--text); background: var(--bg); box-shadow: inset 3px 3px 8px var(--sd), inset -3px -3px 8px var(--sl); outline: none; }
+.two { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.quick { display: flex; gap: 8px; margin: 16px 0 4px; }
+.quick a { flex: 1; text-align: center; padding: 12px; border-radius: 14px; text-decoration: none; font-size: 13px; font-weight: 800; color: var(--accent); background: var(--bg); box-shadow: 4px 4px 10px var(--sd), -4px -4px 10px var(--sl); }
+.quick a:active { box-shadow: inset 3px 3px 8px var(--sd), inset -3px -3px 8px var(--sl); }
+.quick a.off { color: var(--text3); pointer-events: none; }
+.actions { display: flex; gap: 10px; margin-top: 22px; }
+.actions .pill { flex: 1; text-align: center; padding: 13px; font-size: 14px; }
+.danger { color: #b04040; }
+
+.toast { position: fixed; left: 50%; bottom: 30px; transform: translateX(-50%); background: var(--text); color: #fff; padding: 11px 18px; border-radius: 20px; font-size: 13px; font-weight: 700; z-index: 500; display: none; box-shadow: 0 6px 20px rgba(0,0,0,0.25); max-width: 90%; text-align: center; }
+.toast.err { background: #b04040; }
+
+#signinOverlay { display: none; position: fixed; inset: 0; z-index: 400; background: var(--bg); flex-direction: column; align-items: center; justify-content: center; padding: 32px; text-align: center; gap: 18px; }
+</style>
+</head>
+<body>
+<div id="signinOverlay">
+  <div style="font-size:24px;font-weight:800;">名刺</div>
+  <a class="pill" href="/" style="text-decoration:none;">トップに戻る</a>
+  <div id="signinErr" style="font-size:11px;color:#b04040;font-family:monospace;"></div>
+</div>
+
+<div id="app" style="display:none;">
+  <div id="listScreen">
+    <div class="bar">
+      <a class="pill" href="/"><span class="icon">arrow_back</span> 戻る</a>
+      <span style="font-size:11px;letter-spacing:0.22em;color:var(--text3);font-weight:700;text-transform:uppercase;">MEISHI</span>
+      <button class="pill primary" id="newBtn" type="button"><span class="icon">add_a_photo</span> 追加</button>
+    </div>
+    <div class="wrap">
+      <div class="title">名刺</div>
+      <div class="subtitle">名刺を撮ると AI が連絡先を読み取ります。</div>
+      <input class="search" id="searchInp" placeholder="名前・会社で検索" autocomplete="off">
+      <div id="list"></div>
+    </div>
+  </div>
+
+  <div id="detailScreen" style="display:none;">
+    <div class="bar">
+      <button class="pill" id="backBtn" type="button"><span class="icon">arrow_back</span> 一覧</button>
+      <span style="font-size:11px;letter-spacing:0.16em;color:var(--text3);font-weight:800;text-transform:uppercase;">名刺</span>
+      <button class="pill danger" id="deleteBtn" type="button"><span class="icon">delete</span></button>
+    </div>
+    <div class="wrap" id="detailBody"></div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script src="/config.js"></script>
+<script type="module">
+import { initAuthBoot, api } from "/api-auth.js";
+
+const $ = (id) => document.getElementById(id);
+const FIELDS = ["name", "kana", "company", "department", "jobTitle", "phone", "mobile", "email", "url", "postal", "address", "memo"];
+let cards = [];
+let search = "";
+let cur = null;
+
+let _tt = null;
+function toast(msg, isErr = false) {
+  const t = $("toast"); t.textContent = msg; t.classList.toggle("err", !!isErr);
+  t.style.display = "block"; clearTimeout(_tt);
+  _tt = setTimeout(() => { t.style.display = "none"; }, isErr ? 4500 : 1800);
+}
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+function attr(s) { return String(s || "").replace(/"/g, "&quot;"); }
+
+function toBase64(fileOrBlob, maxSize = 1500, quality = 0.7) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    const url = URL.createObjectURL(fileOrBlob);
+    img.onload = () => {
+      const ratio = Math.min(maxSize / img.width, maxSize / img.height, 1);
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.round(img.width * ratio);
+      canvas.height = Math.round(img.height * ratio);
+      canvas.getContext("2d").drawImage(img, 0, 0, canvas.width, canvas.height);
+      URL.revokeObjectURL(url);
+      resolve(canvas.toDataURL("image/jpeg", quality).split(",")[1]);
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error("画像読込失敗")); };
+    img.src = url;
+  });
+}
+
+// ───────── 一覧 ─────────
+async function loadList() {
+  try { cards = await api("GET", "/api/meishi"); }
+  catch (e) { toast("読み込み失敗: " + e.message, true); cards = []; }
+  renderList();
+}
+function renderList() {
+  cur = null;
+  $("listScreen").style.display = ""; $("detailScreen").style.display = "none";
+  const q = search.trim().toLowerCase();
+  const items = q
+    ? cards.filter((c) => [c.name, c.kana, c.company, c.department, c.jobTitle].some((v) => (v || "").toLowerCase().includes(q)))
+    : cards;
+  if (items.length === 0) {
+    $("list").innerHTML = `<div class="list-empty">${cards.length === 0 ? "まだ名刺がありません。<br>右上の「追加」から名刺を撮ってみて。" : "見つかりませんでした。"}</div>`;
+    return;
+  }
+  $("list").innerHTML = items.map((c) => {
+    const initial = (c.name || c.company || "?").trim().charAt(0);
+    const sub = [c.company, c.jobTitle].filter(Boolean).join(" · ");
+    return `
+      <div class="c-card" data-id="${c.id}">
+        <div class="avatar">${escapeHtml(initial)}</div>
+        <div style="min-width:0;">
+          <div class="c-name">${escapeHtml(c.name || "(名前なし)")}</div>
+          <div class="c-sub">${escapeHtml(sub || "—")}</div>
+        </div>
+      </div>`;
+  }).join("");
+  document.querySelectorAll(".c-card").forEach((el) =>
+    el.addEventListener("click", () => openDetail(el.dataset.id)));
+}
+
+// ───────── 詳細 ─────────
+function blankCard() {
+  const c = { id: null, imageBase64: "", imageDataUrl: "", hasImage: false, _dirtyImage: false };
+  FIELDS.forEach((f) => c[f] = "");
+  return c;
+}
+function newCard() { cur = blankCard(); showDetail(); }
+async function openDetail(id) {
+  const c = cards.find((x) => x.id === id);
+  if (!c) return;
+  cur = { ...blankCard(), ...c, imageBase64: "", imageDataUrl: "", _dirtyImage: false };
+  showDetail();
+  if (c.hasImage) {
+    try {
+      const { imageBase64 } = await api("GET", `/api/meishi/${id}/image`);
+      if (imageBase64 && cur && cur.id === id) { cur.imageDataUrl = "data:image/jpeg;base64," + imageBase64; renderDetail(); }
+    } catch (_) {}
+  }
+}
+function showDetail() { $("listScreen").style.display = "none"; $("detailScreen").style.display = ""; renderDetail(); }
+
+function fieldInput(f, label, ph = "") {
+  return `<div><div class="field-label">${label}</div><input class="inp" data-f="${f}" placeholder="${ph}" value="${attr(cur[f])}"></div>`;
+}
+function renderDetail() {
+  if (!cur) return;
+  $("deleteBtn").style.display = cur.id ? "" : "none";
+  const tel = (cur.mobile || cur.phone || "").replace(/[^0-9+]/g, "");
+  const mapQ = encodeURIComponent(cur.address || "");
+  $("detailBody").innerHTML = `
+    <div class="scan-box">
+      <button class="pill primary" id="camBtn" type="button"><span class="icon">photo_camera</span> 名刺を撮る</button>
+      <button class="pill" id="albumBtn" type="button"><span class="icon">photo_library</span> 選ぶ</button>
+    </div>
+    ${cur.imageDataUrl ? `<img class="card-img" src="${cur.imageDataUrl}" alt="">` : ""}
+
+    <div class="quick">
+      <a class="${tel ? "" : "off"}" href="${tel ? "tel:" + tel : "#"}"><span class="icon">call</span> 電話</a>
+      <a class="${cur.email ? "" : "off"}" href="${cur.email ? "mailto:" + attr(cur.email) : "#"}"><span class="icon">mail</span> メール</a>
+      <a class="${cur.address ? "" : "off"}" href="${cur.address ? "https://www.google.com/maps/search/?api=1&query=" + mapQ : "#"}" target="_blank"><span class="icon">map</span> 地図</a>
+    </div>
+
+    ${fieldInput("name", "氏名", "山田 太郎")}
+    ${fieldInput("kana", "ふりがな", "やまだ たろう")}
+    ${fieldInput("company", "会社名", "")}
+    <div class="two">${fieldInput("department", "部署")}${fieldInput("jobTitle", "役職")}</div>
+    <div class="two">${fieldInput("phone", "電話", "03-...")}${fieldInput("mobile", "携帯", "090-...")}</div>
+    ${fieldInput("email", "メール", "name@example.com")}
+    ${fieldInput("url", "URL", "https://")}
+    <div class="two">${fieldInput("postal", "郵便番号")}${fieldInput("address", "住所")}</div>
+    ${fieldInput("memo", "メモ", "会った場所・用件など")}
+
+    <div class="actions">
+      <button class="pill primary" id="saveBtn" type="button"><span class="icon">save</span> ${cur.id ? "保存" : "登録"}</button>
+    </div>
+
+    <input type="file" id="camIn" accept="image/*" capture="environment" style="display:none">
+    <input type="file" id="albumIn" accept="image/*" style="display:none">
+  `;
+  document.querySelectorAll("input[data-f]").forEach((el) =>
+    el.addEventListener("input", (e) => { cur[el.dataset.f] = e.target.value; }));
+  $("saveBtn").addEventListener("click", saveCard);
+  $("camBtn").addEventListener("click", () => $("camIn").click());
+  $("albumBtn").addEventListener("click", () => $("albumIn").click());
+  const onFile = (ev) => { const f = ev.target.files?.[0]; ev.target.value = ""; if (f) scanImage(f); };
+  $("camIn").addEventListener("change", onFile);
+  $("albumIn").addEventListener("change", onFile);
+}
+
+async function scanImage(file) {
+  toast("AI が読み取り中…");
+  try {
+    const base64 = await toBase64(file);
+    cur.imageBase64 = base64;
+    cur.imageDataUrl = "data:image/jpeg;base64," + base64;
+    cur._dirtyImage = true;
+    const { card } = await api("POST", "/api/meishi/scan", { image: base64, mimeType: "image/jpeg" });
+    // AI 結果をフィールドへ (jobTitle は job_title で返る場合あり)
+    FIELDS.forEach((f) => { const v = card?.[f] ?? card?.[f === "jobTitle" ? "job_title" : f]; if (v) cur[f] = v; });
+    renderDetail();
+    toast("読み取りました。確認して登録してね");
+  } catch (e) {
+    renderDetail();
+    toast("読み取り失敗: " + e.message, true);
+  }
+}
+
+async function saveCard() {
+  if (!cur) return;
+  const btn = $("saveBtn"); btn.disabled = true;
+  const payload = {}; FIELDS.forEach((f) => payload[f] = cur[f] || "");
+  try {
+    if (!cur.id) {
+      if (cur._dirtyImage) payload.imageBase64 = cur.imageBase64;
+      const saved = await api("POST", "/api/meishi", payload);
+      cur.id = saved.id; toast("登録しました");
+    } else {
+      await api("PUT", `/api/meishi/${cur.id}`, payload); toast("保存しました");
+    }
+    await loadList();
+  } catch (e) { toast("保存失敗: " + e.message, true); btn.disabled = false; }
+}
+
+async function deleteCard() {
+  if (!cur?.id) return;
+  if (!confirm("この名刺を削除しますか？")) return;
+  try { await api("DELETE", `/api/meishi/${cur.id}`); toast("削除しました"); await loadList(); }
+  catch (e) { toast("削除失敗: " + e.message, true); }
+}
+
+$("newBtn").addEventListener("click", newCard);
+$("backBtn").addEventListener("click", renderList);
+$("deleteBtn").addEventListener("click", deleteCard);
+$("searchInp").addEventListener("input", (e) => { search = e.target.value; renderList(); });
+
+initAuthBoot({
+  returnPath: "/meishi/",
+  onReady: async () => {
+    $("app").style.display = "";
+    $("list").innerHTML = '<div class="list-empty">読み込み中…</div>';
+    await loadList();
+  },
+});
+</script>
+</body>
+</html>

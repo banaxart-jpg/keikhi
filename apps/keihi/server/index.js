@@ -1097,6 +1097,28 @@ async function ensureSchema() {
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       )
     `);
+    // 名刺 (meishi): 名刺を撮る → AI が氏名・会社・連絡先を抽出して連絡先一覧に。全員共有。
+    await p.query(`
+      CREATE TABLE IF NOT EXISTS meishi_cards (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL DEFAULT '',
+        kana TEXT NOT NULL DEFAULT '',
+        company TEXT NOT NULL DEFAULT '',
+        department TEXT NOT NULL DEFAULT '',
+        job_title TEXT NOT NULL DEFAULT '',
+        phone TEXT NOT NULL DEFAULT '',
+        mobile TEXT NOT NULL DEFAULT '',
+        email TEXT NOT NULL DEFAULT '',
+        url TEXT NOT NULL DEFAULT '',
+        postal TEXT NOT NULL DEFAULT '',
+        address TEXT NOT NULL DEFAULT '',
+        memo TEXT NOT NULL DEFAULT '',
+        image_data TEXT,
+        created_by TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `);
     // yado: Beds24 予約のローカルキャッシュ + 同期メタ
     await p.query(`
       CREATE TABLE IF NOT EXISTS yado_bookings (
@@ -8156,6 +8178,146 @@ app.delete("/api/genka/:id", async (req, res) => {
   if (!p) return res.status(503).json({ error: "DB not configured" });
   try {
     await p.query("DELETE FROM genka_projects WHERE id = $1", [req.params.id]);
+    res.status(204).end();
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─────────────────────────────
+// 名刺 (meishi): 名刺画像 → AI 抽出 → 連絡先一覧。全員共有 (records/tasks と同型)。
+// ─────────────────────────────
+const MEISHI_COLS = ["name", "kana", "company", "department", "job_title", "phone", "mobile", "email", "url", "postal", "address", "memo"];
+
+app.get("/api/meishi", async (req, res) => {
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  try {
+    const { rows } = await p.query(
+      `SELECT id, name, kana, company, department, job_title AS "jobTitle",
+              phone, mobile, email, url, postal, address, memo,
+              (image_data IS NOT NULL) AS "hasImage",
+              created_by AS "createdBy", created_at AS "createdAt", updated_at AS "updatedAt"
+         FROM meishi_cards
+        ORDER BY updated_at DESC, id DESC LIMIT 1000`
+    );
+    res.json(rows);
+  } catch (err) {
+    console.error("meishi list error", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get("/api/meishi/:id/image", async (req, res) => {
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  try {
+    const { rows } = await p.query("SELECT image_data FROM meishi_cards WHERE id=$1", [req.params.id]);
+    if (!rows.length) return res.status(404).json({ error: "not found" });
+    res.json({ imageBase64: rows[0].image_data || "" });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 名刺画像 → AI で構造化抽出 (保存はしない。フロントで確認・修正してから POST)
+app.post("/api/meishi/scan", async (req, res) => {
+  try {
+    if (!genAI) return res.status(503).json({ error: "GEMINI_API_KEY not configured" });
+    const { image, mimeType = "image/jpeg" } = req.body || {};
+    if (!image) return res.status(400).json({ error: "image (base64) is required" });
+    const prompt = `この名刺の画像を読み取って、JSON のみで返してください。JSON 以外のテキストは一切出力しないこと。
+読み取れない項目は空文字にする。電話番号はハイフン付きで。会社名の (株) 等は残してよい。
+形式:
+{
+  "name": "氏名 (漢字)",
+  "kana": "ふりがな (あれば)",
+  "company": "会社名",
+  "department": "部署",
+  "job_title": "役職",
+  "phone": "固定/代表電話",
+  "mobile": "携帯番号",
+  "email": "メールアドレス",
+  "url": "ウェブサイト URL",
+  "postal": "郵便番号",
+  "address": "住所",
+  "memo": ""
+}`;
+    const { result, modelUsed } = await callGeminiWithFallback([
+      prompt,
+      { inlineData: { data: image, mimeType } },
+    ], { jsonMode: true, maxOutputTokens: 1024 });
+    const raw = parseLooseJson(result.response.text()) || {};
+    const card = {};
+    for (const k of MEISHI_COLS) card[k] = String(raw[k] || "").trim();
+    res.json({ card, modelUsed });
+  } catch (err) {
+    console.error("meishi scan error", err);
+    const msg = String(err?.message || err);
+    const isTransient = /\b(503|429|500)\b|UNAVAILABLE|overload|high demand/i.test(msg);
+    res.status(isTransient ? 503 : 500).json({
+      error: isTransient ? `Gemini が混雑中です。少し待って再実行してください: ${msg.slice(0, 200)}` : msg,
+    });
+  }
+});
+
+app.post("/api/meishi", async (req, res) => {
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  try {
+    const b = req.body || {};
+    const id = b.id || (Date.now().toString(36) + Math.random().toString(36).slice(2, 8));
+    const { rows } = await p.query(
+      `INSERT INTO meishi_cards
+         (id, name, kana, company, department, job_title, phone, mobile, email, url, postal, address, memo, image_data, created_by)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+       RETURNING id, created_at AS "createdAt", updated_at AS "updatedAt"`,
+      [
+        id, b.name || "", b.kana || "", b.company || "", b.department || "", b.jobTitle || b.job_title || "",
+        b.phone || "", b.mobile || "", b.email || "", b.url || "", b.postal || "", b.address || "", b.memo || "",
+        b.imageBase64 || null, req.user?.email || "",
+      ]
+    );
+    res.status(201).json(rows[0]);
+  } catch (err) {
+    console.error("meishi insert error", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.put("/api/meishi/:id", async (req, res) => {
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  try {
+    const b = req.body || {};
+    const { rows } = await p.query(
+      `UPDATE meishi_cards SET
+         name = COALESCE($2, name), kana = COALESCE($3, kana), company = COALESCE($4, company),
+         department = COALESCE($5, department), job_title = COALESCE($6, job_title),
+         phone = COALESCE($7, phone), mobile = COALESCE($8, mobile), email = COALESCE($9, email),
+         url = COALESCE($10, url), postal = COALESCE($11, postal), address = COALESCE($12, address),
+         memo = COALESCE($13, memo), updated_at = NOW()
+       WHERE id = $1
+       RETURNING id, updated_at AS "updatedAt"`,
+      [
+        req.params.id, b.name ?? null, b.kana ?? null, b.company ?? null, b.department ?? null,
+        (b.jobTitle ?? b.job_title) ?? null, b.phone ?? null, b.mobile ?? null, b.email ?? null,
+        b.url ?? null, b.postal ?? null, b.address ?? null, b.memo ?? null,
+      ]
+    );
+    if (!rows.length) return res.status(404).json({ error: "not found" });
+    res.json(rows[0]);
+  } catch (err) {
+    console.error("meishi update error", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete("/api/meishi/:id", async (req, res) => {
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  try {
+    await p.query("DELETE FROM meishi_cards WHERE id = $1", [req.params.id]);
     res.status(204).end();
   } catch (err) {
     res.status(500).json({ error: err.message });
