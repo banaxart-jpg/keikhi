@@ -99,16 +99,7 @@ body.edit-mode .app-card .order-btn { display: flex; }
 <body>
 
 <div id="app" style="display:none;">
-  <!-- iPhone ホーム画面風: 大見出し・メール表示なし。右上に小さく操作だけ -->
-  <div class="top-bar">
-    <span id="who" style="display:none;"></span>
-    <div style="display:flex; gap:8px; margin-left:auto;">
-      <button class="pill-btn" id="editBtn" onclick="toggleEditMode()">編集</button>
-      <button class="pill-btn" onclick="doSignOut()"><span class="icon" style="font-size:15px;">logout</span></button>
-    </div>
-  </div>
-  <div class="pager-scroll" id="pagerScroll"></div>
-  <div class="dots" id="dots"></div>
+  <!-- 中身は Vue が描画する (iPhone ホーム画面風)。TEMPLATE はスクリプト内 -->
 </div>
 
 <div id="signinOverlay">
@@ -122,6 +113,7 @@ body.edit-mode .app-card .order-btn { display: flex; }
 
 <script src="/config.js"></script>
 <script type="module">
+import { createApp, ref, reactive, computed, watchEffect, onMounted } from "https://unpkg.com/vue@3.4.27/dist/vue.esm-browser.prod.js";
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js";
 import {
   getAuth, GoogleAuthProvider, signInWithPopup, signInWithRedirect,
@@ -182,342 +174,280 @@ const CATEGORIES = [
   { id: "toshi",  name: "投資" },
 ];
 
-// ───── アプリ毎のバッジ取得 (今日未活動の警告など) ─────
-const appBadges = {}; // id → "!" などのバッジ文字
-async function fetchTechstudyBadge(user) {
-  try {
-    if (!user) return;
-    const token = await user.getIdToken();
-    const res = await fetch((window.API_BASE || "") + "/api/kotonoha/me", {
-      headers: { authorization: "Bearer " + token },
-    });
-    if (!res.ok) return;
-    const j = await res.json();
-    const s = j.streak;
-    if (s && s.streak > 0 && !s.today_active) {
-      appBadges.techstudy = "!";
-      renderGrid();
-    }
-  } catch (e) { /* silent */ }
-}
+// ───── Vue アプリ本体 (タイル描画・MRU・prefs・編集モード) ─────
+// 認証フロー (下の initAuth) は実績のある vanilla のまま残し、
+// window.__launcherAuthed / __launcherDev で Vue 側に橋渡しする。
 
-// 社内 (= 全ミニアプリ可) 限定の email。これ以外は techstudy だけ表示。
+const PUBLIC_APPS = new Set(["techstudy", "kaimono", "task"]); // 社外 auth ユーザーにも公開
 const INTERNAL_EMAILS = new Set(["info@banax.tokyo", "konishi0221@gmail.com", "banaxart@gmail.com"]);
-let currentUserEmail = null;
-function isInternal() { return INTERNAL_EMAILS.has((currentUserEmail || "").toLowerCase()); }
 
-// ─── ユーザー別ランチャー設定 (Firestore: launcher_prefs/{uid} に保存) ───
-// uid をキーにすれば Firebase Auth 1本でユーザー識別できて、メアド変更にも追従する。
-// 並びは MRU (最近開いた順) で自動、ユーザーは hide だけコントロールできる。
-// 初期 prefs は localStorage から先に拾う → Firestore ロード前でも MRU 並びが出る
-let prefs = (() => {
-  try {
-    const cached = localStorage.getItem("launcher_mru_cache");
-    return { mru: cached ? (JSON.parse(cached) || {}) : {}, hidden: [], catOrder: {} };
-  } catch (_) { return { mru: {}, hidden: [], catOrder: {} }; }
-})();
-let editMode = false;
-let prefsSaveTimer = null;
+const TEMPLATE = `
+<div class="top-bar">
+  <div style="display:flex; gap:8px; margin-left:auto;">
+    <button class="pill-btn" id="editBtn" @click="toggleEditMode">{{ editMode ? '完了' : '編集' }}</button>
+    <button class="pill-btn" @click="doSignOut"><span class="icon" style="font-size:15px;">logout</span></button>
+  </div>
+</div>
+<div class="pager-scroll" ref="pagerEl" @scroll.passive="onPagerScroll">
+  <section v-for="pg in pages" :key="pg.cat.id" class="page" :data-cat="pg.cat.id">
+    <div class="page-label">{{ pg.cat.name }}</div>
+    <div class="grid">
+      <button v-for="a in pg.list" :key="a.id"
+        class="app-card" :class="{ soon: a.soon, 'hidden-tile': isHidden(a.id) }"
+        :style="a.accent ? { '--accent': a.accent } : null"
+        @pointerdown="onDown($event, a)" @pointermove="onMove($event)"
+        @pointerup="onUp($event, a)" @pointercancel="onCancel">
+        <div class="tile">
+          <button class="hide-btn" :class="{ 'show-btn': isHidden(a.id) }" @click.stop="toggleHidden(a.id)">{{ isHidden(a.id) ? '+' : '−' }}</button>
+          <template v-if="!isHidden(a.id) && pg.cat.id !== 'home'">
+            <button class="order-btn order-prev" :disabled="visIndex(pg, a.id) <= 0" @click.stop="moveApp(pg.cat.id, a.id, -1)">‹</button>
+            <button class="order-btn order-next" :disabled="visIndex(pg, a.id) >= pg.visibleIds.length - 1" @click.stop="moveApp(pg.cat.id, a.id, 1)">›</button>
+          </template>
+          <div class="app-icon">{{ a.icon }}</div>
+          <div v-if="a.soon" class="app-badge">SOON</div>
+          <div v-if="badges[a.id]" class="warn-badge">{{ badges[a.id] }}</div>
+        </div>
+        <div class="app-name">{{ a.name }}</div>
+      </button>
+    </div>
+  </section>
+</div>
+<div class="dots">
+  <button v-for="(pg, pi) in pages" :key="pg.cat.id" class="dot" :class="{ active: currentPage === pi }" :aria-label="pg.cat.name" @click="scrollToPage(pi)"></button>
+</div>
+`;
+
+let fbAuth = null;
 let fsDb = null;
 
-async function loadPrefs(user) {
-  // localStorage に直近の MRU を残してるので、Firestore の遅延でも取りこぼさない
-  // 両ソースを取って app id ごとに新しい timestamp 採用 (= last-write-wins merge)
-  let localMru = {};
-  try {
-    const cached = localStorage.getItem("launcher_mru_cache");
-    if (cached) localMru = JSON.parse(cached) || {};
-  } catch (_) {}
-  let remote = null;
-  try {
-    if (fsDb && user) {
-      const snap = await getDoc(doc(fsDb, "launcher_prefs", user.uid));
-      if (snap.exists()) remote = snap.data() || {};
+const App = {
+  template: TEMPLATE,
+  setup() {
+    const userEmail = ref(null);
+    const editMode = ref(false);
+    const currentPage = ref(0);
+    const pagerEl = ref(null);
+    const badges = reactive({}); // id → "!" などのバッジ文字
+    // 初期 prefs は localStorage から先に拾う → Firestore ロード前でも MRU 並びが出る
+    const prefs = reactive((() => {
+      try {
+        const cached = localStorage.getItem("launcher_mru_cache");
+        return { mru: cached ? (JSON.parse(cached) || {}) : {}, hidden: [], catOrder: {} };
+      } catch (_) { return { mru: {}, hidden: [], catOrder: {} }; }
+    })());
+
+    const isInternal = () => INTERNAL_EMAILS.has((userEmail.value || "").toLowerCase());
+    const visibleApps = () => APPS.filter((a) => isInternal() || PUBLIC_APPS.has(a.id));
+    const isHidden = (id) => prefs.hidden.includes(id);
+
+    // MRU (最近開いた順)。同点は APPS 配列内の順序で解決
+    function mruSort(list) {
+      const mru = prefs.mru || {};
+      const fallback = new Map(APPS.map((a, i) => [a.id, i]));
+      return list.slice().sort((a, b) => {
+        const ra = mru[a.id] || 0, rb = mru[b.id] || 0;
+        if (ra !== rb) return rb - ra;
+        return fallback.get(a.id) - fallback.get(b.id);
+      });
     }
-  } catch (e) { console.warn("loadPrefs:", e?.message || e); }
-
-  const remoteMru = (remote?.mru && typeof remote.mru === "object") ? { ...remote.mru } : {};
-  // 旧 prefs.order からの後方互換: order があれば最後尾を最古として並べる
-  if (Object.keys(remoteMru).length === 0 && Array.isArray(remote?.order) && remote.order.length) {
-    const base = Date.now() - remote.order.length * 1000;
-    remote.order.forEach((id, i) => { remoteMru[id] = base + (remote.order.length - i) * 1000; });
-  }
-  // localStorage と remote を merge: app ごとに新しい方を採用
-  const merged = { ...remoteMru };
-  for (const [id, ts] of Object.entries(localMru)) {
-    if (!merged[id] || ts > merged[id]) merged[id] = ts;
-  }
-  // catOrder: カテゴリー内の手動並べ替え結果 ({ [catId]: [appId, ...] })。
-  // 編集モードの ‹ › ボタンを押したカテゴリーだけ入る。触ってないカテゴリーは
-  // 引き続き MRU 自動並び。
-  const remoteCatOrder = (remote?.catOrder && typeof remote.catOrder === "object" && !Array.isArray(remote.catOrder))
-    ? remote.catOrder : {};
-  prefs = {
-    mru: merged,
-    hidden: Array.isArray(remote?.hidden) ? remote.hidden : [],
-    catOrder: remoteCatOrder,
-  };
-  renderGrid();
-}
-
-function savePrefs() {
-  clearTimeout(prefsSaveTimer);
-  prefsSaveTimer = setTimeout(async () => {
-    try {
-      const user = fbAuth?.currentUser;
-      if (!user || !fsDb) return;
-      await setDoc(doc(fsDb, "launcher_prefs", user.uid), {
-        mru: prefs.mru || {},
-        hidden: prefs.hidden || [],
-        catOrder: prefs.catOrder || {},
-        updatedAt: Date.now(),
-      }, { merge: true });
-    } catch (e) { console.warn("savePrefs:", e?.message || e); }
-  }, 600); // debounce
-}
-
-// アプリタップ時に呼ぶ: mru を即時更新 + Firestore に書きつつ navigate。
-// localStorage を「真のソース」として扱い、Firestore は best-effort sync。
-// loadPrefs 側で localStorage と Firestore を merge するので、Firestore 書込が
-// navigation で消えてもローカル分は次回確実に反映される。
-async function bumpMru(appId) {
-  const ts = Date.now();
-  prefs.mru = { ...(prefs.mru || {}), [appId]: ts };
-  // ローカルに先に書く (これが効いてれば次回必ず反映される)
-  try { localStorage.setItem("launcher_mru_cache", JSON.stringify(prefs.mru)); } catch (_) {}
-  // Firestore は best-effort で fire-and-forget
-  try {
-    const user = fbAuth?.currentUser;
-    if (user && fsDb) {
-      setDoc(doc(fsDb, "launcher_prefs", user.uid), {
-        mru: prefs.mru,
-        updatedAt: ts,
-      }, { merge: true }).catch(() => {});
+    // 手動並べ替え (catOrder) があればそれを優先。未登録の新アプリは MRU 順で末尾
+    function manualSort(catId, list) {
+      const order = prefs.catOrder && prefs.catOrder[catId];
+      if (!order || !order.length) return list;
+      const idx = new Map(order.map((id, i) => [id, i]));
+      const known = list.filter((a) => idx.has(a.id)).sort((a, b) => idx.get(a.id) - idx.get(b.id));
+      const rest = list.filter((a) => !idx.has(a.id));
+      return [...known, ...rest];
     }
-  } catch (_) {}
-}
+    function categoryOrderedApps(catId) {
+      return manualSort(catId, mruSort(visibleApps().filter((a) => a.category === catId)));
+    }
 
-// techstudy / 手配リスト (kaimono) / タスク (task) は社外 auth ユーザーにも公開
-const PUBLIC_APPS = new Set(["techstudy", "kaimono", "task"]);
-function visibleApps() {
-  return APPS.filter((a) => isInternal() || PUBLIC_APPS.has(a.id));
-}
-
-// MRU (最近開いた順) で並べる。同点は APPS 配列内の順序 (先頭ほど優先) で解決。
-function mruSort(list) {
-  const mru = prefs.mru || {};
-  const fallback = new Map(APPS.map((a, i) => [a.id, i]));
-  return list.slice().sort((a, b) => {
-    const ra = mru[a.id] || 0, rb = mru[b.id] || 0;
-    if (ra !== rb) return rb - ra;
-    return fallback.get(a.id) - fallback.get(b.id);
-  });
-}
-
-// カテゴリー内で手動並べ替え (catOrder) が保存されていればそれを優先。
-// まだ登録されていないアプリ (新規追加分) は MRU 順のまま末尾に足す。
-function manualSort(catId, list) {
-  const order = prefs.catOrder && prefs.catOrder[catId];
-  if (!order || !order.length) return list;
-  const idx = new Map(order.map((id, i) => [id, i]));
-  const known = list.filter((a) => idx.has(a.id)).sort((a, b) => idx.get(a.id) - idx.get(b.id));
-  const rest = list.filter((a) => !idx.has(a.id));
-  return [...known, ...rest];
-}
-
-function categoryOrderedApps(catId) {
-  const inCat = visibleApps().filter((a) => a.category === catId);
-  return manualSort(catId, mruSort(inCat));
-}
-
-function isHidden(id) { return prefs.hidden.includes(id); }
-
-let currentPageIdx = 0; // 現在表示中のページ (スワイプ/ドットタップで更新)
-
-function scrollToPage(idx) {
-  const scroller = document.getElementById("pagerScroll");
-  if (!scroller) return;
-  currentPageIdx = idx;
-  scroller.scrollTo({ left: idx * scroller.clientWidth, behavior: "smooth" });
-  document.querySelectorAll("#dots .dot").forEach((d, i) => d.classList.toggle("active", i === idx));
-}
-
-function initPagerScrollListener() {
-  const scroller = document.getElementById("pagerScroll");
-  if (!scroller || scroller.dataset.listenerAttached) return;
-  scroller.dataset.listenerAttached = "1";
-  let ticking = false;
-  scroller.addEventListener("scroll", () => {
-    if (ticking) return;
-    ticking = true;
-    requestAnimationFrame(() => {
-      const idx = Math.round(scroller.scrollLeft / (scroller.clientWidth || 1));
-      if (idx !== currentPageIdx) {
-        currentPageIdx = idx;
-        document.querySelectorAll("#dots .dot").forEach((d, i) => d.classList.toggle("active", i === idx));
-      }
-      ticking = false;
-    });
-  }, { passive: true });
-}
-
-function renderGrid() {
-  const scroller = document.getElementById("pagerScroll");
-  const dotsEl = document.getElementById("dots");
-  if (!scroller || !dotsEl) return;
-  scroller.innerHTML = "";
-  dotsEl.innerHTML = "";
-
-  CATEGORIES.forEach((cat, pageIdx) => {
-    let list;
-    if (cat.id === "home") {
-      // ホーム = 全カテゴリー横断の MRU 上位 8 件。並べ替え不可、常に自動。
-      list = mruSort(visibleApps()).filter((a) => !isHidden(a.id)).slice(0, 8);
-    } else {
-      list = categoryOrderedApps(cat.id);
-      if (editMode) {
-        // 編集モード: 非表示は薄く出すが画面下のほうに固める (visible が先)
-        const vis = list.filter((a) => !isHidden(a.id));
-        const hid = list.filter((a) => isHidden(a.id));
-        list = [...vis, ...hid];
+    const pages = computed(() => CATEGORIES.map((cat) => {
+      let list;
+      if (cat.id === "home") {
+        // ホーム = 全カテゴリー横断の MRU 上位 8 件。並べ替え不可、常に自動
+        list = mruSort(visibleApps()).filter((a) => !isHidden(a.id)).slice(0, 8);
       } else {
-        list = list.filter((a) => !isHidden(a.id));
+        list = categoryOrderedApps(cat.id);
+        if (editMode.value) {
+          const vis = list.filter((a) => !isHidden(a.id));
+          const hid = list.filter((a) => isHidden(a.id));
+          list = [...vis, ...hid];
+        } else {
+          list = list.filter((a) => !isHidden(a.id));
+        }
       }
+      return { cat, list, visibleIds: list.filter((a) => !isHidden(a.id)).map((a) => a.id) };
+    }));
+    const visIndex = (pg, id) => pg.visibleIds.indexOf(id);
+
+    // ── prefs の Firestore 同期 (localStorage と last-write-wins merge) ──
+    let prefsSaveTimer = null;
+    async function loadPrefs(user) {
+      let localMru = {};
+      try {
+        const cached = localStorage.getItem("launcher_mru_cache");
+        if (cached) localMru = JSON.parse(cached) || {};
+      } catch (_) {}
+      let remote = null;
+      try {
+        if (fsDb && user) {
+          const snap = await getDoc(doc(fsDb, "launcher_prefs", user.uid));
+          if (snap.exists()) remote = snap.data() || {};
+        }
+      } catch (e) { console.warn("loadPrefs:", e?.message || e); }
+      const remoteMru = (remote?.mru && typeof remote.mru === "object") ? { ...remote.mru } : {};
+      // 旧 prefs.order からの後方互換
+      if (Object.keys(remoteMru).length === 0 && Array.isArray(remote?.order) && remote.order.length) {
+        const base = Date.now() - remote.order.length * 1000;
+        remote.order.forEach((id, i) => { remoteMru[id] = base + (remote.order.length - i) * 1000; });
+      }
+      const merged = { ...remoteMru };
+      for (const [id, ts] of Object.entries(localMru)) {
+        if (!merged[id] || ts > merged[id]) merged[id] = ts;
+      }
+      prefs.mru = merged;
+      prefs.hidden = Array.isArray(remote?.hidden) ? remote.hidden : [];
+      prefs.catOrder = (remote?.catOrder && typeof remote.catOrder === "object" && !Array.isArray(remote.catOrder))
+        ? remote.catOrder : {};
+    }
+    function savePrefs() {
+      clearTimeout(prefsSaveTimer);
+      prefsSaveTimer = setTimeout(async () => {
+        try {
+          const user = fbAuth?.currentUser;
+          if (!user || !fsDb) return;
+          await setDoc(doc(fsDb, "launcher_prefs", user.uid), {
+            mru: prefs.mru || {}, hidden: prefs.hidden || [], catOrder: prefs.catOrder || {},
+            updatedAt: Date.now(),
+          }, { merge: true });
+        } catch (e) { console.warn("savePrefs:", e?.message || e); }
+      }, 600);
+    }
+    // アプリタップ: mru を即時更新 (localStorage が真のソース、Firestore は best-effort)
+    function bumpMru(appId) {
+      const ts = Date.now();
+      prefs.mru = { ...(prefs.mru || {}), [appId]: ts };
+      try { localStorage.setItem("launcher_mru_cache", JSON.stringify(prefs.mru)); } catch (_) {}
+      try {
+        const user = fbAuth?.currentUser;
+        if (user && fsDb) {
+          setDoc(doc(fsDb, "launcher_prefs", user.uid), { mru: prefs.mru, updatedAt: ts }, { merge: true }).catch(() => {});
+        }
+      } catch (_) {}
     }
 
-    const page = document.createElement("section");
-    page.className = "page";
-    page.dataset.cat = cat.id;
-    const label = document.createElement("div");
-    label.className = "page-label";
-    label.textContent = cat.name;
-    page.appendChild(label);
-
-    const grid = document.createElement("div");
-    grid.className = "grid";
-    const visibleIds = list.filter((a) => !isHidden(a.id)).map((a) => a.id);
-    for (const a of list) {
-      const hidden = isHidden(a.id);
-      const card = document.createElement("button");
-      card.className = "app-card" + (a.soon ? " soon" : "") + (hidden ? " hidden-tile" : "");
-      card.dataset.appId = a.id;
-      if (a.accent) card.style.setProperty("--accent", a.accent);
-      const badge = appBadges[a.id];
-      let orderHtml = "";
-      if (!hidden && cat.id !== "home") {
-        const vIdx = visibleIds.indexOf(a.id);
-        orderHtml =
-          `<button class="order-btn order-prev" ${vIdx <= 0 ? "disabled" : ""} onclick="event.stopPropagation();moveApp('${cat.id}','${a.id}',-1)">‹</button>` +
-          `<button class="order-btn order-next" ${vIdx >= visibleIds.length - 1 ? "disabled" : ""} onclick="event.stopPropagation();moveApp('${cat.id}','${a.id}',1)">›</button>`;
-      }
-      // iPhone ホーム画面風: アイコンの角丸タイル + 下に名前だけ (説明文は出さない)
-      card.innerHTML =
-        `<div class="tile">` +
-          `<button class="hide-btn${hidden ? " show-btn" : ""}" onclick="event.stopPropagation();toggleHidden('${a.id}')">${hidden ? "+" : "−"}</button>` +
-          orderHtml +
-          `<div class="app-icon">${a.icon}</div>` +
-          (a.soon ? `<div class="app-badge">SOON</div>` : "") +
-          (badge ? `<div class="warn-badge">${badge}</div>` : "") +
-        `</div>` +
-        `<div class="app-name">${a.name}</div>`;
-      attachCardHandlers(card, a);
-      grid.appendChild(card);
+    async function fetchTechstudyBadge(user) {
+      try {
+        if (!user) return;
+        const token = await user.getIdToken();
+        const res = await fetch((window.API_BASE || "") + "/api/kotonoha/me", {
+          headers: { authorization: "Bearer " + token },
+        });
+        if (!res.ok) return;
+        const j = await res.json();
+        const s = j.streak;
+        if (s && s.streak > 0 && !s.today_active) badges.techstudy = "!";
+      } catch (e) { /* silent */ }
     }
-    page.appendChild(grid);
-    scroller.appendChild(page);
 
-    const dot = document.createElement("button");
-    dot.className = "dot" + (pageIdx === currentPageIdx ? " active" : "");
-    dot.setAttribute("aria-label", cat.name);
-    dot.addEventListener("click", () => scrollToPage(pageIdx));
-    dotsEl.appendChild(dot);
-  });
+    // ── 編集モード / 非表示 / 並べ替え ──
+    function toggleEditMode() { editMode.value = !editMode.value; }
+    watchEffect(() => { document.body.classList.toggle("edit-mode", editMode.value); });
+    function toggleHidden(id) {
+      if (prefs.hidden.includes(id)) prefs.hidden = prefs.hidden.filter((x) => x !== id);
+      else prefs.hidden = [...prefs.hidden, id];
+      savePrefs();
+    }
+    function moveApp(catId, appId, dir) {
+      const ids = categoryOrderedApps(catId).filter((a) => !isHidden(a.id)).map((a) => a.id);
+      const i = ids.indexOf(appId);
+      const j = i + dir;
+      if (i < 0 || j < 0 || j >= ids.length) return;
+      [ids[i], ids[j]] = [ids[j], ids[i]];
+      prefs.catOrder = { ...(prefs.catOrder || {}), [catId]: ids };
+      savePrefs();
+    }
 
-  initPagerScrollListener();
-  if (scroller.clientWidth) scroller.scrollLeft = currentPageIdx * scroller.clientWidth;
-}
+    // ── ページャ (スワイプ + ドット) ──
+    let ticking = false;
+    function onPagerScroll() {
+      if (ticking) return;
+      ticking = true;
+      requestAnimationFrame(() => {
+        const el = pagerEl.value;
+        if (el) {
+          const idx = Math.round(el.scrollLeft / (el.clientWidth || 1));
+          if (idx !== currentPage.value) currentPage.value = idx;
+        }
+        ticking = false;
+      });
+    }
+    function scrollToPage(idx) {
+      currentPage.value = idx;
+      const el = pagerEl.value;
+      if (el) el.scrollTo({ left: idx * el.clientWidth, behavior: "smooth" });
+    }
 
-function toggleHidden(id) {
-  if (prefs.hidden.includes(id)) prefs.hidden = prefs.hidden.filter((x) => x !== id);
-  else prefs.hidden = [...prefs.hidden, id];
-  renderGrid();
-  savePrefs();
-}
-window.toggleHidden = toggleHidden;
-
-// カテゴリー内で1つ前/後ろに手動移動 (‹ ›)。一度動かしたカテゴリーは
-// 以後 catOrder が優先され、MRU による自動並べ替えは行われなくなる。
-function moveApp(catId, appId, dir) {
-  const ids = categoryOrderedApps(catId).filter((a) => !isHidden(a.id)).map((a) => a.id);
-  const i = ids.indexOf(appId);
-  const j = i + dir;
-  if (i < 0 || j < 0 || j >= ids.length) return;
-  [ids[i], ids[j]] = [ids[j], ids[i]];
-  prefs.catOrder = { ...(prefs.catOrder || {}), [catId]: ids };
-  renderGrid();
-  savePrefs();
-}
-window.moveApp = moveApp;
-
-function toggleEditMode() {
-  editMode = !editMode;
-  document.body.classList.toggle("edit-mode", editMode);
-  document.getElementById("editBtn").textContent = editMode ? "完了" : "編集";
-  renderGrid();
-}
-window.toggleEditMode = toggleEditMode;
-
-// ───── 長押し → 編集モード突入 (iPhone 風) ─────
-// 通常モードでは:
-//   - 短いタップ → アプリ起動 (= MRU タイムスタンプ更新 → 並びが先頭へ)
-//   - 長押し (450ms 静止) → 編集モード突入 (hide ボタン / ‹ › で並べ替え)
-const LONGPRESS_MS = 450;
-const TAP_MAX_MOVE = 8;
-
-function attachCardHandlers(card, app) {
-  const id = app.id;
-  let pressTimer = null;
-  let pressX = 0, pressY = 0;
-  let moved = false;
-
-  card.addEventListener("pointerdown", (e) => {
-    if (app.soon) return;
-    if (e.target.closest(".hide-btn") || e.target.closest(".order-btn")) return;
-    pressX = e.clientX; pressY = e.clientY;
-    moved = false;
-    if (!editMode) {
-      // 通常モード → 長押し検知タイマー開始
-      pressTimer = setTimeout(() => {
+    // ── 長押し → 編集モード (iPhone 風)。短タップ → 起動 ──
+    const LONGPRESS_MS = 450;
+    const TAP_MAX_MOVE = 8;
+    let pressTimer = null, pressX = 0, pressY = 0, moved = false;
+    function onDown(e, a) {
+      if (a.soon) return;
+      if (e.target.closest(".hide-btn") || e.target.closest(".order-btn")) return;
+      pressX = e.clientX; pressY = e.clientY; moved = false;
+      if (!editMode.value) {
+        pressTimer = setTimeout(() => {
+          pressTimer = null;
+          toggleEditMode();
+          if (navigator.vibrate) navigator.vibrate(20);
+        }, LONGPRESS_MS);
+      }
+    }
+    function onMove(e) {
+      const dx = Math.abs(e.clientX - pressX), dy = Math.abs(e.clientY - pressY);
+      if (dx > TAP_MAX_MOVE || dy > TAP_MAX_MOVE) moved = true;
+      if (pressTimer && moved) { clearTimeout(pressTimer); pressTimer = null; }
+    }
+    function onUp(e, a) {
+      if (pressTimer) {
+        clearTimeout(pressTimer);
         pressTimer = null;
-        toggleEditMode();
-        if (navigator.vibrate) navigator.vibrate(20);
-      }, LONGPRESS_MS);
-    }
-  });
-
-  card.addEventListener("pointermove", (e) => {
-    const dx = Math.abs(e.clientX - pressX);
-    const dy = Math.abs(e.clientY - pressY);
-    if (dx > TAP_MAX_MOVE || dy > TAP_MAX_MOVE) moved = true;
-    if (pressTimer && moved) { clearTimeout(pressTimer); pressTimer = null; }
-  });
-
-  card.addEventListener("pointerup", () => {
-    if (pressTimer) {
-      clearTimeout(pressTimer);
-      pressTimer = null;
-      // 短いタップ → 通常モードならアプリ起動 (MRU bump → 次回先頭へ)
-      if (!editMode && !moved && app.path) {
-        bumpMru(id);
-        location.href = app.path;
+        if (!editMode.value && !moved && a.path) {
+          bumpMru(a.id);
+          location.href = a.path;
+        }
       }
     }
-  });
+    function onCancel() {
+      if (pressTimer) { clearTimeout(pressTimer); pressTimer = null; }
+    }
 
-  card.addEventListener("pointercancel", () => {
-    if (pressTimer) { clearTimeout(pressTimer); pressTimer = null; }
-  });
-}
+    async function doSignOut() {
+      if (fbAuth) await signOut(fbAuth);
+      location.reload();
+    }
+
+    // 認証フロー (vanilla 側) からの橋渡し
+    window.__launcherAuthed = (user) => {
+      userEmail.value = user?.email || null;
+      loadPrefs(user);
+      fetchTechstudyBadge(user);
+    };
+    window.__launcherDev = () => { userEmail.value = "dev@local"; };
+
+    return {
+      editMode, currentPage, pagerEl, badges, pages,
+      isHidden, visIndex, toggleEditMode, toggleHidden, moveApp,
+      onPagerScroll, scrollToPage, onDown, onMove, onUp, onCancel, doSignOut,
+    };
+  },
+};
+
+createApp(App).mount("#app");
+
 
 // ───────── 共通ログイン（全ミニアプリで共有） ─────────
 // Firebase セッションは browserLocalPersistence で永続化され、同一オリジンの
@@ -554,7 +484,6 @@ document.getElementById("signinDiag")?.addEventListener("click", () => {
   );
 });
 renderDiag(); // 前回 redirect 前のログがあれば表示
-let fbAuth = null;
 
 (async function initAuth() {
   // dev プレビュー: cloudshell.dev で Firebase ログイン不可のためスキップ。
@@ -563,8 +492,7 @@ let fbAuth = null;
     // インライン style を消して stylesheet の display:flex に戻す
     // ("block" を書くと縦 flex レイアウトが壊れて画面上半分に潰れる — 実測)
     document.getElementById("app").style.display = "";
-    document.getElementById("who").textContent = "dev@local";
-    renderGrid();
+    window.__launcherDev?.();
     return;
   }
   // 別ミニアプリ(/keihi/ 等)から未ログインで飛ばされてきた場合の戻り先
@@ -599,17 +527,13 @@ let fbAuth = null;
       done = true;
       diagLog(`onAuthed → ${nextUrl || "grid"}`);
       clearDiag();
-      currentUserEmail = user?.email || null;
       // 元のミニアプリへ自動復帰（ログイン後に経費へ戻る等）
       if (nextUrl && nextUrl.startsWith("/")) { location.replace(nextUrl); return; }
       document.getElementById("signinOverlay").style.display = "none";
       // インライン style を消して stylesheet の display:flex に戻す (block だと縦 flex が壊れる)
       document.getElementById("app").style.display = "";
-      document.getElementById("who").textContent = user?.email || "サインイン済み";
-      renderGrid();
-      // バッジ + ユーザー設定 (Firestore) は後追いで取得 → 取れたら再 render
-      fetchTechstudyBadge(user);
-      loadPrefs(user);
+      // Vue 側へ橋渡し (email 反映 → 表示アプリ確定、prefs / バッジ取得)
+      window.__launcherAuthed?.(user);
       // FCM ハンドシェイク (Notification 許可 + token を Firestore に保存)。
       // 失敗しても致命じゃないので fire-and-forget。
       registerPushForUser(window._fbApp, user);
@@ -648,11 +572,6 @@ let fbAuth = null;
     sErr("init失敗: " + e.message);
   }
 })();
-
-window.doSignOut = async () => {
-  if (fbAuth) await signOut(fbAuth);
-  location.reload();
-};
 </script>
 </body>
 </html>
