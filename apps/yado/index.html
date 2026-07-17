@@ -52,6 +52,17 @@ body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); 
 .month-bar .label { font-size: 17px; font-weight: 800; letter-spacing: 0.02em; flex: 1; text-align: center; }
 .today-btn { font-size: 11px; padding: 6px 12px; border-radius: 14px; }
 
+/* 月売上ライン (カレンダータブ)。タップでサマリーへ */
+.month-rev { display: flex; justify-content: center; align-items: center; gap: 14px; padding: 0 18px 12px; font-size: 12px; color: var(--text2); font-weight: 600; cursor: pointer; }
+.month-rev b { color: var(--accent); font-weight: 800; font-size: 13px; }
+.month-rev .icon { font-size: 14px; color: var(--text3); }
+
+/* 月切替のスライドアニメ (フリック / ‹ › 共通) */
+.slide-left-enter-active { animation: slideInL 0.22s ease; }
+.slide-right-enter-active { animation: slideInR 0.22s ease; }
+@keyframes slideInL { from { transform: translateX(38px); opacity: 0.3; } to { transform: translateX(0); opacity: 1; } }
+@keyframes slideInR { from { transform: translateX(-38px); opacity: 0.3; } to { transform: translateX(0); opacity: 1; } }
+
 /* カレンダーグリッド */
 .cal { padding: 0 12px 18px; }
 .dow { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; padding: 0 4px 6px; }
@@ -244,16 +255,23 @@ const TEMPLATE = `
   <div v-if="err" class="err">{{ err }}</div>
 
   <!-- ───── カレンダータブ ───── -->
-  <div v-if="tab === 'cal'">
+  <div v-if="tab === 'cal'" @touchstart.passive="onSwipeStart" @touchmove.passive="onSwipeMove" @touchend.passive="onSwipeEnd" @touchcancel.passive="onSwipeCancel">
     <div class="month-bar">
       <button class="nav" @click="shiftMonth(-1)">‹</button>
       <div class="label">{{ monthLabel }}</div>
       <button class="nav" @click="shiftMonth(1)">›</button>
     </div>
+    <div v-if="!loading" class="month-rev" @click="tab = 'sum'">
+      <span>売上 <b>¥{{ formatYen(monthlyRevenue) }}</b></span>
+      <span>手取り <b>¥{{ formatYen(monthlyNet) }}</b></span>
+      <span>{{ totalNights }}泊</span>
+      <span class="icon">chevron_right</span>
+    </div>
 
     <div v-if="loading" class="loading">読み込み中…</div>
     <template v-else>
-      <div class="cal">
+      <Transition :name="'slide-' + slideDir">
+      <div class="cal" :key="yyyymm">
         <div class="dow">
           <div class="sun">日</div><div>月</div><div>火</div><div>水</div><div>木</div><div>金</div><div class="sat">土</div>
         </div>
@@ -272,6 +290,7 @@ const TEMPLATE = `
           </div>
         </div>
       </div>
+      </Transition>
 
       <div class="legend">
         <span v-for="c in channels" :key="c"><span class="dot" :class="c"></span>{{ chLabel(c) }}</span>
@@ -336,7 +355,7 @@ const TEMPLATE = `
   </div>
 
   <!-- ───── サマリータブ ───── -->
-  <div v-else-if="tab === 'sum'" class="summary">
+  <div v-else-if="tab === 'sum'" class="summary" @touchstart.passive="onSwipeStart" @touchmove.passive="onSwipeMove" @touchend.passive="onSwipeEnd" @touchcancel.passive="onSwipeCancel">
     <div class="month-bar">
       <button class="nav" @click="shiftMonth(-1)">‹</button>
       <div class="label">{{ monthLabel }}</div>
@@ -510,6 +529,7 @@ const App = {
     });
 
     function shiftMonth(delta) {
+      slideDir.value = delta > 0 ? "left" : "right";
       const d = new Date(cur.value);
       d.setMonth(d.getMonth() + delta);
       cur.value = d;
@@ -517,6 +537,30 @@ const App = {
       expandedBookingId.value = null;
       fetchBookings();
     }
+
+    // ── 横フリックで月切替 (カレンダー / サマリー共通) ──
+    // passive listener で縦スクロールは邪魔しない。横成分が縦の 1.4 倍以上 & 60px 以上で発火。
+    const slideDir = ref("left");
+    let swX = 0, swY = 0, swLX = 0, swLY = 0, swOn = false;
+    function onSwipeStart(e) {
+      if (e.touches.length !== 1) { swOn = false; return; }
+      swOn = true;
+      swX = swLX = e.touches[0].clientX;
+      swY = swLY = e.touches[0].clientY;
+    }
+    function onSwipeMove(e) {
+      if (!swOn || !e.touches.length) return;
+      swLX = e.touches[0].clientX;
+      swLY = e.touches[0].clientY;
+    }
+    function onSwipeEnd() {
+      if (!swOn) return;
+      swOn = false;
+      const dx = swLX - swX, dy = swLY - swY;
+      if (Math.abs(dx) < 60 || Math.abs(dx) < Math.abs(dy) * 1.4) return;
+      shiftMonth(dx < 0 ? 1 : -1);
+    }
+    function onSwipeCancel() { swOn = false; }
 
     function isoDate(dt) {
       return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, "0")}-${String(dt.getDate()).padStart(2, "0")}`;
@@ -670,12 +714,14 @@ const App = {
     });
 
     // ───── サーバー呼び出し ─────
+    // 月送り時は「読み込み中…」で画面を消さない (±1ヶ月は前回 fetch で先読み済みなので即描画
+    // できる)。初回 (bookings 空) だけ loading 表示。連続フリック対策で古いレスポンスは捨てる。
+    let fetchSeq = 0;
     async function fetchBookings() {
       if (!user.value) return;
-      loading.value = true;
+      const seq = ++fetchSeq;
+      if (!bookings.value.length) loading.value = true;
       err.value = "";
-      usingSample.value = false;
-      needsBackfill.value = false;
       try {
         const d = cur.value;
         const from = isoDate(new Date(d.getFullYear(), d.getMonth() - 1, 1));   // 前月から
@@ -689,6 +735,9 @@ const App = {
           throw new Error(`${res.status}: ${t.slice(0, 200)}`);
         }
         const j = await res.json();
+        if (seq !== fetchSeq) return; // より新しい fetch が走ってる → この結果は捨てる
+        usingSample.value = false;
+        needsBackfill.value = false;
         if (j.sample) {
           // サーバーがトークン未設定でサンプルを返してきたパターン → 空のまま
           usingSample.value = true;
@@ -704,10 +753,11 @@ const App = {
           }));
         }
       } catch (e) {
+        if (seq !== fetchSeq) return;
         err.value = "取得失敗: " + (e.message || e);
         bookings.value = [];
       } finally {
-        loading.value = false;
+        if (seq === fetchSeq) loading.value = false;
       }
     }
 
@@ -920,6 +970,7 @@ const App = {
       revenueByChannel, revenueBarPct, dailyRevenue, maxDayRevenue,
       shiftMonth, formatYen, formatJP, fetchBookings, generateStrategy, syncToSheet, back,
       onReviewInput, onUploadReviews, ocrLoading, ocrProgress,
+      slideDir, onSwipeStart, onSwipeMove, onSwipeEnd, onSwipeCancel,
     };
   },
 };
