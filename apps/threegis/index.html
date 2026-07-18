@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>threegis 360</title>
+<style>
+  html,body{margin:0;height:100%;overflow:hidden;background:#05060f;
+    font-family:ui-monospace,Menlo,monospace;color:#cdd6ff;-webkit-user-select:none;user-select:none}
+  #c{display:block;position:fixed;inset:0;width:100%;height:100%;touch-action:none}
+  .badge{position:fixed;top:calc(16px + env(safe-area-inset-top));left:50%;transform:translateX(-50%);
+    z-index:5;font-weight:800;font-style:italic;font-size:16px;letter-spacing:.02em;
+    color:#eaf1ff;text-shadow:0 1px 10px rgba(120,160,255,.6);pointer-events:none;opacity:.9}
+  .hint{position:fixed;left:0;right:0;bottom:calc(20px + env(safe-area-inset-bottom));
+    text-align:center;font-size:12px;letter-spacing:.28em;color:rgba(205,214,255,.72);
+    pointer-events:none;z-index:5;text-shadow:0 1px 6px #000}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div class="badge">threegis 360°</div>
+<div class="hint">ドラッグで見回す</div>
+
+<script>
+(() => {
+  const canvas = document.getElementById("c");
+  const ctx = canvas.getContext("2d");
+  const DPR = Math.min(2, devicePixelRatio || 1);
+
+  // ── 360°パノラマを一枚のオフスクリーン canvas に描く（左右はループする）──
+  const PW = 4096, PH = 1400, HZ = PH * 0.55; // 幅・高さ・地平線
+  const pano = document.createElement("canvas");
+  pano.width = PW; pano.height = PH;
+  (function paint() {
+    const g = pano.getContext("2d");
+    // 空
+    let sky = g.createLinearGradient(0, 0, 0, HZ);
+    sky.addColorStop(0, "#05061a"); sky.addColorStop(.55, "#0c1030");
+    sky.addColorStop(.86, "#232043"); sky.addColorStop(1, "#5a3f4a");
+    g.fillStyle = sky; g.fillRect(0, 0, PW, HZ);
+    // 地平線の暖かい光
+    let glow = g.createLinearGradient(0, HZ - 150, 0, HZ + 30);
+    glow.addColorStop(0, "rgba(255,150,90,0)"); glow.addColorStop(1, "rgba(255,150,90,.4)");
+    g.fillStyle = glow; g.fillRect(0, HZ - 150, PW, 180);
+    // 天の川（sin で全幅ループ）
+    for (let i = 0; i < 9000; i++) {
+      const x = Math.random() * PW;
+      const band = HZ * 0.42 + Math.sin(x / PW * Math.PI * 2 + .6) * HZ * 0.16;
+      const y = band + (Math.random() - .5) * HZ * 0.5;
+      if (y < 4 || y > HZ - 6) continue;
+      const near = 1 - Math.min(1, Math.abs(y - band) / (HZ * 0.28));
+      g.globalAlpha = .05 + near * .22;
+      g.fillStyle = ["#cbd8ff", "#e9d9ff", "#fff4e8"][i % 3];
+      g.fillRect(x, y, 2, 2);
+    }
+    // 星
+    for (let i = 0; i < 4200; i++) {
+      const x = Math.random() * PW, y = Math.random() * (HZ - 8), r = Math.random() * 1.7 + .4;
+      g.globalAlpha = .35 + Math.random() * .65;
+      g.fillStyle = ["#ffffff", "#cfe0ff", "#e8ccff", "#bff4ff"][i % 4];
+      g.beginPath(); g.arc(x, y, r, 0, 7); g.fill();
+      if (r > 1.7) { g.globalAlpha *= .5; g.beginPath(); g.arc(x, y, r * 2.6, 0, 7); g.fill(); }
+    }
+    g.globalAlpha = 1;
+    // 地面
+    let gr = g.createLinearGradient(0, HZ, 0, PH);
+    gr.addColorStop(0, "#6b4a34"); gr.addColorStop(.35, "#3d2a20"); gr.addColorStop(1, "#0a0705");
+    g.fillStyle = gr; g.fillRect(0, HZ, PW, PH - HZ);
+    // 砂丘の稜線（sin でループ）
+    g.fillStyle = "#2b1d16"; g.beginPath(); g.moveTo(0, HZ);
+    for (let x = 0; x <= PW; x += 8) {
+      const y = HZ + Math.sin(x / PW * Math.PI * 6) * 16 + Math.sin(x / PW * Math.PI * 20) * 7;
+      g.lineTo(x, y);
+    }
+    g.lineTo(PW, PH); g.lineTo(0, PH); g.closePath(); g.fill();
+  })();
+
+  // 画面サイズを取り直す（プレビューが最初 0 を返すことがあるので毎フレーム確認）
+  function fit() {
+    const w = canvas.clientWidth || innerWidth || document.documentElement.clientWidth || 390;
+    const h = canvas.clientHeight || innerHeight || document.documentElement.clientHeight || 844;
+    const nw = Math.max(1, Math.round(w * DPR)), nh = Math.max(1, Math.round(h * DPR));
+    if (canvas.width !== nw || canvas.height !== nh) { canvas.width = nw; canvas.height = nh; }
+  }
+  fit(); addEventListener("resize", fit); addEventListener("load", fit);
+
+  // ── 見回し（ドラッグ / 傾き / 自動）──
+  let lon = 0, lat = 0, down = false, px = 0, py = 0, lastMove = -9999;
+  const now = () => performance.now();
+  const clampLat = (v) => Math.max(-78, Math.min(78, v));
+  canvas.addEventListener("pointerdown", (e) => { down = true; px = e.clientX; py = e.clientY; });
+  addEventListener("pointermove", (e) => {
+    if (!down) return;
+    lon -= (e.clientX - px) * 0.18; lat = clampLat(lat + (e.clientY - py) * 0.18);
+    px = e.clientX; py = e.clientY; lastMove = now();
+  }, { passive: true });
+  addEventListener("pointerup", () => { down = false; });
+  addEventListener("pointercancel", () => { down = false; });
+  function onOrient(e) { if (e.alpha == null) return; lon = -e.alpha; lat = clampLat((e.beta || 0) - 90); lastMove = now(); }
+  function enableTilt() {
+    if (typeof DeviceOrientationEvent === "undefined") return;
+    if (typeof DeviceOrientationEvent.requestPermission === "function")
+      DeviceOrientationEvent.requestPermission().then(p => { if (p === "granted") addEventListener("deviceorientation", onOrient); }).catch(() => {});
+    else addEventListener("deviceorientation", onOrient);
+  }
+  addEventListener("click", enableTilt, { once: true });
+  addEventListener("touchend", enableTilt, { once: true });
+
+  function frame() {
+    requestAnimationFrame(frame);
+    fit();                                                  // サイズを毎フレーム確認（0対策）
+    if (!down && now() - lastMove > 2200) lon += 0.02;      // 放置で自動パン
+    const cw = canvas.width, ch = canvas.height;
+    const scale = ch / (PH * 0.58);                          // 縦のズーム（一度に見える範囲）
+    const dW = PW * scale, dH = PH * scale;
+    // 横：lon(度) → 0..dW をループ
+    let ox = -(((lon % 360) + 360) % 360) / 360 * dW;
+    // 縦：lat=0 で地平線を画面中央付近に、上下で視点移動
+    let oy = ch * 0.5 - HZ * scale + lat * (dH / 170);
+    oy = Math.max(ch - dH, Math.min(0, oy));
+    ctx.clearRect(0, 0, cw, ch);
+    for (let x = ox; x < cw; x += dW) ctx.drawImage(pano, x, oy, dW, dH);
+    for (let x = ox - dW; x > -dW; x -= dW) ctx.drawImage(pano, x, oy, dW, dH);
+  }
+  frame();
+})();
+</script>
+</body>
+</html>
