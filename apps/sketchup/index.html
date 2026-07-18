@@ -1,0 +1,356 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>My SketchUp</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@24,400,0,0">
+<style>
+:root{
+  --bg:#eef1f5; --card:#ffffff; --text:#1c232e; --text2:#5b6472;
+  --accent:#c2410c; --line:#dde2e9;
+}
+*{box-sizing:border-box; margin:0; padding:0; -webkit-tap-highlight-color:transparent;}
+html,body{height:100%;}
+body{
+  font-family:-apple-system, "Hiragino Sans", sans-serif;
+  background:var(--bg); color:var(--text); overflow:hidden;
+  -webkit-user-select:none; user-select:none;
+}
+.icon{font-family:'Material Symbols Outlined'; font-size:1.15em; display:inline-block;
+  vertical-align:-0.18em; font-variation-settings:'FILL' 0,'wght' 500,'GRAD' 0,'opsz' 20; line-height:1;}
+
+#canvas{position:fixed; inset:0; width:100%; height:100%; touch-action:none; display:none;}
+body.viewing #canvas{display:block;}
+
+/* ── 空の状態（ファイル選択画面）── */
+#empty{
+  position:fixed; inset:0; display:flex; flex-direction:column;
+  align-items:center; justify-content:center; gap:14px; padding:24px; text-align:center;
+}
+body.viewing #empty{display:none;}
+#empty .big-icon{font-size:64px; color:var(--accent); opacity:.85;}
+#empty h1{font-size:22px; font-weight:800; letter-spacing:.02em;}
+#empty p{font-size:13px; color:var(--text2); line-height:1.7; max-width:340px;}
+#pickBtn{
+  margin-top:6px; padding:14px 28px; border:none; border-radius:28px;
+  background:var(--accent); color:#fff; font-size:15px; font-weight:700;
+  font-family:inherit; cursor:pointer; box-shadow:0 4px 14px rgba(194,65,12,.35);
+}
+#pickBtn:active{transform:scale(.97);}
+.formats{font-size:11px; color:var(--text2); letter-spacing:.04em;}
+.drop-hint{font-size:11px; color:var(--text2); opacity:.7;}
+
+/* ── ドラッグ中のハイライト ── */
+body.dragover::after{
+  content:""; position:fixed; inset:8px; border:2px dashed var(--accent);
+  border-radius:16px; pointer-events:none; z-index:50;
+}
+
+/* ── 表示中の上バー ── */
+#topbar{
+  position:fixed; top:calc(10px + env(safe-area-inset-top)); left:12px; right:12px;
+  display:none; align-items:center; gap:8px; z-index:10; pointer-events:none;
+}
+body.viewing #topbar{display:flex;}
+#modelName{
+  font-size:12px; font-weight:700; color:var(--text2); background:rgba(255,255,255,.82);
+  padding:6px 12px; border-radius:16px; backdrop-filter:blur(6px);
+  max-width:70%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+}
+
+/* ── 右下の操作ボタン ── */
+#fabs{
+  position:fixed; right:14px; bottom:calc(18px + env(safe-area-inset-bottom));
+  display:none; flex-direction:column; gap:10px; z-index:10;
+}
+body.viewing #fabs{display:flex;}
+.fab{
+  width:50px; height:50px; border-radius:50%; border:none; cursor:pointer;
+  background:var(--card); color:var(--text); font-size:22px;
+  box-shadow:0 3px 12px rgba(0,0,0,.18); display:flex; align-items:center; justify-content:center;
+}
+.fab.primary{background:var(--accent); color:#fff;}
+.fab:active{transform:scale(.94);}
+
+/* ── メッセージシート（.skp を入れた時など）── */
+#sheet{
+  position:fixed; left:0; right:0; bottom:0; z-index:60;
+  background:var(--card); border-radius:18px 18px 0 0;
+  padding:20px 20px calc(24px + env(safe-area-inset-bottom));
+  box-shadow:0 -6px 30px rgba(0,0,0,.2);
+  transform:translateY(110%); transition:transform .25s ease;
+}
+#sheet.open{transform:translateY(0);}
+#sheet h2{font-size:15px; font-weight:800; margin-bottom:10px;}
+#sheet p{font-size:13px; color:var(--text2); line-height:1.8;}
+#sheet .close-btn{
+  margin-top:16px; width:100%; padding:12px; border:none; border-radius:12px;
+  background:var(--bg); color:var(--text); font-size:14px; font-weight:700;
+  font-family:inherit; cursor:pointer;
+}
+#backdrop{position:fixed; inset:0; background:rgba(0,0,0,.3); z-index:55; display:none;}
+#backdrop.open{display:block;}
+
+/* ── ローディング ── */
+#loading{
+  position:fixed; inset:0; z-index:40; display:none;
+  align-items:center; justify-content:center; background:rgba(238,241,245,.7);
+  font-size:13px; font-weight:700; color:var(--text2); backdrop-filter:blur(3px);
+}
+#loading.open{display:flex;}
+</style>
+</head>
+<body>
+
+<canvas id="canvas"></canvas>
+
+<div id="empty">
+  <span class="icon big-icon">view_in_ar</span>
+  <h1>My SketchUp</h1>
+  <p>SketchUp のモデルをスマホで、ぐるぐる回して見るためのビューア。</p>
+  <button id="pickBtn"><span class="icon">upload_file</span> ファイルを選ぶ</button>
+  <div class="formats">対応: DAE / OBJ / STL / GLB / GLTF</div>
+  <div class="drop-hint">PC ならここにファイルをドラッグしても OK</div>
+</div>
+
+<div id="topbar">
+  <span id="modelName"></span>
+</div>
+
+<div id="fabs">
+  <button class="fab" id="resetBtn" title="視点リセット"><span class="icon">recenter</span></button>
+  <button class="fab primary" id="openBtn" title="別のファイルを開く"><span class="icon">upload_file</span></button>
+</div>
+
+<div id="backdrop"></div>
+<div id="sheet">
+  <h2 id="sheetTitle"></h2>
+  <p id="sheetBody"></p>
+  <button class="close-btn" id="sheetClose">閉じる</button>
+</div>
+
+<div id="loading">読み込み中…</div>
+
+<input type="file" id="fileInput" multiple hidden
+  accept=".dae,.obj,.mtl,.stl,.glb,.gltf,.bin,.skp,.png,.jpg,.jpeg,.webp">
+
+<script src="/config.js"></script>
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+<script type="module">
+import * as THREE from "three";
+import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
+import { OBJLoader } from "three/addons/loaders/OBJLoader.js";
+import { MTLLoader } from "three/addons/loaders/MTLLoader.js";
+import { STLLoader } from "three/addons/loaders/STLLoader.js";
+import { ColladaLoader } from "three/addons/loaders/ColladaLoader.js";
+
+const $ = (id) => document.getElementById(id);
+
+// ── three.js の基本セットアップ ──
+const renderer = new THREE.WebGLRenderer({ canvas: $("canvas"), antialias: true });
+renderer.setPixelRatio(Math.min(2, devicePixelRatio || 1));
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0xeef1f5);
+const camera = new THREE.PerspectiveCamera(55, 1, 0.01, 20000);
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.dampingFactor = 0.08;
+
+scene.add(new THREE.HemisphereLight(0xffffff, 0x8f9bb0, 1.1));
+const sun = new THREE.DirectionalLight(0xffffff, 1.6);
+sun.position.set(1, 2, 1.2);
+scene.add(sun);
+
+let modelGroup = null;   // 今表示してるモデル
+let gridHelper = null;
+let homeView = null;     // 視点リセット用 { pos, target }
+
+function fit() {
+  const w = innerWidth, h = innerHeight;
+  renderer.setSize(w, h, false);
+  camera.aspect = w / h;
+  camera.updateProjectionMatrix();
+}
+addEventListener("resize", fit);
+fit();
+
+renderer.setAnimationLoop(() => {
+  controls.update();
+  renderer.render(scene, camera);
+});
+
+// ── モデルを画面いっぱいに収める ──
+function frameModel(obj) {
+  const box = new THREE.Box3().setFromObject(obj);
+  if (box.isEmpty()) return;
+  const size = box.getSize(new THREE.Vector3());
+  const center = box.getCenter(new THREE.Vector3());
+  const radius = Math.max(size.x, size.y, size.z) * 0.5 || 1;
+
+  // モデルを原点（地面の高さ 0）に寄せる
+  obj.position.sub(center);
+  obj.position.y += size.y / 2;
+
+  const target = new THREE.Vector3(0, size.y / 2, 0);
+  const dist = radius * 2.4;
+  camera.near = Math.max(radius / 1000, 0.001);
+  camera.far = radius * 100;
+  camera.updateProjectionMatrix();
+  camera.position.set(dist * 0.8, dist * 0.65, dist * 0.9);
+  controls.target.copy(target);
+  controls.update();
+  homeView = { pos: camera.position.clone(), target: target.clone() };
+
+  // 地面グリッド（モデルサイズに合わせる）
+  if (gridHelper) scene.remove(gridHelper);
+  const gsize = radius * 5;
+  gridHelper = new THREE.GridHelper(gsize, 20, 0xc4ccd8, 0xdde2e9);
+  scene.add(gridHelper);
+}
+
+function showModel(obj, name) {
+  if (modelGroup) {
+    scene.remove(modelGroup);
+    modelGroup.traverse((c) => {
+      if (c.geometry) c.geometry.dispose();
+      if (c.material) [].concat(c.material).forEach((m) => m.dispose());
+    });
+  }
+  modelGroup = new THREE.Group();
+  modelGroup.add(obj);
+  scene.add(modelGroup);
+  frameModel(modelGroup);
+  $("modelName").textContent = name;
+  document.body.classList.add("viewing");
+}
+
+// ── メッセージシート ──
+function showSheet(title, body) {
+  $("sheetTitle").textContent = title;
+  $("sheetBody").textContent = body;
+  $("sheet").classList.add("open");
+  $("backdrop").classList.add("open");
+}
+function hideSheet() {
+  $("sheet").classList.remove("open");
+  $("backdrop").classList.remove("open");
+}
+$("sheetClose").onclick = hideSheet;
+$("backdrop").onclick = hideSheet;
+
+// ── ファイル読み込み ──
+// 複数ファイル選択に対応：OBJ+MTL+テクスチャ画像みたいなセットもまとめて渡せば表示できる。
+// ファイル名 → blob URL の対応表を作り、ローダーが参照するファイルを差し替える。
+const EXT_MAIN = ["dae", "obj", "stl", "glb", "gltf"];
+
+function extOf(name) {
+  return name.split(".").pop().toLowerCase();
+}
+
+async function openFiles(files) {
+  if (!files || !files.length) return;
+  const list = [...files];
+
+  const skp = list.find((f) => extOf(f.name) === "skp");
+  const main = list.find((f) => EXT_MAIN.includes(extOf(f.name)));
+
+  if (!main) {
+    if (skp) {
+      showSheet(".skp はそのままだと開けない",
+        "SketchUp の保存ファイル (.skp) は SketchUp 専用の形式なので、ブラウザでは中身を読めません。" +
+        "SketchUp 側で「エクスポート」から DAE / OBJ / STL / glTF のどれかで書き出して、そのファイルをここに入れてください。" +
+        "色や素材も一緒に見たいときは DAE が向いてます。");
+    } else {
+      showSheet("開けるファイルが無かった",
+        "対応してるのは DAE / OBJ / STL / GLB / GLTF です。SketchUp からエクスポートしたファイルを選んでください。");
+    }
+    return;
+  }
+
+  $("loading").classList.add("open");
+
+  // ファイル名 → blob URL 対応表（テクスチャ・MTL・bin の解決用）
+  const fileMap = new Map();
+  for (const f of list) fileMap.set(f.name.toLowerCase(), URL.createObjectURL(f));
+  const manager = new THREE.LoadingManager();
+  manager.setURLModifier((url) => {
+    const base = decodeURIComponent(url.split("/").pop().split("?")[0]).toLowerCase();
+    return fileMap.get(base) || url;
+  });
+
+  const mainUrl = fileMap.get(main.name.toLowerCase());
+  const ext = extOf(main.name);
+
+  try {
+    let obj;
+    if (ext === "glb" || ext === "gltf") {
+      const gltf = await new GLTFLoader(manager).loadAsync(mainUrl);
+      obj = gltf.scene;
+    } else if (ext === "dae") {
+      const dae = await new ColladaLoader(manager).loadAsync(mainUrl);
+      obj = dae.scene;
+    } else if (ext === "obj") {
+      const objLoader = new OBJLoader(manager);
+      const mtlFile = list.find((f) => extOf(f.name) === "mtl");
+      if (mtlFile) {
+        const mtl = await new MTLLoader(manager).loadAsync(fileMap.get(mtlFile.name.toLowerCase()));
+        mtl.preload();
+        objLoader.setMaterials(mtl);
+      }
+      obj = await objLoader.loadAsync(mainUrl);
+    } else if (ext === "stl") {
+      const geo = await new STLLoader(manager).loadAsync(mainUrl);
+      geo.rotateX(-Math.PI / 2);   // SketchUp の STL は Z が上なので Y 上に直す
+      geo.computeVertexNormals();
+      obj = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({
+        color: 0xb8c0cc, roughness: 0.75, metalness: 0.05,
+      }));
+    }
+    // 素材が無い / 真っ黒なメッシュには見やすい標準素材を当てる
+    obj.traverse((c) => {
+      if (c.isMesh && !c.material) {
+        c.material = new THREE.MeshStandardMaterial({ color: 0xb8c0cc, roughness: 0.75 });
+      }
+    });
+    showModel(obj, main.name);
+  } catch (e) {
+    console.error(e);
+    showSheet("読み込みに失敗した",
+      "ファイルが壊れてるか、対応してない書き方かも。SketchUp からエクスポートし直して、もう一度試してください。" +
+      "（テクスチャ画像が別ファイルの時は、モデルと一緒に全部まとめて選ぶと表示できます）");
+  } finally {
+    $("loading").classList.remove("open");
+  }
+}
+
+// ── UI イベント ──
+$("pickBtn").onclick = () => $("fileInput").click();
+$("openBtn").onclick = () => $("fileInput").click();
+$("fileInput").onchange = (e) => { openFiles(e.target.files); e.target.value = ""; };
+$("resetBtn").onclick = () => {
+  if (!homeView) return;
+  camera.position.copy(homeView.pos);
+  controls.target.copy(homeView.target);
+  controls.update();
+};
+
+// ドラッグ&ドロップ（PC 用）
+addEventListener("dragover", (e) => { e.preventDefault(); document.body.classList.add("dragover"); });
+addEventListener("dragleave", () => document.body.classList.remove("dragover"));
+addEventListener("drop", (e) => {
+  e.preventDefault();
+  document.body.classList.remove("dragover");
+  openFiles(e.dataTransfer.files);
+});
+</script>
+</body>
+</html>
