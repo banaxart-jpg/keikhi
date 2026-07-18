@@ -130,8 +130,8 @@ body.can-share #shareBtn{display:flex;}
   <h1>My SketchUp</h1>
   <p>SketchUp のモデルをスマホで、ぐるぐる回して見るためのビューア。</p>
   <button id="pickBtn"><span class="icon">upload_file</span> ファイルを選ぶ</button>
-  <div class="formats">対応: DAE / OBJ / STL / GLB / GLTF</div>
-  <div class="drop-hint">PC ならここにファイルをドラッグしても OK</div>
+  <div class="formats">対応: ZIP / DAE / OBJ / STL / GLB / GLTF</div>
+  <div class="drop-hint">SketchUp の OBJ 書き出しは .zip のまま選べば OK。<br>PC ならフォルダごとここにドラッグしても OK</div>
 </div>
 
 <div id="topbar">
@@ -166,7 +166,7 @@ body.can-share #shareBtn{display:flex;}
 <div id="loading"><div class="spinner"></div><span id="loadingText">読み込み中…</span></div>
 
 <input type="file" id="fileInput" multiple hidden
-  accept=".dae,.obj,.mtl,.stl,.glb,.gltf,.bin,.skp,.png,.jpg,.jpeg,.webp">
+  accept=".zip,.dae,.obj,.mtl,.stl,.glb,.gltf,.bin,.skp,.png,.jpg,.jpeg,.webp">
 
 <script src="/config.js"></script>
 <script type="importmap">
@@ -185,6 +185,7 @@ import { OBJLoader } from "three/addons/loaders/OBJLoader.js";
 import { MTLLoader } from "three/addons/loaders/MTLLoader.js";
 import { STLLoader } from "three/addons/loaders/STLLoader.js";
 import { ColladaLoader } from "three/addons/loaders/ColladaLoader.js";
+import { unzipSync } from "https://cdn.jsdelivr.net/npm/fflate@0.8.2/esm/browser.js";
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js";
 import {
   getAuth, onAuthStateChanged, setPersistence, browserLocalPersistence,
@@ -356,14 +357,50 @@ function updateShareFab() {
   document.body.classList.toggle("can-share", !!can);
 }
 
+// ZIP は中身を展開して普通のファイル一覧に変換する。
+// SketchUp の OBJ 書き出しは「obj + mtl + テクスチャのフォルダ」一式で出てくるので、
+// zip のまま渡してもらうのが一番ラク。
+function expandZip(file, buf) {
+  const out = [];
+  let entries;
+  try {
+    entries = unzipSync(new Uint8Array(buf));
+  } catch (e) {
+    throw new Error(`${file.name} を展開できませんでした`);
+  }
+  for (const [path, data] of Object.entries(entries)) {
+    const base = path.split("/").pop();
+    // Mac の zip に混ざるゴミ (__MACOSX / .DS_Store / 隠しファイル) は捨てる
+    if (!base || path.includes("__MACOSX") || base.startsWith(".")) continue;
+    if (!data.length) continue;
+    out.push(new File([data], base));
+  }
+  return out;
+}
+
 async function openFiles(files, opts = {}) {
   if (!files || !files.length) return;
-  const list = [...files];
+  let list = [...files];
+
+  // zip があれば展開して混ぜる
+  const zips = list.filter((f) => extOf(f.name) === "zip");
+  if (zips.length) {
+    setLoading("ZIP を展開中…");
+    try {
+      for (const z of zips) list.push(...expandZip(z, await z.arrayBuffer()));
+    } catch (e) {
+      doneLoading();
+      showSheet("ZIP を開けなかった", e.message);
+      return;
+    }
+    list = list.filter((f) => extOf(f.name) !== "zip");
+  }
 
   const skp = list.find((f) => extOf(f.name) === "skp");
   const main = list.find((f) => EXT_MAIN.includes(extOf(f.name)));
 
   if (!main) {
+    doneLoading();
     if (skp) {
       showSheet(".skp はそのままだと開けない",
         "SketchUp の保存ファイル (.skp) は SketchUp 専用の形式なので、ブラウザでは中身を読めません。" +
@@ -531,13 +568,41 @@ $("resetBtn").onclick = () => {
   controls.update();
 };
 
-// ドラッグ&ドロップ（PC 用）
+// ドラッグ&ドロップ（PC 用）。フォルダごとドロップされたら中身を再帰で拾う。
+async function filesFromDrop(dt) {
+  // webkitGetAsEntry は await を挟むと無効になるので先に同期で全部取る
+  const entries = [...(dt.items || [])].map((i) => i.webkitGetAsEntry?.()).filter(Boolean);
+  if (!entries.length) return [...dt.files];
+  const out = [];
+  async function walk(entry) {
+    if (entry.isFile) {
+      const f = await new Promise((res, rej) => entry.file(res, rej));
+      if (!f.name.startsWith(".")) out.push(f);
+    } else if (entry.isDirectory) {
+      if (entry.name === "__MACOSX") return;
+      const reader = entry.createReader();
+      // readEntries は一度に最大 100 件しか返さないので空になるまで回す
+      let batch;
+      do {
+        batch = await new Promise((res, rej) => reader.readEntries(res, rej));
+        for (const e of batch) await walk(e);
+      } while (batch.length);
+    }
+  }
+  for (const e of entries) await walk(e);
+  return out;
+}
+
 addEventListener("dragover", (e) => { e.preventDefault(); document.body.classList.add("dragover"); });
 addEventListener("dragleave", () => document.body.classList.remove("dragover"));
-addEventListener("drop", (e) => {
+addEventListener("drop", async (e) => {
   e.preventDefault();
   document.body.classList.remove("dragover");
-  openFiles(e.dataTransfer.files);
+  try {
+    openFiles(await filesFromDrop(e.dataTransfer));
+  } catch (err) {
+    showSheet("読み込みに失敗した", err.message);
+  }
 });
 </script>
 </body>
