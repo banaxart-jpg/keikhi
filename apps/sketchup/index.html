@@ -319,11 +319,12 @@ const SECTION_PRESETS = [
 let sectionPresetIdx = 0;
 let sectionTiltHintShown = false;   // 傾き連動のヒントはセッション中1回だけ
 
-// ── 切り口のベタ塗り (ステンシル) ──
-// モデルの裏面/表面を数えて「中身が詰まってる領域」だけに色付きの板を描く定石。
-// 断面 ON のときだけ組み立てる (描画コストが倍近く増えるので常時は持たない)。
-let capStencilGroup = null;
-let capMesh = null;
+// ── 切り口の赤塗り ──
+// ステンシル方式は「閉じた立体」専用で、SketchUp の紙みたいな面モデルだと
+// 画面中が塗られる誤爆を起こす。代わりに「切断面のすぐ奥の薄い層」だけを
+// 赤で描き直す方式にする (CAD の断面線が赤いのと同じ見え方。開いた面でも安全)。
+let rimGroup = null;   // モデルと同じ形を赤マテリアルで薄層クリップしたコピー
+const rimPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 1e9);
 let planeViz = null;   // 「切ってる板」の可視化 (グリッド + 枠線)
 
 // 板の見た目: 半透明のグリッド面。手に持った枠がモデルに刺さってるのが見える
@@ -343,65 +344,42 @@ function makePlaneVizTexture() {
   g.strokeRect(5, 5, 502, 502);
   return new THREE.CanvasTexture(c);
 }
-function stencilMat(side, op) {
-  return new THREE.MeshBasicMaterial({
-    side, colorWrite: false, depthWrite: false, depthTest: false,
-    stencilWrite: true, stencilFunc: THREE.AlwaysStencilFunc,
-    stencilFail: op, stencilZFail: op, stencilZPass: op,
-    clippingPlanes: [sectionPlane],
-  });
-}
-function buildCaps() {
-  removeCaps();
+function buildSectionViz() {
+  removeSectionViz();
   scene.updateMatrixWorld(true);
-  capStencilGroup = new THREE.Group();
+  // 赤い切り口: モデルと同じ geometry を、切断面〜そのすぐ奥だけ残るように
+  // 2枚のクリップ面で挟んで赤く描く。壁がその層を横切った所だけ赤になる
+  const rimMat = new THREE.MeshBasicMaterial({
+    color: 0xc0392b, side: THREE.DoubleSide,
+    clippingPlanes: [sectionPlane, rimPlane],
+    polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2,
+  });
+  rimGroup = new THREE.Group();
   modelGroup.traverse((c) => {
     if (!c.isMesh || !c.geometry) return;
-    for (const [side, op] of [
-      [THREE.BackSide, THREE.IncrementWrapStencilOp],
-      [THREE.FrontSide, THREE.DecrementWrapStencilOp],
-    ]) {
-      const m = new THREE.Mesh(c.geometry, stencilMat(side, op));
-      m.matrixAutoUpdate = false;
-      m.matrix.copy(c.matrixWorld);
-      m.renderOrder = 1;
-      capStencilGroup.add(m);
-    }
+    const m = new THREE.Mesh(c.geometry, rimMat);
+    m.matrixAutoUpdate = false;
+    m.matrix.copy(c.matrixWorld);
+    rimGroup.add(m);
   });
-  scene.add(capStencilGroup);
-  capMesh = new THREE.Mesh(
-    new THREE.PlaneGeometry(boxSphereR * 4, boxSphereR * 4),
-    new THREE.MeshStandardMaterial({
-      color: 0xa8542f, roughness: 0.9, metalness: 0, side: THREE.DoubleSide,
-      stencilWrite: true, stencilRef: 0, stencilFunc: THREE.NotEqualStencilFunc,
-      stencilFail: THREE.ReplaceStencilOp, stencilZFail: THREE.ReplaceStencilOp,
-      stencilZPass: THREE.ReplaceStencilOp,
-    })
-  );
-  capMesh.renderOrder = 2;
-  capMesh.onAfterRender = (r) => r.clearStencil();
-  scene.add(capMesh);
+  scene.add(rimGroup);
+  const tex = makePlaneVizTexture();
+  tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
   planeViz = new THREE.Mesh(
-    new THREE.PlaneGeometry(boxSphereR * 2.6, boxSphereR * 2.6),
+    new THREE.PlaneGeometry(boxSphereR * 2.2, boxSphereR * 2.2),
     new THREE.MeshBasicMaterial({
-      map: makePlaneVizTexture(), transparent: true, opacity: 0.6,
+      map: tex, transparent: true, opacity: 0.4,
       side: THREE.DoubleSide, depthWrite: false,
     })
   );
   planeViz.renderOrder = 3;
   scene.add(planeViz);
 }
-function removeCaps() {
-  if (capStencilGroup) {
-    scene.remove(capStencilGroup);
-    capStencilGroup.traverse((c) => { if (c.material?.dispose) c.material.dispose(); });
-    capStencilGroup = null;
-  }
-  if (capMesh) {
-    scene.remove(capMesh);
-    capMesh.geometry.dispose();
-    capMesh.material.dispose();
-    capMesh = null;
+function removeSectionViz() {
+  if (rimGroup) {
+    scene.remove(rimGroup);
+    rimGroup.children[0]?.material.dispose();   // rimMat は全メッシュ共有
+    rimGroup = null;
   }
   if (planeViz) {
     scene.remove(planeViz);
@@ -416,8 +394,8 @@ const _anchor = new THREE.Vector3();
 function updateSection() {
   if (!modelGroup || !sectionOn || !modelBox) {
     sectionPlane.constant = 1e9;
-    if (capStencilGroup) capStencilGroup.visible = false;
-    if (capMesh) capMesh.visible = false;
+    rimPlane.constant = 1e9;
+    if (rimGroup) rimGroup.visible = false;
     if (planeViz) planeViz.visible = false;
     return;
   }
@@ -425,19 +403,18 @@ function updateSection() {
   _anchor.copy(boxCenter).addScaledVector(sectionNormal, boxSphereR * 1.02 * (1 - 2 * sectionT));
   sectionPlane.normal.copy(sectionNormal);
   sectionPlane.constant = -sectionNormal.dot(_anchor);
-  if (capStencilGroup) capStencilGroup.visible = true;
-  if (capMesh) {
-    capMesh.visible = true;
-    sectionPlane.coplanarPoint(capMesh.position);
-    capMesh.lookAt(
-      capMesh.position.x - sectionNormal.x,
-      capMesh.position.y - sectionNormal.y,
-      capMesh.position.z - sectionNormal.z);
-  }
+  // 赤層: 切断面から少しだけ奥までの薄い層 (逆向きの面で挟む)
+  const rimDepth = boxSphereR * 0.012;
+  rimPlane.normal.copy(sectionNormal).negate();
+  rimPlane.constant = -sectionPlane.constant + rimDepth;
+  if (rimGroup) rimGroup.visible = true;
   if (planeViz) {
     planeViz.visible = true;
-    planeViz.position.copy(capMesh.position);
-    planeViz.quaternion.copy(capMesh.quaternion);
+    sectionPlane.coplanarPoint(planeViz.position);
+    planeViz.lookAt(
+      planeViz.position.x - sectionNormal.x,
+      planeViz.position.y - sectionNormal.y,
+      planeViz.position.z - sectionNormal.z);
   }
 }
 function setSectionOn(on) {
@@ -449,7 +426,7 @@ function setSectionOn(on) {
     $("sectionAxisBtn").textContent = SECTION_PRESETS[sectionPresetIdx].label;
     sectionT = 0.55;                    // ON にした瞬間から切れてるのが分かる位置
     $("sectionRange").value = 55;
-    if (!capStencilGroup) buildCaps();
+    if (!rimGroup) buildSectionViz();
     if (!sectionTiltHintShown && matchMedia("(pointer:coarse)").matches) {
       sectionTiltHintShown = true;
       showToast("バー右の傾きボタン ON で<br>スマホの画面がそのまま「切る板」になります");
@@ -692,7 +669,7 @@ function showHintOnce() {
 }
 
 function showModel(obj, name) {
-  removeCaps();   // 切り口メッシュは旧モデルの geometry を参照してるので先に外す
+  removeSectionViz();   // 切り口メッシュは旧モデルの geometry を参照してるので先に外す
   if (modelGroup) {
     scene.remove(modelGroup);
     modelGroup.traverse((c) => {
