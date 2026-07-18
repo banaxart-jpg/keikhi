@@ -98,6 +98,22 @@ body.viewing #fabs{display:flex;}
 #shareBtn{display:none;}
 body.can-share #shareBtn{display:flex;}
 
+/* ── 断面スライダー ── */
+#sectionBar{
+  position:fixed; left:14px; right:80px;
+  bottom:calc(18px + env(safe-area-inset-bottom));
+  display:none; align-items:center; gap:10px; z-index:10;
+  background:rgba(255,255,255,.9); border-radius:26px; padding:10px 14px;
+  backdrop-filter:blur(6px); box-shadow:0 3px 12px rgba(0,0,0,.15);
+}
+body.section-on.viewing #sectionBar{display:flex;}
+#sectionAxisBtn{
+  border:1px solid var(--line); background:var(--card); color:var(--text);
+  border-radius:16px; padding:6px 12px; font-size:12px; font-weight:700;
+  font-family:inherit; cursor:pointer; white-space:nowrap;
+}
+#sectionRange{flex:1; accent-color:var(--accent); min-width:0;}
+
 /* ── メッセージ / 共有シート ── */
 .sheet{
   position:fixed; left:0; right:0; bottom:0; z-index:60;
@@ -178,8 +194,14 @@ body.can-share #shareBtn{display:flex;}
 <div id="fabs">
   <button class="fab" id="shareBtn" title="共有リンクを作る"><span class="icon">share</span></button>
   <button class="fab" id="gyroBtn" title="傾きで見回す"><span class="icon">screen_rotation</span></button>
+  <button class="fab" id="sectionBtn" title="断面を見る"><span class="icon">content_cut</span></button>
   <button class="fab" id="resetBtn" title="視点リセット"><span class="icon">recenter</span></button>
   <button class="fab primary" id="openBtn" title="別のファイルを開く"><span class="icon">upload_file</span></button>
+</div>
+
+<div id="sectionBar">
+  <button id="sectionAxisBtn">上から</button>
+  <input type="range" id="sectionRange" min="0" max="100" value="100">
 </div>
 
 <div id="backdrop"></div>
@@ -219,7 +241,7 @@ body.can-share #shareBtn{display:flex;}
 </div>
 
 <div id="loading"><div class="spinner"></div><span id="loadingText">読み込み中…</span></div>
-<div id="hintToast">1本指で回転、2本指でズーム<br>ぐっと近づくと断面が見えます</div>
+<div id="hintToast">1本指で回転、2本指でズーム<br>断面は右下のハサミボタンから</div>
 
 <input type="file" id="fileInput" multiple hidden
   accept=".zip,.dae,.obj,.mtl,.stl,.glb,.gltf,.bin,.skp,.png,.jpg,.jpeg,.webp">
@@ -273,21 +295,35 @@ let gridHelper = null;
 let homeView = null;     // 視点リセット用 { pos, target }
 let modelRadius = 1;     // モデルの外接半径 (断面モードの発動判定に使う)
 
-// ── 断面表示 ──
-// ピンチで近づいてカメラがモデルの外接球に入ったら、注視点を通る面で
-// 手前側をスパッと切る。引けば勝手に元に戻る。モデルの material だけに
+// ── 断面モード ──
+// ハサミボタンで ON にすると、切る方向 (上から/横から/前から) と深さスライダーが
+// 出て、その位置でモデルをスパッと切って中が見える。モデルの material だけに
 // 適用するのでグリッドは切れない。
 const sectionPlane = new THREE.Plane(new THREE.Vector3(0, 0, 1), 1e9);
-const _camDir = new THREE.Vector3();
+let sectionAxis = null;   // null = OFF / "y" 上から / "x" 横から / "z" 前から
+let sectionT = 1;         // スライダー位置 (1 = 切らない 〜 0 = 全部切る)
+let modelBox = null;      // 表示中モデルの外接ボックス
+const SECTION_AXES = [
+  { key: "y", label: "上から", normal: new THREE.Vector3(0, -1, 0) },
+  { key: "x", label: "横から", normal: new THREE.Vector3(-1, 0, 0) },
+  { key: "z", label: "前から", normal: new THREE.Vector3(0, 0, -1) },
+];
 function updateSection() {
-  if (!modelGroup) return;
-  const dist = camera.position.distanceTo(controls.target);
-  if (dist < modelRadius * 1.25) {
-    camera.getWorldDirection(_camDir);
-    sectionPlane.normal.copy(_camDir);
-    sectionPlane.constant = -_camDir.dot(controls.target);
+  if (!modelGroup || !sectionAxis || !modelBox) { sectionPlane.constant = 1e9; return; }
+  const ax = SECTION_AXES.find((a) => a.key === sectionAxis);
+  const min = modelBox.min[sectionAxis], max = modelBox.max[sectionAxis];
+  const pad = (max - min) * 0.02 || 0.01;
+  sectionPlane.normal.copy(ax.normal);
+  sectionPlane.constant = (min - pad) + (max - min + pad * 2) * sectionT;
+}
+function setSectionOn(on) {
+  document.body.classList.toggle("section-on", on);
+  $("sectionBtn").classList.toggle("on", on);
+  if (on) {
+    if (!sectionAxis) sectionAxis = "y";
+    $("sectionAxisBtn").textContent = SECTION_AXES.find((a) => a.key === sectionAxis).label;
   } else {
-    sectionPlane.constant = 1e9;   // 遠くにあるうちは何も切らない
+    sectionAxis = null;
   }
 }
 
@@ -373,6 +409,8 @@ function frameModel(obj) {
   obj.position.sub(center);
   obj.position.y += size.y / 2;
 
+  modelBox = new THREE.Box3().setFromObject(obj);   // 断面スライダーの範囲用 (原点寄せ後)
+
   const target = new THREE.Vector3(0, size.y / 2, 0);
   const dist = radius * 2.4;
   camera.near = Math.max(radius / 1000, 0.001);
@@ -399,8 +437,9 @@ function cleanTitle(name) {
 }
 
 function showHintOnce() {
-  if (localStorage.getItem("sketchup_hint_done")) return;
-  localStorage.setItem("sketchup_hint_done", "1");
+  // 文言を変えたら key を上げて、もう一度だけ見せる
+  if (localStorage.getItem("sketchup_hint_v2")) return;
+  localStorage.setItem("sketchup_hint_v2", "1");
   $("hintToast").classList.add("show");
   setTimeout(() => $("hintToast").classList.remove("show"), 5000);
 }
@@ -420,6 +459,9 @@ function showModel(obj, name) {
   currentTitle = name;
   $("modelName").textContent = name;
   document.body.classList.add("viewing");
+  setSectionOn(false);          // 新しいモデルは断面なしから
+  $("sectionRange").value = 100;
+  sectionT = 1;
   showHintOnce();
 }
 
@@ -793,6 +835,13 @@ $("pickBtn").onclick = () => $("fileInput").click();
 $("openBtn").onclick = () => $("fileInput").click();
 $("shareBtn").onclick = shareCurrent;
 $("gyroBtn").onclick = toggleGyro;
+$("sectionBtn").onclick = () => setSectionOn(!sectionAxis);
+$("sectionRange").oninput = (e) => { sectionT = e.target.value / 100; };
+$("sectionAxisBtn").onclick = () => {
+  const i = SECTION_AXES.findIndex((a) => a.key === sectionAxis);
+  sectionAxis = SECTION_AXES[(i + 1) % SECTION_AXES.length].key;
+  $("sectionAxisBtn").textContent = SECTION_AXES.find((a) => a.key === sectionAxis).label;
+};
 $("fileInput").onchange = (e) => { openFiles(e.target.files); e.target.value = ""; };
 $("pickDirBtn").onclick = () => $("dirInput").click();
 $("dirInput").onchange = (e) => {
