@@ -3,147 +3,178 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
-<title>threegis 360</title>
+<title>threegis</title>
 <style>
-  html,body{margin:0;height:100%;overflow:hidden;background:#05060f;
-    font-family:ui-monospace,Menlo,monospace;color:#cdd6ff;-webkit-user-select:none;user-select:none}
+  html,body{margin:0;height:100%;overflow:hidden;background:#0e1338;
+    font-family:ui-monospace,Menlo,monospace;color:#dfe6ff;-webkit-user-select:none;user-select:none}
   #c{display:block;position:fixed;inset:0;width:100%;height:100%;touch-action:none}
   .badge{position:fixed;top:calc(16px + env(safe-area-inset-top));left:50%;transform:translateX(-50%);
-    z-index:5;font-weight:800;font-style:italic;font-size:16px;letter-spacing:.02em;
-    color:#eaf1ff;text-shadow:0 1px 10px rgba(120,160,255,.6);pointer-events:none;opacity:.9}
+    z-index:5;font-weight:800;font-style:italic;font-size:15px;letter-spacing:.04em;
+    color:#eef3ff;text-shadow:0 1px 10px rgba(120,160,255,.7);pointer-events:none;opacity:.9}
   .hint{position:fixed;left:0;right:0;bottom:calc(20px + env(safe-area-inset-bottom));
-    text-align:center;font-size:12px;letter-spacing:.28em;color:rgba(205,214,255,.72);
+    text-align:center;font-size:12px;letter-spacing:.26em;color:rgba(210,220,255,.7);
     pointer-events:none;z-index:5;text-shadow:0 1px 6px #000}
   #tiltBtn{position:fixed;left:50%;transform:translateX(-50%);
-    bottom:calc(52px + env(safe-area-inset-bottom));z-index:6;
-    padding:12px 22px;border-radius:30px;border:1px solid rgba(150,170,255,.4);
-    background:rgba(20,26,60,.72);color:#eaf1ff;font-family:inherit;font-size:13px;font-weight:700;
-    letter-spacing:.04em;cursor:pointer;backdrop-filter:blur(6px);box-shadow:0 6px 20px rgba(0,0,0,.4)}
+    bottom:calc(50px + env(safe-area-inset-bottom));z-index:6;
+    padding:11px 22px;border-radius:30px;border:1px solid rgba(150,170,255,.4);
+    background:rgba(24,30,70,.75);color:#eef3ff;font-family:inherit;font-size:13px;font-weight:700;
+    letter-spacing:.03em;cursor:pointer;backdrop-filter:blur(6px);box-shadow:0 6px 20px rgba(0,0,0,.45)}
   #tiltBtn:active{transform:translateX(-50%) scale(.96)}
 </style>
 </head>
 <body>
 <canvas id="c"></canvas>
-<div class="badge">threegis 360°</div>
-<div class="hint" id="hint">ドラッグで見回す</div>
-<button id="tiltBtn" type="button">📱 スマホを倒して見回す</button>
+<div class="badge">threegis</div>
+<div class="hint" id="hint">傾ける / 指でなぞる</div>
+<button id="tiltBtn" type="button">📱 スマホを傾けて動かす</button>
 
 <script>
 (() => {
-  const canvas = document.getElementById("c");
-  const ctx = canvas.getContext("2d");
+  const canvas = document.getElementById("c"), ctx = canvas.getContext("2d");
   const DPR = Math.min(2, devicePixelRatio || 1);
+  const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
 
-  // ── 360°パノラマを一枚のオフスクリーン canvas に描く（左右はループする）──
-  const PW = 4096, PH = 1400, HZ = PH * 0.55; // 幅・高さ・地平線
-  const pano = document.createElement("canvas");
-  pano.width = PW; pano.height = PH;
-  (function paint() {
-    const g = pano.getContext("2d");
-    // 空
-    let sky = g.createLinearGradient(0, 0, 0, HZ);
-    sky.addColorStop(0, "#05061a"); sky.addColorStop(.55, "#0c1030");
-    sky.addColorStop(.86, "#232043"); sky.addColorStop(1, "#5a3f4a");
-    g.fillStyle = sky; g.fillRect(0, 0, PW, HZ);
-    // 地平線の暖かい光
-    let glow = g.createLinearGradient(0, HZ - 150, 0, HZ + 30);
-    glow.addColorStop(0, "rgba(255,150,90,0)"); glow.addColorStop(1, "rgba(255,150,90,.4)");
-    g.fillStyle = glow; g.fillRect(0, HZ - 150, PW, 180);
-    // 天の川（sin で全幅ループ）
-    for (let i = 0; i < 9000; i++) {
-      const x = Math.random() * PW;
-      const band = HZ * 0.42 + Math.sin(x / PW * Math.PI * 2 + .6) * HZ * 0.16;
-      const y = band + (Math.random() - .5) * HZ * 0.5;
-      if (y < 4 || y > HZ - 6) continue;
-      const near = 1 - Math.min(1, Math.abs(y - band) / (HZ * 0.28));
-      g.globalAlpha = .05 + near * .22;
-      g.fillStyle = ["#cbd8ff", "#e9d9ff", "#fff4e8"][i % 3];
-      g.fillRect(x, y, 2, 2);
+  // ── オフスクリーン層 ──
+  const layer = (w, h) => { const c = document.createElement("canvas"); c.width = w; c.height = h; return { c, g: c.getContext("2d") }; };
+  let scene = null, W = 0, H = 0;
+
+  function star5(g, x, y, r, color) {
+    g.beginPath();
+    for (let i = 0; i < 10; i++) {
+      const ang = -Math.PI / 2 + i * Math.PI / 5, rad = i % 2 ? r * 0.44 : r;
+      g[i ? "lineTo" : "moveTo"](x + Math.cos(ang) * rad, y + Math.sin(ang) * rad);
     }
-    // 星
-    for (let i = 0; i < 4200; i++) {
-      const x = Math.random() * PW, y = Math.random() * (HZ - 8), r = Math.random() * 1.7 + .4;
-      g.globalAlpha = .35 + Math.random() * .65;
-      g.fillStyle = ["#ffffff", "#cfe0ff", "#e8ccff", "#bff4ff"][i % 4];
+    g.closePath(); g.fillStyle = color; g.fill();
+  }
+  function paintStars(g, w, h) {
+    for (let i = 0; i < Math.round(w * h / 5200); i++) {
+      const x = Math.random() * w, y = Math.random() * h * 0.82, r = Math.random() * 1.6 + 0.4;
+      g.globalAlpha = 0.4 + Math.random() * 0.6; g.fillStyle = ["#ffffff", "#cfe0ff", "#fff2c8"][i % 3];
       g.beginPath(); g.arc(x, y, r, 0, 7); g.fill();
-      if (r > 1.7) { g.globalAlpha *= .5; g.beginPath(); g.arc(x, y, r * 2.6, 0, 7); g.fill(); }
     }
     g.globalAlpha = 1;
-    // 地面
-    let gr = g.createLinearGradient(0, HZ, 0, PH);
-    gr.addColorStop(0, "#6b4a34"); gr.addColorStop(.35, "#3d2a20"); gr.addColorStop(1, "#0a0705");
-    g.fillStyle = gr; g.fillRect(0, HZ, PW, PH - HZ);
-    // 砂丘の稜線（sin でループ）
-    g.fillStyle = "#2b1d16"; g.beginPath(); g.moveTo(0, HZ);
-    for (let x = 0; x <= PW; x += 8) {
-      const y = HZ + Math.sin(x / PW * Math.PI * 6) * 16 + Math.sin(x / PW * Math.PI * 20) * 7;
-      g.lineTo(x, y);
-    }
-    g.lineTo(PW, PH); g.lineTo(0, PH); g.closePath(); g.fill();
-  })();
-
-  // 画面サイズを取り直す（プレビューが最初 0 を返すことがあるので毎フレーム確認）
+    for (let i = 0; i < 7; i++) { const x = Math.random() * w, y = Math.random() * h * 0.6; g.globalAlpha = .9; star5(g, x, y, 5 + Math.random() * 4, "#fdf0b8"); }
+    g.globalAlpha = 1;
+  }
+  function paintBigStar(g, x, y, r) {
+    const gl = g.createRadialGradient(x, y, 0, x, y, r * 3.4);
+    gl.addColorStop(0, "rgba(255,244,180,0.9)"); gl.addColorStop(0.3, "rgba(255,230,140,0.35)"); gl.addColorStop(1, "rgba(255,230,140,0)");
+    g.fillStyle = gl; g.beginPath(); g.arc(x, y, r * 3.4, 0, 7); g.fill();
+    star5(g, x, y, r, "#fff6cf"); star5(g, x, y, r * 0.6, "#fffbe8");
+  }
+  function drawCat(g, x, y, s) {
+    g.save(); g.translate(x, y); g.scale(s, s);
+    const orange = "#d78a46", dark = "#a75f2a", light = "#efcfa0";
+    g.lineCap = "round"; g.lineJoin = "round";
+    // tail
+    g.strokeStyle = orange; g.lineWidth = 0.42;
+    g.beginPath(); g.moveTo(-0.75, 1.0); g.quadraticCurveTo(-1.7, 1.5, -1.15, 2.25); g.stroke();
+    // body
+    g.fillStyle = orange; g.beginPath();
+    g.moveTo(-0.7, 1.65); g.quadraticCurveTo(-1.05, 0.2, -0.5, -0.5);
+    g.quadraticCurveTo(0, -1.0, 0.5, -0.5); g.quadraticCurveTo(1.0, 0.35, 0.72, 1.65);
+    g.quadraticCurveTo(0, 2.0, -0.7, 1.65); g.closePath(); g.fill();
+    // belly
+    g.fillStyle = light; g.beginPath(); g.ellipse(0, 0.95, 0.36, 0.72, 0, 0, 7); g.fill();
+    // raised arm to star (upper-right)
+    g.strokeStyle = orange; g.lineWidth = 0.4; g.beginPath(); g.moveTo(0.35, -0.25); g.quadraticCurveTo(1.05, -1.05, 1.45, -1.75); g.stroke();
+    g.fillStyle = orange; g.beginPath(); g.arc(1.5, -1.85, 0.2, 0, 7); g.fill();
+    // front leg
+    g.strokeStyle = orange; g.lineWidth = 0.46; g.beginPath(); g.moveTo(-0.28, 0.7); g.lineTo(-0.33, 1.75); g.stroke();
+    // head
+    g.fillStyle = orange; g.beginPath(); g.arc(0, -1.02, 0.66, 0, 7); g.fill();
+    // ears
+    g.beginPath(); g.moveTo(-0.56, -1.4); g.lineTo(-0.74, -1.98); g.lineTo(-0.2, -1.56); g.closePath(); g.fill();
+    g.beginPath(); g.moveTo(0.56, -1.4); g.lineTo(0.74, -1.98); g.lineTo(0.2, -1.56); g.closePath(); g.fill();
+    g.fillStyle = "#e9b48a"; g.beginPath(); g.moveTo(-0.5, -1.5); g.lineTo(-0.6, -1.82); g.lineTo(-0.32, -1.6); g.closePath(); g.fill();
+    g.beginPath(); g.moveTo(0.5, -1.5); g.lineTo(0.6, -1.82); g.lineTo(0.32, -1.6); g.closePath(); g.fill();
+    // face
+    g.strokeStyle = dark; g.lineWidth = 0.085;
+    g.beginPath(); g.arc(-0.23, -1.02, 0.14, 0.15 * Math.PI, 0.85 * Math.PI); g.stroke();
+    g.beginPath(); g.arc(0.23, -1.02, 0.14, 0.15 * Math.PI, 0.85 * Math.PI); g.stroke();
+    g.fillStyle = "#7a4a28"; g.beginPath(); g.moveTo(-0.08, -0.86); g.lineTo(0.08, -0.86); g.lineTo(0, -0.74); g.closePath(); g.fill();
+    // stripes
+    g.strokeStyle = dark; g.lineWidth = 0.11;
+    g.beginPath(); g.moveTo(0.02, -1.5); g.lineTo(-0.02, -1.62); g.stroke();
+    g.beginPath(); g.moveTo(-0.48, -0.25); g.lineTo(-0.55, 0.05); g.stroke();
+    g.beginPath(); g.moveTo(-0.38, 0.3); g.lineTo(-0.44, 0.6); g.stroke();
+    g.restore();
+  }
+  function paintMoonCat(g, w, h) {
+    const mx = w * 0.42, my = h * 0.5, mr = Math.min(w, h) * 0.26;
+    // glow
+    const gl = g.createRadialGradient(mx, my, mr * 0.6, mx, my, mr * 1.7);
+    gl.addColorStop(0, "rgba(245,232,170,0.28)"); gl.addColorStop(1, "rgba(245,232,170,0)");
+    g.fillStyle = gl; g.beginPath(); g.arc(mx, my, mr * 1.7, 0, 7); g.fill();
+    // crescent (thick on left, opening right)
+    g.fillStyle = "#f4e7a6"; g.beginPath(); g.arc(mx, my, mr, 0, 7); g.fill();
+    g.globalCompositeOperation = "destination-out";
+    g.beginPath(); g.arc(mx + mr * 0.6, my - mr * 0.32, mr * 0.98, 0, 7); g.fill();
+    g.globalCompositeOperation = "source-over";
+    // 猫: 三日月の下の角あたりに座らせる
+    drawCat(g, mx + mr * 0.14, my + mr * 0.42, mr * 0.2);
+  }
+  function paintClouds(g, w, h) {
+    const puffs = (cx, cy, s, col) => {
+      g.fillStyle = col;
+      [[0, 0, 1], [-0.9, 0.25, 0.8], [0.9, 0.22, 0.85], [-0.45, -0.35, 0.7], [0.5, -0.3, 0.72], [1.7, 0.4, 0.6], [-1.7, 0.42, 0.6]]
+        .forEach(([dx, dy, r]) => { g.beginPath(); g.arc(cx + dx * s, cy + dy * s, r * s, 0, 7); g.fill(); });
+    };
+    puffs(w * 0.2, h * 1.02, w * 0.13, "#c7cfe8");
+    puffs(w * 0.78, h * 1.0, w * 0.15, "#c7cfe8");
+    puffs(w * 0.5, h * 1.08, w * 0.17, "#dbe1f2");
+    puffs(w * 0.05, h * 0.98, w * 0.1, "#e7ecf8");
+    puffs(w * 0.95, h * 1.04, w * 0.11, "#e7ecf8");
+  }
+  function drawSky(g, w, h) {
+    const s = g.createLinearGradient(0, 0, 0, h);
+    s.addColorStop(0, "#0c1140"); s.addColorStop(0.5, "#1b2a66"); s.addColorStop(0.82, "#28376f"); s.addColorStop(1, "#3a4180");
+    g.fillStyle = s; g.fillRect(0, 0, w, h);
+  }
+  function build() {
+    const stars = layer(W, H); paintStars(stars.g, W, H);
+    const big = layer(W, H); paintBigStar(big.g, W * 0.74, H * 0.33, Math.min(W, H) * 0.05);
+    const moon = layer(W, H); paintMoonCat(moon.g, W, H);
+    const clouds = layer(W, H); paintClouds(clouds.g, W, H);
+    scene = { stars, big, moon, clouds };
+  }
   function fit() {
-    const w = canvas.clientWidth || innerWidth || document.documentElement.clientWidth || 390;
-    const h = canvas.clientHeight || innerHeight || document.documentElement.clientHeight || 844;
-    const nw = Math.max(1, Math.round(w * DPR)), nh = Math.max(1, Math.round(h * DPR));
-    if (canvas.width !== nw || canvas.height !== nh) { canvas.width = nw; canvas.height = nh; }
+    const w = canvas.clientWidth || innerWidth || 390, h = canvas.clientHeight || innerHeight || 844;
+    const nw = Math.round(w * DPR), nh = Math.round(h * DPR);
+    if (canvas.width !== nw || canvas.height !== nh || !scene) { canvas.width = nw; canvas.height = nh; W = nw; H = nh; build(); }
   }
-  fit(); addEventListener("resize", fit); addEventListener("load", fit);
 
-  // ── 見回し（ドラッグ / 傾き / 自動）──
-  let lon = 0, lat = 0, down = false, px = 0, py = 0, lastMove = -9999;
-  const now = () => performance.now();
-  const clampLat = (v) => Math.max(-78, Math.min(78, v));
-  canvas.addEventListener("pointerdown", (e) => { down = true; px = e.clientX; py = e.clientY; });
-  addEventListener("pointermove", (e) => {
-    if (!down) return;
-    lon -= (e.clientX - px) * 0.18; lat = clampLat(lat + (e.clientY - py) * 0.18);
-    px = e.clientX; py = e.clientY; lastMove = now();
-  }, { passive: true });
-  addEventListener("pointerup", () => { down = false; });
-  addEventListener("pointercancel", () => { down = false; });
-
-  // 傾き見回し: 倒した方向にスーッと見回る（横は速度ステア、縦は角度で狙う）
-  let tiltOn = false, gGamma = 0, gBeta = 45;
-  const hintEl = document.getElementById("hint");
-  const tiltBtn = document.getElementById("tiltBtn");
-  function onOrient(e) {
-    if (e.gamma == null && e.beta == null) return;
-    gGamma = e.gamma || 0; gBeta = e.beta || 45; lastMove = now();
-  }
+  // ── 入力（傾き / ドラッグ / 自動）──
+  let tx = 0, ty = 0, cx = 0, cy = 0, t = 0, lastInput = -9999, tiltOn = false;
+  const now = () => performance.now(), clamp = v => Math.max(-1, Math.min(1, v));
+  function onPointer(e) { tx = clamp((e.clientX / innerWidth - .5) * 2); ty = clamp((e.clientY / innerHeight - .5) * 2); lastInput = now(); }
+  addEventListener("pointermove", onPointer, { passive: true });
+  function onOrient(e) { if (e.gamma == null && e.beta == null) return; tx = clamp((e.gamma || 0) / 22); ty = clamp(((e.beta || 0) - 45) / 24); lastInput = now(); }
+  const hintEl = document.getElementById("hint"), tiltBtn = document.getElementById("tiltBtn");
   function enableTilt() {
-    const go = () => { tiltOn = true; addEventListener("deviceorientation", onOrient); tiltBtn.style.display = "none"; hintEl.textContent = "スマホを倒すと見回す"; };
-    if (typeof DeviceOrientationEvent === "undefined") { hintEl.textContent = "この端末は傾き非対応（ドラッグでどうぞ）"; return; }
-    if (typeof DeviceOrientationEvent.requestPermission === "function") {
-      DeviceOrientationEvent.requestPermission().then(p => { p === "granted" ? go() : (hintEl.textContent = "傾きが許可されませんでした（ドラッグで見回せます）"); }).catch(() => {});
-    } else go();
+    const go = () => { tiltOn = true; addEventListener("deviceorientation", onOrient); tiltBtn.style.display = "none"; hintEl.textContent = "スマホを傾けて動かす"; };
+    if (typeof DeviceOrientationEvent === "undefined") { tiltBtn.style.display = "none"; return; }
+    if (typeof DeviceOrientationEvent.requestPermission === "function")
+      DeviceOrientationEvent.requestPermission().then(p => { p === "granted" ? go() : (hintEl.textContent = "指でなぞってね（傾き不可）", tiltBtn.style.display = "none"); }).catch(() => {});
+    else go();
   }
   tiltBtn.addEventListener("click", enableTilt);
 
+  function blit(l, ox, oy) { ctx.drawImage(l.c, ox, oy); }
   function frame() {
     requestAnimationFrame(frame);
-    fit();                                                  // サイズを毎フレーム確認（0対策）
-    if (tiltOn) {
-      lon += Math.max(-1, Math.min(1, gGamma / 40)) * 1.7;  // 左右に倒す→その向きへ回る
-      const tLat = clampLat((gBeta - 52) * 1.15);            // 前後に倒す→上下を狙う
-      lat += (tLat - lat) * 0.12;
-    } else if (!down && now() - lastMove > 2200) {
-      lon += 0.02;                                          // 放置で自動パン
-    }
-    const cw = canvas.width, ch = canvas.height;
-    const scale = ch / (PH * 0.58);                          // 縦のズーム（一度に見える範囲）
-    const dW = PW * scale, dH = PH * scale;
-    // 横：lon(度) → 0..dW をループ
-    let ox = -(((lon % 360) + 360) % 360) / 360 * dW;
-    // 縦：lat=0 で地平線を画面中央付近に、上下で視点移動
-    let oy = ch * 0.5 - HZ * scale + lat * (dH / 170);
-    oy = Math.max(ch - dH, Math.min(0, oy));
-    ctx.clearRect(0, 0, cw, ch);
-    for (let x = ox; x < cw; x += dW) ctx.drawImage(pano, x, oy, dW, dH);
-    for (let x = ox - dW; x > -dW; x -= dW) ctx.drawImage(pano, x, oy, dW, dH);
+    fit();
+    if (!tiltOn && !reduce && now() - lastInput > 1500) { tx = Math.sin(t * 0.6) * 0.5; ty = Math.sin(t * 0.42 + 1) * 0.32; }
+    t += 0.016;
+    cx += (tx - cx) * 0.08; cy += (ty - cy) * 0.08;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    drawSky(ctx, W, H);
+    blit(scene.stars, cx * 8 * DPR, cy * 8 * DPR);
+    blit(scene.big, cx * 20 * DPR, cy * 16 * DPR);
+    blit(scene.moon, cx * 46 * DPR, cy * 34 * DPR);
+    blit(scene.clouds, cx * 82 * DPR, cy * 40 * DPR);
   }
-  frame();
+  requestAnimationFrame(frame);
 })();
 </script>
 </body>
