@@ -38,6 +38,14 @@ body.ready:not(.viewing) #empty{display:flex;}
   font-family:inherit; cursor:pointer; box-shadow:0 4px 14px rgba(194,65,12,.35);
 }
 #pickBtn:active{transform:scale(.97);}
+#pickDirBtn{
+  padding:12px 24px; border:1px solid var(--line); border-radius:26px;
+  background:var(--card); color:var(--text); font-size:14px; font-weight:700;
+  font-family:inherit; cursor:pointer;
+}
+#pickDirBtn:active{transform:scale(.97);}
+/* スマホはフォルダ選択が使えないので隠す (ドロップも不要、単ファイル/zip で選ぶ) */
+@media (pointer:coarse){ #pickDirBtn{display:none;} }
 .formats{font-size:11px; color:var(--text2); letter-spacing:.04em;}
 .drop-hint{font-size:11px; color:var(--text2); opacity:.7;}
 
@@ -130,8 +138,9 @@ body.can-share #shareBtn{display:flex;}
   <h1>My SketchUp</h1>
   <p>SketchUp のモデルをスマホで、ぐるぐる回して見るためのビューア。</p>
   <button id="pickBtn"><span class="icon">upload_file</span> ファイルを選ぶ</button>
-  <div class="formats">対応: ZIP / DAE / OBJ / STL / GLB / GLTF</div>
-  <div class="drop-hint">SketchUp の OBJ 書き出しは .zip のまま選べば OK。<br>PC ならフォルダごとここにドラッグしても OK</div>
+  <button id="pickDirBtn"><span class="icon">folder_open</span> フォルダを選ぶ</button>
+  <div class="formats">対応: フォルダ / ZIP / DAE / OBJ / STL / GLB / GLTF</div>
+  <div class="drop-hint">SketchUp の OBJ 書き出しはフォルダごと<br>ここにドロップすればそのまま表示されます</div>
 </div>
 
 <div id="topbar">
@@ -167,6 +176,7 @@ body.can-share #shareBtn{display:flex;}
 
 <input type="file" id="fileInput" multiple hidden
   accept=".zip,.dae,.obj,.mtl,.stl,.glb,.gltf,.bin,.skp,.png,.jpg,.jpeg,.webp">
+<input type="file" id="dirInput" webkitdirectory hidden>
 
 <script src="/config.js"></script>
 <script type="importmap">
@@ -561,6 +571,11 @@ $("pickBtn").onclick = () => $("fileInput").click();
 $("openBtn").onclick = () => $("fileInput").click();
 $("shareBtn").onclick = shareCurrent;
 $("fileInput").onchange = (e) => { openFiles(e.target.files); e.target.value = ""; };
+$("pickDirBtn").onclick = () => $("dirInput").click();
+$("dirInput").onchange = (e) => {
+  openFiles([...e.target.files].filter((f) => !f.name.startsWith(".")));
+  e.target.value = "";
+};
 $("resetBtn").onclick = () => {
   if (!homeView) return;
   camera.position.copy(homeView.pos);
