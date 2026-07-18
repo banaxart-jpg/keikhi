@@ -1119,6 +1119,23 @@ async function ensureSchema() {
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       )
     `);
+    // 世界制覇めし (tabemap): 世界の料理を食べた記録。国ごとに店・写真を貯めて制覇率を出す。全員共有。
+    // photos = 縮小 base64 の配列 (2-3枚)。country = 国キー(日本語名)。
+    await p.query(`
+      CREATE TABLE IF NOT EXISTS tabemap_visits (
+        id TEXT PRIMARY KEY,
+        country TEXT NOT NULL DEFAULT '',
+        restaurant TEXT NOT NULL DEFAULT '',
+        area TEXT NOT NULL DEFAULT '',
+        eater TEXT NOT NULL DEFAULT '',
+        memo TEXT NOT NULL DEFAULT '',
+        photos JSONB NOT NULL DEFAULT '[]',
+        visited_on DATE,
+        created_by TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `);
     // yado: Beds24 予約のローカルキャッシュ + 同期メタ
     await p.query(`
       CREATE TABLE IF NOT EXISTS yado_bookings (
@@ -8318,6 +8335,97 @@ app.delete("/api/meishi/:id", async (req, res) => {
   if (!p) return res.status(503).json({ error: "DB not configured" });
   try {
     await p.query("DELETE FROM meishi_cards WHERE id = $1", [req.params.id]);
+    res.status(204).end();
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─────────────────────────────
+// 世界制覇めし (tabemap): 世界の料理を食べた記録。全員共有 (records/tasks と同型)。
+// 一覧は写真本体を返さず、写真は /:id/photos で別取得。
+// ─────────────────────────────
+app.get("/api/tabemap", async (req, res) => {
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  try {
+    const { rows } = await p.query(
+      `SELECT id, country, restaurant, area, eater, memo,
+              COALESCE(jsonb_array_length(photos), 0) AS "photoCount",
+              visited_on::text AS "visitedOn",
+              created_by AS "createdBy", created_at AS "createdAt", updated_at AS "updatedAt"
+         FROM tabemap_visits
+        ORDER BY visited_on DESC NULLS LAST, created_at DESC LIMIT 2000`
+    );
+    res.json(rows);
+  } catch (err) {
+    console.error("tabemap list error", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get("/api/tabemap/:id/photos", async (req, res) => {
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  try {
+    const { rows } = await p.query("SELECT photos FROM tabemap_visits WHERE id=$1", [req.params.id]);
+    if (!rows.length) return res.status(404).json({ error: "not found" });
+    res.json({ photos: Array.isArray(rows[0].photos) ? rows[0].photos : [] });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post("/api/tabemap", async (req, res) => {
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  try {
+    const b = req.body || {};
+    const id = b.id || (Date.now().toString(36) + Math.random().toString(36).slice(2, 8));
+    const photos = Array.isArray(b.photos) ? JSON.stringify(b.photos.slice(0, 3)) : "[]";
+    const { rows } = await p.query(
+      `INSERT INTO tabemap_visits (id, country, restaurant, area, eater, memo, photos, visited_on, created_by)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+       RETURNING id, created_at AS "createdAt"`,
+      [id, b.country || "", b.restaurant || "", b.area || "", b.eater || "", b.memo || "",
+       photos, b.visitedOn || null, req.user?.email || ""]
+    );
+    res.status(201).json(rows[0]);
+  } catch (err) {
+    console.error("tabemap insert error", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.put("/api/tabemap/:id", async (req, res) => {
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  try {
+    const b = req.body || {};
+    const { rows } = await p.query(
+      `UPDATE tabemap_visits SET
+         country = COALESCE($2, country), restaurant = COALESCE($3, restaurant),
+         area = COALESCE($4, area), eater = COALESCE($5, eater), memo = COALESCE($6, memo),
+         photos = COALESCE($7::jsonb, photos), visited_on = COALESCE($8, visited_on),
+         updated_at = NOW()
+       WHERE id = $1
+       RETURNING id, updated_at AS "updatedAt"`,
+      [req.params.id, b.country ?? null, b.restaurant ?? null, b.area ?? null, b.eater ?? null,
+       b.memo ?? null, b.photos != null ? JSON.stringify(b.photos.slice(0, 3)) : null, b.visitedOn ?? null]
+    );
+    if (!rows.length) return res.status(404).json({ error: "not found" });
+    res.json(rows[0]);
+  } catch (err) {
+    console.error("tabemap update error", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete("/api/tabemap/:id", async (req, res) => {
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  try {
+    await p.query("DELETE FROM tabemap_visits WHERE id = $1", [req.params.id]);
     res.status(204).end();
   } catch (err) {
     res.status(500).json({ error: err.message });
