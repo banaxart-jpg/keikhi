@@ -38,9 +38,10 @@ body.ready:not(.viewing) #empty{display:flex;}
   font-family:inherit; cursor:pointer; box-shadow:0 4px 14px rgba(194,65,12,.35);
 }
 #pickBtn:active{transform:scale(.97);}
+.sub-row{display:flex; gap:10px; flex-wrap:wrap; justify-content:center;}
 #pickDirBtn, #historyBtn{
-  padding:12px 24px; border:1px solid var(--line); border-radius:26px;
-  background:var(--card); color:var(--text); font-size:14px; font-weight:700;
+  padding:12px 20px; border:1px solid var(--line); border-radius:26px;
+  background:var(--card); color:var(--text); font-size:13px; font-weight:700;
   font-family:inherit; cursor:pointer;
 }
 #pickDirBtn:active, #historyBtn:active{transform:scale(.97);}
@@ -141,6 +142,16 @@ body.can-share #shareBtn{display:flex;}
   border-top-color:var(--accent); animation:spin .8s linear infinite;
 }
 @keyframes spin{to{transform:rotate(360deg);}}
+
+/* 初回だけ出す操作ヒント */
+#hintToast{
+  position:fixed; left:50%; transform:translateX(-50%);
+  bottom:calc(88px + env(safe-area-inset-bottom));
+  background:rgba(28,35,46,.85); color:#fff; font-size:12px; font-weight:600;
+  padding:10px 18px; border-radius:20px; z-index:30; text-align:center; line-height:1.7;
+  opacity:0; transition:opacity .4s; pointer-events:none; max-width:82%;
+}
+#hintToast.show{opacity:1;}
 </style>
 </head>
 <body>
@@ -152,8 +163,10 @@ body.can-share #shareBtn{display:flex;}
   <h1>My SketchUp</h1>
   <p>SketchUp のモデルをスマホで、ぐるぐる回して見るためのビューア。</p>
   <button id="pickBtn"><span class="icon">upload_file</span> ファイルを選ぶ</button>
-  <button id="pickDirBtn"><span class="icon">folder_open</span> フォルダを選ぶ</button>
-  <button id="historyBtn" style="display:none;"><span class="icon">history</span> あげたモデル</button>
+  <div class="sub-row">
+    <button id="pickDirBtn"><span class="icon">folder_open</span> フォルダを選ぶ</button>
+    <button id="historyBtn" style="display:none;"><span class="icon">history</span> あげたモデル</button>
+  </div>
   <div class="formats">対応: フォルダ / ZIP / DAE / OBJ / STL / GLB / GLTF</div>
   <div class="drop-hint">SketchUp の OBJ 書き出しはフォルダごと<br>ここにドロップすればそのまま表示されます</div>
 </div>
@@ -206,6 +219,7 @@ body.can-share #shareBtn{display:flex;}
 </div>
 
 <div id="loading"><div class="spinner"></div><span id="loadingText">読み込み中…</span></div>
+<div id="hintToast">1本指で回転、2本指でズーム<br>ぐっと近づくと断面が見えます</div>
 
 <input type="file" id="fileInput" multiple hidden
   accept=".zip,.dae,.obj,.mtl,.stl,.glb,.gltf,.bin,.skp,.png,.jpg,.jpeg,.webp">
@@ -376,6 +390,21 @@ function frameModel(obj) {
   scene.add(gridHelper);
 }
 
+let currentTitle = "";
+
+// SketchUp の書き出しは中身のファイル名が「ea3d9cd9-….obj」みたいな暗号に
+// なるので、表示名にはフォルダ名 / ZIP 名 (=人が付けた名前) を優先して使う
+function cleanTitle(name) {
+  return String(name || "").replace(/\.zip$/i, "").replace(/\.(obj|dae|stl|glb|gltf)$/i, "");
+}
+
+function showHintOnce() {
+  if (localStorage.getItem("sketchup_hint_done")) return;
+  localStorage.setItem("sketchup_hint_done", "1");
+  $("hintToast").classList.add("show");
+  setTimeout(() => $("hintToast").classList.remove("show"), 5000);
+}
+
 function showModel(obj, name) {
   if (modelGroup) {
     scene.remove(modelGroup);
@@ -388,8 +417,10 @@ function showModel(obj, name) {
   modelGroup.add(obj);
   scene.add(modelGroup);
   frameModel(modelGroup);
+  currentTitle = name;
   $("modelName").textContent = name;
   document.body.classList.add("viewing");
+  showHintOnce();
 }
 
 // ── シート（メッセージ / 共有リンク）──
@@ -504,8 +535,10 @@ async function openFiles(files, opts = {}) {
   let list = [...files];
 
   // zip があれば展開して混ぜる
+  let title = opts.title || "";
   const zips = list.filter((f) => extOf(f.name) === "zip");
   if (zips.length) {
+    if (!title && zips.length === 1) title = cleanTitle(zips[0].name);
     setLoading("ZIP を展開中…");
     try {
       for (const z of zips) list.push(...expandZip(z, await z.arrayBuffer()));
@@ -587,7 +620,7 @@ async function openFiles(files, opts = {}) {
       });
     });
     lastLocalFiles = opts.shared ? null : list.filter((f) => EXT_SHARE.has(extOf(f.name)));
-    showModel(obj, opts.title || main.name);
+    showModel(obj, title || cleanTitle(main.name) || main.name);
     updateShareFab();
   } catch (e) {
     console.error(e);
@@ -648,7 +681,7 @@ async function shareCurrent() {
   try {
     setLoading("共有リンク作成中…");
     const main = lastLocalFiles.find((f) => EXT_MAIN.includes(extOf(f.name)));
-    const { id, url } = await api("POST", "/api/sketchup/models", { name: main?.name || "" });
+    const { id, url } = await api("POST", "/api/sketchup/models", { name: currentTitle || main?.name || "" });
     let i = 0;
     for (const f of lastLocalFiles) {
       i++;
@@ -763,21 +796,37 @@ $("gyroBtn").onclick = toggleGyro;
 $("fileInput").onchange = (e) => { openFiles(e.target.files); e.target.value = ""; };
 $("pickDirBtn").onclick = () => $("dirInput").click();
 $("dirInput").onchange = (e) => {
-  openFiles([...e.target.files].filter((f) => !f.name.startsWith(".")));
+  const files = [...e.target.files].filter((f) => !f.name.startsWith("."));
+  const title = cleanTitle((files[0]?.webkitRelativePath || "").split("/")[0]);
+  openFiles(files, { title });
   e.target.value = "";
 };
-$("resetBtn").onclick = () => {
+function resetView() {
   if (!homeView) return;
   camera.position.copy(homeView.pos);
   controls.target.copy(homeView.target);
   controls.update();
-};
+}
+$("resetBtn").onclick = resetView;
+
+// 画面ダブルタップでも視点リセット (迷子になった時用)
+let tapT = 0, tapX = 0, tapY = 0;
+renderer.domElement.addEventListener("pointerdown", (e) => {
+  if (!e.isPrimary) { tapT = 0; return; }
+  tapX = e.clientX; tapY = e.clientY;
+});
+renderer.domElement.addEventListener("pointerup", (e) => {
+  if (!e.isPrimary || Math.hypot(e.clientX - tapX, e.clientY - tapY) > 10) { tapT = 0; return; }
+  const now = performance.now();
+  if (now - tapT < 320) { resetView(); tapT = 0; } else { tapT = now; }
+});
 
 // ドラッグ&ドロップ（PC 用）。フォルダごとドロップされたら中身を再帰で拾う。
 async function filesFromDrop(dt) {
   // webkitGetAsEntry は await を挟むと無効になるので先に同期で全部取る
   const entries = [...(dt.items || [])].map((i) => i.webkitGetAsEntry?.()).filter(Boolean);
-  if (!entries.length) return [...dt.files];
+  if (!entries.length) return { files: [...dt.files], title: "" };
+  const title = entries.length === 1 && entries[0].isDirectory ? cleanTitle(entries[0].name) : "";
   const out = [];
   async function walk(entry) {
     if (entry.isFile) {
@@ -795,7 +844,7 @@ async function filesFromDrop(dt) {
     }
   }
   for (const e of entries) await walk(e);
-  return out;
+  return { files: out, title };
 }
 
 addEventListener("dragover", (e) => { e.preventDefault(); document.body.classList.add("dragover"); });
@@ -804,7 +853,8 @@ addEventListener("drop", async (e) => {
   e.preventDefault();
   document.body.classList.remove("dragover");
   try {
-    openFiles(await filesFromDrop(e.dataTransfer));
+    const { files, title } = await filesFromDrop(e.dataTransfer);
+    openFiles(files, { title });
   } catch (err) {
     showSheet("読み込みに失敗した", err.message);
   }
