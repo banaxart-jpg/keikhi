@@ -317,12 +317,32 @@ const SECTION_PRESETS = [
   { label: "前から", normal: [0, 0, -1] },
 ];
 let sectionPresetIdx = 0;
+let sectionTiltHintShown = false;   // 傾き連動のヒントはセッション中1回だけ
 
 // ── 切り口のベタ塗り (ステンシル) ──
 // モデルの裏面/表面を数えて「中身が詰まってる領域」だけに色付きの板を描く定石。
 // 断面 ON のときだけ組み立てる (描画コストが倍近く増えるので常時は持たない)。
 let capStencilGroup = null;
 let capMesh = null;
+let planeViz = null;   // 「切ってる板」の可視化 (グリッド + 枠線)
+
+// 板の見た目: 半透明のグリッド面。手に持った枠がモデルに刺さってるのが見える
+function makePlaneVizTexture() {
+  const c = document.createElement("canvas");
+  c.width = c.height = 512;
+  const g = c.getContext("2d");
+  g.clearRect(0, 0, 512, 512);
+  g.strokeStyle = "rgba(28,35,46,0.30)";
+  g.lineWidth = 1;
+  for (let i = 0; i <= 512; i += 32) {
+    g.beginPath(); g.moveTo(i, 0); g.lineTo(i, 512); g.stroke();
+    g.beginPath(); g.moveTo(0, i); g.lineTo(512, i); g.stroke();
+  }
+  g.strokeStyle = "#c2410c";
+  g.lineWidth = 10;
+  g.strokeRect(5, 5, 502, 502);
+  return new THREE.CanvasTexture(c);
+}
 function stencilMat(side, op) {
   return new THREE.MeshBasicMaterial({
     side, colorWrite: false, depthWrite: false, depthTest: false,
@@ -361,6 +381,15 @@ function buildCaps() {
   capMesh.renderOrder = 2;
   capMesh.onAfterRender = (r) => r.clearStencil();
   scene.add(capMesh);
+  planeViz = new THREE.Mesh(
+    new THREE.PlaneGeometry(boxSphereR * 2.6, boxSphereR * 2.6),
+    new THREE.MeshBasicMaterial({
+      map: makePlaneVizTexture(), transparent: true, opacity: 0.6,
+      side: THREE.DoubleSide, depthWrite: false,
+    })
+  );
+  planeViz.renderOrder = 3;
+  scene.add(planeViz);
 }
 function removeCaps() {
   if (capStencilGroup) {
@@ -374,6 +403,13 @@ function removeCaps() {
     capMesh.material.dispose();
     capMesh = null;
   }
+  if (planeViz) {
+    scene.remove(planeViz);
+    planeViz.geometry.dispose();
+    planeViz.material.map?.dispose();
+    planeViz.material.dispose();
+    planeViz = null;
+  }
 }
 
 const _anchor = new THREE.Vector3();
@@ -382,6 +418,7 @@ function updateSection() {
     sectionPlane.constant = 1e9;
     if (capStencilGroup) capStencilGroup.visible = false;
     if (capMesh) capMesh.visible = false;
+    if (planeViz) planeViz.visible = false;
     return;
   }
   // 板の位置: モデル中心から板の向きに沿って前後 (t=1 で何も切らない位置)
@@ -397,6 +434,11 @@ function updateSection() {
       capMesh.position.y - sectionNormal.y,
       capMesh.position.z - sectionNormal.z);
   }
+  if (planeViz) {
+    planeViz.visible = true;
+    planeViz.position.copy(capMesh.position);
+    planeViz.quaternion.copy(capMesh.quaternion);
+  }
 }
 function setSectionOn(on) {
   sectionOn = on;
@@ -408,6 +450,10 @@ function setSectionOn(on) {
     sectionT = 0.55;                    // ON にした瞬間から切れてるのが分かる位置
     $("sectionRange").value = 55;
     if (!capStencilGroup) buildCaps();
+    if (!sectionTiltHintShown && matchMedia("(pointer:coarse)").matches) {
+      sectionTiltHintShown = true;
+      showToast("バー右の傾きボタンを押すと<br>スマホの傾きで板ごと動かせます");
+    }
   } else if (planeGyroOn) {
     togglePlaneGyro();                  // 断面 OFF なら板の傾き連動も止める
   }
@@ -575,12 +621,18 @@ function cleanTitle(name) {
   return String(name || "").replace(/\.zip$/i, "").replace(/\.(obj|dae|stl|glb|gltf)$/i, "");
 }
 
+let toastTimer = null;
+function showToast(html, ms = 4500) {
+  $("hintToast").innerHTML = html;
+  $("hintToast").classList.add("show");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => $("hintToast").classList.remove("show"), ms);
+}
 function showHintOnce() {
   // 文言を変えたら key を上げて、もう一度だけ見せる
   if (localStorage.getItem("sketchup_hint_v2")) return;
   localStorage.setItem("sketchup_hint_v2", "1");
-  $("hintToast").classList.add("show");
-  setTimeout(() => $("hintToast").classList.remove("show"), 5000);
+  showToast("1本指で回転、2本指でズーム<br>断面は右下のハサミボタンから", 5000);
 }
 
 function showModel(obj, name) {
