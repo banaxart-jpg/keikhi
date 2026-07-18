@@ -30,8 +30,11 @@ body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); 
 .wrap { padding: 14px 16px 40px; max-width: 680px; margin: 0 auto; }
 .title { font-size: 22px; font-weight: 800; }
 
+/* 世界ピン地図 */
+.wmap { width: 100%; aspect-ratio: 2 / 1; display: block; border-radius: 18px; background: #0a1428; box-shadow: 6px 6px 16px var(--sd), -5px -5px 14px var(--sl); margin: 10px 0 12px; cursor: pointer; }
+
 /* 制覇サマリー */
-.summary { background: var(--bg); border-radius: 20px; padding: 18px; box-shadow: 6px 6px 16px var(--sd), -5px -5px 14px var(--sl); margin: 10px 0 16px; }
+.summary { background: var(--bg); border-radius: 20px; padding: 18px; box-shadow: 6px 6px 16px var(--sd), -5px -5px 14px var(--sl); margin: 0 0 16px; }
 .pct { font-size: 44px; font-weight: 900; color: var(--accent); line-height: 1; letter-spacing: -0.02em; }
 .pct .u { font-size: 20px; }
 .pct-sub { font-size: 12px; color: var(--text2); font-weight: 700; margin-top: 4px; }
@@ -111,6 +114,7 @@ textarea.inp { min-height: 60px; resize: vertical; }
   </div>
   <div class="wrap">
     <div class="title">世界制覇めし</div>
+    <canvas class="wmap" id="wmap"></canvas>
     <div class="summary">
       <div class="pct" id="pct">0<span class="u">%</span></div>
       <div class="pct-sub" id="pctSub">0 / 0 か国 制覇</div>
@@ -155,6 +159,16 @@ const REGIONS = [
 ];
 const FLAG = {}; REGIONS.forEach(r => r.items.forEach(([n, f]) => FLAG[n] = f));
 const TOTAL = Object.keys(FLAG).length;
+// 各国のおおよその緯度・経度（世界ピン地図用）[lat, lng]
+const COORD = {
+  "日本":[36,138],"韓国":[37,127.5],"中国":[35,105],"台湾":[23.7,121],"タイ":[15,101],"ベトナム":[16,106],"インド":[22,79],"ネパール":[28,84],"インドネシア":[-2,118],"マレーシア":[4,102],"シンガポール":[1.3,103.8],"フィリピン":[13,122],"スリランカ":[7.5,80.7],"ミャンマー":[21,96],"モンゴル":[46,105],"カンボジア":[12.5,105],
+  "トルコ":[39,35],"レバノン":[33.8,35.8],"イスラエル":[31.5,34.8],"イラン":[32,53],"シリア":[35,38],
+  "イタリア":[42,12.5],"フランス":[46,2],"スペイン":[40,-4],"ドイツ":[51,10],"イギリス":[54,-2],"ポルトガル":[39.5,-8],"ギリシャ":[39,22],"ロシア":[57,60],"ハンガリー":[47,19.5],"ポーランド":[52,19],"スイス":[47,8],"ベルギー":[50.5,4.5],"オランダ":[52.3,5.5],"スウェーデン":[62,15],"ジョージア":[42,43.5],"ウクライナ":[49,32],
+  "エジプト":[26,30],"モロッコ":[32,-6],"エチオピア":[9,40],"チュニジア":[34,9],"ナイジェリア":[9,8],"南アフリカ":[-30,25],"セネガル":[14.5,-14.5],"ケニア":[0.5,38],
+  "アメリカ":[39,-98],"メキシコ":[23,-102],"カナダ":[56,-106],"キューバ":[22,-79],"ジャマイカ":[18,-77],
+  "ブラジル":[-10,-52],"ペルー":[-10,-76],"アルゼンチン":[-34,-64],"コロンビア":[4,-73],"チリ":[-33,-71],
+  "オーストラリア":[-25,133],"ハワイ":[20,-157],"ニュージーランド":[-41,174],
+};
 
 let visits = [];
 let filter = "みんな";
@@ -180,22 +194,66 @@ async function load() {
   catch (e) { toast("読み込み失敗: " + e.message, true); visits = []; }
   render();
 }
+// 「誰と食べた」はカンマ等区切りで複数人。どんちゃんで絞ると どんちゃんと食べた記録だけ。
+function membersOf(v) { return (v.eater || "").split(/[,、\/・\s]+/).map(s => s.trim()).filter(Boolean); }
+function inFilter(v) { return filter === "みんな" || membersOf(v).includes(filter); }
 function members() {
-  const s = new Set(); visits.forEach(v => { if ((v.eater || "").trim()) s.add(v.eater.trim()); });
+  const s = new Set(); visits.forEach(v => membersOf(v).forEach(m => s.add(m)));
   return [...s];
-}
-function visitsFor(country) {
-  return visits.filter(v => v.country === country && (filter === "みんな" || (v.eater || "").trim() === filter));
 }
 function conqueredSet() {
   const s = new Set();
-  visits.forEach(v => { if (filter === "みんな" || (v.eater || "").trim() === filter) s.add(v.country); });
+  visits.forEach(v => { if (inFilter(v)) s.add(v.country); });
   return s;
 }
+
+// ── 世界ピン地図 ──
+function drawMap(conq) {
+  const cv = $("wmap"); if (!cv) return;
+  const cssW = cv.clientWidth || 340, cssH = cssW / 2, DPR = Math.min(2, devicePixelRatio || 1);
+  cv.width = Math.round(cssW * DPR); cv.height = Math.round(cssH * DPR);
+  const g = cv.getContext("2d"); g.setTransform(DPR, 0, 0, DPR, 0, 0);
+  const X = (lng) => (lng + 180) / 360 * cssW, Y = (lat) => (90 - lat) / 180 * cssH;
+  // 海
+  let og = g.createLinearGradient(0, 0, 0, cssH); og.addColorStop(0, "#0c1c40"); og.addColorStop(1, "#071023");
+  g.fillStyle = og; g.fillRect(0, 0, cssW, cssH);
+  // 大陸のぼんやりした塊（位置の目安）
+  const blobs = [[-100,45,44,26],[-62,-15,22,30],[12,52,26,17],[20,3,30,34],[95,48,58,32],[110,20,26,20],[134,-25,26,18]];
+  for (const [lng, lat, rw, rh] of blobs) {
+    const x = X(lng), y = Y(lat), rx = rw / 360 * cssW, ry = rh / 180 * cssH;
+    const rad = g.createRadialGradient(x, y, 0, x, y, Math.max(rx, ry));
+    rad.addColorStop(0, "rgba(86,104,86,0.5)"); rad.addColorStop(1, "rgba(86,104,86,0)");
+    g.fillStyle = rad; g.beginPath(); g.ellipse(x, y, rx, ry, 0, 0, 7); g.fill();
+  }
+  // 国のピン
+  for (const [name, c] of Object.entries(COORD)) {
+    const x = X(c[1]), y = Y(c[0]), done = conq.has(name);
+    if (done) {
+      g.fillStyle = "rgba(232,89,12,0.3)"; g.beginPath(); g.arc(x, y, 7, 0, 7); g.fill();
+      g.fillStyle = "#e8590c"; g.beginPath(); g.arc(x, y, 3.6, 0, 7); g.fill();
+      g.fillStyle = "rgba(255,255,255,0.9)"; g.beginPath(); g.arc(x - 1, y - 1, 1.1, 0, 7); g.fill();
+    } else {
+      g.strokeStyle = "rgba(200,210,235,0.42)"; g.lineWidth = 1;
+      g.beginPath(); g.arc(x, y, 2.4, 0, 7); g.stroke();
+    }
+  }
+}
+$("wmap").addEventListener("click", (e) => {
+  const r = e.currentTarget.getBoundingClientRect();
+  const mx = e.clientX - r.left, my = e.clientY - r.top, cssW = r.width, cssH = r.height;
+  let best = null, bd = 15;
+  for (const [name, c] of Object.entries(COORD)) {
+    const x = (c[1] + 180) / 360 * cssW, y = (90 - c[0]) / 180 * cssH;
+    const d = Math.hypot(mx - x, my - y); if (d < bd) { bd = d; best = name; }
+  }
+  if (best) openCountry(best);
+});
+addEventListener("resize", () => { if ($("app").style.display !== "none") render(); });
 
 // ── 描画 ──
 function render() {
   const conq = conqueredSet();
+  drawMap(conq);
   const done = [...conq].filter(c => FLAG[c]).length;
   const pct = Math.round((done / TOTAL) * 100);
   $("pct").innerHTML = `${pct}<span class="u">%</span>`;
@@ -268,8 +326,8 @@ function renderEdit() {
       <div><div class="field-label">エリア</div><input class="inp" id="fArea" placeholder="例：新大久保" value="${esc(cur.area)}"></div>
       <div><div class="field-label">日付</div><input class="inp" id="fDate" type="date" value="${esc(cur.visitedOn)}"></div>
     </div>
-    <div class="field-label">食べた人</div>
-    <input class="inp" id="fEater" placeholder="あなたの名前" value="${esc(cur.eater)}">
+    <div class="field-label">誰と食べた？（カンマ区切りで複数OK）</div>
+    <input class="inp" id="fEater" placeholder="例：自分, どんちゃん" value="${esc(cur.eater)}">
     <div class="field-label">メモ</div>
     <textarea class="inp" id="fMemo" placeholder="美味しかったもの・感想">${esc(cur.memo)}</textarea>
     <div class="field-label">写真（最大3枚）</div>
