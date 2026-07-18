@@ -438,7 +438,11 @@ app.use("/api", async (req, res, next) => {
     // 世界制覇めし (/tabemap) は名指しの社外ゲストにも開放
     const isTabemapGuest = req.path.startsWith("/tabemap") && TABEMAP_GUEST_EMAILS.has(email);
     const isPublicSitesRead = req.method === "GET" && req.path === "/sites";
-    if (!isKotonoha && !isGenbaQa && !isTabemapGuest && !isPublicSitesRead && allowList.length && !allowList.includes(email)) {
+    // My SketchUp (/sketchup) の共有モデル閲覧は、リンクを受け取った社外の人
+    // (お客さん) も Google ログインだけで見られるよう GET だけ開放。
+    // アップロード (POST) は ALLOWED_EMAILS の社内限定のまま。
+    const isSketchupSharedRead = req.method === "GET" && req.path.startsWith("/sketchup/models/");
+    if (!isKotonoha && !isGenbaQa && !isTabemapGuest && !isPublicSitesRead && !isSketchupSharedRead && allowList.length && !allowList.includes(email)) {
       return res.status(403).json({ error: `権限がありません (${decoded.email || "?"})` });
     }
     req.user = decoded;
@@ -1139,6 +1143,18 @@ async function ensureSchema() {
         created_by TEXT,
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `);
+    // My SketchUp (sketchup): 共有した 3D モデルのメタ情報。実ファイルは GCS
+    // (sketchup/<id>/<filename>)。閲覧はリンク + Google ログインで誰でも可。
+    await p.query(`
+      CREATE TABLE IF NOT EXISTS sketchup_models (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL DEFAULT '',
+        files JSONB NOT NULL DEFAULT '[]',
+        total_bytes BIGINT NOT NULL DEFAULT 0,
+        created_by TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       )
     `);
     // yado: Beds24 予約のローカルキャッシュ + 同期メタ
@@ -8432,6 +8448,101 @@ app.delete("/api/tabemap/:id", async (req, res) => {
   try {
     await p.query("DELETE FROM tabemap_visits WHERE id = $1", [req.params.id]);
     res.status(204).end();
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─────────────────────────────
+// My SketchUp (sketchup): 3D モデルの共有
+// ─────────────────────────────
+// 社内がモデルをアップロード → /sketchup/?m=<id> のリンクをお客さんに渡す。
+// 閲覧 (GET) は Google ログイン済みなら誰でも可 (auth middleware 側で開放済み)。
+// アップロードは ALLOWED_EMAILS の社内限定。実ファイルは GCS、DB はメタ情報のみ。
+// ファイルは 1 リクエスト 1 ファイルで追加していく (express.json の 20mb 制限内に収める)。
+const SKETCHUP_EXTS = new Set(["dae", "obj", "mtl", "stl", "glb", "gltf", "bin", "png", "jpg", "jpeg", "webp"]);
+const SKETCHUP_MAX_FILE = 14 * 1024 * 1024;   // 1ファイル上限 (base64 で 20mb 制限に当たる手前)
+const SKETCHUP_MAX_TOTAL = 60 * 1024 * 1024;  // 1モデル合計上限
+
+app.post("/api/sketchup/models", async (req, res) => {
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  try {
+    await ensureSchema();
+    const id = crypto.randomBytes(8).toString("hex");
+    const name = String(req.body?.name || "").slice(0, 200);
+    await p.query(
+      "INSERT INTO sketchup_models (id, name, created_by) VALUES ($1, $2, $3)",
+      [id, name, req.user.email]
+    );
+    res.json({ id, url: `/sketchup/?m=${id}` });
+  } catch (err) {
+    console.error("sketchup create error", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post("/api/sketchup/models/:id/files", async (req, res) => {
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  if (!storage || !RECEIPTS_BUCKET) return res.status(503).json({ error: "Storage not configured" });
+  try {
+    const { rows } = await p.query("SELECT files, total_bytes FROM sketchup_models WHERE id=$1", [req.params.id]);
+    if (!rows.length) return res.status(404).json({ error: "モデルが見つかりません" });
+    const fname = String(req.body?.name || "").replace(/[/\\]/g, "_").trim();
+    const ext = fname.split(".").pop().toLowerCase();
+    if (!fname || !SKETCHUP_EXTS.has(ext)) return res.status(400).json({ error: `対応してないファイルです: ${fname}` });
+    const buf = Buffer.from(String(req.body?.data || ""), "base64");
+    if (!buf.length) return res.status(400).json({ error: "ファイルが空です" });
+    if (buf.length > SKETCHUP_MAX_FILE) return res.status(413).json({ error: "1ファイル 14MB までです" });
+    const total = Number(rows[0].total_bytes) + buf.length;
+    if (total > SKETCHUP_MAX_TOTAL) return res.status(413).json({ error: "合計 60MB までです" });
+    await storage.bucket(RECEIPTS_BUCKET).file(`sketchup/${req.params.id}/${fname}`)
+      .save(buf, { contentType: "application/octet-stream", resumable: false });
+    const files = rows[0].files.filter((f) => f.name !== fname);
+    files.push({ name: fname, size: buf.length });
+    await p.query("UPDATE sketchup_models SET files=$1, total_bytes=$2 WHERE id=$3",
+      [JSON.stringify(files), total, req.params.id]);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error("sketchup file upload error", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get("/api/sketchup/models/:id", async (req, res) => {
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  try {
+    await ensureSchema();
+    const { rows } = await p.query("SELECT * FROM sketchup_models WHERE id=$1", [req.params.id]);
+    if (!rows.length) return res.status(404).json({ error: "モデルが見つかりません" });
+    const m = rows[0];
+    res.json({ id: m.id, name: m.name, files: m.files, createdAt: m.created_at });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GCS から直接ではなく API 経由でストリーム返しする (バケットに CORS 設定が
+// 要らず、three.js の fetch がそのまま通る)。
+app.get("/api/sketchup/models/:id/files/:fname", async (req, res) => {
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  if (!storage || !RECEIPTS_BUCKET) return res.status(503).json({ error: "Storage not configured" });
+  try {
+    const { rows } = await p.query("SELECT files FROM sketchup_models WHERE id=$1", [req.params.id]);
+    if (!rows.length) return res.status(404).json({ error: "モデルが見つかりません" });
+    const fname = String(req.params.fname);
+    if (!rows[0].files.some((f) => f.name === fname)) {
+      return res.status(404).json({ error: "ファイルが見つかりません" });
+    }
+    res.setHeader("content-type", "application/octet-stream");
+    res.setHeader("cache-control", "private, max-age=3600");
+    storage.bucket(RECEIPTS_BUCKET).file(`sketchup/${req.params.id}/${fname}`)
+      .createReadStream()
+      .on("error", (e) => { console.error("sketchup stream error", e); res.destroy(e); })
+      .pipe(res);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

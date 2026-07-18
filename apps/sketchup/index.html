@@ -25,10 +25,10 @@ body.viewing #canvas{display:block;}
 
 /* ── 空の状態（ファイル選択画面）── */
 #empty{
-  position:fixed; inset:0; display:flex; flex-direction:column;
+  position:fixed; inset:0; display:none; flex-direction:column;
   align-items:center; justify-content:center; gap:14px; padding:24px; text-align:center;
 }
-body.viewing #empty{display:none;}
+body.ready:not(.viewing) #empty{display:flex;}
 #empty .big-icon{font-size:64px; color:var(--accent); opacity:.85;}
 #empty h1{font-size:22px; font-weight:800; letter-spacing:.02em;}
 #empty p{font-size:13px; color:var(--text2); line-height:1.7; max-width:340px;}
@@ -72,19 +72,21 @@ body.viewing #fabs{display:flex;}
 }
 .fab.primary{background:var(--accent); color:#fff;}
 .fab:active{transform:scale(.94);}
+#shareBtn{display:none;}
+body.can-share #shareBtn{display:flex;}
 
-/* ── メッセージシート（.skp を入れた時など）── */
-#sheet{
+/* ── メッセージ / 共有シート ── */
+.sheet{
   position:fixed; left:0; right:0; bottom:0; z-index:60;
   background:var(--card); border-radius:18px 18px 0 0;
   padding:20px 20px calc(24px + env(safe-area-inset-bottom));
   box-shadow:0 -6px 30px rgba(0,0,0,.2);
   transform:translateY(110%); transition:transform .25s ease;
 }
-#sheet.open{transform:translateY(0);}
-#sheet h2{font-size:15px; font-weight:800; margin-bottom:10px;}
-#sheet p{font-size:13px; color:var(--text2); line-height:1.8;}
-#sheet .close-btn{
+.sheet.open{transform:translateY(0);}
+.sheet h2{font-size:15px; font-weight:800; margin-bottom:10px;}
+.sheet p{font-size:13px; color:var(--text2); line-height:1.8;}
+.sheet .close-btn{
   margin-top:16px; width:100%; padding:12px; border:none; border-radius:12px;
   background:var(--bg); color:var(--text); font-size:14px; font-weight:700;
   font-family:inherit; cursor:pointer;
@@ -92,13 +94,31 @@ body.viewing #fabs{display:flex;}
 #backdrop{position:fixed; inset:0; background:rgba(0,0,0,.3); z-index:55; display:none;}
 #backdrop.open{display:block;}
 
+#shareUrl{
+  width:100%; margin-top:4px; padding:12px; border:1px solid var(--line); border-radius:12px;
+  font-size:12px; color:var(--text); background:var(--bg); font-family:inherit;
+  -webkit-user-select:all; user-select:all;
+}
+.share-actions{display:flex; gap:10px; margin-top:12px;}
+.share-actions button{
+  flex:1; padding:12px; border:none; border-radius:12px; font-size:14px; font-weight:700;
+  font-family:inherit; cursor:pointer; background:var(--accent); color:#fff;
+}
+.share-actions button.sub{background:var(--bg); color:var(--text);}
+.share-note{font-size:11px; color:var(--text2); margin-top:10px; line-height:1.7;}
+
 /* ── ローディング ── */
 #loading{
-  position:fixed; inset:0; z-index:40; display:none;
-  align-items:center; justify-content:center; background:rgba(238,241,245,.7);
+  position:fixed; inset:0; z-index:40; display:none; flex-direction:column; gap:10px;
+  align-items:center; justify-content:center; background:rgba(238,241,245,.75);
   font-size:13px; font-weight:700; color:var(--text2); backdrop-filter:blur(3px);
 }
 #loading.open{display:flex;}
+.spinner{
+  width:28px; height:28px; border-radius:50%; border:3px solid var(--line);
+  border-top-color:var(--accent); animation:spin .8s linear infinite;
+}
+@keyframes spin{to{transform:rotate(360deg);}}
 </style>
 </head>
 <body>
@@ -119,18 +139,31 @@ body.viewing #fabs{display:flex;}
 </div>
 
 <div id="fabs">
+  <button class="fab" id="shareBtn" title="共有リンクを作る"><span class="icon">share</span></button>
   <button class="fab" id="resetBtn" title="視点リセット"><span class="icon">recenter</span></button>
   <button class="fab primary" id="openBtn" title="別のファイルを開く"><span class="icon">upload_file</span></button>
 </div>
 
 <div id="backdrop"></div>
-<div id="sheet">
+<div class="sheet" id="sheet">
   <h2 id="sheetTitle"></h2>
   <p id="sheetBody"></p>
-  <button class="close-btn" id="sheetClose">閉じる</button>
+  <button class="close-btn" data-close>閉じる</button>
 </div>
 
-<div id="loading">読み込み中…</div>
+<div class="sheet" id="shareSheet">
+  <h2><span class="icon">link</span> 共有リンクができた</h2>
+  <p>この URL を送れば、相手は Google (Gmail) でログインするだけでモデルを見られます。</p>
+  <input id="shareUrl" readonly>
+  <div class="share-actions">
+    <button class="sub" id="copyBtn"><span class="icon">content_copy</span> コピー</button>
+    <button id="nativeShareBtn"><span class="icon">ios_share</span> 共有</button>
+  </div>
+  <div class="share-note">リンクを知ってる人だけが開けます（ランチャーや他のアプリには入れません）。</div>
+  <button class="close-btn" data-close>閉じる</button>
+</div>
+
+<div id="loading"><div class="spinner"></div><span id="loadingText">読み込み中…</span></div>
 
 <input type="file" id="fileInput" multiple hidden
   accept=".dae,.obj,.mtl,.stl,.glb,.gltf,.bin,.skp,.png,.jpg,.jpeg,.webp">
@@ -152,8 +185,14 @@ import { OBJLoader } from "three/addons/loaders/OBJLoader.js";
 import { MTLLoader } from "three/addons/loaders/MTLLoader.js";
 import { STLLoader } from "three/addons/loaders/STLLoader.js";
 import { ColladaLoader } from "three/addons/loaders/ColladaLoader.js";
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js";
+import {
+  getAuth, onAuthStateChanged, setPersistence, browserLocalPersistence,
+} from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
+import { isInternalEmail } from "/internal-gate.js";
 
 const $ = (id) => document.getElementById(id);
+const API = (window.API_BASE || "").replace(/\/$/, "");
 
 // ── three.js の基本セットアップ ──
 const renderer = new THREE.WebGLRenderer({ canvas: $("canvas"), antialias: true });
@@ -233,30 +272,91 @@ function showModel(obj, name) {
   document.body.classList.add("viewing");
 }
 
-// ── メッセージシート ──
+// ── シート（メッセージ / 共有リンク）──
 function showSheet(title, body) {
   $("sheetTitle").textContent = title;
   $("sheetBody").textContent = body;
   $("sheet").classList.add("open");
   $("backdrop").classList.add("open");
 }
-function hideSheet() {
-  $("sheet").classList.remove("open");
+function hideSheets() {
+  document.querySelectorAll(".sheet").forEach((s) => s.classList.remove("open"));
   $("backdrop").classList.remove("open");
 }
-$("sheetClose").onclick = hideSheet;
-$("backdrop").onclick = hideSheet;
+document.querySelectorAll("[data-close]").forEach((b) => (b.onclick = hideSheets));
+$("backdrop").onclick = hideSheets;
+
+function setLoading(text) {
+  $("loadingText").textContent = text;
+  $("loading").classList.add("open");
+}
+function doneLoading() { $("loading").classList.remove("open"); }
+
+// ── 認証（Google ログイン必須）──
+// 未ログインならランチャー (/) のログイン画面に飛ばして、ログイン後ここに戻す。
+// 社外の人 (お客さん) も Google アカウントがあれば OK。ランチャー側には
+// 公開アプリしか見えないので、ここに戻ってくるだけ。
+let currentUser = null;
+let internal = false;
+let booted = false;
+
+try {
+  const cfg = await fetch("/__/firebase/init.json").then((r) => r.json());
+  cfg.authDomain = location.hostname;
+  const auth = getAuth(initializeApp(cfg));
+  await setPersistence(auth, browserLocalPersistence);
+  onAuthStateChanged(auth, async (u) => {
+    if (!u) {
+      location.replace("/?next=" + encodeURIComponent(location.pathname + location.search));
+      return;
+    }
+    if (booted) return;
+    booted = true;
+    currentUser = u;
+    internal = isInternalEmail(u.email);
+    document.body.classList.add("ready");
+    const m = new URLSearchParams(location.search).get("m");
+    if (m) await openShared(m);
+  });
+} catch (e) {
+  showSheet("初期化に失敗した", e.message);
+}
+
+async function api(method, path, body) {
+  const token = await currentUser.getIdToken();
+  const res = await fetch(API + path, {
+    method,
+    headers: {
+      Authorization: "Bearer " + token,
+      ...(body ? { "content-type": "application/json" } : {}),
+    },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const j = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(j.error || "HTTP " + res.status);
+  return j;
+}
 
 // ── ファイル読み込み ──
 // 複数ファイル選択に対応：OBJ+MTL+テクスチャ画像みたいなセットもまとめて渡せば表示できる。
 // ファイル名 → blob URL の対応表を作り、ローダーが参照するファイルを差し替える。
 const EXT_MAIN = ["dae", "obj", "stl", "glb", "gltf"];
+const EXT_SHARE = new Set(["dae", "obj", "mtl", "stl", "glb", "gltf", "bin", "png", "jpg", "jpeg", "webp"]);
+const MAX_FILE = 14 * 1024 * 1024;
+const MAX_TOTAL = 60 * 1024 * 1024;
+
+let lastLocalFiles = null;   // 共有リンク作成用に、直近で開いたローカルファイルを保持
 
 function extOf(name) {
   return name.split(".").pop().toLowerCase();
 }
 
-async function openFiles(files) {
+function updateShareFab() {
+  const can = internal && lastLocalFiles && document.body.classList.contains("viewing");
+  document.body.classList.toggle("can-share", !!can);
+}
+
+async function openFiles(files, opts = {}) {
   if (!files || !files.length) return;
   const list = [...files];
 
@@ -276,7 +376,7 @@ async function openFiles(files) {
     return;
   }
 
-  $("loading").classList.add("open");
+  setLoading("読み込み中…");
 
   // ファイル名 → blob URL 対応表（テクスチャ・MTL・bin の解決用）
   const fileMap = new Map();
@@ -315,26 +415,114 @@ async function openFiles(files) {
         color: 0xb8c0cc, roughness: 0.75, metalness: 0.05,
       }));
     }
-    // 素材が無い / 真っ黒なメッシュには見やすい標準素材を当てる
     obj.traverse((c) => {
-      if (c.isMesh && !c.material) {
+      if (!c.isMesh) return;
+      // 素材が無いメッシュには見やすい標準素材を当てる
+      if (!c.material) {
         c.material = new THREE.MeshStandardMaterial({ color: 0xb8c0cc, roughness: 0.75 });
       }
+      // SketchUp のモデルは面の裏表が混ざりがちで、片面描画だと壁が透明に
+      // 見えることがあるので常に両面描画にする
+      [].concat(c.material).forEach((m) => { m.side = THREE.DoubleSide; });
     });
-    showModel(obj, main.name);
+    lastLocalFiles = opts.shared ? null : list.filter((f) => EXT_SHARE.has(extOf(f.name)));
+    showModel(obj, opts.title || main.name);
+    updateShareFab();
   } catch (e) {
     console.error(e);
     showSheet("読み込みに失敗した",
       "ファイルが壊れてるか、対応してない書き方かも。SketchUp からエクスポートし直して、もう一度試してください。" +
       "（テクスチャ画像が別ファイルの時は、モデルと一緒に全部まとめて選ぶと表示できます）");
   } finally {
-    $("loading").classList.remove("open");
+    doneLoading();
   }
 }
+
+// ── 共有リンクで開く（?m=<id>）──
+async function openShared(id) {
+  try {
+    setLoading("モデル情報を取得中…");
+    const meta = await api("GET", `/api/sketchup/models/${id}`);
+    const token = await currentUser.getIdToken();
+    const files = [];
+    for (const f of meta.files) {
+      setLoading(`ダウンロード中 ${files.length + 1}/${meta.files.length}…`);
+      const r = await fetch(API + `/api/sketchup/models/${id}/files/${encodeURIComponent(f.name)}`, {
+        headers: { Authorization: "Bearer " + token },
+      });
+      if (!r.ok) throw new Error("ダウンロードに失敗: " + f.name);
+      files.push(new File([await r.blob()], f.name));
+    }
+    await openFiles(files, { shared: true, title: meta.name || files[0]?.name || "" });
+  } catch (e) {
+    doneLoading();
+    showSheet("モデルを開けなかった",
+      e.message + "。リンクが正しいか、送ってくれた人に確認してください。");
+  }
+}
+
+// ── 共有リンク作成（社内のみ）──
+function fileToBase64(file) {
+  return new Promise((resolve, reject) => {
+    const fr = new FileReader();
+    fr.onload = () => resolve(String(fr.result).split(",")[1] || "");
+    fr.onerror = () => reject(new Error("読み込み失敗: " + file.name));
+    fr.readAsDataURL(file);
+  });
+}
+
+async function shareCurrent() {
+  if (!lastLocalFiles || !lastLocalFiles.length) return;
+  const total = lastLocalFiles.reduce((s, f) => s + f.size, 0);
+  const tooBig = lastLocalFiles.find((f) => f.size > MAX_FILE);
+  if (tooBig) {
+    showSheet("ファイルが大きすぎる",
+      `${tooBig.name} が 14MB を超えてます。SketchUp 側で不要なコンポーネントを消すか、GLB で書き出すと小さくなります。`);
+    return;
+  }
+  if (total > MAX_TOTAL) {
+    showSheet("合計サイズが大きすぎる", "まとめて 60MB までです。テクスチャ画像を減らすか縮小してみてください。");
+    return;
+  }
+  try {
+    setLoading("共有リンク作成中…");
+    const main = lastLocalFiles.find((f) => EXT_MAIN.includes(extOf(f.name)));
+    const { id, url } = await api("POST", "/api/sketchup/models", { name: main?.name || "" });
+    let i = 0;
+    for (const f of lastLocalFiles) {
+      i++;
+      setLoading(`アップロード中 ${i}/${lastLocalFiles.length}…`);
+      await api("POST", `/api/sketchup/models/${id}/files`, {
+        name: f.name, data: await fileToBase64(f),
+      });
+    }
+    doneLoading();
+    $("shareUrl").value = location.origin + url;
+    $("shareSheet").classList.add("open");
+    $("backdrop").classList.add("open");
+  } catch (e) {
+    doneLoading();
+    showSheet("共有リンクを作れなかった", e.message);
+  }
+}
+
+$("copyBtn").onclick = async () => {
+  try {
+    await navigator.clipboard.writeText($("shareUrl").value);
+    $("copyBtn").innerHTML = '<span class="icon">check</span> コピーした';
+    setTimeout(() => { $("copyBtn").innerHTML = '<span class="icon">content_copy</span> コピー'; }, 1500);
+  } catch { $("shareUrl").select(); }
+};
+$("nativeShareBtn").onclick = () => {
+  const url = $("shareUrl").value;
+  if (navigator.share) navigator.share({ title: "My SketchUp", url }).catch(() => {});
+  else $("copyBtn").click();
+};
 
 // ── UI イベント ──
 $("pickBtn").onclick = () => $("fileInput").click();
 $("openBtn").onclick = () => $("fileInput").click();
+$("shareBtn").onclick = shareCurrent;
 $("fileInput").onchange = (e) => { openFiles(e.target.files); e.target.value = ""; };
 $("resetBtn").onclick = () => {
   if (!homeView) return;
