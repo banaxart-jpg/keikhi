@@ -406,6 +406,8 @@ function onMotion(e) {
 }
 function applyMotionZoom() {
   if (!gyroOn) { motionVel = 0; return; }
+  // 外付け距離センサーが生きてる間は実測を優先 (推定ズームは黙る)
+  if (range.mm != null && performance.now() - range.at < 1200) { motionVel = 0; return; }
   if (Math.abs(motionVel) < 0.02) return;
   const off = camera.position.clone().sub(controls.target);
   const d = THREE.MathUtils.clamp(
@@ -436,6 +438,59 @@ function applyGyro() {
   camera.position.setFromSpherical(new THREE.Spherical(r, phi, gyroBase.theta + dTheta))
     .add(controls.target);
   camera.lookAt(controls.target);
+}
+
+// ── 外付け距離センサー (ESP32 + VL53L1X) ──
+// URL に ?dev=<チャネルID> を付ける (or 一度付ければ localStorage に残る) と、
+// ジャイロモード中はセンサーの実測距離でカメラが前後する。
+// 人が横切った時のワープはフィルタで吸収: 50cm 以上の瞬間ジャンプは保留して、
+// 5 回連続で同じあたりに留まったら「本当に移動した」と受け入れる。
+const devChannel = (() => {
+  const p = new URLSearchParams(location.search).get("dev");
+  if (p) localStorage.setItem("sketchup_dev", p);
+  return p || localStorage.getItem("sketchup_dev") || "";
+})();
+const range = { buf: [], mm: null, lastGood: null, rejects: 0, connected: false, at: 0 };
+function feedRange(mm) {
+  if (!(mm > 30 && mm < 8000)) return;   // センサー圏外の値は捨てる
+  if (range.lastGood != null && Math.abs(mm - range.lastGood) > 500) {
+    range.rejects++;
+    if (range.rejects < 5) return;       // 横切りは無視、5連続なら本当の移動
+  }
+  range.rejects = 0;
+  range.buf.push(mm);
+  if (range.buf.length > 5) range.buf.shift();
+  const sorted = [...range.buf].sort((a, b) => a - b);
+  range.mm = sorted[Math.floor(sorted.length / 2)];   // 中央値でチラつき除去
+  range.lastGood = range.mm;
+  range.at = performance.now();
+  if (!range.connected) { range.connected = true; showToast("距離センサーと接続しました"); }
+}
+if (devChannel) {
+  setInterval(async () => {
+    if (!gyroOn) return;
+    try {
+      const r = await fetch(API + "/api/sketchup-range/" + devChannel);
+      if (!r.ok) return;
+      const j = await r.json();
+      if (j.mm != null && j.ageMs < 1500) feedRange(j.mm);
+    } catch {}
+  }, 180);
+}
+
+// 実測距離→カメラ距離: ジャイロ ON 直後の実測値と表示距離を基準に、比率で追従
+let rangeBase = null;
+function applyRangeZoom() {
+  if (!gyroOn || range.mm == null) { rangeBase = null; return; }
+  if (performance.now() - range.at > 1200) return;   // 途切れたら現状維持
+  const dist = camera.position.distanceTo(controls.target);
+  if (!rangeBase) rangeBase = { mm: range.mm, d: dist };
+  const goal = THREE.MathUtils.clamp(
+    rangeBase.d * (range.mm / rangeBase.mm),
+    modelRadius * 0.02, modelRadius * 12);
+  const d = dist + (goal - dist) * 0.25;   // なめらかに追従
+  const off = camera.position.clone().sub(controls.target).normalize();
+  camera.position.copy(controls.target).addScaledVector(off, d);
 }
 
 async function ensureOrientPermission() {
@@ -492,6 +547,7 @@ renderer.setAnimationLoop(() => {
   controls.update();
   applyGyro();
   applyMotionZoom();
+  applyRangeZoom();
   updateSection();
   renderer.render(scene, camera);
 });

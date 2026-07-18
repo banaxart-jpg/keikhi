@@ -83,6 +83,46 @@ app.get("/api/version", (req, res) => {
   res.json({ version: APP_VERSION, buildId: BUILD_ID, startedAt: SERVER_STARTED_AT });
 });
 
+// ── My SketchUp 外付け距離センサー (ESP32 + VL53L1X) の中継 ──
+// ESP32 は Firebase ログインできないので、推測不能なチャネル ID (12 文字以上の
+// 英数字を自分で決める) を合言葉にした公開エンドポイントで受ける。中身は mm 1個。
+// アプリ側は同じ ID を ?dev= で渡して GET でポーリングする。auth middleware より
+// 前に定義してあるのがミソ (この 2 本だけトークン不要)。
+const SKETCHUP_RANGE_CH = /^[a-zA-Z0-9]{12,64}$/;
+app.post("/api/sketchup-range/:channel", async (req, res) => {
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  if (!SKETCHUP_RANGE_CH.test(req.params.channel)) return res.status(400).json({ error: "bad channel" });
+  const mm = Number(req.body?.mm);
+  if (!Number.isFinite(mm) || mm < 0 || mm > 100000) return res.status(400).json({ error: "bad mm" });
+  try {
+    await ensureSchema();
+    await p.query(
+      `INSERT INTO sketchup_range (channel, mm, updated_at) VALUES ($1, $2, now())
+       ON CONFLICT (channel) DO UPDATE SET mm = $2, updated_at = now()`,
+      [req.params.channel, Math.round(mm)]);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+app.get("/api/sketchup-range/:channel", async (req, res) => {
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  if (!SKETCHUP_RANGE_CH.test(req.params.channel)) return res.status(400).json({ error: "bad channel" });
+  try {
+    await ensureSchema();
+    const { rows } = await p.query(
+      `SELECT mm, (EXTRACT(EPOCH FROM (now() - updated_at)) * 1000)::int AS age_ms
+         FROM sketchup_range WHERE channel = $1`,
+      [req.params.channel]);
+    if (!rows.length) return res.json({ mm: null });
+    res.json({ mm: rows[0].mm, ageMs: rows[0].age_ms });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // チャット挙動のデバッグ実行 (Claude Code 用)。Gemini を本当に呼ぶが:
 //  - 履歴に書き込まない / ACTIONS は解析のみで実行しない (本物のデータを汚さない)
 //  - 課金は kind debug_* で記録し、累計 ¥1000 でハードストップ (公開エンドポイントの保険)
@@ -1155,6 +1195,14 @@ async function ensureSchema() {
         total_bytes BIGINT NOT NULL DEFAULT 0,
         created_by TEXT,
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `);
+    // My SketchUp: 外付け距離センサー (ESP32) の最新値。channel = 合言葉
+    await p.query(`
+      CREATE TABLE IF NOT EXISTS sketchup_range (
+        channel TEXT PRIMARY KEY,
+        mm INTEGER NOT NULL,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       )
     `);
     // yado: Beds24 予約のローカルキャッシュ + 同期メタ

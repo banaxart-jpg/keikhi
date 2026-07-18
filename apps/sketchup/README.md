@@ -40,6 +40,11 @@ SketchUp のモデルを読み込んで、スマホでぐるぐる回して見�
 - テクスチャ画像が別ファイルの時は、モデルと画像をまとめて選択すれば表示される
 - サイズ上限: 1ファイル 14MB、1モデル合計 60MB
 
+## 外付け距離センサー（ESP32 + VL53L1X）
+- スマホの背中に貼ったレーザー距離計の実測で「近づく/断面」を動かせる
+- URL に `?dev=<チャネルID>` を1回付ければ有効（localStorage に残る）
+- 作り方・配線・スケッチは [`esp32/README.md`](esp32/README.md)
+
 ## ファイル構成
 - `index.html` — UI + ロジック（three.js を CDN から読み込み）
 - API は `keihi-api` (`apps/keihi/server/index.js`) の `/api/sketchup/*` に相乗り
