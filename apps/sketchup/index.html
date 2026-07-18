@@ -394,7 +394,7 @@ function onOrient(e) {
 }
 
 // 腕の押し引きズーム: 加速度 (重力抜き) の画面奥行き成分をゆるく積分して速度に。
-// 腕を伸ばす (スマホが顔から離れる) = 近づいて拡大、引く = 離れて縮小。
+// スマホを手前に引き寄せる = 近づいて拡大、押し出す = 離れて縮小。
 let motionVel = 0;
 function onMotion(e) {
   let az = e.acceleration?.z;
@@ -409,7 +409,7 @@ function applyMotionZoom() {
   if (Math.abs(motionVel) < 0.02) return;
   const off = camera.position.clone().sub(controls.target);
   const d = THREE.MathUtils.clamp(
-    off.length() * Math.exp(motionVel * 0.09),
+    off.length() * Math.exp(-motionVel * 0.09),   // 符号で押し引きの向きが決まる
     modelRadius * 0.02, modelRadius * 12);
   camera.position.copy(controls.target).addScaledVector(off.normalize(), d);
 }
