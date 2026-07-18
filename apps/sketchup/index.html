@@ -340,8 +340,8 @@ function makePlaneVizTexture() {
     g.beginPath(); g.moveTo(0, i); g.lineTo(512, i); g.stroke();
   }
   g.strokeStyle = "#c2410c";
-  g.lineWidth = 10;
-  g.strokeRect(5, 5, 502, 502);
+  g.lineWidth = 5;
+  g.strokeRect(3, 3, 506, 506);
   return new THREE.CanvasTexture(c);
 }
 function buildSectionViz() {
@@ -365,10 +365,11 @@ function buildSectionViz() {
   scene.add(rimGroup);
   const tex = makePlaneVizTexture();
   tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
+  const vizSize = modelBox.getSize(new THREE.Vector3()).length() * 1.05;
   planeViz = new THREE.Mesh(
-    new THREE.PlaneGeometry(boxSphereR * 2.2, boxSphereR * 2.2),
+    new THREE.PlaneGeometry(vizSize, vizSize),
     new THREE.MeshBasicMaterial({
-      map: tex, transparent: true, opacity: 0.4,
+      map: tex, transparent: true, opacity: 0.35,
       side: THREE.DoubleSide, depthWrite: false,
     })
   );
@@ -390,7 +391,24 @@ function removeSectionViz() {
   }
 }
 
-const _anchor = new THREE.Vector3();
+// モデルの外接ボックスを「板の向き」に投影した実寸レンジ。
+// スライダーはこのレンジに正確に対応させる (外接球基準だと横長モデルで
+// スライダーのほとんどが空振りして「上っ面しか切れない」問題が出る)。
+const _corner = new THREE.Vector3();
+function projectBoxOntoNormal() {
+  let dmin = Infinity, dmax = -Infinity;
+  for (let i = 0; i < 8; i++) {
+    _corner.set(
+      i & 1 ? modelBox.max.x : modelBox.min.x,
+      i & 2 ? modelBox.max.y : modelBox.min.y,
+      i & 4 ? modelBox.max.z : modelBox.min.z);
+    const d = _corner.dot(sectionNormal);
+    if (d < dmin) dmin = d;
+    if (d > dmax) dmax = d;
+  }
+  return [dmin, dmax];
+}
+
 function updateSection() {
   if (!modelGroup || !sectionOn || !modelBox) {
     sectionPlane.constant = 1e9;
@@ -399,22 +417,29 @@ function updateSection() {
     if (planeViz) planeViz.visible = false;
     return;
   }
-  // 板の位置: モデル中心から板の向きに沿って前後 (t=1 で何も切らない位置)
-  _anchor.copy(boxCenter).addScaledVector(sectionNormal, boxSphereR * 1.02 * (1 - 2 * sectionT));
+  const [dmin, dmax] = projectBoxOntoNormal();
+  const span = Math.max(dmax - dmin, 1e-6);
+  const pad = span * 0.02;
+  // t=1 → モデルの手前端 (何も切らない)、t=0 → 奥端 (全部切る)
+  const s = (dmin - pad) + (span + pad * 2) * (1 - sectionT);
   sectionPlane.normal.copy(sectionNormal);
-  sectionPlane.constant = -sectionNormal.dot(_anchor);
+  sectionPlane.constant = -s;
   // 赤層: 切断面から少しだけ奥までの薄い層 (逆向きの面で挟む)
-  const rimDepth = boxSphereR * 0.012;
   rimPlane.normal.copy(sectionNormal).negate();
-  rimPlane.constant = -sectionPlane.constant + rimDepth;
+  rimPlane.constant = s + span * 0.015;
   if (rimGroup) rimGroup.visible = true;
   if (planeViz) {
     planeViz.visible = true;
-    sectionPlane.coplanarPoint(planeViz.position);
+    // モデル中心を板に投影した位置に置く (原点基準だと端に飛ぶことがある)
+    sectionPlane.projectPoint(boxCenter, planeViz.position);
     planeViz.lookAt(
       planeViz.position.x - sectionNormal.x,
       planeViz.position.y - sectionNormal.y,
       planeViz.position.z - sectionNormal.z);
+    // 真横 (エッジオン) に近いほど透明に。画面を横切る「帯」に見えるのを防ぐ
+    camera.getWorldDirection(_camFwd);
+    const face = Math.abs(_camFwd.dot(sectionNormal));
+    planeViz.material.opacity = 0.35 * THREE.MathUtils.smoothstep(face, 0.12, 0.45);
   }
 }
 function setSectionOn(on) {
