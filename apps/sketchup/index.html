@@ -452,7 +452,7 @@ function setSectionOn(on) {
     if (!capStencilGroup) buildCaps();
     if (!sectionTiltHintShown && matchMedia("(pointer:coarse)").matches) {
       sectionTiltHintShown = true;
-      showToast("バー右の傾きボタンを押すと<br>スマホの傾きで板ごと動かせます");
+      showToast("バー右の傾きボタン ON で<br>スマホの画面がそのまま「切る板」になります");
     }
   } else if (planeGyroOn) {
     togglePlaneGyro();                  // 断面 OFF なら板の傾き連動も止める
@@ -468,6 +468,26 @@ let planeGyroOn = false;
 let planeBase = null;              // 板モード: ON にした瞬間の傾き & 板の向き
 const gyroRaw = { alpha: 0, beta: 0, gamma: 0 };
 
+// deviceorientation (alpha/beta/gamma) → スマホの姿勢クォータニオン。
+// three.js の DeviceOrientationControls と同じ変換。
+// q * (0,0,-1) = 「画面の裏が向いてる方向」(自分から見て奥) になる。
+const _zee = new THREE.Vector3(0, 0, 1);
+const _euler = new THREE.Euler();
+const _qScreen = new THREE.Quaternion();
+const _qWorld = new THREE.Quaternion(-Math.sqrt(0.5), 0, 0, Math.sqrt(0.5));
+const _devQ = new THREE.Quaternion();
+function deviceQuaternion() {
+  const a = gyroRaw.alpha * Math.PI / 180;
+  const b = gyroRaw.beta * Math.PI / 180;
+  const g = gyroRaw.gamma * Math.PI / 180;
+  const orient = ((screen.orientation?.angle ?? window.orientation) || 0) * Math.PI / 180;
+  _euler.set(b, a, -g, "YXZ");
+  return _devQ.setFromEuler(_euler)
+    .multiply(_qWorld)
+    .multiply(_qScreen.setFromAxisAngle(_zee, -orient));
+}
+
+const _devBack = new THREE.Vector3();
 function onOrient(e) {
   gyroRaw.alpha = e.alpha ?? 0;
   gyroRaw.beta = e.beta ?? 0;
@@ -478,12 +498,46 @@ function onOrient(e) {
     gyroBase = { alpha: gyroRaw.alpha, beta: gyroRaw.beta, theta: sph.theta, phi: sph.phi };
   }
   if (planeGyroOn && !planeBase) {
-    planeBase = { beta: gyroRaw.beta, gamma: gyroRaw.gamma, normal: sectionNormal.clone() };
+    // alpha (コンパス方角) の基準はデタラメなので、ON にした瞬間の
+    // 「スマホの向き」と「カメラの向き」の水平方向が揃うようオフセットを取る
+    _devBack.set(0, 0, -1).applyQuaternion(deviceQuaternion());
+    camera.getWorldDirection(_camFwd);
+    const devYaw = Math.hypot(_devBack.x, _devBack.z) > 0.2 ? Math.atan2(_devBack.x, _devBack.z) : 0;
+    const camYaw = Math.atan2(_camFwd.x, _camFwd.z);
+    planeBase = { yawOffset: camYaw - devYaw };
   }
 }
+
+// 腕の押し引きズーム: 加速度 (重力抜き) の画面奥行き成分をゆるく積分して速度に。
+// 腕を伸ばす (スマホが顔から離れる) = 近づいて拡大、引く = 離れて縮小。
+let motionVel = 0;
+function onMotion(e) {
+  let az = e.acceleration?.z;
+  if (az == null || Number.isNaN(az)) return;
+  let dt = e.interval || 0.016;
+  if (dt > 1) dt /= 1000;              // ブラウザによって ms で来る
+  if (Math.abs(az) < 0.15) az = 0;     // 手ブレは無視
+  motionVel = (motionVel + az * dt) * 0.9;
+}
+function applyMotionZoom() {
+  if (!gyroOn && !planeGyroOn) { motionVel = 0; return; }
+  if (Math.abs(motionVel) < 0.02) return;
+  const off = camera.position.clone().sub(controls.target);
+  const d = THREE.MathUtils.clamp(
+    off.length() * Math.exp(motionVel * 0.06),
+    modelRadius * 0.05, modelRadius * 12);
+  camera.position.copy(controls.target).addScaledVector(off.normalize(), d);
+}
+
 function syncOrientListener() {
-  if (gyroOn || planeGyroOn) addEventListener("deviceorientation", onOrient);
-  else removeEventListener("deviceorientation", onOrient);
+  if (gyroOn || planeGyroOn) {
+    addEventListener("deviceorientation", onOrient);
+    addEventListener("devicemotion", onMotion);
+  } else {
+    removeEventListener("deviceorientation", onOrient);
+    removeEventListener("devicemotion", onMotion);
+    motionVel = 0;
+  }
 }
 
 function applyGyro() {
@@ -499,19 +553,15 @@ function applyGyro() {
   camera.lookAt(controls.target);
 }
 
-// 板モード: スマホを前後に倒す = 画面の横軸まわりに板が傾く、
-// 左右に倒す = 視線軸まわりに板が回る。「板を手に持って傾ける」感覚。
-const _camRight = new THREE.Vector3(), _camFwd = new THREE.Vector3();
+// 板モード: 「スマホの画面そのものが板」。画面の向き (絶対姿勢) を板の法線に直結。
+// 寝かせれば水平切り (平面図)、立てれば垂直切り (断面図)、斜めに構えれば斜め切り。
+const _camFwd = new THREE.Vector3();
+const Y_UP = new THREE.Vector3(0, 1, 0);
 function applyPlaneGyro() {
   if (!planeGyroOn || !planeBase) return;
-  const dBeta = (gyroRaw.beta - planeBase.beta) * Math.PI / 180;
-  const dGamma = (gyroRaw.gamma - planeBase.gamma) * Math.PI / 180;
-  _camRight.setFromMatrixColumn(camera.matrix, 0);
-  camera.getWorldDirection(_camFwd);
-  sectionNormal.copy(planeBase.normal)
-    .applyAxisAngle(_camRight, dBeta)
-    .applyAxisAngle(_camFwd, -dGamma)
-    .normalize();
+  _devBack.set(0, 0, -1).applyQuaternion(deviceQuaternion());
+  _devBack.applyAxisAngle(Y_UP, planeBase.yawOffset);
+  sectionNormal.copy(_devBack).normalize();
 }
 
 async function ensureOrientPermission() {
@@ -528,6 +578,11 @@ async function ensureOrientPermission() {
         return false;
       }
     } catch { return false; }
+  }
+  // 押し引きズーム用の加速度も同じタップ内で許可を取る (ダメでも傾きだけで続行)
+  if (typeof DeviceMotionEvent !== "undefined" &&
+      typeof DeviceMotionEvent.requestPermission === "function") {
+    try { await DeviceMotionEvent.requestPermission(); } catch {}
   }
   return true;
 }
@@ -575,6 +630,7 @@ renderer.setAnimationLoop(() => {
   controls.update();
   applyGyro();
   applyPlaneGyro();
+  applyMotionZoom();
   updateSection();
   renderer.render(scene, camera);
 });
