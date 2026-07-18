@@ -107,11 +107,13 @@ body.can-share #shareBtn{display:flex;}
   backdrop-filter:blur(6px); box-shadow:0 3px 12px rgba(0,0,0,.15);
 }
 body.section-on.viewing #sectionBar{display:flex;}
-#sectionAxisBtn{
+#sectionAxisBtn, #sectionTiltBtn{
   border:1px solid var(--line); background:var(--card); color:var(--text);
   border-radius:16px; padding:6px 12px; font-size:12px; font-weight:700;
   font-family:inherit; cursor:pointer; white-space:nowrap;
 }
+#sectionTiltBtn{padding:6px 10px; font-size:15px;}
+#sectionTiltBtn.on{background:var(--accent); border-color:var(--accent); color:#fff;}
 #sectionRange{flex:1; accent-color:var(--accent); min-width:0;}
 
 /* ── メッセージ / 共有シート ── */
@@ -201,7 +203,8 @@ body.section-on.viewing #sectionBar{display:flex;}
 
 <div id="sectionBar">
   <button id="sectionAxisBtn">上から</button>
-  <input type="range" id="sectionRange" min="0" max="100" value="100">
+  <input type="range" id="sectionRange" min="0" max="100" value="55">
+  <button id="sectionTiltBtn" title="傾きで板を動かす"><span class="icon">screen_rotation</span></button>
 </div>
 
 <div id="backdrop"></div>
@@ -296,50 +299,147 @@ let homeView = null;     // 視点リセット用 { pos, target }
 let modelRadius = 1;     // モデルの外接半径 (断面モードの発動判定に使う)
 
 // ── 断面モード ──
-// ハサミボタンで ON にすると、切る方向 (上から/横から/前から) と深さスライダーが
-// 出て、その位置でモデルをスパッと切って中が見える。モデルの material だけに
-// 適用するのでグリッドは切れない。
-const sectionPlane = new THREE.Plane(new THREE.Vector3(0, 0, 1), 1e9);
-let sectionAxis = null;   // null = OFF / "y" 上から / "x" 横から / "z" 前から
-let sectionT = 1;         // スライダー位置 (1 = 切らない 〜 0 = 全部切る)
+// ハサミボタンで ON にすると「透明な板」をモデルに差し込むイメージで切れる。
+// - スライダー: 板の位置 (板の向きに沿って前後)
+// - 方向ボタン: 板の初期向き (上から/横から/前から)
+// - 傾きボタン: スマホの傾きに板の向きが連動 (板を手で持って傾ける感覚)
+// 切り口はステンシルで「詰まった面」としてベタ塗り描画する。
+const sectionPlane = new THREE.Plane(new THREE.Vector3(0, -1, 0), 1e9);
+const sectionNormal = new THREE.Vector3(0, -1, 0);  // 板の向き (残す側を向く)
+let sectionOn = false;
+let sectionT = 0.55;      // スライダー位置 (1 = 切らない 〜 0 = 全部切る)
 let modelBox = null;      // 表示中モデルの外接ボックス
-const SECTION_AXES = [
-  { key: "y", label: "上から", normal: new THREE.Vector3(0, -1, 0) },
-  { key: "x", label: "横から", normal: new THREE.Vector3(-1, 0, 0) },
-  { key: "z", label: "前から", normal: new THREE.Vector3(0, 0, -1) },
+const boxCenter = new THREE.Vector3();
+let boxSphereR = 1;       // 外接球の半径 (板をどの向きにしても届く移動範囲)
+const SECTION_PRESETS = [
+  { label: "上から", normal: [0, -1, 0] },
+  { label: "横から", normal: [-1, 0, 0] },
+  { label: "前から", normal: [0, 0, -1] },
 ];
-function updateSection() {
-  if (!modelGroup || !sectionAxis || !modelBox) { sectionPlane.constant = 1e9; return; }
-  const ax = SECTION_AXES.find((a) => a.key === sectionAxis);
-  const min = modelBox.min[sectionAxis], max = modelBox.max[sectionAxis];
-  const pad = (max - min) * 0.02 || 0.01;
-  sectionPlane.normal.copy(ax.normal);
-  sectionPlane.constant = (min - pad) + (max - min + pad * 2) * sectionT;
+let sectionPresetIdx = 0;
+
+// ── 切り口のベタ塗り (ステンシル) ──
+// モデルの裏面/表面を数えて「中身が詰まってる領域」だけに色付きの板を描く定石。
+// 断面 ON のときだけ組み立てる (描画コストが倍近く増えるので常時は持たない)。
+let capStencilGroup = null;
+let capMesh = null;
+function stencilMat(side, op) {
+  return new THREE.MeshBasicMaterial({
+    side, colorWrite: false, depthWrite: false, depthTest: false,
+    stencilWrite: true, stencilFunc: THREE.AlwaysStencilFunc,
+    stencilFail: op, stencilZFail: op, stencilZPass: op,
+    clippingPlanes: [sectionPlane],
+  });
 }
-function setSectionOn(on) {
-  document.body.classList.toggle("section-on", on);
-  $("sectionBtn").classList.toggle("on", on);
-  if (on) {
-    if (!sectionAxis) sectionAxis = "y";
-    $("sectionAxisBtn").textContent = SECTION_AXES.find((a) => a.key === sectionAxis).label;
-  } else {
-    sectionAxis = null;
+function buildCaps() {
+  removeCaps();
+  scene.updateMatrixWorld(true);
+  capStencilGroup = new THREE.Group();
+  modelGroup.traverse((c) => {
+    if (!c.isMesh || !c.geometry) return;
+    for (const [side, op] of [
+      [THREE.BackSide, THREE.IncrementWrapStencilOp],
+      [THREE.FrontSide, THREE.DecrementWrapStencilOp],
+    ]) {
+      const m = new THREE.Mesh(c.geometry, stencilMat(side, op));
+      m.matrixAutoUpdate = false;
+      m.matrix.copy(c.matrixWorld);
+      m.renderOrder = 1;
+      capStencilGroup.add(m);
+    }
+  });
+  scene.add(capStencilGroup);
+  capMesh = new THREE.Mesh(
+    new THREE.PlaneGeometry(boxSphereR * 4, boxSphereR * 4),
+    new THREE.MeshStandardMaterial({
+      color: 0xa8542f, roughness: 0.9, metalness: 0, side: THREE.DoubleSide,
+      stencilWrite: true, stencilRef: 0, stencilFunc: THREE.NotEqualStencilFunc,
+      stencilFail: THREE.ReplaceStencilOp, stencilZFail: THREE.ReplaceStencilOp,
+      stencilZPass: THREE.ReplaceStencilOp,
+    })
+  );
+  capMesh.renderOrder = 2;
+  capMesh.onAfterRender = (r) => r.clearStencil();
+  scene.add(capMesh);
+}
+function removeCaps() {
+  if (capStencilGroup) {
+    scene.remove(capStencilGroup);
+    capStencilGroup.traverse((c) => { if (c.material?.dispose) c.material.dispose(); });
+    capStencilGroup = null;
+  }
+  if (capMesh) {
+    scene.remove(capMesh);
+    capMesh.geometry.dispose();
+    capMesh.material.dispose();
+    capMesh = null;
   }
 }
 
-// ── ジャイロ見回し (iPhone を傾けて上から・下から見る) ──
+const _anchor = new THREE.Vector3();
+function updateSection() {
+  if (!modelGroup || !sectionOn || !modelBox) {
+    sectionPlane.constant = 1e9;
+    if (capStencilGroup) capStencilGroup.visible = false;
+    if (capMesh) capMesh.visible = false;
+    return;
+  }
+  // 板の位置: モデル中心から板の向きに沿って前後 (t=1 で何も切らない位置)
+  _anchor.copy(boxCenter).addScaledVector(sectionNormal, boxSphereR * 1.02 * (1 - 2 * sectionT));
+  sectionPlane.normal.copy(sectionNormal);
+  sectionPlane.constant = -sectionNormal.dot(_anchor);
+  if (capStencilGroup) capStencilGroup.visible = true;
+  if (capMesh) {
+    capMesh.visible = true;
+    sectionPlane.coplanarPoint(capMesh.position);
+    capMesh.lookAt(
+      capMesh.position.x - sectionNormal.x,
+      capMesh.position.y - sectionNormal.y,
+      capMesh.position.z - sectionNormal.z);
+  }
+}
+function setSectionOn(on) {
+  sectionOn = on;
+  document.body.classList.toggle("section-on", on);
+  $("sectionBtn").classList.toggle("on", on);
+  if (on) {
+    sectionNormal.fromArray(SECTION_PRESETS[sectionPresetIdx].normal);
+    $("sectionAxisBtn").textContent = SECTION_PRESETS[sectionPresetIdx].label;
+    sectionT = 0.55;                    // ON にした瞬間から切れてるのが分かる位置
+    $("sectionRange").value = 55;
+    if (!capStencilGroup) buildCaps();
+  } else if (planeGyroOn) {
+    togglePlaneGyro();                  // 断面 OFF なら板の傾き連動も止める
+  }
+}
+
+// ── ジャイロ (2つのモードで共用) ──
+// gyroBtn (右下): カメラを傾きで見回す / sectionTiltBtn (断面バー内): 断面の板を傾ける
+// 同時 ON は混乱するので排他にする。
 let gyroOn = false;
-let gyroBase = null;               // ON にした瞬間の傾き & カメラ角度
-const gyroRaw = { alpha: 0, beta: 0 };
+let gyroBase = null;               // カメラモード: ON にした瞬間の傾き & カメラ角度
+let planeGyroOn = false;
+let planeBase = null;              // 板モード: ON にした瞬間の傾き & 板の向き
+const gyroRaw = { alpha: 0, beta: 0, gamma: 0 };
+
 function onOrient(e) {
   gyroRaw.alpha = e.alpha ?? 0;
   gyroRaw.beta = e.beta ?? 0;
+  gyroRaw.gamma = e.gamma ?? 0;
   if (gyroOn && !gyroBase) {
     const sph = new THREE.Spherical().setFromVector3(
       camera.position.clone().sub(controls.target));
     gyroBase = { alpha: gyroRaw.alpha, beta: gyroRaw.beta, theta: sph.theta, phi: sph.phi };
   }
+  if (planeGyroOn && !planeBase) {
+    planeBase = { beta: gyroRaw.beta, gamma: gyroRaw.gamma, normal: sectionNormal.clone() };
+  }
 }
+function syncOrientListener() {
+  if (gyroOn || planeGyroOn) addEventListener("deviceorientation", onOrient);
+  else removeEventListener("deviceorientation", onOrient);
+}
+
 function applyGyro() {
   if (!gyroOn || !gyroBase) return;
   // beta (前後の傾き) = 上下の見回し、alpha (向き) = 左右の見回し
@@ -352,32 +452,68 @@ function applyGyro() {
     .add(controls.target);
   camera.lookAt(controls.target);
 }
-async function toggleGyro() {
-  if (gyroOn) {
-    gyroOn = false; gyroBase = null;
-    removeEventListener("deviceorientation", onOrient);
-    controls.enableRotate = true;
-    $("gyroBtn").classList.remove("on");
-    return;
-  }
+
+// 板モード: スマホを前後に倒す = 画面の横軸まわりに板が傾く、
+// 左右に倒す = 視線軸まわりに板が回る。「板を手に持って傾ける」感覚。
+const _camRight = new THREE.Vector3(), _camFwd = new THREE.Vector3();
+function applyPlaneGyro() {
+  if (!planeGyroOn || !planeBase) return;
+  const dBeta = (gyroRaw.beta - planeBase.beta) * Math.PI / 180;
+  const dGamma = (gyroRaw.gamma - planeBase.gamma) * Math.PI / 180;
+  _camRight.setFromMatrixColumn(camera.matrix, 0);
+  camera.getWorldDirection(_camFwd);
+  sectionNormal.copy(planeBase.normal)
+    .applyAxisAngle(_camRight, dBeta)
+    .applyAxisAngle(_camFwd, -dGamma)
+    .normalize();
+}
+
+async function ensureOrientPermission() {
   if (typeof DeviceOrientationEvent === "undefined") {
-    showSheet("傾きが使えない", "この端末はジャイロに対応してないみたいです。指で回してください。");
-    return;
+    showSheet("傾きが使えない", "この端末はジャイロに対応してないみたいです。指で操作してください。");
+    return false;
   }
   // iPhone は「動作と方向」の許可を1回もらう必要がある (ボタンタップ内でしか出せない)
   if (typeof DeviceOrientationEvent.requestPermission === "function") {
     try {
       const p = await DeviceOrientationEvent.requestPermission();
       if (p !== "granted") {
-        showSheet("傾きが許可されなかった", "もう一度ボタンを押すと再度聞かれます。ダメなら指で回してください。");
-        return;
+        showSheet("傾きが許可されなかった", "もう一度ボタンを押すと再度聞かれます。ダメなら指で操作してください。");
+        return false;
       }
-    } catch { return; }
+    } catch { return false; }
   }
-  addEventListener("deviceorientation", onOrient);
+  return true;
+}
+
+async function toggleGyro() {
+  if (gyroOn) {
+    gyroOn = false; gyroBase = null;
+    controls.enableRotate = true;
+    $("gyroBtn").classList.remove("on");
+    syncOrientListener();
+    return;
+  }
+  if (!(await ensureOrientPermission())) return;
+  if (planeGyroOn) togglePlaneGyro();  // 板モードと排他
   gyroOn = true; gyroBase = null;      // 次のイベントで今の姿勢を基準にする
   controls.enableRotate = false;       // 指の回転と喧嘩しないように (ピンチ拡縮は生きてる)
   $("gyroBtn").classList.add("on");
+  syncOrientListener();
+}
+
+async function togglePlaneGyro() {
+  if (planeGyroOn) {
+    planeGyroOn = false; planeBase = null;
+    $("sectionTiltBtn").classList.remove("on");
+    syncOrientListener();
+    return;
+  }
+  if (!(await ensureOrientPermission())) return;
+  if (gyroOn) toggleGyro();            // カメラモードと排他
+  planeGyroOn = true; planeBase = null;
+  $("sectionTiltBtn").classList.add("on");
+  syncOrientListener();
 }
 
 function fit() {
@@ -392,6 +528,7 @@ fit();
 renderer.setAnimationLoop(() => {
   controls.update();
   applyGyro();
+  applyPlaneGyro();
   updateSection();
   renderer.render(scene, camera);
 });
@@ -410,6 +547,8 @@ function frameModel(obj) {
   obj.position.y += size.y / 2;
 
   modelBox = new THREE.Box3().setFromObject(obj);   // 断面スライダーの範囲用 (原点寄せ後)
+  modelBox.getCenter(boxCenter);
+  boxSphereR = modelBox.getBoundingSphere(new THREE.Sphere()).radius || 1;
 
   const target = new THREE.Vector3(0, size.y / 2, 0);
   const dist = radius * 2.4;
@@ -445,6 +584,7 @@ function showHintOnce() {
 }
 
 function showModel(obj, name) {
+  removeCaps();   // 切り口メッシュは旧モデルの geometry を参照してるので先に外す
   if (modelGroup) {
     scene.remove(modelGroup);
     modelGroup.traverse((c) => {
@@ -460,8 +600,6 @@ function showModel(obj, name) {
   $("modelName").textContent = name;
   document.body.classList.add("viewing");
   setSectionOn(false);          // 新しいモデルは断面なしから
-  $("sectionRange").value = 100;
-  sectionT = 1;
   showHintOnce();
 }
 
@@ -835,13 +973,15 @@ $("pickBtn").onclick = () => $("fileInput").click();
 $("openBtn").onclick = () => $("fileInput").click();
 $("shareBtn").onclick = shareCurrent;
 $("gyroBtn").onclick = toggleGyro;
-$("sectionBtn").onclick = () => setSectionOn(!sectionAxis);
+$("sectionBtn").onclick = () => setSectionOn(!sectionOn);
 $("sectionRange").oninput = (e) => { sectionT = e.target.value / 100; };
 $("sectionAxisBtn").onclick = () => {
-  const i = SECTION_AXES.findIndex((a) => a.key === sectionAxis);
-  sectionAxis = SECTION_AXES[(i + 1) % SECTION_AXES.length].key;
-  $("sectionAxisBtn").textContent = SECTION_AXES.find((a) => a.key === sectionAxis).label;
+  sectionPresetIdx = (sectionPresetIdx + 1) % SECTION_PRESETS.length;
+  sectionNormal.fromArray(SECTION_PRESETS[sectionPresetIdx].normal);
+  $("sectionAxisBtn").textContent = SECTION_PRESETS[sectionPresetIdx].label;
+  planeBase = null;   // 板の傾き連動中なら、今の姿勢を新しい基準にする
 };
+$("sectionTiltBtn").onclick = togglePlaneGyro;
 $("fileInput").onchange = (e) => { openFiles(e.target.files); e.target.value = ""; };
 $("pickDirBtn").onclick = () => $("dirInput").click();
 $("dirInput").onchange = (e) => {
