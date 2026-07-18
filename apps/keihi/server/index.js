@@ -8510,6 +8510,41 @@ app.post("/api/sketchup/models/:id/files", async (req, res) => {
   }
 });
 
+// 一覧 (管理用・社内限定: path が /sketchup/models/ で始まらないので開放対象外)
+app.get("/api/sketchup/models", async (req, res) => {
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  try {
+    await ensureSchema();
+    const { rows } = await p.query(
+      `SELECT id, name, files, total_bytes, created_by, created_at
+         FROM sketchup_models ORDER BY created_at DESC LIMIT 200`
+    );
+    res.json(rows.map((m) => ({
+      id: m.id, name: m.name, fileCount: m.files.length,
+      totalBytes: Number(m.total_bytes), createdBy: m.created_by, createdAt: m.created_at,
+    })));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 削除 (管理用・社内限定: DELETE メソッドは開放対象外)
+app.delete("/api/sketchup/models/:id", async (req, res) => {
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  try {
+    if (storage && RECEIPTS_BUCKET) {
+      await storage.bucket(RECEIPTS_BUCKET).deleteFiles({ prefix: `sketchup/${req.params.id}/` });
+    }
+    await p.query("DELETE FROM sketchup_models WHERE id=$1", [req.params.id]);
+    res.status(204).end();
+  } catch (err) {
+    console.error("sketchup delete error", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.get("/api/sketchup/models/:id", async (req, res) => {
   const p = getPool();
   if (!p) return res.status(503).json({ error: "DB not configured" });
