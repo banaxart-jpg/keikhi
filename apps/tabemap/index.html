@@ -31,7 +31,7 @@ body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); 
 .title { font-size: 22px; font-weight: 800; }
 
 /* 世界ピン地図 */
-.wmap { width: 100%; aspect-ratio: 2 / 1; display: block; border-radius: 18px; background: #0a1428; box-shadow: 6px 6px 16px var(--sd), -5px -5px 14px var(--sl); margin: 10px 0 12px; cursor: pointer; }
+.wmap { width: 100%; aspect-ratio: 20 / 11; display: block; border-radius: 18px; background: #0e1730; box-shadow: 6px 6px 16px var(--sd), -5px -5px 14px var(--sl); margin: 10px 0 12px; cursor: pointer; }
 
 /* 制覇サマリー */
 .summary { background: var(--bg); border-radius: 20px; padding: 18px; box-shadow: 6px 6px 16px var(--sd), -5px -5px 14px var(--sl); margin: 0 0 16px; }
@@ -120,7 +120,6 @@ textarea.inp { min-height: 60px; resize: vertical; }
       <div class="pct-sub" id="pctSub">0 / 0 か国 制覇</div>
       <div class="pbar"><div class="pfill" id="pfill" style="width:0%"></div></div>
     </div>
-    <div class="chips" id="chips"></div>
     <div id="board"></div>
   </div>
 </div>
@@ -207,46 +206,56 @@ function conqueredSet() {
   return s;
 }
 
-// ── 世界ピン地図 ──
+// ── 塗り絵ワールド地図（各国を位置ごとのタイルに。食べた国を塗りつぶす）──
+// 緯度経度をグリッドに投影し、重なったら近いマスへずらして配置（決定論的）
+const GRID = (() => {
+  const cols = 20, rows = 11, taken = {}, layout = {};
+  const key = (c, r) => c + "," + r;
+  for (const [name, [lat, lng]] of Object.entries(COORD)) {
+    let c = Math.max(0, Math.min(cols - 1, Math.round((lng + 180) / 360 * (cols - 1))));
+    let r = Math.max(0, Math.min(rows - 1, Math.round((90 - lat) / 180 * (rows - 1))));
+    if (taken[key(c, r)]) {
+      let found = null;
+      for (let rad = 1; rad < Math.max(cols, rows) && !found; rad++)
+        for (let dc = -rad; dc <= rad && !found; dc++)
+          for (let dr = -rad; dr <= rad && !found; dr++) {
+            if (Math.max(Math.abs(dc), Math.abs(dr)) !== rad) continue;
+            const nc = c + dc, nr = r + dr;
+            if (nc < 0 || nc >= cols || nr < 0 || nr >= rows || taken[key(nc, nr)]) continue;
+            found = [nc, nr];
+          }
+      if (found) { c = found[0]; r = found[1]; }
+    }
+    taken[key(c, r)] = 1; layout[name] = { col: c, row: r };
+  }
+  return { cols, rows, layout };
+})();
+function rr(g, x, y, w, h, r) { g.beginPath(); g.moveTo(x + r, y); g.arcTo(x + w, y, x + w, y + h, r); g.arcTo(x + w, y + h, x, y + h, r); g.arcTo(x, y + h, x, y, r); g.arcTo(x, y, x + w, y, r); g.closePath(); }
 function drawMap(conq) {
   const cv = $("wmap"); if (!cv) return;
-  const cssW = cv.clientWidth || 340, cssH = cssW / 2, DPR = Math.min(2, devicePixelRatio || 1);
+  const cssW = cv.clientWidth || 340, cell = cssW / GRID.cols, cssH = cell * GRID.rows;
+  const DPR = Math.min(2, devicePixelRatio || 1);
   cv.width = Math.round(cssW * DPR); cv.height = Math.round(cssH * DPR);
   const g = cv.getContext("2d"); g.setTransform(DPR, 0, 0, DPR, 0, 0);
-  const X = (lng) => (lng + 180) / 360 * cssW, Y = (lat) => (90 - lat) / 180 * cssH;
-  // 海
-  let og = g.createLinearGradient(0, 0, 0, cssH); og.addColorStop(0, "#0c1c40"); og.addColorStop(1, "#071023");
-  g.fillStyle = og; g.fillRect(0, 0, cssW, cssH);
-  // 大陸のぼんやりした塊（位置の目安）
-  const blobs = [[-100,45,44,26],[-62,-15,22,30],[12,52,26,17],[20,3,30,34],[95,48,58,32],[110,20,26,20],[134,-25,26,18]];
-  for (const [lng, lat, rw, rh] of blobs) {
-    const x = X(lng), y = Y(lat), rx = rw / 360 * cssW, ry = rh / 180 * cssH;
-    const rad = g.createRadialGradient(x, y, 0, x, y, Math.max(rx, ry));
-    rad.addColorStop(0, "rgba(86,104,86,0.5)"); rad.addColorStop(1, "rgba(86,104,86,0)");
-    g.fillStyle = rad; g.beginPath(); g.ellipse(x, y, rx, ry, 0, 0, 7); g.fill();
-  }
-  // 国のピン
-  for (const [name, c] of Object.entries(COORD)) {
-    const x = X(c[1]), y = Y(c[0]), done = conq.has(name);
-    if (done) {
-      g.fillStyle = "rgba(232,89,12,0.3)"; g.beginPath(); g.arc(x, y, 7, 0, 7); g.fill();
-      g.fillStyle = "#e8590c"; g.beginPath(); g.arc(x, y, 3.6, 0, 7); g.fill();
-      g.fillStyle = "rgba(255,255,255,0.9)"; g.beginPath(); g.arc(x - 1, y - 1, 1.1, 0, 7); g.fill();
-    } else {
-      g.strokeStyle = "rgba(200,210,235,0.42)"; g.lineWidth = 1;
-      g.beginPath(); g.arc(x, y, 2.4, 0, 7); g.stroke();
-    }
+  g.clearRect(0, 0, cssW, cssH);
+  const pad = cell * 0.09, radius = cell * 0.22;
+  g.textAlign = "center"; g.textBaseline = "middle";
+  for (const [name, pos] of Object.entries(GRID.layout)) {
+    const x = pos.col * cell + pad, y = pos.row * cell + pad, w = cell - 2 * pad, h = cell - 2 * pad;
+    const done = conq.has(name);
+    rr(g, x, y, w, h, radius);
+    if (done) { g.fillStyle = "#e8590c"; g.fill(); }
+    else { g.fillStyle = "rgba(150,162,196,0.10)"; g.fill(); g.lineWidth = 1; g.strokeStyle = "rgba(150,162,196,0.25)"; g.stroke(); }
+    g.globalAlpha = done ? 1 : 0.3;
+    g.font = `${Math.round(cell * 0.5)}px serif`;
+    g.fillText(FLAG[name], x + w / 2, y + h / 2 + 1);
+    g.globalAlpha = 1;
   }
 }
 $("wmap").addEventListener("click", (e) => {
-  const r = e.currentTarget.getBoundingClientRect();
-  const mx = e.clientX - r.left, my = e.clientY - r.top, cssW = r.width, cssH = r.height;
-  let best = null, bd = 15;
-  for (const [name, c] of Object.entries(COORD)) {
-    const x = (c[1] + 180) / 360 * cssW, y = (90 - c[0]) / 180 * cssH;
-    const d = Math.hypot(mx - x, my - y); if (d < bd) { bd = d; best = name; }
-  }
-  if (best) openCountry(best);
+  const r = e.currentTarget.getBoundingClientRect(), cell = r.width / GRID.cols;
+  const col = Math.floor((e.clientX - r.left) / cell), row = Math.floor((e.clientY - r.top) / cell);
+  for (const [name, pos] of Object.entries(GRID.layout)) if (pos.col === col && pos.row === row) { openCountry(name); return; }
 });
 addEventListener("resize", () => { if ($("app").style.display !== "none") render(); });
 
@@ -257,12 +266,8 @@ function render() {
   const done = [...conq].filter(c => FLAG[c]).length;
   const pct = Math.round((done / TOTAL) * 100);
   $("pct").innerHTML = `${pct}<span class="u">%</span>`;
-  $("pctSub").textContent = `${done} / ${TOTAL} か国 制覇${filter !== "みんな" ? ` (${filter})` : ""}`;
+  $("pctSub").textContent = `${done} / ${TOTAL} か国 制覇`;
   $("pfill").style.width = pct + "%";
-
-  const chips = ["みんな", ...members()];
-  $("chips").innerHTML = chips.map(c => `<button class="chip ${filter === c ? "on" : ""}" data-c="${esc(c)}" type="button">${esc(c)}</button>`).join("");
-  document.querySelectorAll(".chip").forEach(b => b.addEventListener("click", () => { filter = b.dataset.c; render(); }));
 
   $("board").innerHTML = REGIONS.map(r => {
     const dcount = r.items.filter(([n]) => conq.has(n)).length;
@@ -326,8 +331,6 @@ function renderEdit() {
       <div><div class="field-label">エリア</div><input class="inp" id="fArea" placeholder="例：新大久保" value="${esc(cur.area)}"></div>
       <div><div class="field-label">日付</div><input class="inp" id="fDate" type="date" value="${esc(cur.visitedOn)}"></div>
     </div>
-    <div class="field-label">誰と食べた？（カンマ区切りで複数OK）</div>
-    <input class="inp" id="fEater" placeholder="例：自分, どんちゃん" value="${esc(cur.eater)}">
     <div class="field-label">メモ</div>
     <textarea class="inp" id="fMemo" placeholder="美味しかったもの・感想">${esc(cur.memo)}</textarea>
     <div class="field-label">写真（最大3枚）</div>
@@ -341,7 +344,6 @@ function renderEdit() {
   $("fRest").addEventListener("input", e => cur.restaurant = e.target.value);
   $("fArea").addEventListener("input", e => cur.area = e.target.value);
   $("fDate").addEventListener("input", e => cur.visitedOn = e.target.value);
-  $("fEater").addEventListener("input", e => cur.eater = e.target.value);
   $("fMemo").addEventListener("input", e => cur.memo = e.target.value);
   $("saveBtn").addEventListener("click", save);
   $("delBtn")?.addEventListener("click", del);
