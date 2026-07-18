@@ -13,7 +13,7 @@ import {
   getAuth, setPersistence, browserLocalPersistence,
   onAuthStateChanged, signOut as fbSignOut,
 } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
-import { gateInternal } from "/internal-gate.js";
+import { gateInternal, isInternalEmail } from "/internal-gate.js";
 
 const API_BASE = (window.API_BASE || "").replace(/\/$/, "");
 let fbAuth = null;
@@ -36,7 +36,8 @@ function hideOverlay() {
 
 // returnPath: 未ログインで /?next=<returnPath> に飛ばすパス (例: "/keihi2/")
 // onReady: 認証完了時に1回だけ呼ぶコールバック (= boot())
-export async function initAuthBoot({ returnPath, onReady }) {
+// guestEmails: 社内メール以外に、このアプリだけ入場を許す社外ゲスト (例: tabemap の友達)
+export async function initAuthBoot({ returnPath, onReady, guestEmails = [] }) {
   if (window.DEV_NO_AUTH) {
     hideOverlay();
     onReady();
@@ -47,7 +48,16 @@ export async function initAuthBoot({ returnPath, onReady }) {
     cfg.authDomain = location.hostname;
     fbAuth = getAuth(initializeApp(cfg));
     await setPersistence(fbAuth, browserLocalPersistence);
-    gateInternal(fbAuth);
+    if (guestEmails.length) {
+      // 社内 + 指定ゲスト以外はランチャー (/) に弾き返す
+      const guests = new Set(guestEmails.map((e) => String(e).toLowerCase()));
+      onAuthStateChanged(fbAuth, (u) => {
+        const em = String(u?.email || "").toLowerCase();
+        if (u && !isInternalEmail(em) && !guests.has(em)) location.replace("/");
+      });
+    } else {
+      gateInternal(fbAuth);
+    }
     let entered = false;
     onAuthStateChanged(fbAuth, async (user) => {
       if (user) {

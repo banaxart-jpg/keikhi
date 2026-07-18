@@ -53,6 +53,8 @@ const {
 
 admin.initializeApp({ projectId: FIREBASE_PROJECT_ID || undefined });
 const allowList = ALLOWED_EMAILS.split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);
+// 世界制覇めし (tabemap) だけ、名指しの社外ゲスト (友達) にも API を開放する。
+const TABEMAP_GUEST_EMAILS = new Set(["dddddoro@gmail.com"]);
 // kotonoha/techstudy で他メンバーの進捗を閲覧できるオーナー (社長) のみのホワイトリスト。
 // 従業員同士の比較は不可。env で上書き可。
 const KOTONOHA_OWNER_EMAILS = new Set(
@@ -429,11 +431,14 @@ app.use("/api", async (req, res, next) => {
     // techstudy (/kotonoha) と「現場一覧の GET」は社外 auth ユーザーにも開放。
     //   手配リスト (kaimono) が誰でも入れる仕様で、現場タブを構築するのに /sites
     //   の読み取りだけは要る (POST/DELETE は社内限定のまま)
+    const email = (decoded.email || "").toLowerCase();
     const isKotonoha = req.path.startsWith("/kotonoha/");
     // 現場質問 (/genba-qa) は外部 (設計屋・お客さん) も Google ログインで参加できる
     const isGenbaQa = req.path.startsWith("/genba-qa");
+    // 世界制覇めし (/tabemap) は名指しの社外ゲストにも開放
+    const isTabemapGuest = req.path.startsWith("/tabemap") && TABEMAP_GUEST_EMAILS.has(email);
     const isPublicSitesRead = req.method === "GET" && req.path === "/sites";
-    if (!isKotonoha && !isGenbaQa && !isPublicSitesRead && allowList.length && !allowList.includes((decoded.email || "").toLowerCase())) {
+    if (!isKotonoha && !isGenbaQa && !isTabemapGuest && !isPublicSitesRead && allowList.length && !allowList.includes(email)) {
       return res.status(403).json({ error: `権限がありません (${decoded.email || "?"})` });
     }
     req.user = decoded;

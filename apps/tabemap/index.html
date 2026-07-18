@@ -395,6 +395,7 @@ wireModal("cModal", "cGrab"); wireModal("eModal", "eGrab");
 
 initAuthBoot({
   returnPath: "/tabemap/",
+  guestEmails: ["dddddoro@gmail.com"],   // どんちゃん (社外ゲスト) も tabemap だけ入場OK
   onReady: async () => { $("app").style.display = ""; $("board").innerHTML = '<div class="empty">読み込み中…</div>'; await load(); },
 });
 </script>
