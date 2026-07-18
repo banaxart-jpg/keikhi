@@ -14,12 +14,19 @@
   .hint{position:fixed;left:0;right:0;bottom:calc(20px + env(safe-area-inset-bottom));
     text-align:center;font-size:12px;letter-spacing:.28em;color:rgba(205,214,255,.72);
     pointer-events:none;z-index:5;text-shadow:0 1px 6px #000}
+  #tiltBtn{position:fixed;left:50%;transform:translateX(-50%);
+    bottom:calc(52px + env(safe-area-inset-bottom));z-index:6;
+    padding:12px 22px;border-radius:30px;border:1px solid rgba(150,170,255,.4);
+    background:rgba(20,26,60,.72);color:#eaf1ff;font-family:inherit;font-size:13px;font-weight:700;
+    letter-spacing:.04em;cursor:pointer;backdrop-filter:blur(6px);box-shadow:0 6px 20px rgba(0,0,0,.4)}
+  #tiltBtn:active{transform:translateX(-50%) scale(.96)}
 </style>
 </head>
 <body>
 <canvas id="c"></canvas>
 <div class="badge">threegis 360°</div>
-<div class="hint">ドラッグで見回す</div>
+<div class="hint" id="hint">ドラッグで見回す</div>
+<button id="tiltBtn" type="button">📱 スマホを倒して見回す</button>
 
 <script>
 (() => {
@@ -96,20 +103,34 @@
   }, { passive: true });
   addEventListener("pointerup", () => { down = false; });
   addEventListener("pointercancel", () => { down = false; });
-  function onOrient(e) { if (e.alpha == null) return; lon = -e.alpha; lat = clampLat((e.beta || 0) - 90); lastMove = now(); }
-  function enableTilt() {
-    if (typeof DeviceOrientationEvent === "undefined") return;
-    if (typeof DeviceOrientationEvent.requestPermission === "function")
-      DeviceOrientationEvent.requestPermission().then(p => { if (p === "granted") addEventListener("deviceorientation", onOrient); }).catch(() => {});
-    else addEventListener("deviceorientation", onOrient);
+
+  // 傾き見回し: 倒した方向にスーッと見回る（横は速度ステア、縦は角度で狙う）
+  let tiltOn = false, gGamma = 0, gBeta = 45;
+  const hintEl = document.getElementById("hint");
+  const tiltBtn = document.getElementById("tiltBtn");
+  function onOrient(e) {
+    if (e.gamma == null && e.beta == null) return;
+    gGamma = e.gamma || 0; gBeta = e.beta || 45; lastMove = now();
   }
-  addEventListener("click", enableTilt, { once: true });
-  addEventListener("touchend", enableTilt, { once: true });
+  function enableTilt() {
+    const go = () => { tiltOn = true; addEventListener("deviceorientation", onOrient); tiltBtn.style.display = "none"; hintEl.textContent = "スマホを倒すと見回す"; };
+    if (typeof DeviceOrientationEvent === "undefined") { hintEl.textContent = "この端末は傾き非対応（ドラッグでどうぞ）"; return; }
+    if (typeof DeviceOrientationEvent.requestPermission === "function") {
+      DeviceOrientationEvent.requestPermission().then(p => { p === "granted" ? go() : (hintEl.textContent = "傾きが許可されませんでした（ドラッグで見回せます）"); }).catch(() => {});
+    } else go();
+  }
+  tiltBtn.addEventListener("click", enableTilt);
 
   function frame() {
     requestAnimationFrame(frame);
     fit();                                                  // サイズを毎フレーム確認（0対策）
-    if (!down && now() - lastMove > 2200) lon += 0.02;      // 放置で自動パン
+    if (tiltOn) {
+      lon += Math.max(-1, Math.min(1, gGamma / 40)) * 1.7;  // 左右に倒す→その向きへ回る
+      const tLat = clampLat((gBeta - 52) * 1.15);            // 前後に倒す→上下を狙う
+      lat += (tLat - lat) * 0.12;
+    } else if (!down && now() - lastMove > 2200) {
+      lon += 0.02;                                          // 放置で自動パン
+    }
     const cw = canvas.width, ch = canvas.height;
     const scale = ch / (PH * 0.58);                          // 縦のズーム（一度に見える範囲）
     const dW = PW * scale, dH = PH * scale;
