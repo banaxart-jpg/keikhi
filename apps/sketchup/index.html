@@ -98,6 +98,18 @@ body.viewing #fabs{display:flex;}
 #shareBtn{display:none;}
 body.can-share #shareBtn{display:flex;}
 
+/* ── 刃の深さバー (ジャイロモード中のみ) ── */
+#cutBar{
+  position:fixed; left:14px; right:80px;
+  bottom:calc(18px + env(safe-area-inset-bottom));
+  display:none; align-items:center; gap:12px; z-index:10;
+  background:rgba(255,255,255,.9); border-radius:26px; padding:10px 16px;
+  backdrop-filter:blur(6px); box-shadow:0 3px 12px rgba(0,0,0,.15);
+}
+body.gyro-on.viewing #cutBar{display:flex;}
+#cutBar .icon{color:var(--accent); font-size:18px;}
+#cutRange{flex:1; accent-color:var(--accent); min-width:0;}
+
 
 /* ── メッセージ / 共有シート ── */
 .sheet{
@@ -181,6 +193,11 @@ body.can-share #shareBtn{display:flex;}
   <button class="fab" id="gyroBtn" title="傾きで見回す"><span class="icon">screen_rotation</span></button>
   <button class="fab" id="resetBtn" title="視点リセット"><span class="icon">recenter</span></button>
   <button class="fab primary" id="openBtn" title="別のファイルを開く"><span class="icon">upload_file</span></button>
+</div>
+
+<div id="cutBar">
+  <span class="icon">content_cut</span>
+  <input type="range" id="cutRange" min="0" max="100" value="5">
 </div>
 
 <div id="backdrop"></div>
@@ -284,7 +301,9 @@ const sectionNormal = new THREE.Vector3(0, -1, 0);
 let modelBox = null;      // 表示中モデルの外接ボックス
 const boxCenter = new THREE.Vector3();
 let boxSphereR = 1;       // 外接球の半径
-const CUT_AHEAD = 0.18;   // カメラの何m先で切るか (モデル半径に対する比)
+// 刃の深さ (カメラの何m先で切るか)。バーで調整: 左端=すぐ手前、右端=かなり奥。
+// cutDist = boxSphereR * (0.05 + 2.4 * cutT)
+let cutT = 0.05;
 
 let rimGroup = null;      // モデルと同じ形を赤マテリアルで薄層クリップしたコピー
 const rimPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 1e9);
@@ -344,7 +363,7 @@ function updateSection() {
   // 切断面 = カメラのすぐ前、向き = 視線。近づいた分だけ深く切れる
   camera.getWorldDirection(_camFwd);
   sectionNormal.copy(_camFwd);
-  const s = camera.position.dot(sectionNormal) + boxSphereR * CUT_AHEAD;
+  const s = camera.position.dot(sectionNormal) + boxSphereR * (0.05 + 2.4 * cutT);
   sectionPlane.normal.copy(sectionNormal);
   sectionPlane.constant = -s;
   const [dmin, dmax] = projectBoxOntoNormal();
@@ -447,6 +466,7 @@ async function toggleGyro() {
     gyroOn = false; gyroBase = null;
     controls.enableRotate = true;
     $("gyroBtn").classList.remove("on");
+    document.body.classList.remove("gyro-on");
     syncOrientListener();
     return;
   }
@@ -454,8 +474,9 @@ async function toggleGyro() {
   gyroOn = true; gyroBase = null;      // 次のイベントで今の姿勢を基準にする
   controls.enableRotate = false;       // 指の回転と喧嘩しないように (ピンチ拡縮は生きてる)
   $("gyroBtn").classList.add("on");
+  document.body.classList.add("gyro-on");
   syncOrientListener();
-  showToast("傾けて見回し、近づけると大きく<br>さらに近づけるとその角度で切れて中が見えます", 5000);
+  showToast("傾けて見回し、近づけると大きく表示<br>下のバーで断面を奥・手前に送れます", 5000);
 }
 
 function fit() {
@@ -920,6 +941,7 @@ $("pickBtn").onclick = () => $("fileInput").click();
 $("openBtn").onclick = () => $("fileInput").click();
 $("shareBtn").onclick = shareCurrent;
 $("gyroBtn").onclick = toggleGyro;
+$("cutRange").oninput = (e) => { cutT = e.target.value / 100; };
 $("fileInput").onchange = (e) => { openFiles(e.target.files); e.target.value = ""; };
 $("pickDirBtn").onclick = () => $("dirInput").click();
 $("dirInput").onchange = (e) => {
