@@ -372,29 +372,66 @@ function updateSection() {
   rimGroup.visible = true;
 }
 
-// ── ジャイロモード ──
-// 右下のボタン1個で ON/OFF。ON 中は:
-//  - スマホの傾きで見回し (applyGyro)
-//  - 腕の押し引き or ピンチで近づく (applyMotionZoom)
+// ── ジャイロモード (ウォークスルー式) ──
+// 「空間にモデルが浮いてて、自分がカメラを持って歩き回る」動き方。
+// モデル中心を軸にした回転/ズームはしない。
+//  - スマホの傾き = その場から視線を振る (カメラの向き = スマホの向き)
+//  - 押し引き / ピンチ / 距離センサー = 見てる方向へ前進・後退
 //  - カメラのすぐ前で自動的に切れる (updateSection)
 let gyroOn = false;
-let gyroBase = null;               // ON にした瞬間の傾き & カメラ角度
+let yawOffset = null;              // ON 時にスマホとカメラの水平向きを揃える差分
 const gyroRaw = { alpha: 0, beta: 0, gamma: 0 };
+let orientReceived = false;
 const _camFwd = new THREE.Vector3();
+const _v1 = new THREE.Vector3(), _v2 = new THREE.Vector3();
+const Y_UP = new THREE.Vector3(0, 1, 0);
 
 function onOrient(e) {
   gyroRaw.alpha = e.alpha ?? 0;
   gyroRaw.beta = e.beta ?? 0;
   gyroRaw.gamma = e.gamma ?? 0;
-  if (gyroOn && !gyroBase) {
-    const sph = new THREE.Spherical().setFromVector3(
-      camera.position.clone().sub(controls.target));
-    gyroBase = { alpha: gyroRaw.alpha, beta: gyroRaw.beta, theta: sph.theta, phi: sph.phi };
-  }
+  orientReceived = true;
 }
 
-// 腕の押し引きズーム: 加速度 (重力抜き) の画面奥行き成分をゆるく積分して速度に。
-// スマホを手前に引き寄せる = 近づいて拡大、押し出す = 離れて縮小。
+// deviceorientation → スマホの姿勢クォータニオン (DeviceOrientationControls と同じ変換)。
+// これをカメラに直結すると「画面の向いてる方=視線」になる。
+const _zee = new THREE.Vector3(0, 0, 1);
+const _euler = new THREE.Euler();
+const _qScreen = new THREE.Quaternion();
+const _qWorld = new THREE.Quaternion(-Math.sqrt(0.5), 0, 0, Math.sqrt(0.5));
+const _devQ = new THREE.Quaternion();
+const _yawQ = new THREE.Quaternion();
+function deviceQuat() {
+  const a = gyroRaw.alpha * Math.PI / 180;
+  const b = gyroRaw.beta * Math.PI / 180;
+  const g = gyroRaw.gamma * Math.PI / 180;
+  const orient = ((screen.orientation?.angle ?? window.orientation) || 0) * Math.PI / 180;
+  _euler.set(b, a, -g, "YXZ");
+  return _devQ.setFromEuler(_euler)
+    .multiply(_qWorld)
+    .multiply(_qScreen.setFromAxisAngle(_zee, -orient));
+}
+
+function applyGyro() {
+  if (!gyroOn || !orientReceived) return;
+  deviceQuat();
+  if (yawOffset == null) {
+    // alpha (方角) の基準はデタラメなので、ON の瞬間の視線が変わらないよう水平差を取る
+    camera.getWorldDirection(_v1);
+    _v2.set(0, 0, -1).applyQuaternion(_devQ);
+    yawOffset = Math.atan2(_v1.x, _v1.z) - Math.atan2(_v2.x, _v2.z);
+  }
+  camera.quaternion.copy(_yawQ.setFromAxisAngle(Y_UP, yawOffset)).multiply(_devQ);
+}
+
+// 前進・後退: 見てる方向にカメラの「位置」を動かす (中心に吸い込まれない)
+function walk(dist) {
+  camera.getWorldDirection(_v1);
+  camera.position.addScaledVector(_v1, dist);
+}
+
+// 腕の押し引き: 加速度 (重力抜き) の画面奥行き成分をゆるく積分して速度に。
+// スマホを手前に引き寄せる = 前進、押し出す = 後退。
 let motionVel = 0;
 function onMotion(e) {
   let az = e.acceleration?.z;
@@ -406,14 +443,39 @@ function onMotion(e) {
 }
 function applyMotionZoom() {
   if (!gyroOn) { motionVel = 0; return; }
-  // 外付け距離センサーが生きてる間は実測を優先 (推定ズームは黙る)
+  // 外付け距離センサーが生きてる間は実測を優先 (推定は黙る)
   if (range.mm != null && performance.now() - range.at < 1200) { motionVel = 0; return; }
   if (Math.abs(motionVel) < 0.02) return;
-  const off = camera.position.clone().sub(controls.target);
-  const d = THREE.MathUtils.clamp(
-    off.length() * Math.exp(-motionVel * 0.09),   // 符号で押し引きの向きが決まる
-    modelRadius * 0.02, modelRadius * 12);
-  camera.position.copy(controls.target).addScaledVector(off.normalize(), d);
+  walk(motionVel * modelRadius * 0.03);
+}
+
+// ジャイロモード中の指操作: ピンチ = 前進後退、1本指の横スワイプ = 向きの微調整
+const gyroTouches = new Map();
+let pinchPrev = null;
+renderer.domElement.addEventListener("pointerdown", (e) => {
+  if (!gyroOn) return;
+  gyroTouches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  pinchPrev = null;
+});
+renderer.domElement.addEventListener("pointermove", (e) => {
+  if (!gyroOn || !gyroTouches.has(e.pointerId)) return;
+  const prev = gyroTouches.get(e.pointerId);
+  if (gyroTouches.size === 2) {
+    gyroTouches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    const [a, b] = [...gyroTouches.values()];
+    const d = Math.hypot(a.x - b.x, a.y - b.y);
+    if (pinchPrev != null) walk((d - pinchPrev) / innerHeight * modelRadius * 2.5);
+    pinchPrev = d;
+  } else if (gyroTouches.size === 1) {
+    if (yawOffset != null) yawOffset -= (e.clientX - prev.x) * 0.004;
+    gyroTouches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  }
+});
+for (const ev of ["pointerup", "pointercancel"]) {
+  renderer.domElement.addEventListener(ev, (e) => {
+    gyroTouches.delete(e.pointerId);
+    pinchPrev = null;
+  });
 }
 
 function syncOrientListener() {
@@ -425,19 +487,6 @@ function syncOrientListener() {
     removeEventListener("devicemotion", onMotion);
     motionVel = 0;
   }
-}
-
-function applyGyro() {
-  if (!gyroOn || !gyroBase) return;
-  // beta (前後の傾き) = 上下の見回し、alpha (向き) = 左右の見回し
-  let dTheta = (gyroRaw.alpha - gyroBase.alpha) * Math.PI / 180;
-  dTheta = ((dTheta + Math.PI) % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI) - Math.PI;
-  const dPhi = (gyroRaw.beta - gyroBase.beta) * Math.PI / 180;
-  const r = camera.position.distanceTo(controls.target);
-  const phi = Math.min(Math.PI - 0.05, Math.max(0.05, gyroBase.phi + dPhi));
-  camera.position.setFromSpherical(new THREE.Spherical(r, phi, gyroBase.theta + dTheta))
-    .add(controls.target);
-  camera.lookAt(controls.target);
 }
 
 // ── 外付け距離センサー (ESP32 + VL53L1X) ──
@@ -478,19 +527,20 @@ if (devChannel) {
   }, 180);
 }
 
-// 実測距離→カメラ距離: ジャイロ ON 直後の実測値と表示距離を基準に、比率で追従
-let rangeBase = null;
+// 実測距離→歩行: 距離の変化分だけ前進/後退。現実で 1m 動くと
+// モデル半径の 0.9 倍ぶん進む感覚 (壁に近づく = 前進)。
+let rangePrevMm = null;
+let rangePending = 0;   // まだ画面に反映してない移動量 (mm)
 function applyRangeZoom() {
-  if (!gyroOn || range.mm == null) { rangeBase = null; return; }
+  if (!gyroOn || range.mm == null) { rangePrevMm = null; rangePending = 0; return; }
   if (performance.now() - range.at > 1200) return;   // 途切れたら現状維持
-  const dist = camera.position.distanceTo(controls.target);
-  if (!rangeBase) rangeBase = { mm: range.mm, d: dist };
-  const goal = THREE.MathUtils.clamp(
-    rangeBase.d * (range.mm / rangeBase.mm),
-    modelRadius * 0.02, modelRadius * 12);
-  const d = dist + (goal - dist) * 0.25;   // なめらかに追従
-  const off = camera.position.clone().sub(controls.target).normalize();
-  camera.position.copy(controls.target).addScaledVector(off, d);
+  if (rangePrevMm == null) rangePrevMm = range.mm;
+  rangePending += rangePrevMm - range.mm;
+  rangePrevMm = range.mm;
+  const step = rangePending * 0.25;   // なめらかに消化
+  rangePending -= step;
+  if (Math.abs(step) < 0.5) return;
+  walk(step / 1000 * modelRadius * 0.9);
 }
 
 async function ensureOrientPermission() {
@@ -518,20 +568,25 @@ async function ensureOrientPermission() {
 
 async function toggleGyro() {
   if (gyroOn) {
-    gyroOn = false; gyroBase = null;
-    controls.enableRotate = true;
+    gyroOn = false;
+    // 通常モードに戻る時は「今見てる方向の先」を回転の中心にし直す
+    camera.getWorldDirection(_v1);
+    controls.target.copy(camera.position).addScaledVector(_v1, modelRadius * 1.5);
+    controls.enabled = true;
+    controls.update();
     $("gyroBtn").classList.remove("on");
     document.body.classList.remove("gyro-on");
     syncOrientListener();
     return;
   }
   if (!(await ensureOrientPermission())) return;
-  gyroOn = true; gyroBase = null;      // 次のイベントで今の姿勢を基準にする
-  controls.enableRotate = false;       // 指の回転と喧嘩しないように (ピンチ拡縮は生きてる)
+  gyroOn = true;
+  yawOffset = null; orientReceived = false;   // 次のイベントで今の視線を基準にする
+  controls.enabled = false;                   // 歩き回りモード中は軌道カメラを止める
   $("gyroBtn").classList.add("on");
   document.body.classList.add("gyro-on");
   syncOrientListener();
-  showToast("傾けて見回し、近づけると大きく表示<br>下のバーで断面を奥・手前に送れます", 5000);
+  showToast("傾けて見回し、引き寄せ/ピンチで前進<br>下のバーで断面を奥・手前に送れます", 5000);
 }
 
 function fit() {
@@ -544,7 +599,7 @@ addEventListener("resize", fit);
 fit();
 
 renderer.setAnimationLoop(() => {
-  controls.update();
+  if (!gyroOn) controls.update();   // 歩き回りモード中は軌道カメラを回さない
   applyGyro();
   applyMotionZoom();
   applyRangeZoom();
@@ -1010,7 +1065,12 @@ function resetView() {
   if (!homeView) return;
   camera.position.copy(homeView.pos);
   controls.target.copy(homeView.target);
-  controls.update();
+  if (gyroOn) {
+    camera.lookAt(homeView.target);
+    yawOffset = null;   // 今のスマホの向き = リセット後の視線、で取り直す
+  } else {
+    controls.update();
+  }
 }
 $("resetBtn").onclick = resetView;
 
