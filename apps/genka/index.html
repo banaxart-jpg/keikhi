@@ -95,238 +95,223 @@ input.inp { width: 100%; padding: 12px 14px; border-radius: 14px; border: none; 
 </div>
 
 <div id="app" style="display:none;">
-  <!-- 一覧 -->
-  <div id="listScreen">
+  <!-- 中身は Vue が描画する。TEMPLATE はスクリプト内 -->
+</div>
+
+<script src="/config.js"></script>
+<script type="module">
+import { createApp, ref, computed } from "https://unpkg.com/vue@3.4.27/dist/vue.esm-browser.prod.js";
+import { initAuthBoot, api } from "/api-auth.js";
+
+const TEMPLATE = `
+<div>
+  <!-- ───── 一覧 ───── -->
+  <div v-if="screen === 'list'">
     <div class="bar">
       <a class="pill" href="/"><span class="icon">arrow_back</span> 戻る</a>
       <span style="font-size:11px;letter-spacing:0.22em;color:var(--text3);font-weight:700;text-transform:uppercase;">GENKA</span>
-      <button class="pill primary" id="newBtn" type="button"><span class="icon">add</span> 現場</button>
+      <button class="pill primary" id="newBtn" type="button" @click="newProject"><span class="icon">add</span> 現場</button>
     </div>
     <div class="wrap">
       <div class="title">原価計算</div>
       <div class="subtitle">現場ごとに 見積 − 業者の金額 = 利益。金額は万単位。</div>
-      <div class="totals" id="totals"></div>
-      <div id="list"></div>
+      <div class="totals">
+        <div class="tcell"><div class="n">{{ fmtMan(totalQuote) }}</div><div class="l">見積合計</div></div>
+        <div class="tcell"><div class="n">{{ fmtMan(totalCost) }}</div><div class="l">原価合計</div></div>
+        <div class="tcell"><div class="n" :class="totalProfit >= 0 ? 'pos' : 'neg'">{{ signed(totalProfit) }}</div><div class="l">利益合計</div></div>
+      </div>
+      <div v-if="loading" class="list-empty">読み込み中…</div>
+      <div v-else-if="projects.length === 0" class="list-empty">まだありません。右上の「＋現場」から追加。</div>
+      <template v-else>
+        <div v-for="p in projects" :key="p.id" class="card" @click="openDetail(p.id)">
+          <div>
+            <div class="site">{{ p.site || "(現場名なし)" }}</div>
+            <div class="breakdown">見積 {{ fmtMan(p.quote) }} · 原価 {{ fmtMan(costOf(p)) }} · 業者{{ (p.vendors || []).length }}社<template v-if="pendCount(p)"> · <span class="pend-n">未定{{ pendCount(p) }}</span></template></div>
+          </div>
+          <div class="profit">
+            <div class="p" :class="profitOf(p) >= 0 ? 'pos' : 'neg'">{{ signed(profitOf(p)) }}</div>
+            <div class="rate" :class="profitOf(p) >= 0 ? 'pos' : 'neg'">利益率 {{ rateOf(p).toFixed(0) }}%</div>
+          </div>
+        </div>
+      </template>
     </div>
   </div>
 
-  <!-- 詳細 -->
-  <div id="detailScreen" style="display:none;">
+  <!-- ───── 詳細 ───── -->
+  <div v-else-if="cur">
     <div class="bar">
-      <button class="pill" id="backBtn" type="button"><span class="icon">arrow_back</span> 一覧</button>
+      <button class="pill" id="backBtn" type="button" @click="screen = 'list'"><span class="icon">arrow_back</span> 一覧</button>
       <span style="font-size:11px;letter-spacing:0.16em;color:var(--text3);font-weight:800;text-transform:uppercase;">原価計算</span>
-      <button class="pill danger" id="deleteBtn" type="button"><span class="icon">delete</span></button>
+      <button v-if="cur.id" class="pill danger" id="deleteBtn" type="button" @click="deleteProject"><span class="icon">delete</span></button>
+      <span v-else style="width:52px;"></span>
     </div>
-    <div class="wrap" id="detailBody"></div>
+    <div class="wrap">
+      <div class="field-label">現場名</div>
+      <input class="inp" list="siteList" placeholder="例：田中様邸 新築" v-model="cur.site">
+      <datalist id="siteList"><option v-for="n in siteNames" :key="n" :value="n"></option></datalist>
+
+      <div class="field-label">見積金額（お客さんに出した額）</div>
+      <div class="amt-wrap"><input class="inp" type="number" inputmode="decimal" placeholder="0" v-model="cur.quote"><span class="unit">万</span></div>
+
+      <div class="field-label">業者（原価）</div>
+      <div>
+        <div v-for="(v, i) in cur.vendors" :key="i" class="vendor-row">
+          <input class="inp vname" placeholder="業者名（例：○○電気）" v-model="v.name">
+          <div class="amt-wrap"><input class="inp vamt" type="number" inputmode="decimal" placeholder="0" v-model="v.amount"><span class="unit">万</span></div>
+          <button class="vst" :class="v.status === 'fixed' ? 'fixed' : 'pending'" type="button" title="タップで未定⇄確定"
+                  @click="v.status = v.status === 'fixed' ? 'pending' : 'fixed'">{{ v.status === 'fixed' ? '確定' : '未定' }}</button>
+          <button class="vrm" type="button" title="削除" @click="removeVendor(i)"><span class="icon">close</span></button>
+        </div>
+      </div>
+      <button class="add-vendor" id="addVendorBtn" type="button" @click="cur.vendors.push(newVendor())"><span class="icon">add</span> 業者を追加</button>
+
+      <div class="summary">
+        <div class="srow"><span class="lbl">見積</span><span class="val">{{ fmtMan(cur.quote) }}<span class="yen">{{ yen(cur.quote) }}</span></span></div>
+        <div class="srow"><span class="lbl">原価合計</span><span class="val">{{ fmtMan(curCost) }}<span class="yen">{{ yen(curCost) }}</span></span></div>
+        <div class="srow total profit"><span class="lbl">利益</span><span class="val" :class="curProfit >= 0 ? 'pos' : 'neg'">{{ signed(curProfit) }}<span class="yen">{{ yen(curProfit) }}</span></span></div>
+        <div class="srow"><span class="lbl">利益率</span><span class="val" :class="curProfit >= 0 ? 'pos' : 'neg'">{{ curRate.toFixed(0) }}%</span></div>
+      </div>
+
+      <div class="field-label">メモ（任意）</div>
+      <input class="inp" placeholder="補足があれば" v-model="cur.memo">
+
+      <div class="actions">
+        <button class="pill primary" id="saveBtn" type="button" :disabled="saving" @click="saveProject"><span class="icon">save</span> {{ cur.id ? "保存" : "登録" }}</button>
+      </div>
+    </div>
   </div>
+
+  <div v-if="toastMsg" class="toast" :class="{ err: toastErr }" style="display:block;">{{ toastMsg }}</div>
 </div>
+`;
 
-<datalist id="siteList"></datalist>
-<div class="toast" id="toast"></div>
+const App = {
+  template: TEMPLATE,
+  setup() {
+    const screen = ref("list");
+    const loading = ref(true);
+    const projects = ref([]);
+    const siteNames = ref([]);
+    const cur = ref(null);
+    const saving = ref(false);
 
-<script src="/config.js"></script>
-<script type="module">
-import { initAuthBoot, api } from "/api-auth.js";
-
-const $ = (id) => document.getElementById(id);
-let projects = [];
-let siteNames = [];
-let cur = null;
-
-// ───────── utils ─────────
-let _tt = null;
-function toast(msg, isErr = false) {
-  const t = $("toast"); t.textContent = msg; t.classList.toggle("err", !!isErr);
-  t.style.display = "block"; clearTimeout(_tt);
-  _tt = setTimeout(() => { t.style.display = "none"; }, isErr ? 4000 : 1800);
-}
-function escapeHtml(s) {
-  return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-}
-const num = (v) => { const n = Number(v); return isFinite(n) ? n : 0; };
-function costOf(p) { return (p.vendors || []).reduce((s, v) => s + num(v.amount), 0); }
-function profitOf(p) { return num(p.quote) - costOf(p); }
-function rateOf(p) { const q = num(p.quote); return q > 0 ? (profitOf(p) / q) * 100 : 0; }
-// 万 → 表示。整数はそのまま、小数は 1 桁まで
-function fmtMan(v) {
-  const n = num(v);
-  const s = Number.isInteger(n) ? String(n) : n.toFixed(1);
-  return s.replace(/\.0$/, "") + "万";
-}
-function yen(vMan) { return "¥" + Math.round(num(vMan) * 10000).toLocaleString(); }
-
-// ───────── 一覧 ─────────
-async function loadList() {
-  try {
-    const [ps, sites] = await Promise.all([
-      api("GET", "/api/genka"),
-      api("GET", "/api/sites").catch(() => []),
-    ]);
-    projects = ps || [];
-    siteNames = (sites || []).map((s) => s.name).filter(Boolean);
-    $("siteList").innerHTML = siteNames.map((n) => `<option value="${escapeHtml(n)}">`).join("");
-  } catch (e) { toast("読み込み失敗: " + e.message, true); projects = []; }
-  renderList();
-}
-function renderList() {
-  cur = null;
-  $("listScreen").style.display = ""; $("detailScreen").style.display = "none";
-  const totalQuote = projects.reduce((s, p) => s + num(p.quote), 0);
-  const totalCost = projects.reduce((s, p) => s + costOf(p), 0);
-  const totalProfit = totalQuote - totalCost;
-  $("totals").innerHTML = `
-    <div class="tcell"><div class="n">${fmtMan(totalQuote)}</div><div class="l">見積合計</div></div>
-    <div class="tcell"><div class="n">${fmtMan(totalCost)}</div><div class="l">原価合計</div></div>
-    <div class="tcell"><div class="n ${totalProfit >= 0 ? "pos" : "neg"}">${totalProfit >= 0 ? "+" : ""}${fmtMan(totalProfit)}</div><div class="l">利益合計</div></div>
-  `;
-  if (projects.length === 0) {
-    $("list").innerHTML = `<div class="list-empty">まだありません。右上の「＋現場」から追加。</div>`;
-    return;
-  }
-  $("list").innerHTML = projects.map((p) => {
-    const prof = profitOf(p), rate = rateOf(p);
-    const cls = prof >= 0 ? "pos" : "neg";
-    const pend = (p.vendors || []).filter((v) => (v.status || "pending") !== "fixed").length;
-    return `
-      <div class="card" data-id="${p.id}">
-        <div>
-          <div class="site">${escapeHtml(p.site || "(現場名なし)")}</div>
-          <div class="breakdown">見積 ${fmtMan(p.quote)} · 原価 ${fmtMan(costOf(p))} · 業者${(p.vendors || []).length}社${pend ? ` · <span class="pend-n">未定${pend}</span>` : ""}</div>
-        </div>
-        <div class="profit">
-          <div class="p ${cls}">${prof >= 0 ? "+" : ""}${fmtMan(prof)}</div>
-          <div class="rate ${cls}">利益率 ${rate.toFixed(0)}%</div>
-        </div>
-      </div>`;
-  }).join("");
-  document.querySelectorAll(".card").forEach((c) =>
-    c.addEventListener("click", () => openDetail(c.dataset.id)));
-}
-
-// ───────── 詳細 ─────────
-function newProject() {
-  cur = { id: null, site: "", quote: 0, vendors: [newVendor()], memo: "" };
-  showDetail();
-}
-// 業者行の初期値。状態は「未定」がデフォルト
-function newVendor() { return { name: "", amount: "", status: "pending" }; }
-function openDetail(id) {
-  const p = projects.find((x) => x.id === id);
-  if (!p) return;
-  cur = { id: p.id, site: p.site || "", quote: p.quote || 0, memo: p.memo || "",
-          vendors: Array.isArray(p.vendors) ? JSON.parse(JSON.stringify(p.vendors)) : [] };
-  if (cur.vendors.length === 0) cur.vendors.push(newVendor());
-  showDetail();
-}
-function showDetail() { $("listScreen").style.display = "none"; $("detailScreen").style.display = ""; renderDetail(); }
-
-function renderDetail() {
-  if (!cur) return;
-  $("deleteBtn").style.display = cur.id ? "" : "none";
-  $("detailBody").innerHTML = `
-    <div class="field-label">現場名</div>
-    <input class="inp" id="siteInp" list="siteList" placeholder="例：田中様邸 新築" value="${escapeHtml(cur.site || "")}">
-
-    <div class="field-label">見積金額（お客さんに出した額）</div>
-    <div class="amt-wrap"><input class="inp" id="quoteInp" type="number" inputmode="decimal" placeholder="0" value="${cur.quote || ""}"><span class="unit">万</span></div>
-
-    <div class="field-label">業者（原価）</div>
-    <div id="vendorList">${cur.vendors.map((v, i) => vendorRow(v, i)).join("")}</div>
-    <button class="add-vendor" id="addVendorBtn" type="button"><span class="icon">add</span> 業者を追加</button>
-
-    <div class="summary">
-      <div class="srow"><span class="lbl">見積</span><span class="val" id="sQuote"></span></div>
-      <div class="srow"><span class="lbl">原価合計</span><span class="val" id="sCost"></span></div>
-      <div class="srow total profit"><span class="lbl">利益</span><span class="val" id="sProfit"></span></div>
-      <div class="srow"><span class="lbl">利益率</span><span class="val" id="sRate"></span></div>
-    </div>
-
-    <div class="field-label">メモ（任意）</div>
-    <input class="inp" id="memoInp" placeholder="補足があれば" value="${escapeHtml(cur.memo || "")}">
-
-    <div class="actions">
-      <button class="pill primary" id="saveBtn" type="button"><span class="icon">save</span> ${cur.id ? "保存" : "登録"}</button>
-    </div>
-  `;
-  $("siteInp").addEventListener("input", (e) => { cur.site = e.target.value; });
-  $("quoteInp").addEventListener("input", (e) => { cur.quote = num(e.target.value); updateSummary(); });
-  $("memoInp").addEventListener("input", (e) => { cur.memo = e.target.value; });
-  $("addVendorBtn").addEventListener("click", () => { cur.vendors.push(newVendor()); renderDetail(); });
-  $("saveBtn").addEventListener("click", saveProject);
-  wireVendors();
-  updateSummary();
-}
-function vendorRow(v, i) {
-  const st = v.status === "fixed" ? "fixed" : "pending";
-  return `
-    <div class="vendor-row" data-i="${i}">
-      <input class="inp vname" placeholder="業者名（例：○○電気）" value="${escapeHtml(v.name || "")}">
-      <div class="amt-wrap"><input class="inp vamt" type="number" inputmode="decimal" placeholder="0" value="${v.amount ?? ""}"><span class="unit">万</span></div>
-      <button class="vst ${st}" type="button" title="タップで未定⇄確定">${st === "fixed" ? "確定" : "未定"}</button>
-      <button class="vrm" type="button" title="削除"><span class="icon">close</span></button>
-    </div>`;
-}
-function wireVendors() {
-  document.querySelectorAll(".vendor-row").forEach((row) => {
-    const i = Number(row.dataset.i);
-    row.querySelector(".vname").addEventListener("input", (e) => { cur.vendors[i].name = e.target.value; });
-    row.querySelector(".vamt").addEventListener("input", (e) => { cur.vendors[i].amount = e.target.value; updateSummary(); });
-    row.querySelector(".vst").addEventListener("click", (e) => {
-      const next = cur.vendors[i].status === "fixed" ? "pending" : "fixed";
-      cur.vendors[i].status = next;
-      e.target.className = `vst ${next}`;
-      e.target.textContent = next === "fixed" ? "確定" : "未定";
-    });
-    row.querySelector(".vrm").addEventListener("click", () => { cur.vendors.splice(i, 1); if (cur.vendors.length === 0) cur.vendors.push(newVendor()); renderDetail(); });
-  });
-}
-function updateSummary() {
-  const cost = costOf(cur), prof = profitOf(cur), rate = rateOf(cur);
-  const cls = prof >= 0 ? "pos" : "neg";
-  $("sQuote").innerHTML = `${fmtMan(cur.quote)}<span class="yen">${yen(cur.quote)}</span>`;
-  $("sCost").innerHTML = `${fmtMan(cost)}<span class="yen">${yen(cost)}</span>`;
-  $("sProfit").className = `val ${cls}`;
-  $("sProfit").innerHTML = `${prof >= 0 ? "+" : ""}${fmtMan(prof)}<span class="yen">${yen(prof)}</span>`;
-  $("sRate").className = `val ${cls}`;
-  $("sRate").textContent = `${rate.toFixed(0)}%`;
-}
-
-async function saveProject() {
-  if (!cur) return;
-  // 空の業者行は落とす。status は行ごとの 未定/確定 (デフォルト未定)
-  const vendors = cur.vendors
-    .map((v) => ({ name: (v.name || "").trim(), amount: num(v.amount), status: v.status === "fixed" ? "fixed" : "pending" }))
-    .filter((v) => v.name || v.amount);
-  const payload = { site: cur.site || "", quote: num(cur.quote), vendors, memo: cur.memo || "" };
-  const btn = $("saveBtn"); btn.disabled = true;
-  try {
-    if (!cur.id) {
-      const saved = await api("POST", "/api/genka", payload);
-      cur.id = saved.id; toast("登録しました");
-    } else {
-      await api("PUT", `/api/genka/${cur.id}`, payload); toast("保存しました");
+    // ── toast ──
+    const toastMsg = ref("");
+    const toastErr = ref(false);
+    let tt = null;
+    function toast(msg, isErr = false) {
+      toastMsg.value = msg; toastErr.value = !!isErr;
+      clearTimeout(tt);
+      tt = setTimeout(() => { toastMsg.value = ""; }, isErr ? 4000 : 1800);
     }
-    await loadList();
-  } catch (e) { toast("保存失敗: " + e.message, true); btn.disabled = false; }
-}
 
-async function deleteProject() {
-  if (!cur?.id) return;
-  if (!confirm("この現場を削除しますか？")) return;
-  try { await api("DELETE", `/api/genka/${cur.id}`); toast("削除しました"); await loadList(); }
-  catch (e) { toast("削除失敗: " + e.message, true); }
-}
+    // ── 計算ヘルパー ──
+    const num = (v) => { const n = Number(v); return isFinite(n) ? n : 0; };
+    function costOf(p) { return (p.vendors || []).reduce((s, v) => s + num(v.amount), 0); }
+    function profitOf(p) { return num(p.quote) - costOf(p); }
+    function rateOf(p) { const q = num(p.quote); return q > 0 ? (profitOf(p) / q) * 100 : 0; }
+    function pendCount(p) { return (p.vendors || []).filter((v) => (v.status || "pending") !== "fixed").length; }
+    // 万 → 表示。整数はそのまま、小数は 1 桁まで
+    function fmtMan(v) {
+      const n = num(v);
+      const s = Number.isInteger(n) ? String(n) : n.toFixed(1);
+      return s.replace(/\.0$/, "") + "万";
+    }
+    function signed(v) { return (num(v) >= 0 ? "+" : "") + fmtMan(v); }
+    function yen(vMan) { return "¥" + Math.round(num(vMan) * 10000).toLocaleString(); }
 
-$("newBtn").addEventListener("click", newProject);
-$("backBtn").addEventListener("click", renderList);
-$("deleteBtn").addEventListener("click", deleteProject);
+    // ── 一覧の合計 ──
+    const totalQuote = computed(() => projects.value.reduce((s, p) => s + num(p.quote), 0));
+    const totalCost = computed(() => projects.value.reduce((s, p) => s + costOf(p), 0));
+    const totalProfit = computed(() => totalQuote.value - totalCost.value);
+
+    // ── 詳細の集計 (入力に追従してリアクティブに更新) ──
+    const curCost = computed(() => (cur.value ? costOf(cur.value) : 0));
+    const curProfit = computed(() => (cur.value ? profitOf(cur.value) : 0));
+    const curRate = computed(() => (cur.value ? rateOf(cur.value) : 0));
+
+    // ── データ ──
+    async function loadList() {
+      try {
+        const [ps, sites] = await Promise.all([
+          api("GET", "/api/genka"),
+          api("GET", "/api/sites").catch(() => []),
+        ]);
+        projects.value = ps || [];
+        siteNames.value = (sites || []).map((s) => s.name).filter(Boolean);
+      } catch (e) { toast("読み込み失敗: " + e.message, true); projects.value = []; }
+      loading.value = false;
+    }
+
+    // 業者行の初期値。状態は「未定」がデフォルト
+    function newVendor() { return { name: "", amount: "", status: "pending" }; }
+    function newProject() {
+      cur.value = { id: null, site: "", quote: 0, vendors: [newVendor()], memo: "" };
+      screen.value = "detail";
+    }
+    function openDetail(id) {
+      const p = projects.value.find((x) => x.id === id);
+      if (!p) return;
+      cur.value = {
+        id: p.id, site: p.site || "", quote: p.quote || 0, memo: p.memo || "",
+        vendors: Array.isArray(p.vendors) ? JSON.parse(JSON.stringify(p.vendors)) : [],
+      };
+      if (cur.value.vendors.length === 0) cur.value.vendors.push(newVendor());
+      screen.value = "detail";
+    }
+    function removeVendor(i) {
+      cur.value.vendors.splice(i, 1);
+      if (cur.value.vendors.length === 0) cur.value.vendors.push(newVendor());
+    }
+
+    async function saveProject() {
+      if (!cur.value || saving.value) return;
+      // 空の業者行は落とす。status は行ごとの 未定/確定 (デフォルト未定)
+      const vendors = cur.value.vendors
+        .map((v) => ({ name: (v.name || "").trim(), amount: num(v.amount), status: v.status === "fixed" ? "fixed" : "pending" }))
+        .filter((v) => v.name || v.amount);
+      const payload = { site: cur.value.site || "", quote: num(cur.value.quote), vendors, memo: cur.value.memo || "" };
+      saving.value = true;
+      try {
+        if (!cur.value.id) {
+          const saved = await api("POST", "/api/genka", payload);
+          cur.value.id = saved.id; toast("登録しました");
+        } else {
+          await api("PUT", "/api/genka/" + cur.value.id, payload); toast("保存しました");
+        }
+        await loadList();
+        screen.value = "list";
+      } catch (e) { toast("保存失敗: " + e.message, true); }
+      saving.value = false;
+    }
+
+    async function deleteProject() {
+      if (!cur.value?.id) return;
+      if (!confirm("この現場を削除しますか？")) return;
+      try {
+        await api("DELETE", "/api/genka/" + cur.value.id);
+        toast("削除しました");
+        await loadList();
+        screen.value = "list";
+      } catch (e) { toast("削除失敗: " + e.message, true); }
+    }
+
+    return {
+      screen, loading, projects, siteNames, cur, saving, toastMsg, toastErr,
+      costOf, profitOf, rateOf, pendCount, fmtMan, signed, yen,
+      totalQuote, totalCost, totalProfit, curCost, curProfit, curRate,
+      loadList, newVendor, newProject, openDetail, removeVendor, saveProject, deleteProject,
+    };
+  },
+};
+
+const vm = createApp(App).mount("#app");
 
 initAuthBoot({
   returnPath: "/genka/",
   onReady: async () => {
-    $("app").style.display = "";
-    $("list").innerHTML = '<div class="list-empty">読み込み中…</div>';
-    await loadList();
+    document.getElementById("app").style.display = "";
+    await vm.loadList();
   },
 });
 </script>
