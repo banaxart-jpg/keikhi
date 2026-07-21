@@ -48,14 +48,12 @@ body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); 
 .pos { color: var(--profit); } .neg { color: var(--loss); }
 .list-empty { text-align: center; color: var(--text2); font-weight: 600; font-size: 13px; padding: 40px 20px; }
 
-/* 未定/確定 トグル (工事ごとの状態。一覧カードと詳細で共用) */
-.st-toggle { display: inline-flex; padding: 3px; border-radius: 12px; background: var(--bg); box-shadow: inset 2px 2px 6px var(--sd), inset -2px -2px 6px var(--sl); }
-.st-toggle button { border: none; background: transparent; padding: 5px 13px; border-radius: 9px; font-size: 11px; font-weight: 800; color: var(--text3); font-family: inherit; cursor: pointer; }
-.st-toggle button.on { color: #fff; box-shadow: 2px 2px 6px var(--sd); }
-.st-toggle button.on.st-pending { background: #d97706; }
-.st-toggle button.on.st-fixed { background: var(--accent); }
-.card .st-toggle { margin-top: 8px; }
-.st-toggle.big button { padding: 9px 22px; font-size: 13px; }
+/* 未定/確定 トグル (業者行ごと。タップで切替) */
+.vst { border: none; border-radius: 12px; font-family: inherit; font-size: 12px; font-weight: 800; cursor: pointer; padding: 0; height: 44px; color: #fff; box-shadow: 3px 3px 8px var(--sd), -2px -2px 6px var(--sl); }
+.vst:active { transform: scale(0.96); }
+.vst.pending { background: #d97706; }
+.vst.fixed { background: var(--accent); }
+.pend-n { color: #d97706; font-weight: 800; }
 
 /* 詳細 */
 .field-label { font-size: 11px; font-weight: 800; letter-spacing: 0.1em; text-transform: uppercase; color: var(--text2); margin: 16px 2px 8px; }
@@ -64,7 +62,7 @@ input.inp { width: 100%; padding: 12px 14px; border-radius: 14px; border: none; 
 .amt-wrap input { padding-right: 42px; text-align: right; font-weight: 800; }
 .amt-wrap .unit { position: absolute; right: 14px; top: 50%; transform: translateY(-50%); font-size: 13px; font-weight: 800; color: var(--text2); }
 
-.vendor-row { display: grid; grid-template-columns: 1fr 110px 34px; gap: 8px; align-items: center; margin-bottom: 8px; }
+.vendor-row { display: grid; grid-template-columns: 1fr 92px 52px 34px; gap: 8px; align-items: center; margin-bottom: 8px; }
 .vendor-row .amt-wrap input { font-size: 14px; }
 .vrm { width: 34px; height: 34px; border-radius: 10px; border: none; background: var(--bg); color: var(--loss); box-shadow: 3px 3px 8px var(--sd), -3px -3px 8px var(--sl); cursor: pointer; display: flex; align-items: center; justify-content: center; }
 .vrm .icon { font-size: 18px; vertical-align: 0; }
@@ -188,16 +186,12 @@ function renderList() {
   $("list").innerHTML = projects.map((p) => {
     const prof = profitOf(p), rate = rateOf(p);
     const cls = prof >= 0 ? "pos" : "neg";
-    const st = p.status === "fixed" ? "fixed" : "pending";
+    const pend = (p.vendors || []).filter((v) => (v.status || "pending") !== "fixed").length;
     return `
       <div class="card" data-id="${p.id}">
         <div>
           <div class="site">${escapeHtml(p.site || "(現場名なし)")}</div>
-          <div class="breakdown">見積 ${fmtMan(p.quote)} · 原価 ${fmtMan(costOf(p))} · 業者${(p.vendors || []).length}社</div>
-          <div class="st-toggle">
-            <button type="button" class="st-pending ${st === "pending" ? "on" : ""}" data-st="pending">未定</button>
-            <button type="button" class="st-fixed ${st === "fixed" ? "on" : ""}" data-st="fixed">確定</button>
-          </div>
+          <div class="breakdown">見積 ${fmtMan(p.quote)} · 原価 ${fmtMan(costOf(p))} · 業者${(p.vendors || []).length}社${pend ? ` · <span class="pend-n">未定${pend}</span>` : ""}</div>
         </div>
         <div class="profit">
           <div class="p ${cls}">${prof >= 0 ? "+" : ""}${fmtMan(prof)}</div>
@@ -205,44 +199,23 @@ function renderList() {
         </div>
       </div>`;
   }).join("");
-  document.querySelectorAll(".card").forEach((c) => {
-    c.addEventListener("click", () => openDetail(c.dataset.id));
-    c.querySelectorAll(".st-toggle button").forEach((btn) =>
-      btn.addEventListener("click", (e) => {
-        e.stopPropagation();
-        setStatus(c.dataset.id, btn.dataset.st);
-      }));
-  });
-}
-
-// 一覧から状態を直接切替 → 即保存 (失敗したら元に戻す)
-async function setStatus(id, status) {
-  const p = projects.find((x) => x.id === id);
-  if (!p || (p.status === "fixed" ? "fixed" : "pending") === status) return;
-  const prev = p.status;
-  p.status = status;
-  renderList();
-  try {
-    await api("PUT", `/api/genka/${id}`, { status });
-  } catch (e) {
-    p.status = prev;
-    renderList();
-    toast("保存失敗: " + e.message, true);
-  }
+  document.querySelectorAll(".card").forEach((c) =>
+    c.addEventListener("click", () => openDetail(c.dataset.id)));
 }
 
 // ───────── 詳細 ─────────
 function newProject() {
-  cur = { id: null, site: "", quote: 0, vendors: [{ name: "", amount: "" }], memo: "", status: "pending" };
+  cur = { id: null, site: "", quote: 0, vendors: [newVendor()], memo: "" };
   showDetail();
 }
+// 業者行の初期値。状態は「未定」がデフォルト
+function newVendor() { return { name: "", amount: "", status: "pending" }; }
 function openDetail(id) {
   const p = projects.find((x) => x.id === id);
   if (!p) return;
   cur = { id: p.id, site: p.site || "", quote: p.quote || 0, memo: p.memo || "",
-          status: p.status === "fixed" ? "fixed" : "pending",
           vendors: Array.isArray(p.vendors) ? JSON.parse(JSON.stringify(p.vendors)) : [] };
-  if (cur.vendors.length === 0) cur.vendors.push({ name: "", amount: "" });
+  if (cur.vendors.length === 0) cur.vendors.push(newVendor());
   showDetail();
 }
 function showDetail() { $("listScreen").style.display = "none"; $("detailScreen").style.display = ""; renderDetail(); }
@@ -253,12 +226,6 @@ function renderDetail() {
   $("detailBody").innerHTML = `
     <div class="field-label">現場名</div>
     <input class="inp" id="siteInp" list="siteList" placeholder="例：田中様邸 新築" value="${escapeHtml(cur.site || "")}">
-
-    <div class="field-label">状態</div>
-    <div class="st-toggle big">
-      <button type="button" id="stPendingBtn" class="st-pending ${cur.status !== "fixed" ? "on" : ""}">未定</button>
-      <button type="button" id="stFixedBtn" class="st-fixed ${cur.status === "fixed" ? "on" : ""}">確定</button>
-    </div>
 
     <div class="field-label">見積金額（お客さんに出した額）</div>
     <div class="amt-wrap"><input class="inp" id="quoteInp" type="number" inputmode="decimal" placeholder="0" value="${cur.quote || ""}"><span class="unit">万</span></div>
@@ -282,26 +249,20 @@ function renderDetail() {
     </div>
   `;
   $("siteInp").addEventListener("input", (e) => { cur.site = e.target.value; });
-  $("stPendingBtn").addEventListener("click", () => {
-    cur.status = "pending";
-    $("stPendingBtn").classList.add("on"); $("stFixedBtn").classList.remove("on");
-  });
-  $("stFixedBtn").addEventListener("click", () => {
-    cur.status = "fixed";
-    $("stFixedBtn").classList.add("on"); $("stPendingBtn").classList.remove("on");
-  });
   $("quoteInp").addEventListener("input", (e) => { cur.quote = num(e.target.value); updateSummary(); });
   $("memoInp").addEventListener("input", (e) => { cur.memo = e.target.value; });
-  $("addVendorBtn").addEventListener("click", () => { cur.vendors.push({ name: "", amount: "" }); renderDetail(); });
+  $("addVendorBtn").addEventListener("click", () => { cur.vendors.push(newVendor()); renderDetail(); });
   $("saveBtn").addEventListener("click", saveProject);
   wireVendors();
   updateSummary();
 }
 function vendorRow(v, i) {
+  const st = v.status === "fixed" ? "fixed" : "pending";
   return `
     <div class="vendor-row" data-i="${i}">
       <input class="inp vname" placeholder="業者名（例：○○電気）" value="${escapeHtml(v.name || "")}">
       <div class="amt-wrap"><input class="inp vamt" type="number" inputmode="decimal" placeholder="0" value="${v.amount ?? ""}"><span class="unit">万</span></div>
+      <button class="vst ${st}" type="button" title="タップで未定⇄確定">${st === "fixed" ? "確定" : "未定"}</button>
       <button class="vrm" type="button" title="削除"><span class="icon">close</span></button>
     </div>`;
 }
@@ -310,7 +271,13 @@ function wireVendors() {
     const i = Number(row.dataset.i);
     row.querySelector(".vname").addEventListener("input", (e) => { cur.vendors[i].name = e.target.value; });
     row.querySelector(".vamt").addEventListener("input", (e) => { cur.vendors[i].amount = e.target.value; updateSummary(); });
-    row.querySelector(".vrm").addEventListener("click", () => { cur.vendors.splice(i, 1); if (cur.vendors.length === 0) cur.vendors.push({ name: "", amount: "" }); renderDetail(); });
+    row.querySelector(".vst").addEventListener("click", (e) => {
+      const next = cur.vendors[i].status === "fixed" ? "pending" : "fixed";
+      cur.vendors[i].status = next;
+      e.target.className = `vst ${next}`;
+      e.target.textContent = next === "fixed" ? "確定" : "未定";
+    });
+    row.querySelector(".vrm").addEventListener("click", () => { cur.vendors.splice(i, 1); if (cur.vendors.length === 0) cur.vendors.push(newVendor()); renderDetail(); });
   });
 }
 function updateSummary() {
@@ -326,12 +293,11 @@ function updateSummary() {
 
 async function saveProject() {
   if (!cur) return;
-  // 空の業者行は落とす
+  // 空の業者行は落とす。status は行ごとの 未定/確定 (デフォルト未定)
   const vendors = cur.vendors
-    .map((v) => ({ name: (v.name || "").trim(), amount: num(v.amount) }))
+    .map((v) => ({ name: (v.name || "").trim(), amount: num(v.amount), status: v.status === "fixed" ? "fixed" : "pending" }))
     .filter((v) => v.name || v.amount);
-  const payload = { site: cur.site || "", quote: num(cur.quote), vendors, memo: cur.memo || "",
-                    status: cur.status === "fixed" ? "fixed" : "pending" };
+  const payload = { site: cur.site || "", quote: num(cur.quote), vendors, memo: cur.memo || "" };
   const btn = $("saveBtn"); btn.disabled = true;
   try {
     if (!cur.id) {
