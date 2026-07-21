@@ -1146,6 +1146,8 @@ async function ensureSchema() {
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       )
     `);
+    // 工事の状態: pending=未定 (デフォルト) / fixed=確定
+    await p.query("ALTER TABLE genka_projects ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'pending'");
     // 名刺 (meishi): 名刺を撮る → AI が氏名・会社・連絡先を抽出して連絡先一覧に。全員共有。
     await p.query(`
       CREATE TABLE IF NOT EXISTS meishi_cards (
@@ -8198,7 +8200,7 @@ app.get("/api/genka", async (req, res) => {
   if (!p) return res.status(503).json({ error: "DB not configured" });
   try {
     const { rows } = await p.query(
-      `SELECT id, site, quote::float8 AS quote, vendors, memo,
+      `SELECT id, site, quote::float8 AS quote, vendors, memo, status,
               created_by AS "createdBy", created_at AS "createdAt", updated_at AS "updatedAt"
          FROM genka_projects
         ORDER BY updated_at DESC, id DESC LIMIT 500`
@@ -8217,11 +8219,12 @@ app.post("/api/genka", async (req, res) => {
     const b = req.body || {};
     const id = b.id || (Date.now().toString(36) + Math.random().toString(36).slice(2, 8));
     const vendors = Array.isArray(b.vendors) ? JSON.stringify(b.vendors) : "[]";
+    const status = b.status === "fixed" ? "fixed" : "pending"; // 初期値は未定
     const { rows } = await p.query(
-      `INSERT INTO genka_projects (id, site, quote, vendors, memo, created_by)
-       VALUES ($1,$2,$3,$4,$5,$6)
+      `INSERT INTO genka_projects (id, site, quote, vendors, memo, status, created_by)
+       VALUES ($1,$2,$3,$4,$5,$6,$7)
        RETURNING id, created_at AS "createdAt", updated_at AS "updatedAt"`,
-      [id, b.site || "", Number(b.quote) || 0, vendors, b.memo || "", req.user?.email || ""]
+      [id, b.site || "", Number(b.quote) || 0, vendors, b.memo || "", status, req.user?.email || ""]
     );
     res.status(201).json(rows[0]);
   } catch (err) {
@@ -8241,6 +8244,7 @@ app.put("/api/genka/:id", async (req, res) => {
          quote  = COALESCE($3, quote),
          vendors = COALESCE($4::jsonb, vendors),
          memo   = COALESCE($5, memo),
+         status = COALESCE($6, status),
          updated_at = NOW()
        WHERE id = $1
        RETURNING id, updated_at AS "updatedAt"`,
@@ -8249,6 +8253,7 @@ app.put("/api/genka/:id", async (req, res) => {
         b.quote != null ? Number(b.quote) : null,
         b.vendors != null ? JSON.stringify(b.vendors) : null,
         b.memo ?? null,
+        b.status === "fixed" || b.status === "pending" ? b.status : null,
       ]
     );
     if (!rows.length) return res.status(404).json({ error: "not found" });
