@@ -8595,6 +8595,36 @@ app.delete("/api/mitsumori/:id", async (req, res) => {
   }
 });
 
+// 工事内容を一言 → AI が見積項目を下書き (保存はしない。フロントで確認・修正して追加)
+const MITSUMORI_PRESET = ["墨出し","厨房ブロック","厨房防水","水道配管","グリストラップ取り付け","土間打ち","土間仕上げ","グレーチング作成","カウンター作成","間仕切り作成","ダクト作成","シロッコファン取り付け","フード作成","厨房天井作成","厨房さがり壁","外周ふかし壁","電気コンセント配線","電気照明配線","分電盤作成","エアコン","厨房タイル貼り","便器取り付け","手洗い器取り付け","厨房器具取り付け","スイングドア取り付け","客席床上げ","客席床仕上げ","壁左官仕上げ","外部左官仕上げ","オーニング取り付け","サイン取り付け","サインシート貼り","入り口建具作成","テイクアウト窓作成","厨房内塗装","木部塗装","外部照明","電線管取り付け","左官クリア塗装","トイレ換気扇","トイレドア","収納作成"];
+app.post("/api/mitsumori/draft", async (req, res) => {
+  try {
+    if (!genAI) return res.status(503).json({ error: "GEMINI_API_KEY not configured" });
+    const desc = String(req.body?.desc || "").trim();
+    if (!desc) return res.status(400).json({ error: "desc is required" });
+    const prompt = `あなたは飲食店の内装・厨房工事の見積を作る職人です。次の工事内容から、必要な見積項目を JSON のみで返してください。JSON 以外は一切出力しない。
+できるだけ次のプリセット項目名から選ぶ。無ければ独自の項目名でよい。各項目に数量(qty)と単位(unit)を付ける。単価・金額は入れない。
+単位は 式/㎡/m/個/台/ヶ所/人工 等。kind は「材料」「手間」「外注」「経費」から近いもの（不明なら空文字）。
+プリセット項目: ${MITSUMORI_PRESET.join("、")}
+工事内容: ${desc}
+形式: {"items":[{"name":"項目名","qty":1,"unit":"式","kind":""}]}`;
+    const { result } = await callGeminiWithFallback(prompt, { jsonMode: true, maxOutputTokens: 2048, primaryModel: "gemini-2.5-flash" });
+    const raw = parseLooseJson(result.response.text()) || {};
+    const items = (Array.isArray(raw.items) ? raw.items : []).slice(0, 40).map((it) => ({
+      name: String(it.name || "").trim().slice(0, 60),
+      qty: Number(it.qty) || 1,
+      unit: String(it.unit || "式").trim().slice(0, 6),
+      kind: ["材料", "手間", "外注", "経費"].includes(it.kind) ? it.kind : "",
+    })).filter((it) => it.name);
+    res.json({ items });
+  } catch (err) {
+    console.error("mitsumori draft error", err);
+    const msg = String(err?.message || err);
+    const isTransient = /\b(503|429|500)\b|UNAVAILABLE|overload/i.test(msg);
+    res.status(isTransient ? 503 : 500).json({ error: isTransient ? `Gemini が混雑中です。少し待って再実行してください` : msg });
+  }
+});
+
 // ─────────────────────────────
 // My SketchUp (sketchup): 3D モデルの共有
 // ─────────────────────────────
