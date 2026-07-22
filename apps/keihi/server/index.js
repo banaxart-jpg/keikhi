@@ -1187,6 +1187,21 @@ async function ensureSchema() {
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       )
     `);
+    // 見積 (mitsumori): 工事の見積書。items = [{name, qty, unit, price}]。全員共有。
+    await p.query(`
+      CREATE TABLE IF NOT EXISTS mitsumori_estimates (
+        id TEXT PRIMARY KEY,
+        customer TEXT NOT NULL DEFAULT '',
+        site TEXT NOT NULL DEFAULT '',
+        issued_on DATE,
+        tax_rate NUMERIC NOT NULL DEFAULT 10,
+        items JSONB NOT NULL DEFAULT '[]',
+        memo TEXT NOT NULL DEFAULT '',
+        created_by TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `);
     // My SketchUp (sketchup): 共有した 3D モデルのメタ情報。実ファイルは GCS
     // (sketchup/<id>/<filename>)。閲覧はリンク + Google ログインで誰でも可。
     await p.query(`
@@ -8500,6 +8515,80 @@ app.delete("/api/tabemap/:id", async (req, res) => {
   if (!p) return res.status(503).json({ error: "DB not configured" });
   try {
     await p.query("DELETE FROM tabemap_visits WHERE id = $1", [req.params.id]);
+    res.status(204).end();
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─────────────────────────────
+// 見積 (mitsumori): 工事の見積書。全員共有 (records/tasks と同型)。
+// ─────────────────────────────
+app.get("/api/mitsumori", async (req, res) => {
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  try {
+    const { rows } = await p.query(
+      `SELECT id, customer, site, issued_on::text AS "issuedOn", tax_rate::float8 AS "taxRate",
+              items, memo, created_by AS "createdBy", created_at AS "createdAt", updated_at AS "updatedAt"
+         FROM mitsumori_estimates
+        ORDER BY updated_at DESC, id DESC LIMIT 500`
+    );
+    res.json(rows);
+  } catch (err) {
+    console.error("mitsumori list error", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post("/api/mitsumori", async (req, res) => {
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  try {
+    const b = req.body || {};
+    const id = b.id || (Date.now().toString(36) + Math.random().toString(36).slice(2, 8));
+    const items = Array.isArray(b.items) ? JSON.stringify(b.items) : "[]";
+    const { rows } = await p.query(
+      `INSERT INTO mitsumori_estimates (id, customer, site, issued_on, tax_rate, items, memo, created_by)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+       RETURNING id, created_at AS "createdAt"`,
+      [id, b.customer || "", b.site || "", b.issuedOn || null, Number(b.taxRate) || 10, items, b.memo || "", req.user?.email || ""]
+    );
+    res.status(201).json(rows[0]);
+  } catch (err) {
+    console.error("mitsumori insert error", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.put("/api/mitsumori/:id", async (req, res) => {
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  try {
+    const b = req.body || {};
+    const { rows } = await p.query(
+      `UPDATE mitsumori_estimates SET
+         customer = COALESCE($2, customer), site = COALESCE($3, site),
+         issued_on = COALESCE($4, issued_on), tax_rate = COALESCE($5, tax_rate),
+         items = COALESCE($6::jsonb, items), memo = COALESCE($7, memo), updated_at = NOW()
+       WHERE id = $1
+       RETURNING id, updated_at AS "updatedAt"`,
+      [req.params.id, b.customer ?? null, b.site ?? null, b.issuedOn ?? null,
+       b.taxRate != null ? Number(b.taxRate) : null, b.items != null ? JSON.stringify(b.items) : null, b.memo ?? null]
+    );
+    if (!rows.length) return res.status(404).json({ error: "not found" });
+    res.json(rows[0]);
+  } catch (err) {
+    console.error("mitsumori update error", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete("/api/mitsumori/:id", async (req, res) => {
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  try {
+    await p.query("DELETE FROM mitsumori_estimates WHERE id = $1", [req.params.id]);
     res.status(204).end();
   } catch (err) {
     res.status(500).json({ error: err.message });

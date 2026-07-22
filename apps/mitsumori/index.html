@@ -1,0 +1,317 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="見積">
+<link rel="apple-touch-icon" href="/icon.png">
+<title>見積</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@24,400,0,0">
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+:root {
+  --bg: #e4e6ee; --bg2: #d8dae4; --sl: rgba(255,255,255,1); --sd: rgba(168,172,192,0.75);
+  --text: #42455e; --text2: rgba(66,69,94,0.52); --text3: rgba(66,69,94,0.28);
+  --accent: #0d9488;
+}
+body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; padding-bottom: 40px; }
+.icon { font-family: 'Material Symbols Outlined'; font-weight: normal; font-size: 1.1em; display: inline-block; line-height: 1; vertical-align: -0.18em; }
+.bar { display: flex; justify-content: space-between; align-items: center; padding: 40px 18px 0; gap: 8px; }
+.pill { padding: 8px 15px; border-radius: 24px; font-size: 12px; font-weight: 700; border: none; color: var(--text2); background: var(--bg); box-shadow: 4px 4px 10px var(--sd), -4px -4px 10px var(--sl); cursor: pointer; font-family: inherit; text-decoration: none; }
+.pill:active { box-shadow: inset 3px 3px 8px var(--sd), inset -3px -3px 8px var(--sl); transform: scale(0.97); }
+.pill.primary { background: var(--accent); color: #fff; }
+.pill:disabled { opacity: 0.5; }
+.wrap { padding: 14px 16px 40px; max-width: 720px; margin: 0 auto; }
+.title { font-size: 22px; font-weight: 800; }
+.subtitle { font-size: 12px; color: var(--text2); font-weight: 600; margin: 2px 0 14px; }
+
+/* 一覧 */
+.est-card { display: grid; grid-template-columns: 1fr auto; gap: 10px; align-items: center; padding: 15px; border-radius: 16px; background: var(--bg); box-shadow: 5px 5px 12px var(--sd), -4px -4px 10px var(--sl); margin-bottom: 10px; cursor: pointer; }
+.est-card:active { transform: scale(0.99); }
+.est-cust { font-size: 15px; font-weight: 800; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.est-meta { font-size: 11px; color: var(--text2); font-weight: 600; margin-top: 3px; }
+.est-total { font-size: 17px; font-weight: 900; color: var(--accent); }
+.list-empty { text-align: center; color: var(--text2); font-weight: 600; font-size: 13px; padding: 40px 20px; }
+
+/* 詳細 */
+.field-label { font-size: 11px; font-weight: 800; letter-spacing: 0.08em; color: var(--text2); margin: 14px 2px 6px; }
+input.inp { width: 100%; padding: 11px 13px; border-radius: 12px; border: none; font-size: 14px; font-family: inherit; color: var(--text); background: var(--bg); box-shadow: inset 3px 3px 8px var(--sd), inset -3px -3px 8px var(--sl); outline: none; }
+.two { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+
+.items { margin-top: 8px; }
+.item-row { display: grid; grid-template-columns: 1fr 52px 46px 82px 22px; gap: 6px; align-items: center; padding: 9px; border-radius: 12px; background: var(--bg); box-shadow: 3px 3px 8px var(--sd), -3px -3px 8px var(--sl); margin-bottom: 7px; }
+.item-row input { padding: 8px 8px; border-radius: 9px; border: none; font-size: 13px; font-family: inherit; color: var(--text); background: var(--bg2); box-shadow: inset 2px 2px 5px var(--sd); outline: none; width: 100%; }
+.item-row .nm { font-weight: 700; }
+.item-row .qty, .item-row .price { text-align: right; }
+.item-row .amt { font-size: 13px; font-weight: 800; text-align: right; white-space: nowrap; }
+.item-row .rm { background: none; border: none; color: #b04040; cursor: pointer; padding: 0; }
+.item-row .rm .icon { font-size: 18px; vertical-align: 0; }
+.item-head { display: grid; grid-template-columns: 1fr 52px 46px 82px 22px; gap: 6px; font-size: 9px; font-weight: 800; color: var(--text3); letter-spacing: 0.05em; padding: 0 9px 4px; text-align: right; }
+.item-head .l { text-align: left; }
+.add-item { width: 100%; padding: 13px; border-radius: 14px; border: 1px dashed var(--accent); background: transparent; color: var(--accent); font-size: 14px; font-weight: 800; font-family: inherit; cursor: pointer; margin-top: 4px; }
+
+.summary { margin-top: 18px; padding: 16px 18px; border-radius: 16px; background: var(--bg); box-shadow: 6px 6px 14px var(--sd), -5px -5px 12px var(--sl); }
+.srow { display: flex; justify-content: space-between; align-items: baseline; padding: 6px 0; font-size: 14px; }
+.srow .lbl { color: var(--text2); font-weight: 700; }
+.srow .val { font-weight: 800; font-variant-numeric: tabular-nums; }
+.srow.total { border-top: 1px solid rgba(154,160,184,0.3); margin-top: 6px; padding-top: 12px; }
+.srow.total .val { font-size: 24px; font-weight: 900; color: var(--accent); }
+.srow .tax-in { width: 48px; padding: 4px 6px; border-radius: 8px; border: none; background: var(--bg2); box-shadow: inset 2px 2px 5px var(--sd); text-align: right; font-family: inherit; font-weight: 800; color: var(--text); }
+.actions { display: flex; gap: 10px; margin-top: 20px; }
+.actions .pill { flex: 1; text-align: center; padding: 13px; font-size: 14px; }
+.danger { color: #b04040; }
+
+/* 項目ピッカー シート */
+.modal { position: fixed; inset: 0; z-index: 300; display: flex; align-items: flex-end; justify-content: center; background: rgba(180,184,205,0); visibility: hidden; opacity: 0; transition: background .2s, opacity .2s, visibility 0s linear .2s; }
+.modal.open { background: rgba(180,184,205,0.42); visibility: visible; opacity: 1; transition: background .2s, opacity .2s; }
+.sheet { background: var(--bg); border-radius: 28px 28px 0 0; width: 100%; max-width: 720px; height: 82vh; overflow-y: auto; padding: 6px 18px calc(20px + env(safe-area-inset-bottom)); transform: translateY(100%); transition: transform .2s cubic-bezier(.2,.8,.2,1); box-shadow: -2px -10px 30px rgba(148,152,176,0.35); }
+.modal.open .sheet { transform: translateY(0); }
+.grab { padding: 12px 18px 8px; margin: 0 -18px 4px; touch-action: none; user-select: none; position: sticky; top: 0; background: var(--bg); z-index: 2; }
+.grab .handle { width: 46px; height: 5px; border-radius: 3px; background: rgba(168,172,192,0.45); margin: 0 auto 10px; }
+.psearch { width: 100%; padding: 11px 14px; border-radius: 12px; border: none; font-size: 14px; font-family: inherit; color: var(--text); background: var(--bg2); box-shadow: inset 2px 2px 6px var(--sd); outline: none; }
+.p-item { display: flex; align-items: center; justify-content: space-between; padding: 13px 12px; border-radius: 12px; margin-bottom: 6px; cursor: pointer; background: var(--bg); box-shadow: 3px 3px 8px var(--sd), -3px -3px 8px var(--sl); }
+.p-item:active { transform: scale(0.98); }
+.p-item .pn { font-size: 14px; font-weight: 700; }
+.p-item .pp { font-size: 11px; color: var(--text2); font-weight: 700; }
+.p-item .add-ic { color: var(--accent); }
+.p-item.added { box-shadow: inset 3px 3px 8px var(--sd), inset -3px -3px 8px var(--sl); }
+.p-item.added .add-ic { color: var(--accent); }
+.p-sect { font-size: 11px; font-weight: 800; color: var(--text2); letter-spacing: 0.08em; margin: 12px 2px 8px; }
+
+.toast { position: fixed; left: 50%; bottom: 30px; transform: translateX(-50%); background: var(--text); color: #fff; padding: 11px 18px; border-radius: 20px; font-size: 13px; font-weight: 700; z-index: 500; display: none; box-shadow: 0 6px 20px rgba(0,0,0,0.25); }
+.toast.err { background: #b04040; }
+#signinOverlay { display: none; position: fixed; inset: 0; z-index: 400; background: var(--bg); flex-direction: column; align-items: center; justify-content: center; padding: 32px; text-align: center; gap: 18px; }
+</style>
+</head>
+<body>
+<div id="signinOverlay">
+  <div style="font-size:24px;font-weight:800;">見積</div>
+  <a class="pill" href="/" style="text-decoration:none;">トップに戻る</a>
+  <div id="signinErr" style="font-size:11px;color:#b04040;font-family:monospace;"></div>
+</div>
+
+<div id="app" style="display:none;">
+  <div id="listScreen">
+    <div class="bar">
+      <a class="pill" href="/"><span class="icon">arrow_back</span> 戻る</a>
+      <span style="font-size:11px;letter-spacing:0.2em;color:var(--text3);font-weight:700;text-transform:uppercase;">MITSUMORI</span>
+      <button class="pill primary" id="newBtn" type="button"><span class="icon">add</span> 新規</button>
+    </div>
+    <div class="wrap">
+      <div class="title">見積</div>
+      <div class="subtitle">項目をタップで選ぶだけ。合計・消費税は自動。</div>
+      <div id="list"></div>
+    </div>
+  </div>
+
+  <div id="editScreen" style="display:none;">
+    <div class="bar">
+      <button class="pill" id="backBtn" type="button"><span class="icon">arrow_back</span> 一覧</button>
+      <span style="font-size:11px;letter-spacing:0.16em;color:var(--text3);font-weight:800;">見積</span>
+      <button class="pill danger" id="deleteBtn" type="button"><span class="icon">delete</span></button>
+    </div>
+    <div class="wrap" id="editBody"></div>
+  </div>
+</div>
+
+<div class="modal" id="pModal">
+  <div class="sheet" id="pSheet">
+    <div class="grab" id="pGrab">
+      <div class="handle"></div>
+      <input class="psearch" id="pSearch" placeholder="項目を検索 / 追加（例：厨房防水）" autocomplete="off">
+    </div>
+    <div id="pList"></div>
+  </div>
+</div>
+
+<datalist id="unitList"><option value="式"><option value="㎡"><option value="m"><option value="個"><option value="台"><option value="ヶ所"><option value="人工"><option value="本"><option value="枚"></datalist>
+<div class="toast" id="toast"></div>
+
+<script src="/config.js"></script>
+<script type="module">
+import { initAuthBoot, api } from "/api-auth.js";
+const $ = (id) => document.getElementById(id);
+
+const PRESET = ["墨出し","厨房ブロック","厨房防水","水道配管","グリストラップ取り付け","土間打ち","土間仕上げ","グレーチング作成","カウンター作成","間仕切り作成","ダクト作成","シロッコファン取り付け","フード作成","厨房天井作成","厨房さがり壁","外周ふかし壁","電気コンセント配線","電気照明配線","分電盤作成","エアコン","厨房タイル貼り","便器取り付け","手洗い器取り付け","厨房器具取り付け","スイングドア取り付け","客席床上げ","客席床仕上げ","壁左官仕上げ","外部左官仕上げ","オーニング取り付け","サイン取り付け","サインシート貼り","入り口建具作成","テイクアウト窓作成","厨房内塗装","木部塗装","外部照明","電線管取り付け","左官クリア塗装","トイレ換気扇","トイレドア","収納作成"];
+
+let estimates = [];
+let priceMemory = {};   // 品名 -> 直近の単価
+let cur = null;
+
+let _tt = null;
+function toast(m, e = false) { const t = $("toast"); t.textContent = m; t.classList.toggle("err", !!e); t.style.display = "block"; clearTimeout(_tt); _tt = setTimeout(() => t.style.display = "none", e ? 4000 : 1400); }
+function esc(s) { return String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); }
+function attr(s) { return String(s ?? "").replace(/"/g, "&quot;"); }
+const yen = (n) => "¥" + Math.round(Number(n) || 0).toLocaleString();
+const num = (v) => { const n = Number(v); return isFinite(n) ? n : 0; };
+function estTotal(e) { return (e.items || []).reduce((s, it) => s + num(it.qty) * num(it.price), 0); }
+
+async function load() {
+  try { estimates = await api("GET", "/api/mitsumori"); }
+  catch (e) { toast("読み込み失敗: " + e.message, true); estimates = []; }
+  // 品名ごとの直近単価を記憶（新しい順に走査、最初に見つけた価格を採用）
+  priceMemory = {};
+  estimates.forEach(e => (e.items || []).forEach(it => {
+    if (it.name && it.price && priceMemory[it.name] == null) priceMemory[it.name] = num(it.price);
+  }));
+  renderList();
+}
+function renderList() {
+  cur = null;
+  $("listScreen").style.display = ""; $("editScreen").style.display = "none";
+  if (estimates.length === 0) { $("list").innerHTML = `<div class="list-empty">まだ見積はありません。<br>右上の「新規」から。</div>`; return; }
+  $("list").innerHTML = estimates.map(e => {
+    const sub = estTotal(e), tot = Math.round(sub * (1 + (num(e.taxRate) || 10) / 100));
+    return `<div class="est-card" data-id="${e.id}">
+      <div style="min-width:0;">
+        <div class="est-cust">${esc(e.customer || "(顧客名なし)")}</div>
+        <div class="est-meta">${[e.site, (e.items || []).length + "項目", e.issuedOn].filter(Boolean).map(esc).join(" · ")}</div>
+      </div>
+      <div class="est-total">${yen(tot)}</div>
+    </div>`;
+  }).join("");
+  document.querySelectorAll(".est-card").forEach(c => c.addEventListener("click", () => openEdit(c.dataset.id)));
+}
+
+// ── 見積の編集 ──
+function newEst() { cur = { id: null, customer: "", site: "", issuedOn: new Date().toISOString().slice(0, 10), taxRate: 10, items: [], memo: "" }; showEdit(); }
+function openEdit(id) {
+  const e = estimates.find(x => x.id === id); if (!e) return;
+  cur = { id: e.id, customer: e.customer || "", site: e.site || "", issuedOn: e.issuedOn || "", taxRate: num(e.taxRate) || 10, memo: e.memo || "",
+          items: Array.isArray(e.items) ? JSON.parse(JSON.stringify(e.items)) : [] };
+  showEdit();
+}
+function showEdit() { $("listScreen").style.display = "none"; $("editScreen").style.display = ""; renderEdit(); }
+
+function renderEdit() {
+  $("deleteBtn").style.display = cur.id ? "" : "none";
+  $("editBody").innerHTML = `
+    <div class="two">
+      <div><div class="field-label">顧客名</div><input class="inp" id="fCust" placeholder="例：〇〇食堂 様" value="${attr(cur.customer)}"></div>
+      <div><div class="field-label">現場 / 物件</div><input class="inp" id="fSite" placeholder="例：新宿店" value="${attr(cur.site)}"></div>
+    </div>
+    <div class="field-label">発行日</div>
+    <input class="inp" id="fDate" type="date" value="${attr(cur.issuedOn)}">
+
+    <div class="field-label" style="margin-top:18px;">項目</div>
+    ${cur.items.length ? `<div class="item-head"><span class="l">品名</span><span>数量</span><span>単位</span><span>単価</span><span></span></div>` : ""}
+    <div class="items" id="itemsBox"></div>
+    <button class="add-item" id="addItemBtn" type="button"><span class="icon">add</span> 項目を追加</button>
+
+    <div class="summary">
+      <div class="srow"><span class="lbl">小計</span><span class="val" id="sSub"></span></div>
+      <div class="srow"><span class="lbl">消費税（<input class="tax-in" id="fTax" type="number" value="${cur.taxRate}">%）</span><span class="val" id="sTax"></span></div>
+      <div class="srow total"><span class="lbl">合計</span><span class="val" id="sTot"></span></div>
+    </div>
+    <div class="field-label">備考</div>
+    <input class="inp" id="fMemo" placeholder="有効期限・支払条件など" value="${attr(cur.memo)}">
+    <div class="actions"><button class="pill primary" id="saveBtn" type="button"><span class="icon">save</span> ${cur.id ? "保存" : "登録"}</button></div>
+  `;
+  $("fCust").addEventListener("input", e => cur.customer = e.target.value);
+  $("fSite").addEventListener("input", e => cur.site = e.target.value);
+  $("fDate").addEventListener("input", e => cur.issuedOn = e.target.value);
+  $("fMemo").addEventListener("input", e => cur.memo = e.target.value);
+  $("fTax").addEventListener("input", e => { cur.taxRate = num(e.target.value); updateTotals(); });
+  $("addItemBtn").addEventListener("click", openPicker);
+  $("saveBtn").addEventListener("click", save);
+  renderItems();
+}
+function renderItems() {
+  $("itemsBox").innerHTML = cur.items.map((it, i) => `
+    <div class="item-row" data-i="${i}">
+      <input class="nm" value="${attr(it.name)}" placeholder="品名">
+      <input class="qty" type="number" inputmode="decimal" value="${attr(it.qty)}">
+      <input class="unit" list="unitList" value="${attr(it.unit)}">
+      <input class="price" type="number" inputmode="numeric" value="${attr(it.price)}" placeholder="単価">
+      <button class="rm" type="button"><span class="icon">close</span></button>
+    </div>
+    <div class="item-head" style="padding:0 9px 8px;"><span></span><span></span><span></span><span class="l" style="text-align:right;color:var(--text2);font-weight:800;">金額</span><span class="amt" id="amt${i}"></span></div>
+  `).join("");
+  document.querySelectorAll(".item-row").forEach(row => {
+    const i = Number(row.dataset.i);
+    row.querySelector(".nm").addEventListener("input", e => { cur.items[i].name = e.target.value; });
+    row.querySelector(".qty").addEventListener("input", e => { cur.items[i].qty = e.target.value; updateTotals(); });
+    row.querySelector(".unit").addEventListener("input", e => { cur.items[i].unit = e.target.value; });
+    row.querySelector(".price").addEventListener("input", e => { cur.items[i].price = e.target.value; updateTotals(); });
+    row.querySelector(".rm").addEventListener("click", () => { cur.items.splice(i, 1); renderEdit(); });
+  });
+  updateTotals();
+}
+function updateTotals() {
+  let sub = 0;
+  cur.items.forEach((it, i) => { const a = num(it.qty) * num(it.price); sub += a; const el = $("amt" + i); if (el) el.textContent = yen(a); });
+  const tax = Math.round(sub * (num(cur.taxRate) / 100));
+  $("sSub").textContent = yen(sub); $("sTax").textContent = yen(tax); $("sTot").textContent = yen(sub + tax);
+}
+
+// ── 項目ピッカー ──
+let pSearch = "";
+function openPicker() { pSearch = ""; $("pSearch").value = ""; renderPicker(); $("pModal").classList.add("open"); }
+function renderPicker() {
+  const q = pSearch.trim();
+  const has = (n) => cur.items.some(it => it.name === n);
+  const list = PRESET.filter(n => !q || n.includes(q));
+  let html = "";
+  if (q && !PRESET.includes(q)) {
+    html += `<div class="p-item" data-custom="1"><span class="pn">＋「${esc(q)}」を追加</span><span class="icon add-ic">add_circle</span></div>`;
+  }
+  html += `<div class="p-sect">よく使う項目（タップで追加）</div>`;
+  html += list.map(n => {
+    const mem = priceMemory[n];
+    return `<div class="p-item ${has(n) ? "added" : ""}" data-n="${attr(n)}">
+      <span class="pn">${esc(n)}${mem != null ? ` <span class="pp">前回 ${yen(mem)}</span>` : ""}</span>
+      <span class="icon add-ic">${has(n) ? "check_circle" : "add_circle"}</span>
+    </div>`;
+  }).join("");
+  $("pList").innerHTML = html;
+  $("pList").querySelector('[data-custom]')?.addEventListener("click", () => { addItem(q); pSearch = ""; $("pSearch").value = ""; renderPicker(); });
+  $("pList").querySelectorAll("[data-n]").forEach(el => el.addEventListener("click", () => { addItem(el.dataset.n); renderPicker(); }));
+}
+function addItem(name) {
+  cur.items.push({ name, qty: 1, unit: "式", price: priceMemory[name] != null ? priceMemory[name] : "" });
+  renderItems();
+  toast(`「${name}」を追加`);
+}
+$("pSearch").addEventListener("input", e => { pSearch = e.target.value; renderPicker(); });
+
+async function save() {
+  const btn = $("saveBtn"); btn.disabled = true;
+  const items = cur.items.map(it => ({ name: (it.name || "").trim(), qty: num(it.qty), unit: it.unit || "式", price: num(it.price) })).filter(it => it.name);
+  const payload = { customer: cur.customer, site: cur.site, issuedOn: cur.issuedOn || null, taxRate: num(cur.taxRate) || 10, items, memo: cur.memo };
+  try {
+    if (!cur.id) { const s = await api("POST", "/api/mitsumori", payload); cur.id = s.id; }
+    else await api("PUT", `/api/mitsumori/${cur.id}`, payload);
+    toast("保存しました"); await load(); renderList();
+  } catch (e) { toast("保存失敗: " + e.message, true); btn.disabled = false; }
+}
+async function del() {
+  if (!cur?.id || !confirm("この見積を削除しますか？")) return;
+  try { await api("DELETE", `/api/mitsumori/${cur.id}`); toast("削除しました"); await load(); }
+  catch (e) { toast("削除失敗: " + e.message, true); }
+}
+
+// モーダル閉じる
+$("pModal").addEventListener("click", e => { if (e.target === $("pModal")) $("pModal").classList.remove("open"); });
+(() => {
+  const grab = $("pGrab"), sheet = $("pSheet"); let sy = null, dy = 0;
+  grab.addEventListener("pointerdown", e => { if (e.target.id === "pSearch") return; sy = e.clientY; dy = 0; sheet.style.transition = "none"; });
+  grab.addEventListener("pointermove", e => { if (sy === null) return; dy = e.clientY - sy; if (dy > 0) sheet.style.transform = `translateY(${dy}px)`; });
+  const end = () => { if (sy === null) return; sy = null; sheet.style.transition = ""; if (dy > 90) $("pModal").classList.remove("open"); sheet.style.transform = ""; dy = 0; };
+  grab.addEventListener("pointerup", end); grab.addEventListener("pointercancel", end);
+})();
+
+$("newBtn").addEventListener("click", newEst);
+$("backBtn").addEventListener("click", renderList);
+$("deleteBtn").addEventListener("click", del);
+
+initAuthBoot({
+  returnPath: "/mitsumori/",
+  onReady: async () => { $("app").style.display = ""; $("list").innerHTML = '<div class="list-empty">読み込み中…</div>'; await load(); },
+});
+</script>
+</body>
+</html>
