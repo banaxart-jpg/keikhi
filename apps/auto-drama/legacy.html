@@ -1,0 +1,1860 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="自動ドラマ作成">
+<title>自動ドラマ作成</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@24,400,0,0">
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+:root {
+  --bg: #e4e6ee; --bg2: #d8dae4;
+  --sl: rgba(255,255,255,1); --sd: rgba(168,172,192,0.75); --sd2: rgba(148,152,176,0.55);
+  --text: #42455e; --text2: rgba(66,69,94,0.5); --text3: rgba(66,69,94,0.28);
+  --accent: #be185d; --accent2: #db2777;
+  --danger: #b04040;
+}
+html, body { height: 100%; }
+body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; overflow-x: hidden; padding-bottom: 100px; }
+.icon { font-family: 'Material Symbols Outlined'; font-size: 1.1em; display: inline-block; vertical-align: -0.18em; font-variation-settings: 'FILL' 0, 'wght' 500, 'GRAD' 0, 'opsz' 20; }
+
+.header-fix { position: sticky; top: 0; z-index: 10; background: var(--bg); box-shadow: 0 2px 10px rgba(168,172,192,0.18); }
+.top { display: flex; justify-content: space-between; align-items: center; padding: 54px 18px 14px; gap: 10px; }
+.top-title { font-size: 20px; font-weight: 800; letter-spacing: -0.3px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+.pill { padding: 8px 16px; border-radius: 24px; font-size: 12px; font-weight: 700; border: none; color: var(--text2); background: var(--bg); box-shadow: 4px 4px 10px var(--sd), -4px -4px 10px var(--sl); cursor: pointer; font-family: inherit; flex-shrink: 0; text-decoration: none; display: inline-flex; align-items: center; gap: 4px; }
+.pill:active { box-shadow: inset 3px 3px 8px var(--sd), inset -3px -3px 8px var(--sl); transform: scale(0.97); }
+
+.tabs { display: flex; gap: 8px; padding: 4px 18px 14px; overflow-x: auto; scrollbar-width: none; }
+.tabs::-webkit-scrollbar { display: none; }
+.tab { padding: 9px 16px; border-radius: 18px; font-size: 13px; font-weight: 700; border: none; color: var(--text2); background: var(--bg); box-shadow: 4px 4px 10px var(--sd), -4px -4px 10px var(--sl); cursor: pointer; flex-shrink: 0; font-family: inherit; }
+.tab.on { color: white; background: linear-gradient(145deg, var(--accent2), var(--accent)); box-shadow: 6px 6px 14px rgba(190,24,93,0.35), -3px -3px 10px var(--sl); }
+
+.list { padding: 4px 16px 30px; display: flex; flex-direction: column; gap: 10px; min-height: 120px; }
+.empty { text-align: center; color: var(--text3); font-size: 13px; font-weight: 600; padding: 50px 0; }
+.loading { text-align: center; color: var(--text3); padding: 60px 0; font-size: 13px; font-weight: 700; }
+.err { color: var(--danger); font-size: 11px; padding: 0 18px; margin-top: 6px; font-family: ui-monospace, Menlo, monospace; }
+
+/* カード共通: collapsed = 最小限、タップで展開 */
+.card { background: var(--bg); border-radius: 18px; box-shadow: 5px 5px 12px var(--sd), -4px -4px 10px var(--sl); overflow: hidden; }
+.card-row { display: flex; align-items: center; gap: 12px; padding: 14px 16px; cursor: pointer; }
+.card-main { flex: 1; min-width: 0; }
+.card-title { font-size: 15px; font-weight: 700; color: var(--text); word-break: break-word; }
+.card-sub { font-size: 11px; color: var(--text2); margin-top: 2px; }
+.chev { color: var(--text3); font-family: 'Material Symbols Outlined'; font-size: 20px; flex-shrink: 0; transition: transform 200ms ease; }
+.card.open .chev { transform: rotate(180deg); }
+.badge { display: inline-block; padding: 3px 9px; border-radius: 8px; font-size: 10px; font-weight: 800; letter-spacing: 0.02em; background: var(--bg2); color: var(--text2); box-shadow: inset 1.5px 1.5px 3px var(--sd), inset -1px -1px 2px var(--sl); flex-shrink: 0; }
+.badge.state-exported { background: color-mix(in srgb, var(--accent) 18%, var(--bg2) 82%); color: var(--accent); }
+.badge.status-confirmed { background: color-mix(in srgb, #16a34a 18%, var(--bg2) 82%); color: #16a34a; }
+.chip { display: inline-flex; align-items: center; padding: 3px 10px; border-radius: 10px; font-size: 11px; font-weight: 700; background: var(--bg2); color: var(--text2); box-shadow: inset 1.5px 1.5px 3px var(--sd), inset -1px -1px 2px var(--sl); }
+
+.card-detail { border-top: 1px solid rgba(168,172,192,0.18); padding: 4px 16px 16px; display: flex; flex-direction: column; gap: 10px; animation: slide-open 200ms ease-out; }
+@keyframes slide-open { from { opacity: 0; max-height: 0; } to { opacity: 1; max-height: 1600px; } }
+.field-label { font-size: 11px; font-weight: 700; color: var(--text3); margin-bottom: 4px; }
+.field-value { font-size: 13px; color: var(--text); line-height: 1.6; white-space: pre-wrap; word-break: break-word; }
+textarea.field-input, input.field-input, select.field-input {
+  width: 100%; padding: 10px 12px; border: none; border-radius: 10px; font-size: 13px; font-family: inherit;
+  color: var(--text); background: var(--bg2); box-shadow: inset 3px 3px 6px var(--sd), inset -2px -2px 5px var(--sl);
+  outline: none; box-sizing: border-box;
+}
+textarea.field-input { min-height: 70px; resize: vertical; }
+.field-row { display: flex; gap: 8px; }
+.field-row > * { flex: 1; min-width: 0; }
+.actions-row { display: flex; gap: 8px; }
+.actions-row button { flex: 1; padding: 10px; border: none; border-radius: 10px; font-weight: 700; font-size: 13px; cursor: pointer; font-family: inherit; background: var(--bg); color: var(--text2); box-shadow: 3px 3px 8px var(--sd), -2px -2px 6px var(--sl); }
+.actions-row button.primary { background: linear-gradient(145deg, var(--accent2), var(--accent)); color: white; box-shadow: 4px 4px 10px rgba(190,24,93,0.3); }
+.actions-row button.danger { color: var(--danger); }
+.actions-row button:disabled { opacity: 0.5; cursor: wait; }
+
+.thumb-row { display: flex; gap: 8px; flex-wrap: wrap; }
+.thumb { width: 64px; height: 64px; border-radius: 10px; object-fit: cover; background: var(--bg2); box-shadow: inset 2px 2px 5px var(--sd); }
+.thumb-wrap { position: relative; }
+.thumb-wrap .thumb { display: block; }
+.thumb-del { position: absolute; top: -6px; right: -6px; width: 22px; height: 22px; border-radius: 50%; border: none; padding: 0; background: var(--danger); color: #fff; display: flex; align-items: center; justify-content: center; cursor: pointer; box-shadow: 2px 2px 6px var(--sd); }
+.thumb-del .icon { font-size: 14px; }
+.filepick { display: inline-flex; align-items: center; gap: 6px; padding: 9px 14px; border-radius: 10px; background: var(--bg); box-shadow: 3px 3px 8px var(--sd), -2px -2px 6px var(--sl); cursor: pointer; font-size: 12px; font-weight: 700; color: var(--text2); }
+.filepick input { display: none; }
+
+.warn-banner { margin: 0 16px 10px; padding: 12px 14px; border-radius: 14px; background: color-mix(in srgb, #d97706 12%, var(--bg) 88%); box-shadow: inset 2px 2px 6px rgba(217,119,6,0.12); }
+.warn-banner-title { font-size: 12px; font-weight: 800; color: #b45309; display: flex; align-items: center; gap: 6px; margin-bottom: 6px; }
+.warn-banner ul { margin: 0; padding-left: 18px; }
+.warn-banner li { font-size: 12px; color: #92400e; line-height: 1.7; }
+
+.key-visual-box { margin: 0 16px 12px; }
+.kv-img { width: 100%; max-height: 340px; object-fit: cover; border-radius: 16px; box-shadow: 5px 5px 12px var(--sd), -4px -4px 10px var(--sl); display: block; }
+.kv-empty { padding: 40px 16px; text-align: center; border-radius: 16px; background: var(--bg2); box-shadow: inset 3px 3px 8px var(--sd), inset -2px -2px 6px var(--sl); color: var(--text3); font-size: 12px; font-weight: 700; }
+
+.section-title { font-size: 12px; font-weight: 800; color: var(--text3); letter-spacing: 0.04em; text-transform: uppercase; padding: 14px 16px 6px; }
+
+.cut-order-btn { width: 26px; height: 26px; border-radius: 13px; border: none; background: var(--bg); color: var(--text2); box-shadow: 2px 2px 5px var(--sd), -2px -2px 5px var(--sl); font-size: 14px; font-weight: 900; cursor: pointer; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.cut-order-btn:disabled { opacity: 0.3; cursor: default; }
+.gen-video { width: 100%; border-radius: 12px; background: #000; margin-top: 6px; }
+.gen-note { font-size: 11px; color: var(--text3); margin-top: 4px; }
+
+/* FAB 群: chat + add */
+.fab-row { position: fixed; right: 22px; bottom: calc(22px + env(safe-area-inset-bottom)); display: flex; flex-direction: column; gap: 12px; z-index: 30; }
+.fab { width: 56px; height: 56px; border-radius: 28px; color: white; font-size: 26px; border: none; cursor: pointer; padding: 0; box-shadow: 6px 6px 18px rgba(190,24,93,0.4), -3px -3px 10px var(--sl); display: flex; align-items: center; justify-content: center; transition: transform 200ms ease; }
+.fab:active { transform: scale(0.93); }
+.fab.add { background: linear-gradient(145deg, var(--accent2), var(--accent)); }
+.fab.chat { background: linear-gradient(145deg, #6366f1, #4338ca); box-shadow: 6px 6px 18px rgba(67,56,202,0.4), -3px -3px 10px var(--sl); }
+
+/* チャット */
+.chat-sheet { display: flex; flex-direction: column; height: 60vh; }
+.chat-sheet.full { height: calc(100dvh - 150px); } /* 全画面時 (ハンドル+タイトル+padding 分を引く) */
+.chat-log { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; padding: 6px 2px 12px; }
+.msg { max-width: 84%; padding: 10px 14px; border-radius: 14px; font-size: 13px; line-height: 1.6; white-space: pre-wrap; word-break: break-word; }
+.msg.user { align-self: flex-end; background: linear-gradient(145deg, var(--accent2), var(--accent)); color: white; border-bottom-right-radius: 4px; }
+.msg.assistant { align-self: flex-start; background: var(--bg); color: var(--text); border-bottom-left-radius: 4px; box-shadow: 4px 4px 10px var(--sd), -3px -3px 8px var(--sl); }
+/* 応答待ちインジケーター (弾むドット) */
+.typing-row { display: inline-flex; align-items: center; gap: 8px; }
+.typing-dots { display: inline-flex; gap: 5px; }
+.typing-dots span { width: 7px; height: 7px; border-radius: 50%; background: var(--text2); animation: typing-bounce 1.2s infinite; }
+.typing-dots span:nth-child(2) { animation-delay: 0.15s; }
+.typing-dots span:nth-child(3) { animation-delay: 0.3s; }
+@keyframes typing-bounce { 0%, 60%, 100% { transform: translateY(0); opacity: 0.35; } 30% { transform: translateY(-4px); opacity: 1; } }
+.typing-label { font-size: 11px; color: var(--text2); font-weight: 600; }
+
+/* 引用 (リプライ) */
+.quote-btn { border: none; background: none; padding: 2px 4px; margin-top: 6px; cursor: pointer; color: inherit; opacity: 0.45; font-size: 12px; font-weight: 700; display: inline-flex; align-items: center; gap: 3px; font-family: inherit; }
+.msg a { color: inherit; text-decoration: underline; word-break: break-all; }
+.quote-box { display: flex; align-items: center; gap: 8px; padding: 6px 9px; border-radius: 9px; background: rgba(0,0,0,0.08); margin-bottom: 6px; border-left: 3px solid rgba(0,0,0,0.18); }
+.msg.user .quote-box { background: rgba(255,255,255,0.18); border-left-color: rgba(255,255,255,0.5); }
+.quote-box img { width: 34px; height: 34px; border-radius: 6px; object-fit: cover; flex-shrink: 0; }
+.quote-box .qtext { font-size: 11px; opacity: 0.8; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.quote-bar { display: flex; align-items: center; gap: 8px; padding: 7px 10px; border-radius: 10px; background: var(--bg2); box-shadow: inset 2px 2px 5px var(--sd), inset -2px -2px 4px var(--sl); margin-bottom: 6px; }
+.quote-bar img { width: 38px; height: 38px; border-radius: 7px; object-fit: cover; flex-shrink: 0; }
+.quote-bar .qtext { flex: 1; min-width: 0; font-size: 11px; color: var(--text2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.quote-bar button { border: none; background: none; color: var(--text2); font-size: 15px; cursor: pointer; padding: 4px; }
+
+/* ── PC (900px〜): チャットは右サイドバーにドッキング、コンテンツはその分縮む ── */
+.chat-close { display: none; }
+@media (min-width: 900px) {
+  .chat-docked { padding-right: 420px; }
+  .chat-docked .fab-row { right: 442px; }
+  /* bottom-sheet を右サイドバー化 (chat-bs クラスの sheet だけ) */
+  .chat-bs.bs-modal { justify-content: flex-end; align-items: stretch; background: transparent !important; pointer-events: none; }
+  .chat-bs.bs-modal .bs-sheet {
+    width: 420px; max-width: 420px; height: 100dvh; max-height: 100dvh;
+    border-radius: 0; pointer-events: auto;
+    box-shadow: -8px 0 24px rgba(148,152,176,0.35);
+    transform: translateX(100%);
+  }
+  .chat-bs.bs-modal .bs-grab { pointer-events: none; } /* ドラッグ閉じ無効 (タイトルは残す) → × で閉じる */
+  .chat-bs.bs-modal .bs-handle { display: none; }
+  .chat-bs.bs-modal .chat-sheet { height: calc(100dvh - 120px); }
+  .chat-close { display: flex; position: absolute; top: 14px; right: 14px; width: 34px; height: 34px;
+    border-radius: 17px; border: none; background: var(--bg); color: var(--text2);
+    box-shadow: 3px 3px 8px var(--sd), -2px -2px 6px var(--sl);
+    align-items: center; justify-content: center; font-size: 17px; cursor: pointer; z-index: 5; }
+}
+
+/* 画像ライトボックス (ピンチ拡大 / ダブルタップ拡大 / 左右フリックで前後) */
+.lightbox { position: fixed; inset: 0; z-index: 200; background: rgba(20,22,34,0.92); display: flex; align-items: center; justify-content: center; }
+.lb-stage { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; touch-action: none; overflow: hidden; }
+.lb-stage img { max-width: 94vw; max-height: 90vh; border-radius: 12px; object-fit: contain; user-select: none; -webkit-user-select: none; will-change: transform; }
+.lightbox-close { position: absolute; top: calc(14px + env(safe-area-inset-top)); right: 16px; width: 40px; height: 40px; border-radius: 20px; border: none; background: rgba(255,255,255,0.15); color: white; font-size: 20px; cursor: pointer; line-height: 1; z-index: 2; }
+.lb-nav { position: absolute; top: 50%; transform: translateY(-50%); width: 42px; height: 42px; border-radius: 21px; border: none; background: rgba(255,255,255,0.15); color: white; font-size: 24px; cursor: pointer; line-height: 1; z-index: 2; }
+.lb-nav.prev { left: 12px; }
+.lb-nav.next { right: 12px; }
+.lb-counter { position: absolute; bottom: calc(18px + env(safe-area-inset-bottom)); left: 50%; transform: translateX(-50%); color: rgba(255,255,255,0.8); font-size: 12px; font-weight: 700; z-index: 2; }
+.lb-quote { position: absolute; bottom: calc(44px + env(safe-area-inset-bottom)); left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 6px; padding: 10px 16px; border-radius: 21px; border: none; background: rgba(255,255,255,0.18); color: white; font-size: 12px; font-weight: 700; cursor: pointer; z-index: 2; }
+.quote-box.jumpable { cursor: pointer; }
+.msg-flash { animation: msgFlash 1.4s ease; }
+@keyframes msgFlash { 0%, 55% { outline: 3px solid var(--accent); outline-offset: 2px; } 100% { outline: 3px solid transparent; outline-offset: 2px; } }
+.zoomable { cursor: zoom-in; }
+.sb-crop { width: 100%; aspect-ratio: 9 / 16; border-radius: 12px; background-repeat: no-repeat; }
+.chat-input-row { display: flex; gap: 8px; padding-top: 6px; }
+.chat-input-row textarea { flex: 1; min-height: 42px; max-height: 120px; }
+.chat-send { width: 42px; height: 42px; border-radius: 21px; border: none; background: linear-gradient(145deg, var(--accent2), var(--accent)); color: white; font-family: 'Material Symbols Outlined'; font-size: 20px; cursor: pointer; flex-shrink: 0; }
+.chat-send:disabled { opacity: 0.5; }
+
+.seed-row { padding: 10px 18px 0; text-align: center; }
+.seed-btn { padding: 8px 16px; border-radius: 14px; font-size: 11px; font-weight: 700; color: var(--text3); background: none; border: 1px dashed var(--text3); cursor: pointer; font-family: inherit; }
+</style>
+</head>
+<body>
+
+<div id="app"></div>
+
+<script src="/config.js"></script>
+<script type="module">
+import { createApp, ref, computed, onMounted, onBeforeUnmount, nextTick } from "https://unpkg.com/vue@3.4.27/dist/vue.esm-browser.prod.js";
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js";
+import {
+  getAuth, onAuthStateChanged, setPersistence, browserLocalPersistence,
+} from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
+import {
+  getStorage, ref as storageRef, uploadBytes, getDownloadURL,
+} from "https://www.gstatic.com/firebasejs/10.14.1/firebase-storage.js";
+import { BottomSheet } from "/bottom-sheet.js";
+
+const STATE_LABEL = {
+  key_visual: "キービジュアル待ち", cuts: "カット割り待ち", generating: "動画生成中",
+  review: "レビュー中", timeline: "タイムライン編集中", exported: "書き出し済み",
+};
+const IMG_KIND_LABEL = { full: "全身", face: "顔", expression: "表情" };
+
+const TEMPLATE = `
+<div :class="{ 'chat-docked': chatOpen }">
+  <!-- ───────── プロジェクト一覧 ───────── -->
+  <template v-if="view === 'projects'">
+    <div class="header-fix">
+      <div class="top">
+        <span class="top-title"><span class="icon" style="vertical-align:-0.18em;">movie</span> 自動ドラマ作成</span>
+        <a class="pill" href="/">← 戻る</a>
+      </div>
+    </div>
+    <div v-if="!ready" class="loading">接続中…</div>
+    <template v-else>
+      <div class="list">
+        <div v-if="projects.length === 0" class="empty">右下の + から作品を選んで始めてください</div>
+        <div v-for="p in projects" :key="p.id" class="card" @click="openProject(p.id)">
+          <div class="card-row">
+            <div class="card-main">
+              <div class="card-title">{{ p.title }}</div>
+              <div class="card-sub">{{ p.author || '作者不明' }}</div>
+            </div>
+            <span v-if="p.costYen >= 1" class="badge">API ¥{{ Math.round(p.costYen) }}</span>
+            <button class="cut-order-btn" style="color:var(--danger);" title="削除"
+              @click.stop="deleteProject(p)" :disabled="deletingProjectId === p.id">
+              <span class="icon" style="font-size:15px;">{{ deletingProjectId === p.id ? 'hourglass_top' : 'delete' }}</span>
+            </button>
+            <span class="chev">chevron_right</span>
+          </div>
+        </div>
+      </div>
+    </template>
+    <div class="err" v-if="err">{{ err }}</div>
+
+    <div class="fab-row">
+      <button class="fab add" @click="startCreate" title="新規プロジェクト">+</button>
+    </div>
+  </template>
+
+  <!-- ───────── 作成ウィザード: 作品選択 → AI 構造化 → チャットへ ───────── -->
+  <template v-else-if="view === 'create'">
+    <div class="header-fix">
+      <div class="top">
+        <button class="pill" @click="view = 'projects'" :disabled="createStep === 'structuring'">← 戻る</button>
+        <span class="top-title">新規プロジェクト</span>
+      </div>
+    </div>
+
+    <!-- Step 1: 青空文庫から作品を選ぶ -->
+    <template v-if="createStep === 'pick'">
+      <div class="list">
+        <div class="field-label">青空文庫から作品を選ぶ</div>
+        <div class="field-row">
+          <input class="field-input" v-model="aozoraQuery" placeholder="作品名や作者で検索 (例: 邪宗門)" style="flex:2;" @keydown.enter.prevent="searchAozora">
+          <button class="tab" @click="searchAozora" :disabled="searching" style="flex:1;">検索</button>
+        </div>
+        <div v-if="searching" class="loading" style="padding:20px 0;">青空文庫を検索中…</div>
+        <div v-for="r in aozoraResults" :key="r.cardUrl || r.title" class="card" @click="r.cardUrl && createFromAozora(r.cardUrl)">
+          <div class="card-row">
+            <div class="card-main">
+              <div class="card-title">{{ r.title }}</div>
+              <div class="card-sub">{{ r.author }}{{ r.cardUrl ? '' : ' (URL不明、下の欄に手動で)' }}</div>
+            </div>
+            <span class="chev">chevron_right</span>
+          </div>
+        </div>
+
+        <div class="field-label" style="margin-top:14px;">または URL 直接貼り付け (図書カード / 本文どちらでも)</div>
+        <div class="field-row">
+          <input class="field-input" v-model="aozoraCreateUrl" placeholder="https://www.aozora.gr.jp/cards/...">
+          <button class="tab" @click="createFromAozora(aozoraCreateUrl)" :disabled="!aozoraCreateUrl.trim()" style="flex:0 0 auto;">作成</button>
+        </div>
+
+        <button class="seed-btn" style="margin-top:16px; align-self:center;" @click="showNewProject = true">青空文庫を使わず手動で作る</button>
+      </div>
+
+      <bottom-sheet v-model="showNewProject" title="手動で作成">
+        <form @submit.prevent="createProject" class="card-detail" style="border:none; padding:0;">
+          <div><div class="field-label">タイトル</div><input class="field-input" v-model="newProject.title" required></div>
+          <div><div class="field-label">作者</div><input class="field-input" v-model="newProject.author"></div>
+          <div><div class="field-label">絵柄方針 (styleGuide)</div><input class="field-input" v-model="newProject.styleGuide" placeholder="例: 劇画・浮世絵×シネマティック"></div>
+          <div><div class="field-label">世界観・トーン</div><textarea class="field-input" v-model="newProject.worldSetting"></textarea></div>
+          <div class="actions-row"><button type="submit" class="primary" :disabled="creating">{{ creating ? '作成中…' : '作成' }}</button></div>
+        </form>
+      </bottom-sheet>
+    </template>
+
+    <!-- Step 2: AI 構造化の進行表示 -->
+    <template v-else>
+      <div class="list">
+        <div class="card" style="padding: 18px 16px;">
+          <div class="card-title" style="margin-bottom: 12px;">{{ createTitle || '作品' }} を構造化中…</div>
+          <div v-for="s in createStages" :key="s.key" style="display:flex; align-items:center; gap:10px; padding:7px 0;">
+            <span class="icon" :style="{ color: s.state === 'done' ? '#16a34a' : s.state === 'doing' ? 'var(--accent)' : 'var(--text3)' }">
+              {{ s.state === 'done' ? 'check_circle' : s.state === 'doing' ? 'progress_activity' : 'radio_button_unchecked' }}</span>
+            <span :style="{ fontSize: '13px', fontWeight: 600, color: s.state === 'wait' ? 'var(--text3)' : 'var(--text)' }">{{ s.label }}</span>
+          </div>
+          <div class="card-sub" style="margin-top:10px;">終わったらそのまま AI チャットが開きます。絵柄や画像の粒度をチャットで詰めてください。</div>
+        </div>
+      </div>
+    </template>
+    <div class="err" v-if="err">{{ err }}</div>
+  </template>
+
+  <!-- ───────── プロジェクト詳細 ───────── -->
+  <template v-else-if="view === 'project' && currentProject">
+    <div class="header-fix">
+      <div class="top">
+        <button class="pill" @click="backToProjects">← 一覧</button>
+        <span class="top-title">{{ currentProject.title }}</span>
+      </div>
+      <div class="tabs">
+        <button class="tab" :class="{ on: projectTab === 'episodes' }" @click="projectTab = 'episodes'">エピソード</button>
+        <button class="tab" :class="{ on: projectTab === 'characters' }" @click="projectTab = 'characters'">キャラクター ({{ currentProject.characters.length }})</button>
+        <button class="tab" :class="{ on: projectTab === 'locations' }" @click="projectTab = 'locations'">場所 ({{ (currentProject.locations || []).length }})</button>
+        <button class="tab" :class="{ on: projectTab === 'source' }" @click="openSourceTab">原作 ({{ chapters.length }})</button>
+        <button class="tab" :class="{ on: projectTab === 'settings' }" @click="openSettingsTab">設定</button>
+      </div>
+    </div>
+
+    <!-- エピソード一覧 -->
+    <div class="list" v-if="projectTab === 'episodes'">
+      <div class="actions-row" v-if="chapters.length">
+        <button @click="composeSeriesFn" :disabled="composingSeries">
+          {{ composingSeries ? 'AIが話数割りを構成中…' : (currentProject.episodes.length ? 'AIでシリーズ構成を作り直す' : 'AIでシリーズ構成 (話数割り)') }}</button>
+      </div>
+      <div class="card-sub" v-if="chapters.length" style="padding:0 4px;">地味な章は圧縮・見せ場は引き伸ばす編集方針で、1章=1話にはしません</div>
+      <div v-if="currentProject.episodes.length === 0" class="empty">まだ話がありません</div>
+      <div v-for="ep in currentProject.episodes" :key="ep.id" class="card" @click="openEpisode(ep.id)">
+        <div class="card-row">
+          <div class="card-main">
+            <div class="card-title">第{{ ep.number }}話 {{ ep.title || '(無題)' }}</div>
+            <div class="card-sub" v-if="(ep.chapterNumbers || []).length">
+              原作{{ ep.chapterNumbers.join('・') }}章{{ ep.pacing === 'compress' ? ' / 圧縮' : ep.pacing === 'stretch' ? ' / 引き伸ばし' : '' }}</div>
+            <div class="card-sub" v-if="ep.focus">{{ ep.focus }}</div>
+          </div>
+          <span class="badge" :class="'state-' + ep.state">{{ STATE_LABEL[ep.state] || ep.state }}</span>
+          <span class="chev">chevron_right</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- 場所 (シーン背景の統一性) -->
+    <div class="list" v-else-if="projectTab === 'locations'">
+      <div v-if="(currentProject.locations || []).length === 0" class="empty">まだ場所がありません。原作タブの「AIでキャラ・時代背景を登録」でも自動登録されます</div>
+      <div v-for="l in currentProject.locations" :key="l.id" class="card" :class="{ open: locOpenId === l.id }">
+        <div class="card-row" @click="toggleLoc(l)">
+          <div class="card-main">
+            <div class="card-title">{{ l.name }}</div>
+            <div class="card-sub">参照画像 {{ (l.referenceImages||[]).length }}枚</div>
+          </div>
+          <span class="badge" :class="'status-' + l.status">{{ l.status === 'confirmed' ? '確定' : '下書き' }}</span>
+          <span class="chev">expand_more</span>
+        </div>
+        <div v-if="locOpenId === l.id" class="card-detail">
+          <div><div class="field-label">名前</div><input class="field-input" v-model="locEdit.name"></div>
+          <div><div class="field-label">状態</div>
+            <select class="field-input" v-model="locEdit.status"><option value="draft">下書き</option><option value="confirmed">確定</option></select>
+          </div>
+          <div><div class="field-label">説明 (どんな場面で使うか)</div><textarea class="field-input" v-model="locEdit.description"></textarea></div>
+          <div><div class="field-label">識別子 (背景の統一要素・読点区切り)</div><input class="field-input" v-model="locEdit.identityTokensText" placeholder="例: 朱塗りの門、篝火、砂利の前庭"></div>
+          <div><div class="field-label">背景画像生成用プロンプト</div><textarea class="field-input" v-model="locEdit.appearancePrompt"></textarea></div>
+          <div>
+            <div class="field-label">参照画像 (×で外して保存)</div>
+            <div class="thumb-row">
+              <div class="thumb-wrap" v-for="(img,i) in locEdit.referenceImages" :key="i">
+                <img :src="img.url" class="thumb zoomable" @click="openViewer(locEdit.referenceImages.map(x => x.url), i)">
+                <button type="button" class="thumb-del" @click.stop="locEdit.referenceImages.splice(i,1)" title="この画像を外す"><span class="icon">close</span></button>
+              </div>
+              <label class="filepick"><input type="file" accept="image/*" @change="e => onLocImagePick(e, l)"><span class="icon">add_photo_alternate</span>追加</label>
+            </div>
+          </div>
+          <div class="actions-row">
+            <button class="danger" @click="deleteLocation(l)" :disabled="locSaving">削除</button>
+            <button class="primary" @click="saveLocation(l)" :disabled="locSaving">{{ locSaving ? '保存中…' : '保存' }}</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 設定 (時代背景・作画 + API コスト) -->
+    <div class="list" v-else-if="projectTab === 'settings'">
+      <div>
+        <div class="field-label">時代背景・世界観 (worldSetting — AI チャットが毎回読む前提情報)</div>
+        <textarea class="field-input" v-model="settingsEdit.worldSetting" style="min-height:110px;"></textarea>
+      </div>
+      <div>
+        <div class="field-label">作画設定 (styleGuide — 絵柄・画風の統一指示)</div>
+        <textarea class="field-input" v-model="settingsEdit.styleGuide"></textarea>
+      </div>
+      <div>
+        <div class="field-label">AI の制作メモ (チャットの AI が自分で書き足す長期記憶。手直しも可)</div>
+        <textarea class="field-input" v-model="settingsEdit.aiNotes" style="min-height:130px;" placeholder="チャットで方向性が決まると AI がここに記録していきます"></textarea>
+      </div>
+      <div class="actions-row">
+        <button class="primary" @click="saveSettings" :disabled="settingsSaving">{{ settingsSaving ? '保存中…' : '保存' }}</button>
+      </div>
+
+      <div class="section-title" style="padding-left:0;">作画基準画像 (すべての画像生成に自動同梱され、絵柄がこれに寄る)</div>
+      <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+        <img v-for="(u,i) in (currentProject.styleRefImages || [])" :key="i" :src="u" class="thumb zoomable" style="width:96px; height:96px;" @click="openViewer(currentProject.styleRefImages, i)">
+        <span v-if="!(currentProject.styleRefImages || []).length" class="card-sub">未登録。チャットで見本画像を添付して「これを基準に」と言うか、ここからアップロード</span>
+        <label class="filepick"><input type="file" accept="image/*" @change="onStyleRefPick"><span class="icon">add_photo_alternate</span>登録</label>
+        <button v-if="(currentProject.styleRefImages || []).length" class="pill" style="padding:6px 14px; font-size:11px; color:var(--danger);" @click="clearStyleRef">解除</button>
+      </div>
+
+      <div class="section-title" style="padding-left:0;">制作資料・小物 (対比図・護符などの参考画像。名前がプロンプトに出ると生成時に自動参照)</div>
+      <div style="display:flex; flex-direction:column; gap:8px;">
+        <div v-for="a in (currentProject.assets || [])" :key="a.id" class="card" style="padding:10px 12px; display:flex; align-items:center; gap:10px;">
+          <img :src="a.url" class="thumb zoomable" style="width:56px; height:56px; flex-shrink:0;" @click="openViewer(currentProject.assets.map(x => x.url), currentProject.assets.indexOf(a))">
+          <div style="flex:1; min-width:0;">
+            <div style="font-size:13px; font-weight:700;">{{ a.name }}</div>
+            <div class="card-sub" v-if="a.note">{{ a.note }}</div>
+          </div>
+          <button class="cut-order-btn" style="color:var(--danger);" @click="deleteAsset(a)"><span class="icon" style="font-size:15px;">delete</span></button>
+        </div>
+        <div class="field-row">
+          <input class="field-input" v-model="newAssetName" placeholder="資料名 (例: 人物対比図 / 摩利信乃法師の護符)">
+          <label class="filepick" style="flex:0 0 auto;"><input type="file" accept="image/*" @change="onAssetPick" :disabled="!newAssetName.trim()"><span class="icon">add_photo_alternate</span>追加</label>
+        </div>
+      </div>
+
+      <div class="section-title" style="padding-left:0;">API 費用 (概算)</div>
+      <div class="card" style="padding:14px 16px;">
+        <div v-if="!usage" class="card-sub">読み込み中…</div>
+        <template v-else>
+          <div class="card-title" style="margin-bottom:8px;">合計 ¥{{ usage.totalYen.toFixed(1) }}</div>
+          <div v-for="(yen, prov) in usage.byProvider" :key="prov" style="display:flex; justify-content:space-between; padding:4px 0; font-size:13px;">
+            <span style="font-weight:700;">{{ prov === 'gemini' ? 'Gemini (チャット/解析)' : 'Seedance (動画生成)' }}</span>
+            <span>¥{{ yen.toFixed(1) }}</span>
+          </div>
+          <div style="border-top:1px solid rgba(168,172,192,0.18); margin-top:8px; padding-top:8px;">
+            <div v-for="r in usage.byKind" :key="r.provider + r.kind" style="display:flex; justify-content:space-between; padding:2px 0; font-size:11px; color:var(--text2);">
+              <span>{{ r.provider }} / {{ r.kind }} × {{ r.calls }}</span>
+              <span>¥{{ r.costYen.toFixed(1) }}</span>
+            </div>
+          </div>
+          <div class="card-sub" style="margin-top:8px;">動画は 720p 8秒 ≈ ¥150 の概算計上 (保守側)。単価改定はサーバー側の定数で調整</div>
+        </template>
+      </div>
+    </div>
+
+    <!-- 原作 (章分割 + 出演 index) -->
+    <div class="list" v-else-if="projectTab === 'source'">
+      <div style="display:flex; flex-direction:column; gap:8px;">
+        <div class="field-label">青空文庫の本文 URL (…/files/xx_xxxxx.html) から取り込み</div>
+        <div class="field-row">
+          <input class="field-input" v-model="aozoraUrl" placeholder="https://www.aozora.gr.jp/cards/.../files/....html" style="flex:2.5;">
+          <button class="tab" @click="importSource" :disabled="importing" style="flex:1;">{{ importing ? '取込中…' : '取り込み' }}</button>
+        </div>
+        <div class="actions-row" v-if="chapters.length">
+          <button @click="runSetupAnalysis" :disabled="setupAnalyzing">{{ setupAnalyzing ? 'AI構造化中…' : 'AIでキャラ・時代背景を登録 (構造化)' }}</button>
+        </div>
+        <div class="actions-row" v-if="chapters.length">
+          <button @click="analyzeChapters" :disabled="analyzing">{{ analyzing ? ('章を解析中… ' + analyzeProgress) : 'AIで章を解析 (要約 + 出演キャラindex)' }}</button>
+        </div>
+      </div>
+      <div v-if="chapters.length === 0" class="empty">原作テキストがまだ取り込まれていません</div>
+      <div v-for="ch in chapters" :key="ch.id" class="card" :class="{ open: chapterOpenId === ch.id }">
+        <div class="card-row" @click="toggleChapter(ch)">
+          <div class="card-main">
+            <div class="card-title">第{{ ch.number }}章 {{ ch.title }} <span style="font-weight:400; color:var(--text2); font-size:11px;">{{ ch.charCount }}字</span></div>
+            <div class="card-sub" v-if="ch.summary">{{ ch.summary }}</div>
+          </div>
+          <span class="chev">expand_more</span>
+        </div>
+        <div v-if="chapterOpenId === ch.id" class="card-detail">
+          <div v-if="(ch.characterNames || []).length">
+            <div class="field-label">この章に出る人物</div>
+            <div style="display:flex; flex-wrap:wrap; gap:6px;">
+              <span v-for="n in ch.characterNames" :key="n" class="chip"
+                :style="isRegisteredCharacter(n) ? { background: 'var(--accent)', color: 'white' } : {}">{{ n }}</span>
+            </div>
+            <div class="card-sub" style="margin-top:4px;">色付き = キャラクター登録済み</div>
+          </div>
+          <div v-if="chapterContent[ch.id]" class="field-value" style="max-height: 300px; overflow-y: auto;">{{ chapterContent[ch.id] }}</div>
+          <div v-else class="card-sub">本文読み込み中…</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- キャラクター一覧 -->
+    <div class="list" v-else>
+      <div v-if="currentProject.characters.length === 0" class="empty">まだキャラクターがいません</div>
+      <div v-for="c in currentProject.characters" :key="c.id" class="card" :class="{ open: charOpenId === c.id }">
+        <div class="card-row" @click="toggleChar(c)">
+          <div class="card-main">
+            <div class="card-title">{{ c.name }}<span v-if="c.reading" style="font-weight:400; color:var(--text2); font-size:12px;"> ({{ c.reading }})</span></div>
+            <div class="card-sub">参照画像 {{ (c.referenceImages||[]).length }}枚</div>
+          </div>
+          <span class="badge" :class="'status-' + c.status">{{ c.status === 'confirmed' ? '確定' : '下書き' }}</span>
+          <span class="chev">expand_more</span>
+        </div>
+        <div v-if="charOpenId === c.id" class="card-detail">
+          <div><div class="field-label">名前</div><input class="field-input" v-model="charEdit.name"></div>
+          <div class="field-row">
+            <div><div class="field-label">読み</div><input class="field-input" v-model="charEdit.reading"></div>
+            <div><div class="field-label">状態</div>
+              <select class="field-input" v-model="charEdit.status"><option value="draft">下書き</option><option value="confirmed">確定</option></select>
+            </div>
+          </div>
+          <div><div class="field-label">人物像 (原文準拠のメモ)</div><textarea class="field-input" v-model="charEdit.description"></textarea></div>
+          <div><div class="field-label">識別子 (identityTokens・読点区切り)</div><input class="field-input" v-model="charEdit.identityTokensText" placeholder="例: 渦巻く長髪、十字架の護符、ボロ法衣"></div>
+          <div><div class="field-label">画像生成用プロンプト</div><textarea class="field-input" v-model="charEdit.appearancePrompt"></textarea></div>
+          <div>
+            <div class="field-label">参照画像 (×で外して保存)</div>
+            <div class="thumb-row">
+              <div class="thumb-wrap" v-for="(img,i) in charEdit.referenceImages" :key="i">
+                <img :src="img.url" class="thumb zoomable" @click="openViewer(charEdit.referenceImages.map(x => x.url), i)">
+                <button type="button" class="thumb-del" @click.stop="charEdit.referenceImages.splice(i,1)" title="この画像を外す"><span class="icon">close</span></button>
+              </div>
+              <label class="filepick"><input type="file" accept="image/*" @change="e => onCharImagePick(e, c)"><span class="icon">add_photo_alternate</span>追加</label>
+            </div>
+          </div>
+          <div class="actions-row">
+            <button class="danger" @click="deleteCharacter(c)" :disabled="charSaving">削除</button>
+            <button class="primary" @click="saveCharacter(c)" :disabled="charSaving">{{ charSaving ? '保存中…' : '保存' }}</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="fab-row">
+      <button class="fab chat" @click="openChat()" title="AIチャット"><span class="icon" style="font-size:24px;">forum</span></button>
+      <button class="fab add" v-if="['episodes','characters','locations'].includes(projectTab)"
+        @click="projectTab === 'episodes' ? (showNewEpisode = true) : projectTab === 'locations' ? (showNewLocation = true) : (showNewCharacter = true)" title="追加">+</button>
+    </div>
+
+    <bottom-sheet v-model="showNewEpisode" title="新しい話">
+      <form @submit.prevent="createEpisode" class="card-detail" style="border:none; padding:0;">
+        <div class="field-row">
+          <div><div class="field-label">話数</div><input class="field-input" type="number" v-model="newEpisode.number" required></div>
+          <div><div class="field-label">目安秒数</div><input class="field-input" type="number" v-model="newEpisode.targetDurationSec"></div>
+        </div>
+        <div><div class="field-label">タイトル</div><input class="field-input" v-model="newEpisode.title"></div>
+        <div class="field-row">
+          <div><div class="field-label">原作範囲: 開始 (文字位置)</div><input class="field-input" type="number" v-model="newEpisode.sourceRangeStart"></div>
+          <div><div class="field-label">終了</div><input class="field-input" type="number" v-model="newEpisode.sourceRangeEnd"></div>
+        </div>
+        <div class="actions-row"><button type="submit" class="primary" :disabled="creating">{{ creating ? '作成中…' : '作成' }}</button></div>
+      </form>
+    </bottom-sheet>
+
+    <bottom-sheet v-model="showNewCharacter" title="新しいキャラクター">
+      <form @submit.prevent="createCharacter" class="card-detail" style="border:none; padding:0;">
+        <div><div class="field-label">名前</div><input class="field-input" v-model="newCharacter.name" required></div>
+        <div><div class="field-label">読み</div><input class="field-input" v-model="newCharacter.reading"></div>
+        <div><div class="field-label">人物像</div><textarea class="field-input" v-model="newCharacter.description"></textarea></div>
+        <div class="actions-row"><button type="submit" class="primary" :disabled="creating">{{ creating ? '作成中…' : '作成' }}</button></div>
+      </form>
+    </bottom-sheet>
+
+    <bottom-sheet v-model="showNewLocation" title="新しい場所">
+      <form @submit.prevent="createLocation" class="card-detail" style="border:none; padding:0;">
+        <div><div class="field-label">名前 (例: 堀川の御屋形)</div><input class="field-input" v-model="newLocation.name" required></div>
+        <div><div class="field-label">説明 (どんな場面で使うか)</div><textarea class="field-input" v-model="newLocation.description"></textarea></div>
+        <div class="actions-row"><button type="submit" class="primary" :disabled="creating">{{ creating ? '作成中…' : '作成' }}</button></div>
+      </form>
+    </bottom-sheet>
+  </template>
+
+  <!-- ───────── エピソード編集 ───────── -->
+  <template v-else-if="view === 'episode' && currentEpisode">
+    <div class="header-fix">
+      <div class="top">
+        <button class="pill" @click="backToProject">← 話一覧</button>
+        <span class="top-title">第{{ currentEpisode.number }}話 {{ currentEpisode.title || '' }}</span>
+        <span class="badge" :class="'state-' + currentEpisode.state">{{ STATE_LABEL[currentEpisode.state] || currentEpisode.state }}</span>
+      </div>
+    </div>
+
+    <div class="warn-banner" v-if="currentEpisode.missingInfo && currentEpisode.missingInfo.length">
+      <div class="warn-banner-title"><span class="icon">warning</span>不足している情報</div>
+      <ul><li v-for="m in currentEpisode.missingInfo" :key="m">{{ m }}</li></ul>
+    </div>
+
+    <div class="list" style="padding-top:8px; padding-bottom:0;">
+      <div class="actions-row">
+        <button class="primary" @click="autoBuildEpisode" :disabled="autoBuilding">
+          {{ autoBuilding ? autoBuildStage : 'この話をAIで一気に生成 (脚本 → カット割り)' }}</button>
+      </div>
+    </div>
+
+    <div class="section-title">登場キャラクター</div>
+    <div class="list" style="padding-top:0;">
+      <div style="display:flex; flex-wrap:wrap; gap:8px; padding: 0 16px; align-items:center;">
+        <template v-if="!editingCast">
+          <span v-for="c in appearingCharacters" :key="c.id" class="chip" style="background: var(--accent); color: white;">{{ c.name }}</span>
+          <span v-if="!appearingCharacters.length" class="card-sub">未設定 (シリーズ構成・カット割りで自動設定されます)</span>
+          <button class="pill" style="padding:6px 14px; font-size:11px;" @click="editingCast = true">変更</button>
+        </template>
+        <template v-else>
+          <label v-for="c in currentProject.characters" :key="c.id" class="chip" style="cursor:pointer;"
+            :style="isAppearing(c.id) ? { background: 'var(--accent)', color: 'white' } : {}"
+            @click="toggleAppearing(c.id)">{{ isAppearing(c.id) ? '✓ ' : '' }}{{ c.name }}</label>
+          <button class="pill" style="padding:6px 14px; font-size:11px;" @click="editingCast = false">完了</button>
+        </template>
+      </div>
+    </div>
+
+    <div class="section-title">キービジュアル</div>
+    <div class="key-visual-box">
+      <img v-if="currentEpisode.keyVisual && currentEpisode.keyVisual.url" :src="currentEpisode.keyVisual.url" class="kv-img zoomable" @click="openViewer([currentEpisode.keyVisual.url])">
+      <div v-else class="kv-empty">まだキービジュアルがありません</div>
+      <label class="filepick" style="margin-top:8px;"><input type="file" accept="image/*" @change="onKeyVisualPick"><span class="icon">add_photo_alternate</span>アップロード</label>
+    </div>
+
+    <div class="section-title">① 脚本</div>
+    <div class="list" style="padding-top:0;">
+      <div class="actions-row">
+        <button @click="writeScriptFn" :disabled="scriptWriting">
+          {{ scriptWriting ? 'AIが執筆中…' : (currentEpisode.script ? 'AIで脚本を書き直す' : 'AIで脚本を生成 (割当章から)') }}</button>
+      </div>
+      <textarea class="field-input" v-model="scriptEdit" style="min-height:150px;" placeholder="N: ナレーション / 人物名: セリフ / ◆ ト書き — AIで生成して手直しできます"></textarea>
+      <div class="actions-row" v-if="scriptEdit !== (currentEpisode.script || '')">
+        <button class="primary" @click="saveScript" :disabled="scriptSaving">{{ scriptSaving ? '保存中…' : '脚本を保存' }}</button>
+      </div>
+    </div>
+
+    <div class="section-title">② カット割り → 絵コンテ → 作画 ({{ currentEpisode.cuts.length }}カット)</div>
+    <div class="list" style="padding-top:0;">
+      <div class="actions-row">
+        <button @click="composeCutsFn" :disabled="composingCuts">
+          {{ composingCuts ? 'AIがカットを割ってます…' : (currentEpisode.cuts.length ? 'AIでカットを割り直す (脚本から)' : 'AIでカット割り (脚本から)') }}</button>
+      </div>
+      <div class="actions-row" v-if="currentEpisode.cuts.length">
+        <button @click="generateStoryboardGrid" :disabled="gridding">
+          {{ gridding ? 'グリッド生成中… (1ページ≈30秒)' : ('絵コンテ一括 (3×3グリッド・' + Math.ceil(currentEpisode.cuts.length / 9) + 'ページ ≈¥' + (Math.ceil(currentEpisode.cuts.length / 9) * 6) + ')') }}</button>
+      </div>
+      <div class="card-sub" style="padding:0 16px;" v-if="currentEpisode.cuts.length">9カット=1枚で生成してコマごとに自動分割。絵柄が揃って1コマ ≈¥0.7 (端数カットは単体生成)</div>
+    </div>
+    <div class="list">
+      <div v-for="(cut, idx) in currentEpisode.cuts" :key="cut.id" class="card" :class="{ open: cutOpenId === cut.id }">
+        <div class="card-row" @click="toggleCut(cut)">
+          <button class="cut-order-btn" @click.stop="moveCut(cut, -1)" :disabled="idx === 0">‹</button>
+          <div class="card-main">
+            <div class="card-title">カット{{ cut.order }} ({{ cut.durationSec }}秒)</div>
+            <div class="card-sub">{{ (cut.prompt || '(プロンプト未設定)').slice(0, 40) }}</div>
+          </div>
+          <button class="cut-order-btn" @click.stop="moveCut(cut, 1)" :disabled="idx === currentEpisode.cuts.length - 1">›</button>
+          <span class="chev">expand_more</span>
+        </div>
+        <div v-if="cutOpenId === cut.id" class="card-detail">
+          <div><div class="field-label">プロンプト</div><textarea class="field-input" v-model="cutEdit.prompt"></textarea></div>
+          <div class="field-row">
+            <div><div class="field-label">秒数</div><input class="field-input" type="number" v-model="cutEdit.durationSec"></div>
+          </div>
+          <div>
+            <div class="field-label">登場キャラ</div>
+            <div style="display:flex; flex-wrap:wrap; gap:8px;">
+              <label v-for="c in currentProject.characters" :key="c.id" class="chip" :style="cutEdit.characterIds.includes(c.id) ? { background: 'var(--accent)', color: 'white' } : {}" @click="toggleCutChar(c.id)">{{ c.name }}</label>
+            </div>
+          </div>
+          <div>
+            <div class="field-label">場所 (背景の統一用)</div>
+            <select class="field-input" v-model="cutEdit.locationId">
+              <option :value="null">未設定</option>
+              <option v-for="l in currentProject.locations" :key="l.id" :value="l.id">{{ l.name }}{{ (l.referenceImages||[]).length ? '' : ' (参照画像なし)' }}</option>
+            </select>
+          </div>
+          <div><div class="field-label">ナレーション</div><textarea class="field-input" v-model="cutEdit.narration"></textarea></div>
+          <div><div class="field-label">字幕</div><input class="field-input" v-model="cutEdit.subtitle"></div>
+          <div class="actions-row">
+            <button class="danger" @click="deleteCut(cut)" :disabled="cutSaving">削除</button>
+            <button @click="saveCut(cut)" :disabled="cutSaving">{{ cutSaving ? '保存中…' : '保存' }}</button>
+          </div>
+          <div v-if="cut.storyboardUrl">
+            <div class="field-label">絵コンテ (構図確認用の静止画{{ cut.storyboardCrop ? (' — グリッドP' + cut.storyboardCrop.page + ' の ' + (cut.storyboardCrop.row * cut.storyboardCrop.cols + cut.storyboardCrop.col + 1) + 'コマ目') : '' }})</div>
+            <div v-if="cut.storyboardCrop" class="sb-crop zoomable" :style="sbCropStyle(cut)" @click="openViewer([cut.storyboardUrl])"></div>
+            <img v-else :src="cut.storyboardUrl" class="zoomable" style="width:100%; border-radius:12px;" @click="openViewer([cut.storyboardUrl])">
+          </div>
+          <div class="actions-row">
+            <button @click="generateStoryboard(cut)" :disabled="storyboardingCutId === cut.id">
+              {{ storyboardingCutId === cut.id ? '絵コンテ生成中…' : (cut.storyboardUrl ? '絵コンテを再生成 (≈¥6)' : '絵コンテを生成 (静止画 ≈¥6)') }}</button>
+            <button class="primary" @click="generateCut(cut)" :disabled="generatingCutId === cut.id">
+              {{ generatingCutId === cut.id ? '生成中…' : '動画生成 (≈¥150)' }}
+            </button>
+          </div>
+          <div v-if="genErrorFor === cut.id" class="err">{{ genError }}</div>
+          <template v-for="(g, gi) in cut.generations" :key="gi">
+            <video v-if="g.videoUrl" :src="g.videoUrl" controls class="gen-video" :style="cut.selectedGenerationIndex === gi ? { outline: '3px solid var(--accent)' } : {}" @click="selectGeneration(cut, gi)"></video>
+            <div v-else-if="g.status === 'queued' || g.status === 'running'" class="gen-note" style="display:flex; align-items:center; gap:8px;">
+              <span class="icon">hourglass_top</span>生成中 ({{ g.status }})… 自動で更新されます
+              <button class="cut-order-btn" style="width:auto; padding:0 10px; border-radius:8px; font-size:11px;" @click="refreshGeneration(cut, gi)">更新</button>
+            </div>
+            <div class="gen-note">{{ g.note || (g.status + ' / ' + g.model) }}</div>
+          </template>
+        </div>
+      </div>
+      <button class="pill" style="align-self:center;" @click="addCut">+ カットを追加</button>
+    </div>
+
+    <div class="section-title">③ 編集・書き出し</div>
+    <div class="list" style="padding-top:0; gap:4px;">
+      <div class="card-sub" style="padding: 0 16px;">カット順にそのまま連結されます。並べ替えはカット割りの ‹ › で。</div>
+      <div class="actions-row" style="padding: 8px 16px 0;">
+        <button class="primary" @click="exportEpisode" :disabled="exporting">{{ exporting ? '書き出し中…' : '書き出し' }}</button>
+      </div>
+      <div v-if="currentEpisode.timeline && currentEpisode.timeline.exportedVideoUrl" style="padding: 8px 16px;">
+        <video :src="currentEpisode.timeline.exportedVideoUrl" controls class="gen-video"></video>
+      </div>
+      <div v-if="exportErr" class="err">{{ exportErr }}</div>
+    </div>
+
+    <div class="fab-row">
+      <button class="fab chat" @click="openChat(currentEpisode.id)" title="AIチャット"><span class="icon" style="font-size:24px;">forum</span></button>
+    </div>
+  </template>
+
+  <!-- 画像ライトボックス (ピンチ拡大・ダブルタップ拡大・左右フリックで前後) -->
+  <div v-if="viewer" class="lightbox" @click="closeViewer">
+    <div class="lb-stage" @click.stop
+      @pointerdown.prevent="lbDown" @pointermove.prevent="lbMove"
+      @pointerup="lbUp" @pointercancel="lbUp">
+      <img :src="viewer.list[viewer.index]" :style="lbStyle" draggable="false">
+    </div>
+    <button class="lightbox-close" @click.stop="closeViewer">✕</button>
+    <button v-if="viewer.index > 0" class="lb-nav prev" @click.stop="lbGo(-1)">‹</button>
+    <button v-if="viewer.index < viewer.list.length - 1" class="lb-nav next" @click.stop="lbGo(1)">›</button>
+    <div class="lb-counter" v-if="viewer.list.length > 1">{{ viewer.index + 1 }} / {{ viewer.list.length }}</div>
+    <button v-if="viewerQuoteTarget" class="lb-quote" @click.stop="quoteFromViewer"><span class="icon" style="font-size:15px;">reply</span>この画像を引用して話す</button>
+  </div>
+
+  <!-- ───────── AI チャット (モバイル: 下から + 上スワイプ全画面 / PC: 右サイドバー) ───────── -->
+  <bottom-sheet class="chat-bs" v-model="chatOpen" title="AI チャット" expandable fullscreen-on-expand v-model:expanded="chatExpanded">
+    <button class="chat-close" @click="chatOpen = false">✕</button>
+    <div class="chat-sheet" :class="{ full: chatExpanded }">
+      <div class="chat-log" ref="chatLogEl">
+        <div v-if="chatMessages.length === 0" style="display:flex; flex-direction:column; gap:8px; padding:12px 4px;">
+          <div class="card-sub">まずは方向性から。タップで聞けます:</div>
+          <button v-for="s in chatStarters" :key="s" class="chip" style="border:none; cursor:pointer; font-family:inherit; padding:10px 14px; text-align:left; justify-content:flex-start;"
+            @click="sendStarter(s)">{{ s }}</button>
+        </div>
+        <div v-for="m in chatMessages" :key="m.id || m.content" class="msg" :class="m.role" :data-mid="m.id">
+          <div v-if="m.quotedContent || (m.quotedImages || []).length" class="quote-box" :class="{ jumpable: m.quotedMessageId }"
+            @click="jumpToMessage(m.quotedMessageId)">
+            <img v-if="(m.quotedImages || []).length" :src="m.quotedImages[0]">
+            <span class="qtext">{{ m.quotedContent || '(画像)' }}</span>
+          </div>
+          <div v-if="(m.images || []).length" style="display:flex; gap:6px; flex-wrap:wrap; margin-bottom:6px;">
+            <img v-for="(u,i) in m.images" :key="i" :src="u" class="zoomable" style="width:100%; max-width:240px; height:auto; border-radius:10px; display:block;" @click="openChatImage(u)">
+          </div><span v-html="linkify(m.content)"></span><div v-if="m.id">
+            <button class="quote-btn" @click="quoteMsg(m)"><span class="icon" style="font-size:13px;">reply</span>引用</button>
+            <button class="quote-btn" @click="copyMsg(m)"><span class="icon" style="font-size:13px;">content_copy</span>{{ copiedMsgId === m.id ? 'コピー済' : 'コピー' }}</button>
+            <button class="quote-btn" @click="deleteChatMsg(m)"><span class="icon" style="font-size:13px;">delete</span>取消</button>
+          </div></div>
+        <div v-if="chatSending" class="msg assistant">
+          <div class="typing-dots"><span></span><span></span><span></span></div>
+        </div>
+      </div>
+      <div v-if="quoting" class="quote-bar">
+        <img v-if="(quoting.images || []).length" :src="quoting.images[0]">
+        <span class="qtext">引用: {{ quoting.content || '(画像)' }}</span>
+        <button @click="quoting = null">✕</button>
+      </div>
+      <div v-if="chatAttach.length" style="display:flex; gap:6px; padding:4px 0; flex-wrap:wrap;">
+        <div v-for="(a,i) in chatAttach" :key="i" style="position:relative;">
+          <img :src="a.preview" class="thumb" style="width:56px; height:56px;">
+          <button @click="chatAttach.splice(i,1)" style="position:absolute; top:-6px; right:-6px; width:20px; height:20px; border-radius:10px; border:none; background:var(--danger); color:white; font-size:12px; cursor:pointer; line-height:1;">×</button>
+        </div>
+      </div>
+      <div class="chat-input-row">
+        <label class="chat-send" style="background:var(--bg); color:var(--text2); box-shadow:3px 3px 8px var(--sd), -2px -2px 6px var(--sl); display:flex; align-items:center; justify-content:center; cursor:pointer;">
+          <input type="file" accept="image/*" multiple style="display:none;" @change="onChatImagePick" :disabled="chatSending">
+          <span class="icon">add_photo_alternate</span>
+        </label>
+        <!-- Enter は改行 (スマホの誤送信対策)。送信はボタン or Cmd/Ctrl+Enter -->
+        <textarea class="field-input" v-model="chatInput" placeholder="メッセージを入力…"
+          @keydown.enter.meta.prevent="sendChat" @keydown.enter.ctrl.prevent="sendChat"></textarea>
+        <button class="chat-send" @click="sendChat" :disabled="chatSending || (!chatInput.trim() && !chatAttach.length)"><span class="icon">{{ chatSending ? 'hourglass_top' : 'send' }}</span></button>
+      </div>
+    </div>
+  </bottom-sheet>
+</div>
+`;
+
+const App = {
+  template: TEMPLATE,
+  setup() {
+    const user = ref(null);
+    const ready = ref(false);
+    const err = ref("");
+    let fbApp = null;
+
+    const view = ref("projects"); // 'projects' | 'project' | 'episode'
+    const projects = ref([]);
+    const currentProject = ref(null);
+    const currentEpisode = ref(null);
+    const projectTab = ref("episodes");
+
+    const creating = ref(false);
+    const showNewProject = ref(false);
+    const newProject = ref({ title: "", author: "", styleGuide: "", worldSetting: "", sourceText: "" });
+    const aozoraQuery = ref("");
+    const aozoraResults = ref([]);
+    const searching = ref(false);
+    const aozoraCreateUrl = ref("");
+
+    const createStep = ref("pick"); // 'pick' | 'structuring'
+    const createTitle = ref("");
+    const createStages = ref([]);
+    const chatStarters = [
+      "絵柄と画像の粒度の方向性を決めたい。この作品に合う案を出して",
+      "キャラクターの見た目 (identityTokens) を一緒に詰めたい",
+      "第1話をどこからどこまで切り出すのがいいか提案して",
+    ];
+    const showNewEpisode = ref(false);
+    const newEpisode = ref({ number: "", title: "", targetDurationSec: 60, sourceRangeStart: null, sourceRangeEnd: null });
+    const showNewCharacter = ref(false);
+    const newCharacter = ref({ name: "", reading: "", description: "" });
+
+    const charOpenId = ref(null);
+    const charEdit = ref({});
+    const charSaving = ref(false);
+
+    const locOpenId = ref(null);
+    const locEdit = ref({});
+    const locSaving = ref(false);
+    const showNewLocation = ref(false);
+    const newLocation = ref({ name: "", description: "" });
+
+    const cutOpenId = ref(null);
+    const cutEdit = ref({ characterIds: [] });
+    const cutSaving = ref(false);
+    const generatingCutId = ref(null);
+    const genError = ref("");
+    const genErrorFor = ref(null);
+    const exporting = ref(false);
+    const exportErr = ref("");
+
+    const chatOpen = ref(false);
+    const chatExpanded = ref(false);
+
+    // ── 画像ビューア (ギャラリー + ピンチ/ダブルタップ拡大 + フリックで前後) ──
+    const viewer = ref(null); // { list: [url], index }
+    const vScale = ref(1), vX = ref(0), vY = ref(0), vDragging = ref(false);
+    const lbStyle = computed(() => ({
+      transform: `translate(${vX.value}px, ${vY.value}px) scale(${vScale.value})`,
+      transition: vDragging.value ? "none" : "transform 160ms ease",
+    }));
+    function openViewer(list, index = 0, msgByUrl = null) {
+      const clean = (list || []).filter(Boolean);
+      if (!clean.length) return;
+      // msgByUrl: URL → チャットメッセージ (チャットから開いた時だけ。引用ボタン用)
+      viewer.value = { list: clean, index: Math.max(0, Math.min(index, clean.length - 1)), msgByUrl };
+      lbReset();
+    }
+    // 表示中の画像がチャット由来なら、その元メッセージ (引用対象)
+    const viewerQuoteTarget = computed(() => {
+      const v = viewer.value;
+      return (v && v.msgByUrl && v.msgByUrl[v.list[v.index]]) || null;
+    });
+    function quoteFromViewer() {
+      const m = viewerQuoteTarget.value;
+      if (!m) return;
+      quoteMsg(m);
+      closeViewer();
+    }
+    function closeViewer() { viewer.value = null; }
+    function lbReset() { vScale.value = 1; vX.value = 0; vY.value = 0; }
+    function lbGo(d) {
+      if (!viewer.value) return;
+      const next = viewer.value.index + d;
+      if (next < 0 || next >= viewer.value.list.length) { vX.value = 0; return; }
+      viewer.value = { ...viewer.value, index: next };
+      lbReset();
+    }
+    const lbPointers = new Map();
+    let lbPinch = null;   // { dist0, scale0, midX, midY, x0, y0 }
+    let lbPan = null;     // { startX, startY, x0, y0, moved }
+    let lbLastTap = 0;
+    function lbDown(e) {
+      lbPointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      e.currentTarget.setPointerCapture?.(e.pointerId);
+      vDragging.value = true;
+      if (lbPointers.size === 2) {
+        const [a, b] = [...lbPointers.values()];
+        lbPinch = {
+          dist0: Math.hypot(a.x - b.x, a.y - b.y), scale0: vScale.value,
+          midX: (a.x + b.x) / 2, midY: (a.y + b.y) / 2, x0: vX.value, y0: vY.value,
+        };
+        lbPan = null;
+      } else if (lbPointers.size === 1) {
+        lbPan = { startX: e.clientX, startY: e.clientY, x0: vX.value, y0: vY.value, moved: false };
+      }
+    }
+    function lbMove(e) {
+      if (!lbPointers.has(e.pointerId)) return;
+      lbPointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (lbPointers.size === 2 && lbPinch) {
+        const [a, b] = [...lbPointers.values()];
+        const dist = Math.hypot(a.x - b.x, a.y - b.y);
+        vScale.value = Math.max(1, Math.min(5, lbPinch.scale0 * (dist / lbPinch.dist0)));
+        const midX = (a.x + b.x) / 2, midY = (a.y + b.y) / 2;
+        vX.value = lbPinch.x0 + (midX - lbPinch.midX);
+        vY.value = lbPinch.y0 + (midY - lbPinch.midY);
+      } else if (lbPointers.size === 1 && lbPan) {
+        const dx = e.clientX - lbPan.startX, dy = e.clientY - lbPan.startY;
+        if (Math.abs(dx) > 6 || Math.abs(dy) > 6) lbPan.moved = true;
+        if (vScale.value > 1) {
+          vX.value = lbPan.x0 + dx;
+          vY.value = lbPan.y0 + dy;
+        } else {
+          vX.value = dx; // 等倍時はフリック (横) の追従だけ
+          vY.value = 0;
+        }
+      }
+    }
+    function lbUp(e) {
+      const wasPan = lbPan;
+      lbPointers.delete(e.pointerId);
+      if (lbPointers.size < 2) lbPinch = null;
+      if (lbPointers.size === 0) {
+        vDragging.value = false;
+        if (wasPan && vScale.value <= 1) {
+          const dx = vX.value;
+          if (Math.abs(dx) > 60) { lbGo(dx < 0 ? 1 : -1); }
+          else {
+            vX.value = 0;
+            if (!wasPan.moved) {
+              // ダブルタップで 2.5 倍 ⇔ 等倍
+              const now = Date.now();
+              if (now - lbLastTap < 320) { vScale.value = vScale.value > 1 ? 1 : 2.5; vX.value = 0; vY.value = 0; lbLastTap = 0; }
+              else lbLastTap = now;
+            }
+          }
+        } else if (vScale.value <= 1) { vX.value = 0; vY.value = 0; }
+        lbPan = null;
+      }
+    }
+    const chatMessages = ref([]);
+    // チャット内の画像タップ → 会話中の全画像を横断できるギャラリーで開く。
+    // どの画像がどのメッセージ由来かを添えて「この画像を引用」をビューアから出せるようにする
+    function openChatImage(url) {
+      const all = [];
+      const msgByUrl = {};
+      for (const m of chatMessages.value) {
+        for (const u of (m.images || [])) {
+          all.push(u);
+          if (m.id && !msgByUrl[u]) msgByUrl[u] = m;
+        }
+      }
+      openViewer(all, Math.max(0, all.indexOf(url)), msgByUrl);
+    }
+    // 引用ボックスをタップ → 引用元メッセージへスクロール (ページ内リンク)
+    function jumpToMessage(mid) {
+      if (!mid || !chatLogEl.value) return;
+      const el = chatLogEl.value.querySelector(`[data-mid="${mid}"]`);
+      if (!el) return;
+      el.scrollIntoView({ behavior: "smooth", block: "center" });
+      el.classList.remove("msg-flash");
+      void el.offsetWidth; // 連続タップでもアニメーションを再発火させる
+      el.classList.add("msg-flash");
+      setTimeout(() => el.classList.remove("msg-flash"), 1400);
+    }
+    const chatInput = ref("");
+    const chatSending = ref(false);
+    const chatLogEl = ref(null);
+    const chatAttach = ref([]); // [{ file, preview }]
+    const quoting = ref(null);  // 引用中のメッセージ { id, content, images }
+    function quoteMsg(m) {
+      quoting.value = { id: m.id, content: (m.content || "").slice(0, 80), images: m.images || [] };
+    }
+    // 本文中の URL をリンク化 (v-html に入れるので先に HTML エスケープ)
+    function linkify(text) {
+      const esc = String(text || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+      return esc.replace(/https?:\/\/[^\s<>"']+/g, (u) => `<a href="${u}" target="_blank" rel="noopener">${u}</a>`);
+    }
+    const copiedMsgId = ref(null);
+    async function copyMsg(m) {
+      try {
+        await navigator.clipboard.writeText(m.content || "");
+        copiedMsgId.value = m.id;
+        setTimeout(() => { if (copiedMsgId.value === m.id) copiedMsgId.value = null; }, 1500);
+      } catch (_) { /* clipboard 不許可環境は無視 */ }
+    }
+    // 送信取消 (LINE 相当)。DB から消えるので AI の記憶からも消える
+    async function deleteChatMsg(m) {
+      if (!confirm("このメッセージを取り消しますか？(AI の記憶からも消えます)")) return;
+      try {
+        await apiFetch(`/api/drama/chat/${m.id}`, { method: "DELETE" });
+        chatMessages.value = chatMessages.value.filter((x) => x.id !== m.id);
+      } catch (e) { err.value = e.message; }
+    }
+    let chatEpisodeId = null;
+
+    const chapters = ref([]);
+    const chapterOpenId = ref(null);
+    const chapterContent = ref({}); // id → 本文 (開いた時に遅延取得)
+    const aozoraUrl = ref("");
+    const importing = ref(false);
+    const analyzing = ref(false);
+    const analyzeProgress = ref("");
+    const setupAnalyzing = ref(false);
+    const settingsEdit = ref({ worldSetting: "", styleGuide: "" });
+    const settingsSaving = ref(false);
+    const usage = ref(null);
+
+    async function apiFetch(path, opts = {}) {
+      const token = await user.value.getIdToken();
+      const res = await fetch((window.API_BASE || "") + path, {
+        method: opts.method || "GET",
+        headers: { "content-type": "application/json", authorization: "Bearer " + token },
+        body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
+      });
+      if (!res.ok) {
+        let msg = res.statusText;
+        try {
+          const j = await res.json();
+          msg = j.error || msg;
+          if (j.reasons) msg += ": " + j.reasons.join(", ");
+        } catch (_) {}
+        const e = new Error(msg);
+        e.status = res.status;
+        throw e;
+      }
+      if (res.status === 204) return null;
+      return res.json();
+    }
+
+    async function uploadImage(file, pathPrefix) {
+      const storage = getStorage(fbApp, "gs://static-epigram-496002-v8.firebasestorage.app");
+      const safe = file.name.replace(/[^\w.\-]/g, "_");
+      const path = `${pathPrefix}/${Date.now()}_${safe}`;
+      const r = storageRef(storage, path);
+      await uploadBytes(r, file);
+      return getDownloadURL(r);
+    }
+
+    async function loadProjects() {
+      try {
+        projects.value = await apiFetch("/api/drama/projects");
+      } catch (e) { err.value = e.message; }
+    }
+
+    async function openProject(id) {
+      err.value = "";
+      try {
+        currentProject.value = await apiFetch(`/api/drama/projects/${id}`);
+        if (view.value !== "project") projectTab.value = "episodes";
+        view.value = "project";
+        loadChapters(id); // タブの件数表示用に裏で取得 (待たない)
+      } catch (e) { err.value = e.message; }
+    }
+
+    async function loadChapters(projectId) {
+      try {
+        chapters.value = await apiFetch(`/api/drama/projects/${projectId}/chapters`);
+      } catch (_) { chapters.value = []; }
+    }
+
+    // チャットの AI が CRUD を実行した後などに画面データを追従させる。
+    // 開いている編集フォーム (キャラ/場所/設定/脚本) はスナップショットなので、
+    // サーバー側が変わった時だけ再スナップショット (入力途中を不用意に消さない)
+    async function refreshProjectData() {
+      if (!currentProject.value) return;
+      try {
+        const proj = await apiFetch(`/api/drama/projects/${currentProject.value.id}`);
+        currentProject.value = proj;
+        if (charOpenId.value) {
+          const c = (proj.characters || []).find((x) => x.id === charOpenId.value);
+          if (!c) charOpenId.value = null;                       // AI が削除した
+          else if (charSnapshotOf(c) !== charEditBase) snapshotChar(c); // AI が更新した
+        }
+        if (locOpenId.value) {
+          const l = (proj.locations || []).find((x) => x.id === locOpenId.value);
+          if (!l) locOpenId.value = null;
+          else if (locSnapshotOf(l) !== locEditBase) snapshotLoc(l);
+        }
+        if (projectTab.value === "settings" && settingsSnapshotOf(proj) !== settingsEditBase) {
+          snapshotSettings(proj);
+        }
+        if (view.value === "episode" && currentEpisode.value) {
+          const prevScript = currentEpisode.value.script || "";
+          await refreshEpisode();
+          // 脚本エディタはユーザーが書き換え中でなければ追従
+          if (scriptEdit.value === prevScript) scriptEdit.value = currentEpisode.value.script || "";
+        }
+      } catch (_) { /* 次の機会に追従 */ }
+    }
+
+    function backToProjects() { view.value = "projects"; currentProject.value = null; loadProjects(); }
+
+    const deletingProjectId = ref(null);
+    async function deleteProject(p) {
+      // 章・キャラ・エピソード・生成履歴・費用記録まで全部消える不可逆操作なので必ず確認
+      if (!confirm(`「${p.title}」を削除しますか？\nエピソード・キャラクター・生成した動画の記録もすべて消えます (元に戻せません)`)) return;
+      deletingProjectId.value = p.id;
+      err.value = "";
+      try {
+        await apiFetch(`/api/drama/projects/${p.id}`, { method: "DELETE" });
+        await loadProjects();
+      } catch (e) { err.value = e.message; } finally { deletingProjectId.value = null; }
+    }
+
+    async function openEpisode(id) {
+      err.value = "";
+      try {
+        currentEpisode.value = await apiFetch(`/api/drama/episodes/${id}`);
+        scriptEdit.value = currentEpisode.value.script || "";
+        view.value = "episode";
+        ensureGenPolling(); // 生成中タスクが残ってたら追いかけ再開
+      } catch (e) { err.value = e.message; }
+    }
+
+    async function backToProject() {
+      view.value = "project";
+      currentEpisode.value = null;
+      if (currentProject.value) await openProject(currentProject.value.id);
+    }
+
+    async function refreshEpisode() {
+      if (currentEpisode.value) currentEpisode.value = await apiFetch(`/api/drama/episodes/${currentEpisode.value.id}`);
+    }
+
+    // ── プロジェクト ──
+    async function createProject() {
+      creating.value = true;
+      try {
+        const b = newProject.value;
+        const { id } = await apiFetch("/api/drama/projects", { method: "POST", body: b });
+        showNewProject.value = false;
+        newProject.value = { title: "", author: "", styleGuide: "", worldSetting: "", sourceText: "" };
+        await loadProjects();
+        await openProject(id);
+      } catch (e) { err.value = e.message; } finally { creating.value = false; }
+    }
+
+    // ── 作成ウィザード: 作品選択 → AI 構造化 → チャットへ ──
+    function startCreate() {
+      view.value = "create";
+      createStep.value = "pick";
+      aozoraQuery.value = ""; aozoraResults.value = []; aozoraCreateUrl.value = "";
+      err.value = "";
+    }
+    async function searchAozora() {
+      if (!aozoraQuery.value.trim() || searching.value) return;
+      searching.value = true;
+      aozoraResults.value = [];
+      err.value = "";
+      try {
+        const r = await apiFetch("/api/drama/aozora-search", { method: "POST", body: { query: aozoraQuery.value.trim() } });
+        aozoraResults.value = r.results || [];
+        if (!aozoraResults.value.length) err.value = "見つかりませんでした。URL 直接貼り付けを試してください";
+      } catch (e) { err.value = e.message; } finally { searching.value = false; }
+    }
+    async function createFromAozora(url) {
+      if (!url || createStep.value === "structuring") return;
+      err.value = "";
+      createStep.value = "structuring";
+      createTitle.value = "";
+      createStages.value = [
+        { key: "fetch", label: "青空文庫から本文を取得・章に分割", state: "doing" },
+        { key: "setup", label: "AI が時代背景・絵柄・キャラクターを構造化", state: "wait" },
+        { key: "index", label: "章ごとの要約と出演キャラ index を作成", state: "wait" },
+      ];
+      const setStage = (key, state) => {
+        createStages.value = createStages.value.map((s) => s.key === key ? { ...s, state } : s);
+      };
+      try {
+        // 1. 取り込み (Gemini なしでも通る)
+        const r = await apiFetch("/api/drama/projects/from-aozora", { method: "POST", body: { url: url.trim(), skipSetup: true } });
+        createTitle.value = r.title || "";
+        setStage("fetch", "done");
+        // 2. AI 初期構造化 (失敗しても続行)
+        setStage("setup", "doing");
+        try {
+          await apiFetch(`/api/drama/projects/${r.id}/analyze-setup`, { method: "POST", body: {} });
+          setStage("setup", "done");
+        } catch (e) {
+          setStage("setup", "wait");
+          err.value = "AI 初期解析は失敗 (取り込みは成功、あとで原作タブから再実行可): " + e.message;
+        }
+        // 3. 章 index は裏で継続しつつ、先にチャットへ (数章ずつのバッチをループ)
+        setStage("index", "doing");
+        runChapterAnalysisLoop(r.id, () => {
+          if (currentProject.value?.id === r.id) loadChapters(r.id);
+        }).catch(() => {});
+        await loadProjects();
+        await openProject(r.id);
+        openChat(); // 方向性詰めはチャットから
+      } catch (e) {
+        err.value = e.message;
+        createStep.value = "pick";
+      }
+    }
+    function sendStarter(text) {
+      chatInput.value = text;
+      sendChat();
+    }
+
+    // ── 原作 (章) ──
+    function openSourceTab() {
+      projectTab.value = "source";
+      loadChapters(currentProject.value.id);
+    }
+    async function importSource() {
+      if (!aozoraUrl.value.trim()) { err.value = "青空文庫の URL を入れてください"; return; }
+      importing.value = true;
+      err.value = "";
+      try {
+        const r = await apiFetch(`/api/drama/projects/${currentProject.value.id}/import-source`, {
+          method: "POST", body: { url: aozoraUrl.value.trim() },
+        });
+        aozoraUrl.value = "";
+        await loadChapters(currentProject.value.id);
+        chapterContent.value = {};
+      } catch (e) { err.value = e.message; } finally { importing.value = false; }
+    }
+    // 章解析: サーバーは 1 リクエストで数章ずつしか処理しない (Hosting 60秒制限対策) ので
+    // remaining が 0 になるまでループで叩く。進捗は analyzeProgress に出す。
+    async function runChapterAnalysisLoop(projectId, onProgress) {
+      let guard = 0;
+      while (guard++ < 40) {
+        const r = await apiFetch(`/api/drama/projects/${projectId}/chapters/analyze`, { method: "POST", body: {} });
+        if (onProgress) onProgress(r);
+        if (!r.remaining) return;
+      }
+    }
+    async function analyzeChapters() {
+      analyzing.value = true;
+      analyzeProgress.value = "";
+      err.value = "";
+      try {
+        await runChapterAnalysisLoop(currentProject.value.id, (r) => {
+          analyzeProgress.value = `(残り ${r.remaining}/${r.total} 章)`;
+          loadChapters(currentProject.value.id); // 出来た分から順次表示
+        });
+        await loadChapters(currentProject.value.id);
+      } catch (e) { err.value = e.message; } finally { analyzing.value = false; analyzeProgress.value = ""; }
+    }
+    // AI 構造化 (時代背景・作画・キャラ登録) を原作タブから再実行できるように
+    async function runSetupAnalysis() {
+      setupAnalyzing.value = true;
+      err.value = "";
+      try {
+        const r = await apiFetch(`/api/drama/projects/${currentProject.value.id}/analyze-setup`, { method: "POST", body: {} });
+        await openProject(currentProject.value.id);
+        projectTab.value = "characters"; // 登録されたキャラを見せる
+        if (!(r.charactersCreated || []).length) err.value = "新しく登録できるキャラが見つかりませんでした (登録済みは重複登録されません)";
+      } catch (e) { err.value = e.message; } finally { setupAnalyzing.value = false; }
+    }
+
+    // ── 作画基準画像・制作資料 ──
+    const newAssetName = ref("");
+    async function onStyleRefPick(e) {
+      const file = e.target.files?.[0];
+      if (!file) return;
+      try {
+        const url = await uploadImage(file, `auto-drama/${currentProject.value.id}/styleref`);
+        const next = [...(currentProject.value.styleRefImages || []), url].slice(-2); // 最新2枚
+        await apiFetch(`/api/drama/projects/${currentProject.value.id}`, { method: "PATCH", body: { styleRefImages: next } });
+        currentProject.value.styleRefImages = next;
+      } catch (e2) { err.value = e2.message; }
+      e.target.value = "";
+    }
+    async function clearStyleRef() {
+      try {
+        await apiFetch(`/api/drama/projects/${currentProject.value.id}`, { method: "PATCH", body: { styleRefImages: [] } });
+        currentProject.value.styleRefImages = [];
+      } catch (e) { err.value = e.message; }
+    }
+    async function onAssetPick(e) {
+      const file = e.target.files?.[0];
+      if (!file || !newAssetName.value.trim()) return;
+      try {
+        const url = await uploadImage(file, `auto-drama/${currentProject.value.id}/assets`);
+        await apiFetch(`/api/drama/projects/${currentProject.value.id}/assets`, {
+          method: "POST", body: { name: newAssetName.value.trim(), url },
+        });
+        newAssetName.value = "";
+        currentProject.value = await apiFetch(`/api/drama/projects/${currentProject.value.id}`);
+      } catch (e2) { err.value = e2.message; }
+      e.target.value = "";
+    }
+    async function deleteAsset(a) {
+      if (!confirm(`資料「${a.name}」を削除しますか？`)) return;
+      try {
+        await apiFetch(`/api/drama/assets/${a.id}`, { method: "DELETE" });
+        currentProject.value.assets = (currentProject.value.assets || []).filter((x) => x.id !== a.id);
+      } catch (e) { err.value = e.message; }
+    }
+
+    // ── 設定タブ ──
+    const settingsSnapshotOf = (p) => JSON.stringify([p.worldSetting, p.styleGuide, p.aiNotes]);
+    let settingsEditBase = "";
+    function snapshotSettings(p) {
+      settingsEditBase = settingsSnapshotOf(p);
+      settingsEdit.value = {
+        worldSetting: p.worldSetting || "",
+        styleGuide: p.styleGuide || "",
+        aiNotes: p.aiNotes || "",
+      };
+    }
+    function openSettingsTab() {
+      projectTab.value = "settings";
+      snapshotSettings(currentProject.value);
+      usage.value = null;
+      apiFetch(`/api/drama/projects/${currentProject.value.id}/usage`)
+        .then((u) => { usage.value = u; })
+        .catch(() => { usage.value = { totalYen: 0, byProvider: {}, byKind: [], recent: [] }; });
+    }
+    async function saveSettings() {
+      settingsSaving.value = true;
+      err.value = "";
+      try {
+        await apiFetch(`/api/drama/projects/${currentProject.value.id}`, {
+          method: "PATCH",
+          body: { worldSetting: settingsEdit.value.worldSetting, styleGuide: settingsEdit.value.styleGuide, aiNotes: settingsEdit.value.aiNotes },
+        });
+        currentProject.value.worldSetting = settingsEdit.value.worldSetting;
+        currentProject.value.styleGuide = settingsEdit.value.styleGuide;
+        currentProject.value.aiNotes = settingsEdit.value.aiNotes;
+        settingsEditBase = settingsSnapshotOf(currentProject.value);
+      } catch (e) { err.value = e.message; } finally { settingsSaving.value = false; }
+    }
+    async function toggleChapter(ch) {
+      if (chapterOpenId.value === ch.id) { chapterOpenId.value = null; return; }
+      chapterOpenId.value = ch.id;
+      if (!chapterContent.value[ch.id]) {
+        try {
+          const full = await apiFetch(`/api/drama/chapters/${ch.id}`);
+          chapterContent.value = { ...chapterContent.value, [ch.id]: full.content };
+        } catch (e) { err.value = e.message; }
+      }
+    }
+    function isRegisteredCharacter(name) {
+      return (currentProject.value?.characters || []).some((c) => c.name === name || (name && name.includes(c.name)) || (c.name && c.name.includes(name)));
+    }
+
+    // ── エピソード ──
+    async function createEpisode() {
+      creating.value = true;
+      try {
+        const b = { ...newEpisode.value, number: Number(newEpisode.value.number) };
+        await apiFetch(`/api/drama/projects/${currentProject.value.id}/episodes`, { method: "POST", body: b });
+        showNewEpisode.value = false;
+        newEpisode.value = { number: "", title: "", targetDurationSec: 60, sourceRangeStart: null, sourceRangeEnd: null };
+        await openProject(currentProject.value.id);
+      } catch (e) { err.value = e.message; } finally { creating.value = false; }
+    }
+
+    function isAppearing(cid) { return (currentEpisode.value.appearingCharacterIds || []).includes(cid); }
+    async function toggleAppearing(cid) {
+      const cur = currentEpisode.value.appearingCharacterIds || [];
+      const next = cur.includes(cid) ? cur.filter((x) => x !== cid) : [...cur, cid];
+      try {
+        await apiFetch(`/api/drama/episodes/${currentEpisode.value.id}`, { method: "PATCH", body: { appearingCharacterIds: next } });
+        await refreshEpisode();
+      } catch (e) { err.value = e.message; }
+    }
+
+    async function onKeyVisualPick(e) {
+      const file = e.target.files?.[0];
+      if (!file) return;
+      try {
+        const url = await uploadImage(file, `auto-drama/${currentProject.value.id}/keyvisual`);
+        await apiFetch(`/api/drama/episodes/${currentEpisode.value.id}`, { method: "PATCH", body: { keyVisual: { url } } });
+        await refreshEpisode();
+      } catch (e2) { err.value = e2.message; }
+    }
+
+    // ── キャラクター ──
+    // 編集フォームはスナップショット。チャットの AI が裏で CRUD した時に追従できるよう
+    // 開いた時点のサーバー状態 (base) を控えて、base が変わったら再スナップショットする
+    // (base が同じ = 変更はユーザーの入力途中だけ → 温存)
+    const charSnapshotOf = (c) => JSON.stringify([c.name, c.reading, c.description, c.appearancePrompt, c.status, c.identityTokens, c.referenceImages]);
+    let charEditBase = "";
+    function snapshotChar(c) {
+      charEditBase = charSnapshotOf(c);
+      charEdit.value = {
+        name: c.name, reading: c.reading || "", description: c.description || "",
+        appearancePrompt: c.appearancePrompt || "", status: c.status,
+        identityTokensText: (c.identityTokens || []).join("、"),
+        // 元データと配列を共有すると × で外した時に保存前から一覧側まで変わってしまう
+        referenceImages: [...(c.referenceImages || [])],
+      };
+    }
+    function toggleChar(c) {
+      if (charOpenId.value === c.id) { charOpenId.value = null; return; }
+      charOpenId.value = c.id;
+      snapshotChar(c);
+    }
+    async function createCharacter() {
+      creating.value = true;
+      try {
+        await apiFetch(`/api/drama/projects/${currentProject.value.id}/characters`, { method: "POST", body: newCharacter.value });
+        showNewCharacter.value = false;
+        newCharacter.value = { name: "", reading: "", description: "" };
+        await openProject(currentProject.value.id);
+      } catch (e) { err.value = e.message; } finally { creating.value = false; }
+    }
+    async function onCharImagePick(e, c) {
+      const file = e.target.files?.[0];
+      if (!file) return;
+      try {
+        const url = await uploadImage(file, `auto-drama/${currentProject.value.id}/characters/${c.id}`);
+        charEdit.value.referenceImages = [...(charEdit.value.referenceImages || []), { url, kind: "full", note: "" }];
+      } catch (e2) { err.value = e2.message; }
+    }
+    async function saveCharacter(c) {
+      charSaving.value = true;
+      try {
+        const b = charEdit.value;
+        await apiFetch(`/api/drama/characters/${c.id}`, {
+          method: "PATCH",
+          body: {
+            name: b.name, reading: b.reading, description: b.description, appearancePrompt: b.appearancePrompt,
+            status: b.status, identityTokens: b.identityTokensText.split("、").map((s) => s.trim()).filter(Boolean),
+            referenceImages: b.referenceImages,
+          },
+        });
+        charOpenId.value = null;
+        await openProject(currentProject.value.id);
+      } catch (e) { err.value = e.message; } finally { charSaving.value = false; }
+    }
+    async function deleteCharacter(c) {
+      charSaving.value = true;
+      try {
+        await apiFetch(`/api/drama/characters/${c.id}`, { method: "DELETE" });
+        charOpenId.value = null;
+        await openProject(currentProject.value.id);
+      } catch (e) { err.value = e.message; } finally { charSaving.value = false; }
+    }
+
+    // ── 場所 ──
+    const locSnapshotOf = (l) => JSON.stringify([l.name, l.description, l.appearancePrompt, l.status, l.identityTokens, l.referenceImages]);
+    let locEditBase = "";
+    function snapshotLoc(l) {
+      locEditBase = locSnapshotOf(l);
+      locEdit.value = {
+        name: l.name, description: l.description || "",
+        appearancePrompt: l.appearancePrompt || "", status: l.status,
+        identityTokensText: (l.identityTokens || []).join("、"),
+        referenceImages: [...(l.referenceImages || [])],
+      };
+    }
+    function toggleLoc(l) {
+      if (locOpenId.value === l.id) { locOpenId.value = null; return; }
+      locOpenId.value = l.id;
+      snapshotLoc(l);
+    }
+    async function createLocation() {
+      creating.value = true;
+      try {
+        await apiFetch(`/api/drama/projects/${currentProject.value.id}/locations`, { method: "POST", body: newLocation.value });
+        showNewLocation.value = false;
+        newLocation.value = { name: "", description: "" };
+        await openProject(currentProject.value.id);
+      } catch (e) { err.value = e.message; } finally { creating.value = false; }
+    }
+    async function onLocImagePick(e, l) {
+      const file = e.target.files?.[0];
+      if (!file) return;
+      try {
+        const url = await uploadImage(file, `auto-drama/${currentProject.value.id}/locations/${l.id}`);
+        locEdit.value.referenceImages = [...(locEdit.value.referenceImages || []), { url, kind: "full", note: "" }];
+      } catch (e2) { err.value = e2.message; }
+    }
+    async function saveLocation(l) {
+      locSaving.value = true;
+      try {
+        const b = locEdit.value;
+        await apiFetch(`/api/drama/locations/${l.id}`, {
+          method: "PATCH",
+          body: {
+            name: b.name, description: b.description, appearancePrompt: b.appearancePrompt,
+            status: b.status, identityTokens: b.identityTokensText.split("、").map((s) => s.trim()).filter(Boolean),
+            referenceImages: b.referenceImages,
+          },
+        });
+        locOpenId.value = null;
+        await openProject(currentProject.value.id);
+      } catch (e) { err.value = e.message; } finally { locSaving.value = false; }
+    }
+    async function deleteLocation(l) {
+      locSaving.value = true;
+      try {
+        await apiFetch(`/api/drama/locations/${l.id}`, { method: "DELETE" });
+        locOpenId.value = null;
+        await openProject(currentProject.value.id);
+      } catch (e) { err.value = e.message; } finally { locSaving.value = false; }
+    }
+
+    // ── アニメ工程: シリーズ構成 / 脚本 / カット割り / 絵コンテ ──
+    const composingSeries = ref(false);
+    const scriptEdit = ref("");
+    const scriptWriting = ref(false);
+    const scriptSaving = ref(false);
+    const composingCuts = ref(false);
+    const storyboardingCutId = ref(null);
+    const editingCast = ref(false);
+    const autoBuilding = ref(false);
+    const autoBuildStage = ref("");
+    const appearingCharacters = computed(() =>
+      (currentProject.value?.characters || []).filter((c) => isAppearing(c.id))
+    );
+
+    // 1 話ずつの一括生成: 脚本 → カット割りをこの話だけ実行 (全話一気はトークンが
+    // もったいない + 構成ミス時のやり直しが高くつくため、話単位で回す)
+    async function autoBuildEpisode() {
+      const hasScript = !!currentEpisode.value.script;
+      const hasCuts = currentEpisode.value.cuts.length > 0;
+      if ((hasScript || hasCuts) && !confirm("既存の脚本" + (hasCuts ? "とカット (生成履歴含む)" : "") + "を上書きして作り直します。いい？")) return;
+      autoBuilding.value = true;
+      err.value = "";
+      try {
+        autoBuildStage.value = "① 脚本を執筆中…";
+        const r = await apiFetch(`/api/drama/episodes/${currentEpisode.value.id}/write-script`, { method: "POST", body: {} });
+        scriptEdit.value = r.script;
+        autoBuildStage.value = "② カットを割ってます…";
+        await apiFetch(`/api/drama/episodes/${currentEpisode.value.id}/compose-cuts`, { method: "POST", body: { force: hasCuts } });
+        await refreshEpisode();
+        scriptEdit.value = currentEpisode.value.script || "";
+      } catch (e) { err.value = e.message; } finally { autoBuilding.value = false; autoBuildStage.value = ""; }
+    }
+
+    async function composeSeriesFn() {
+      const hasExisting = currentProject.value.episodes.length > 0;
+      if (hasExisting && !confirm("シリーズ構成を作り直すと、既存の話とカット (生成履歴含む) が全部消えます。いい？")) return;
+      composingSeries.value = true;
+      err.value = "";
+      try {
+        await apiFetch(`/api/drama/projects/${currentProject.value.id}/compose-series`, {
+          method: "POST", body: { force: hasExisting },
+        });
+        await openProject(currentProject.value.id);
+      } catch (e) { err.value = e.message; } finally { composingSeries.value = false; }
+    }
+    async function writeScriptFn() {
+      if (currentEpisode.value.script && !confirm("脚本を AI で書き直します (今の脚本は上書き)。いい？")) return;
+      scriptWriting.value = true;
+      err.value = "";
+      try {
+        const r = await apiFetch(`/api/drama/episodes/${currentEpisode.value.id}/write-script`, { method: "POST", body: {} });
+        currentEpisode.value.script = r.script;
+        scriptEdit.value = r.script;
+      } catch (e) { err.value = e.message; } finally { scriptWriting.value = false; }
+    }
+    async function saveScript() {
+      scriptSaving.value = true;
+      try {
+        await apiFetch(`/api/drama/episodes/${currentEpisode.value.id}`, { method: "PATCH", body: { script: scriptEdit.value } });
+        currentEpisode.value.script = scriptEdit.value;
+      } catch (e) { err.value = e.message; } finally { scriptSaving.value = false; }
+    }
+    async function composeCutsFn() {
+      if (!currentEpisode.value.script) { err.value = "脚本がまだありません (①で生成してから)"; return; }
+      const hasExisting = currentEpisode.value.cuts.length > 0;
+      if (hasExisting && !confirm("カットを割り直すと既存カット (生成履歴含む) が消えます。いい？")) return;
+      composingCuts.value = true;
+      err.value = "";
+      try {
+        await apiFetch(`/api/drama/episodes/${currentEpisode.value.id}/compose-cuts`, {
+          method: "POST", body: { force: hasExisting },
+        });
+        await refreshEpisode();
+      } catch (e) { err.value = e.message; } finally { composingCuts.value = false; }
+    }
+    async function generateStoryboard(cut) {
+      storyboardingCutId.value = cut.id;
+      err.value = "";
+      try {
+        await apiFetch(`/api/drama/cuts/${cut.id}/storyboard`, { method: "POST", body: {} });
+        await refreshEpisode();
+      } catch (e) { err.value = e.message; } finally { storyboardingCutId.value = null; }
+    }
+    // 絵コンテ一括: 9 カット = 3×3 グリッド 1 枚で生成 (絵柄が揃う + 1コマ ≈¥0.7)
+    const gridding = ref(false);
+    async function generateStoryboardGrid() {
+      gridding.value = true;
+      err.value = "";
+      try {
+        await apiFetch(`/api/drama/episodes/${currentEpisode.value.id}/storyboard-grid`, { method: "POST", body: {} });
+        await refreshEpisode();
+      } catch (e) { err.value = e.message; } finally { gridding.value = false; }
+    }
+    // グリッドページから自分のコマだけを CSS で切り出して表示する。
+    // コマの縦横比はレイアウト依存 (ページは 9:16 固定 → コマは (9/cols):(16/rows))
+    function sbCropStyle(cut) {
+      const c = cut.storyboardCrop;
+      if (!c || !cut.storyboardUrl) return {};
+      return {
+        backgroundImage: `url(${cut.storyboardUrl})`,
+        backgroundSize: `${c.cols * 100}% ${c.rows * 100}%`,
+        backgroundPosition: `${c.cols > 1 ? (c.col / (c.cols - 1)) * 100 : 0}% ${c.rows > 1 ? (c.row / (c.rows - 1)) * 100 : 0}%`,
+        aspectRatio: `${9 * c.rows} / ${16 * c.cols}`,
+      };
+    }
+
+    // ── カット ──
+    function toggleCut(cut) {
+      if (cutOpenId.value === cut.id) { cutOpenId.value = null; return; }
+      cutOpenId.value = cut.id;
+      cutEdit.value = {
+        prompt: cut.prompt || "", durationSec: cut.durationSec, characterIds: [...(cut.characterIds || [])],
+        locationId: cut.locationId || null,
+        narration: cut.narration || "", subtitle: cut.subtitle || "",
+      };
+    }
+    function toggleCutChar(cid) {
+      const cur = cutEdit.value.characterIds;
+      cutEdit.value.characterIds = cur.includes(cid) ? cur.filter((x) => x !== cid) : [...cur, cid];
+    }
+    async function addCut() {
+      try {
+        await apiFetch(`/api/drama/episodes/${currentEpisode.value.id}/cuts`, { method: "POST", body: {} });
+        await refreshEpisode();
+      } catch (e) { err.value = e.message; }
+    }
+    async function saveCut(cut) {
+      cutSaving.value = true;
+      try {
+        const b = cutEdit.value;
+        await apiFetch(`/api/drama/cuts/${cut.id}`, {
+          method: "PATCH",
+          body: { prompt: b.prompt, durationSec: Number(b.durationSec), characterIds: b.characterIds, locationId: b.locationId, narration: b.narration, subtitle: b.subtitle },
+        });
+        cutOpenId.value = null;
+        await refreshEpisode();
+      } catch (e) { err.value = e.message; } finally { cutSaving.value = false; }
+    }
+    async function deleteCut(cut) {
+      cutSaving.value = true;
+      try {
+        await apiFetch(`/api/drama/cuts/${cut.id}`, { method: "DELETE" });
+        cutOpenId.value = null;
+        await refreshEpisode();
+      } catch (e) { err.value = e.message; } finally { cutSaving.value = false; }
+    }
+    async function moveCut(cut, dir) {
+      const cuts = currentEpisode.value.cuts;
+      const idx = cuts.findIndex((c) => c.id === cut.id);
+      const j = idx + dir;
+      if (j < 0 || j >= cuts.length) return;
+      try {
+        await apiFetch(`/api/drama/cuts/${cut.id}`, { method: "PATCH", body: { order: cuts[j].order } });
+        await apiFetch(`/api/drama/cuts/${cuts[j].id}`, { method: "PATCH", body: { order: cut.order } });
+        await refreshEpisode();
+      } catch (e) { err.value = e.message; }
+    }
+    async function generateCut(cut) {
+      generatingCutId.value = cut.id;
+      genErrorFor.value = null;
+      try {
+        await apiFetch(`/api/drama/cuts/${cut.id}/generate`, { method: "POST", body: {} });
+        await refreshEpisode();
+        ensureGenPolling(); // 非同期生成 (queued/running) を数秒おきに追いかける
+      } catch (e) {
+        genError.value = e.message;
+        genErrorFor.value = cut.id;
+      } finally { generatingCutId.value = null; }
+    }
+
+    // ── 生成タスクの自動ポーリング ──
+    let genPollTimer = null;
+    function pendingGenerations() {
+      const cuts = currentEpisode.value?.cuts || [];
+      const out = [];
+      cuts.forEach((c) => (c.generations || []).forEach((g, gi) => {
+        if (g.status === "queued" || g.status === "running") out.push({ cutId: c.id, gi });
+      }));
+      return out;
+    }
+    function ensureGenPolling() {
+      if (genPollTimer) return;
+      genPollTimer = setInterval(async () => {
+        const pending = pendingGenerations();
+        if (!pending.length || view.value !== "episode") {
+          clearInterval(genPollTimer); genPollTimer = null;
+          return;
+        }
+        try {
+          for (const p of pending) {
+            await apiFetch(`/api/drama/cuts/${p.cutId}/generations/${p.gi}/refresh`, { method: "POST", body: {} });
+          }
+          await refreshEpisode();
+        } catch (_) { /* 次の周回で再試行 */ }
+      }, 8000);
+    }
+    async function refreshGeneration(cut, gi) {
+      try {
+        await apiFetch(`/api/drama/cuts/${cut.id}/generations/${gi}/refresh`, { method: "POST", body: {} });
+        await refreshEpisode();
+      } catch (e) { err.value = e.message; }
+    }
+    async function selectGeneration(cut, idx) {
+      try {
+        await apiFetch(`/api/drama/cuts/${cut.id}`, { method: "PATCH", body: { selectedGenerationIndex: idx } });
+        await refreshEpisode();
+      } catch (e) { err.value = e.message; }
+    }
+
+    async function exportEpisode() {
+      exporting.value = true;
+      exportErr.value = "";
+      try {
+        await apiFetch(`/api/drama/episodes/${currentEpisode.value.id}/export`, { method: "POST", body: {} });
+        await refreshEpisode();
+      } catch (e) { exportErr.value = e.message; } finally { exporting.value = false; }
+    }
+
+    // ── チャット ──
+    async function openChat(episodeId) {
+      chatEpisodeId = episodeId || null;
+      chatExpanded.value = false; // 開くたびに通常サイズから
+      chatOpen.value = true;
+      try {
+        const qs = chatEpisodeId ? `?episodeId=${chatEpisodeId}` : "";
+        const msgs = await apiFetch(`/api/drama/projects/${currentProject.value.id}/chat${qs}`);
+        const pending = msgs.find((m) => m.status === "pending");
+        chatMessages.value = msgs.filter((m) => m.status !== "pending");
+        scrollChatToBottomHard(); // 画像読み込み後も最下部 (最新) に張り付く
+        if (pending) {
+          // 前回の応答がまだ処理中 → インジケーターを出して追いかけ再開
+          chatSending.value = true;
+          pollForReply(pending.id).finally(() => { chatSending.value = false; });
+        }
+      } catch (e) { err.value = e.message; }
+    }
+
+    // pending の assistant 行が done になるまでポーリング (2.5秒間隔・最大3分)。
+    // シートを閉じても完走させる (AI の CRUD を画面に追従させるため)。
+    // 同じ pending は 1 本だけ追いかけ、開き直した時は同じ Promise を待つ
+    const activePolls = new Map();
+    function pollForReply(pendingId) {
+      const key = String(pendingId);
+      if (activePolls.has(key)) return activePolls.get(key);
+      const pr = (async () => {
+        const startedAt = Date.now();
+        const projectId = currentProject.value.id;
+        const qs = chatEpisodeId ? `?episodeId=${chatEpisodeId}` : "";
+        while (Date.now() - startedAt < 180000) {
+          await new Promise((r) => setTimeout(r, 2500));
+          try {
+            const msgs = await apiFetch(`/api/drama/projects/${projectId}/chat${qs}`);
+            const row = msgs.find((m) => String(m.id) === String(pendingId));
+            if (row && row.status !== "pending") {
+              if (chatOpen.value) {
+                chatMessages.value = msgs.filter((m) => m.status !== "pending");
+                nextTick(scrollChatToBottom);
+              }
+              // 設定操作が実行された可能性があるので画面データを追従
+              refreshProjectData();
+              return;
+            }
+          } catch (_) { /* 次の周回で再試行 */ }
+        }
+        if (chatOpen.value) {
+          chatMessages.value.push({ role: "assistant", content: "(まだ処理中です。しばらくしてチャットを開き直すと反映されています)" });
+        }
+      })().finally(() => activePolls.delete(key));
+      activePolls.set(key, pr);
+      return pr;
+    }
+    function scrollChatToBottom() {
+      if (chatLogEl.value) chatLogEl.value.scrollTop = chatLogEl.value.scrollHeight;
+    }
+    // 開いた直後は画像の読み込みで高さが伸びてスクロール位置がズレるため、
+    // 少し遅らせて数回スクロールし直す
+    function scrollChatToBottomHard() {
+      nextTick(scrollChatToBottom);
+      setTimeout(scrollChatToBottom, 250);
+      setTimeout(scrollChatToBottom, 800);
+    }
+    function onChatImagePick(e) {
+      for (const file of e.target.files || []) {
+        chatAttach.value.push({ file, preview: URL.createObjectURL(file) });
+      }
+      e.target.value = "";
+    }
+    async function sendChat() {
+      const message = chatInput.value.trim();
+      const attachments = [...chatAttach.value];
+      const quote = quoting.value;
+      if ((!message && !attachments.length) || chatSending.value) return;
+      chatSending.value = true;
+      chatInput.value = "";
+      chatAttach.value = [];
+      quoting.value = null;
+      chatMessages.value.push({
+        role: "user", content: message, images: attachments.map((a) => a.preview),
+        quotedContent: quote?.content, quotedImages: quote?.images || [],
+      });
+      nextTick(scrollChatToBottom);
+      try {
+        // 添付画像を Firebase Storage に上げてから URL をサーバーへ (サーバーが Gemini に渡す)
+        const imageUrls = [];
+        for (const a of attachments) {
+          imageUrls.push(await uploadImage(a.file, `auto-drama/${currentProject.value.id}/chat`));
+        }
+        const res = await apiFetch(`/api/drama/projects/${currentProject.value.id}/chat`, {
+          method: "POST", body: { message, episodeId: chatEpisodeId, imageUrls, quotedMessageId: quote?.id || null },
+        });
+        if (res.pendingId) {
+          // 非同期処理 (Cloud Tasks)。done になるまでポーリング
+          await pollForReply(res.pendingId);
+          return;
+        }
+        chatMessages.value.push({ role: "assistant", content: res.reply, images: res.images || [] });
+        nextTick(scrollChatToBottom);
+        // AI が設定を書き換えた場合、画面のデータも追従させる (ビューは動かさない)
+        if ((res.applied || []).length) refreshProjectData();
+      } catch (e) {
+        chatMessages.value.push({ role: "assistant", content: "(エラー: " + e.message + ")" });
+      } finally { chatSending.value = false; }
+    }
+
+    onMounted(async () => {
+      try {
+        const cfg = await fetch("/__/firebase/init.json").then((r) => r.json());
+        cfg.authDomain = location.hostname;
+        fbApp = initializeApp(cfg);
+        const auth = getAuth(fbApp);
+        await setPersistence(auth, browserLocalPersistence);
+        onAuthStateChanged(auth, async (u) => {
+          if (!u) { location.href = "/?next=" + encodeURIComponent(location.pathname); return; }
+          user.value = u;
+          ready.value = true;
+          await loadProjects();
+        });
+      } catch (e) {
+        err.value = "初期化失敗: " + (e.message || e);
+        ready.value = true;
+      }
+    });
+
+    return {
+      STATE_LABEL, IMG_KIND_LABEL,
+      view, ready, err, projects, currentProject, currentEpisode, projectTab,
+      creating, showNewProject, newProject, createProject,
+      showNewEpisode, newEpisode, createEpisode,
+      showNewCharacter, newCharacter, createCharacter,
+      openProject, backToProjects, openEpisode, backToProject, deleteProject, deletingProjectId,
+      charOpenId, charEdit, charSaving, toggleChar, onCharImagePick, saveCharacter, deleteCharacter,
+      locOpenId, locEdit, locSaving, showNewLocation, newLocation, toggleLoc, createLocation, onLocImagePick, saveLocation, deleteLocation,
+      cutOpenId, cutEdit, cutSaving, toggleCut, toggleCutChar, addCut, saveCut, deleteCut, moveCut,
+      generatingCutId, genError, genErrorFor, generateCut, selectGeneration, refreshGeneration,
+      composingSeries, composeSeriesFn, scriptEdit, scriptWriting, scriptSaving, writeScriptFn, saveScript,
+      composingCuts, composeCutsFn, storyboardingCutId, generateStoryboard,
+      gridding, generateStoryboardGrid, sbCropStyle,
+      editingCast, appearingCharacters, autoBuilding, autoBuildStage, autoBuildEpisode,
+      isAppearing, toggleAppearing, onKeyVisualPick,
+      exporting, exportErr, exportEpisode,
+      chatOpen, chatExpanded, viewer, lbStyle, openViewer, closeViewer, lbGo, lbDown, lbMove, lbUp, openChatImage, chatMessages, chatInput, chatSending, chatLogEl, chatAttach, quoting, quoteMsg, openChat, sendChat, onChatImagePick,
+      viewerQuoteTarget, quoteFromViewer, jumpToMessage, linkify, copyMsg, copiedMsgId, deleteChatMsg,
+      chapters, chapterOpenId, chapterContent, aozoraUrl, importing, analyzing, analyzeProgress,
+      setupAnalyzing, runSetupAnalysis, settingsEdit, settingsSaving, usage, openSettingsTab, saveSettings,
+      newAssetName, onStyleRefPick, clearStyleRef, onAssetPick, deleteAsset,
+      openSourceTab, importSource, analyzeChapters, toggleChapter, isRegisteredCharacter,
+      aozoraQuery, aozoraResults, searching, aozoraCreateUrl,
+      createStep, createTitle, createStages, chatStarters,
+      startCreate, searchAozora, createFromAozora, sendStarter,
+    };
+  },
+};
+
+createApp(App).component("bottom-sheet", BottomSheet).mount("#app");
+</script>
+</body>
+</html>

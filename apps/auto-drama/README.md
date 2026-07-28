@@ -1,87 +1,61 @@
-# 自動ドラマ作成（/auto-drama/）
+# ドラマ置き場（/auto-drama/）
 
-著作権切れ小説（青空文庫）を元に、AI と対話しながらキャラクター・シーン・
-キービジュアルを固め、1話1分前後の縦型ショート動画を作っていく制作アプリ。
-パイロット題材は芥川龍之介『邪宗門』。
+Claude のチャット (claude.ai) から MCP でドラマ/アニメ/漫画を作り、
+完成したショート動画をここに並べる「置き場」アプリ。
+制作の対話・キャラ設定・画像確認は全部 Claude チャット側でやる。アプリは見るだけ。
 
-## 制作フロー (実際のアニメ制作の工程に対応)
+## 構成 (v2: MCP 方式)
 
 ```
-プロジェクト作成 (+)
-↓ 【企画】青空文庫から作品を選ぶ（公式カタログ検索 or URL 貼り付け）
-↓ 【設定制作】AI が自動で構造化
-    本文取得 → 章分割 / 時代背景・絵柄 / キャラ・場所を下書き登録 / 章index
-↓ 【方向性】AI チャットで絵柄・粒度・トーンを詰める（画像添付も可）
-↓ 【シリーズ構成】AI が話数割り
-    ※ 1章=1話にしない。地味な章は圧縮、見せ場は引き伸ばす (呪術廻戦式の緩急)
-↓ 【① 脚本】AI が割当章から執筆 (N:ナレーション / 人物名:セリフ / ◆ト書き) → 手直し
-↓ 【② カット割り→絵コンテ→作画】
-    AI が脚本から 8 秒×N カットを設計 → 各カット静止画 (≈¥6) で構図確認 →
-    OK なら動画生成 (≈¥150)。キャラ確定+参照画像が無いと生成は 409 で止まる
-↓ 【③ 編集・書き出し】カット順連結 (Phase 1 はプレースホルダー)
+Claude チャット (claude.ai カスタムコネクタ)
+   │  MCP (Streamable HTTP)
+   ▼
+keihi-api の /api/drama/mcp/<token>
+   │  キャラ登録 / 画像生成 (Gemini ≈¥6) / 動画生成 (Seedance ≈¥19/秒)
+   ▼
+Cloud SQL (drama_projects / drama_characters / drama_videos) + GCS (動画・画像)
+   ▲
+   │  GET /api/drama/gallery (read-only)
+/auto-drama/ ← このアプリ。完成動画のギャラリー
 ```
 
-音声 (アフレコ)・BGM・実結合の書き出しはバッチ2 (未実装)。
+## claude.ai への接続 (初回だけ)
 
-## 使い方
+1. claude.ai → 設定 → コネクタ → カスタムコネクタを追加
+2. URL: `https://keihi-api-734350696397.asia-northeast1.run.app/api/drama/mcp/kx9m2drama7vqt4wp8zh`
+   (認証なし。トークンは URL に埋め込み。Cloud Run の env `DRAMA_MCP_TOKEN` で差し替え可)
+3. チャットで「新しいアニメのプロジェクト作って」等と言えば動く
 
-- ランチャーから [🎬 自動ドラマ作成] をタップ → 右下 + で作品検索から開始
-- 構造化が終わるとそのまま AI チャットが開く。スターターの質問チップから方向性決めへ
-- チャットは今の制作状態（キャラ・章 index・不足素材）+ 原作本文を毎回読んだ上で答える。
-  画像を添付して「この雰囲気で」のような指示もできる
-- 「原作」タブで章ごとの本文・要約・出演キャラ index を確認（色付き = キャラ登録済み）。
-  キャラが登録されていない時は「AIでキャラ・時代背景を登録 (構造化)」で再実行できる
-- 「設定」タブで時代背景 (worldSetting)・作画設定 (styleGuide) の確認・編集と、
-  プロジェクト別の API 費用 (Gemini / Seedance の概算) を確認できる
-- 章解析は Firebase Hosting の 60 秒制限を避けるため数章ずつのバッチをループ処理
-- カットの登場キャラが確定 + 参照画像ありでないと「動画生成」は 409 で止まる
-- 「書き出し」は全カットの採用テイクが揃うと実行可能（Phase 1 は代表カットの
-  動画 URL をプレースホルダーとして返す。実際の結合パイプラインは未実装）
+## MCP ツール一覧
+
+| ツール | 何をする |
+|---|---|
+| `drama_list_projects` / `drama_create_project` / `drama_update_project` / `drama_get_project` | プロジェクト CRUD (絵柄 styleGuide・世界観 worldSetting・メモ) |
+| `drama_upsert_character` | キャラ登録 (identityTokens で同一人物性を担保) |
+| `drama_generate_image` | 静止画生成 ≈¥6。saveAs で作画基準/キャラ参照に登録。チャットに縮小プレビューを返す |
+| `drama_generate_video` | 9:16 動画生成 (Seedance、8秒≈¥150)。非同期 |
+| `drama_check_videos` | 生成進捗の確認 + 完了時 GCS 保存 |
+| `drama_delete_video` | ギャラリーから削除 |
+| `drama_get_costs` | API 費用の集計 (drama_api_usage) |
+
+## 使い方 (アプリ側)
+
+- ランチャーから [ドラマ置き場] をタップ
+- プロジェクト別に完成動画が並ぶ。タップで全画面再生
+- 生成中の動画は「生成中」カードで出て、開いている間は 30 秒ごとに自動更新
+  (ギャラリー API がサーバー側で Seedance をポーリングするので、開くだけで進捗が進む)
 
 ## ファイル構成
 
-- `index.html` — UI + ロジック（Vue 3 CDN、ビルドレス）
-- サーバー側: `apps/keihi/server/index.js` の `/api/drama/*` エンドポイント
-  + `apps/keihi/server/drama-lib/`
-  - `aozora.js` — 青空文庫の取得（Shift_JIS デコード・ルビ除去・章分割・カード URL 解決）
-  - `state.js` — 制作状態の再計算・不足情報の判定
-  - `gemini.js` — チャット/作品構造化/章解析のプロンプト構築・呼び出し
-  - `videoGen.js` — Seedance (BytePlus ModelArk) 接続。タスク作成→ポーリングの非同期型。
-    env: `SEEDANCE_API_KEY` / `SEEDANCE_BASE_URL` (Cloud Run に設定済み)。
-    モデル ID はコード内 `SEEDANCE_MODEL` にハードコード (新モデルが出たらここを書き換え)。
-    キー未設定のローカルではモック動画にフォールバック
-- データは Firestore ではなく Cloud SQL (Postgres) の `drama_*` テーブル
-  （seko-kanri / fx-bot と同じ流儀。`ensureSchema()` で自動作成）
-- API コストは `drama_api_usage` にプロジェクト別で記録
-  (Gemini はトークン実測、Seedance は秒数×単価の概算。単価定数は server/index.js 冒頭の
-  `DRAMA_GEMINI_PRICES` / `DRAMA_SEEDANCE_*` — 料金改定時はここを直す)
-
-## Claude Code 用の点検 API
-
-データの構造・粒度を Claude Code が curl で確認できる read-only エンドポイント (認証なし):
-
-```
-GET /api/drama/inspect/<projectId>            … プロジェクト全体の構造 (JSON)
-GET /api/drama/inspect/<projectId>?chapter=3  … 第3章の本文込み
-GET /api/drama/inspect/<projectId>?chat=1     … AI チャットの履歴込み (直近100件)
-```
-
-返る内容: プロジェクト情報 / 章の統計 (数・字数 min/avg/max) / キャラ・場所一覧 (参照画像は枚数のみ) /
-章 index (要約・出演キャラ) / エピソード+カットの粒度 (プロンプト字数・生成回数など) / API 費用。
-
-## AI チャットでできること
-
-- 制作状態 (キャラ・場所・章 index・不足素材・原作本文) を毎回読んだ上で答える
-- 画像を添付して指示できる (「この雰囲気で」)
-- **画像生成もできる**: 「キャラの参照画像案を作って」等と頼むと、返答に
-  [画像生成: プロンプト] を含めてサーバーが実際に生成 (1メッセージ最大2枚、≈¥6/枚)。
-  生成画像はチャット内に表示され、履歴にも残る
+- `index.html` — ギャラリー UI (vanilla、置き場のみ)
+- `legacy.html` — 旧・アプリ内チャット方式の制作アプリ (v1)。青空文庫 import 等はこちらに残っている
+- サーバー側: `apps/keihi/server/index.js` の「auto-drama MCP」セクション
+  - `drama-lib/mcp.js` — MCP (Streamable HTTP) プロトコルの最小実装 (SDK 非依存・stateless)
+  - 動画テーブル: `drama_videos` (完成動画は GCS `drama/videos/` にミラー、署名 URL は期限前に自動貼り直し)
+  - v1 の `/api/drama/*` ルート・テーブルはそのまま残してある (legacy.html 用)
 
 ## 残課題 / 今後やりたいこと
 
-- [x] Seedance 公式 API 接続 (BytePlus ModelArk、モデルはコード内 SEEDANCE_MODEL でハードコード管理)
-- [ ] 実際のカット結合・ナレーション音声・字幕焼き込み・BGM を含む書き出しパイプライン
-- [ ] タイムラインの本格的なマルチトラック編集（現状はカット順の自動連結のみ）
-- [ ] AI によるカット割り自動提案（原文＋キービジュアルから8秒×数カットのプロンプト生成）
-- [ ] キャラクター画像のAI生成（現状は手動アップロードのみ）
-- [ ] ナレーション音声・台詞データの持ち場（narration_audio_url / dialogue 等の列追加）
+- [ ] カット連結・BGM・ナレーション付きの「1話まるごと書き出し」
+- [ ] チャットからの画像添付を MCP 経由で参照に登録する導線 (今は URL 渡しのみ)
+- [ ] ギャラリーの並べ替え・話数まとめ表示

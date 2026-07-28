@@ -27,6 +27,8 @@ import { composeSeries as dramaComposeSeries, writeScript as dramaWriteScript, c
 import { reviewGeneratedImage as dramaReviewImage } from "./drama-lib/gemini.js";
 import { searchWebImages as dramaSearchWebImages } from "./drama-lib/websearch.js";
 import { splitGridImage as dramaSplitGridImage } from "./drama-lib/gridsplit.js";
+import { createMcpHandler as dramaCreateMcpHandler } from "./drama-lib/mcp.js";
+import sharp from "sharp";
 import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -440,6 +442,431 @@ app.get("/api/drama/inspect/:id", async (req, res) => {
   }
 });
 
+// ═══════════════════ auto-drama MCP (claude.ai カスタムコネクタ) ═══════════════════
+// 小西の Claude チャットから直接ドラマ/アニメを作る用。チャット UI はアプリに持たず、
+// Claude との対話で キャラ設定 → 画像 (¥6) → 動画 (≈¥19/秒) まで進め、完成動画は
+// /auto-drama/ ギャラリーに並ぶ。認証は URL の推測不能トークン (inspect と同じ流儀)。
+// 接続 URL: https://<keihi-api の Cloud Run URL>/api/drama/mcp/<token>
+
+const DRAMA_MCP_TOKEN = (process.env.DRAMA_MCP_TOKEN || "kx9m2drama7vqt4wp8zh").trim();
+const DRAMA_GALLERY_URL = "https://keihi-496002.web.app/auto-drama/";
+
+function dramaMcpPool() {
+  const p = getPool();
+  if (!p) throw new Error("DB not configured");
+  return p;
+}
+
+async function dramaSignGs(gsUrl, days = 7) {
+  const [, , bucket, ...rest] = gsUrl.split("/");
+  const [url] = await storage.bucket(bucket).file(rest.join("/"))
+    .getSignedUrl({ action: "read", expires: Date.now() + days * 24 * 60 * 60 * 1000 });
+  return url;
+}
+
+// 生成画像を GCS に保存して { gcsUrl, url } を返す (dev フォールバックは data URL)
+async function dramaSaveImageToGcs(img, keyPrefix) {
+  if (storage && RECEIPTS_BUCKET) {
+    const ext = img.mimeType.includes("jpeg") ? "jpg" : "png";
+    const key = `${keyPrefix}/${Date.now()}.${ext}`;
+    await storage.bucket(RECEIPTS_BUCKET).file(key).save(Buffer.from(img.data, "base64"), { contentType: img.mimeType, resumable: false });
+    const gcsUrl = `gs://${RECEIPTS_BUCKET}/${key}`;
+    return { gcsUrl, url: await dramaSignGs(gcsUrl) };
+  }
+  return { gcsUrl: null, url: `data:${img.mimeType};base64,${img.data}` };
+}
+
+// 参照エントリ (文字列 URL or {url, gcsUrl}) から今使える URL を出す。
+// gcsUrl 持ちは署名を貼り直す (7日で署名が切れるため)
+async function dramaRefUrlOf(entry) {
+  if (!entry) return null;
+  if (typeof entry === "string") return entry;
+  if (entry.gcsUrl && storage) {
+    try { return await dramaSignGs(entry.gcsUrl); } catch (e) { console.warn("[drama-mcp] re-sign failed:", e.message); }
+  }
+  return entry.url || null;
+}
+
+// MCP ツール共通: 参照画像 URL リストを組み立てる (明示 URL → 作画基準 → キャラ参照)
+async function dramaMcpRefUrls(p, projectId, { characterNames = [], imageUrls = [], useStyleRefs = true, max = 4 }) {
+  const urls = [...(imageUrls || [])];
+  if (projectId) {
+    if (useStyleRefs) {
+      const { rows } = await p.query(`SELECT style_ref_images AS s FROM drama_projects WHERE id=$1`, [projectId]);
+      for (const entry of (rows[0]?.s || []).slice(0, 2)) {
+        const u = await dramaRefUrlOf(entry);
+        if (u) urls.push(u);
+      }
+    }
+    if ((characterNames || []).length) {
+      const { rows: chars } = await p.query(
+        `SELECT name, reference_images AS r FROM drama_characters WHERE project_id=$1`, [projectId]);
+      for (const nm of characterNames) {
+        const c = chars.find((x) => x.name === nm);
+        const u = await dramaRefUrlOf((c?.r || [])[0]);
+        if (u) urls.push(u);
+      }
+    }
+  }
+  return urls.slice(0, max);
+}
+
+// 動画行のステータス更新 (Seedance ポーリング + 完了時 GCS 保存 + 署名 URL 更新)。
+// MCP の check ツールとギャラリー API の両方から使う
+async function dramaMcpVideoRefresh(p, row) {
+  const patch = {};
+  if (["queued", "running"].includes(row.status) && row.provider_task_id) {
+    try {
+      const t = await dramaGetVideoTask(row.provider_task_id);
+      if (t.status === "succeeded" && t.videoUrl) {
+        patch.status = "done";
+        patch.video_url = t.videoUrl;
+        if (storage && RECEIPTS_BUCKET) {
+          try {
+            const vr = await fetch(t.videoUrl);
+            if (vr.ok) {
+              const buf = Buffer.from(await vr.arrayBuffer());
+              const key = `drama/videos/${row.id}.mp4`;
+              await storage.bucket(RECEIPTS_BUCKET).file(key).save(buf, { contentType: "video/mp4", resumable: false });
+              patch.gcs_url = `gs://${RECEIPTS_BUCKET}/${key}`;
+              patch.video_url = await dramaSignGs(patch.gcs_url);
+              patch.url_expires_at = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+            }
+          } catch (e) { console.warn("[drama-mcp] video GCS mirror failed:", e.message); }
+        }
+      } else if (t.status === "failed") {
+        patch.status = "failed";
+        patch.note = t.error || "生成に失敗しました";
+      } else if (t.status !== "unknown") {
+        patch.status = t.status; // queued/running
+      }
+    } catch (e) { console.warn("[drama-mcp] video poll failed:", e.message); }
+  } else if (row.status === "done" && row.gcs_url && storage) {
+    // 署名 URL の残り寿命が 1 日を切ったら貼り直す (毎回署名し直すと IAM 呼び出しが嵩む)
+    const exp = row.url_expires_at ? new Date(row.url_expires_at).getTime() : 0;
+    if (exp - Date.now() < 24 * 60 * 60 * 1000) {
+      try {
+        patch.video_url = await dramaSignGs(row.gcs_url);
+        patch.url_expires_at = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+      } catch (e) { console.warn("[drama-mcp] re-sign failed:", e.message); }
+    }
+  }
+  if (Object.keys(patch).length) {
+    const sets = Object.keys(patch).map((k, i) => `${k}=$${i + 2}`).join(", ");
+    await p.query(`UPDATE drama_videos SET ${sets}, updated_at=now() WHERE id=$1`, [row.id, ...Object.values(patch)]);
+    Object.assign(row, patch);
+  }
+  return row;
+}
+
+const dramaVideoRowPublic = (r) => ({
+  videoId: Number(r.id), projectId: r.project_id ? Number(r.project_id) : null,
+  title: r.title, status: r.status, durationSec: r.duration_sec,
+  videoUrl: r.status === "done" ? r.video_url : null, note: r.note || undefined,
+  createdAt: r.created_at,
+});
+
+const DRAMA_MCP_TOOLS = [
+  {
+    name: "drama_list_projects",
+    description: "ドラマ/アニメ制作プロジェクトの一覧 (キャラ数・動画数つき)",
+    inputSchema: { type: "object", properties: {} },
+    handler: async () => {
+      const p = dramaMcpPool();
+      const { rows } = await p.query(`
+        SELECT p.id::int, p.title, p.style_guide AS "styleGuide", p.created_at AS "createdAt",
+               (SELECT COUNT(*)::int FROM drama_characters c WHERE c.project_id=p.id) AS "characterCount",
+               (SELECT COUNT(*)::int FROM drama_videos v WHERE v.project_id=p.id) AS "videoCount"
+          FROM drama_projects p ORDER BY p.id DESC LIMIT 50`);
+      return { projects: rows, galleryUrl: DRAMA_GALLERY_URL };
+    },
+  },
+  {
+    name: "drama_create_project",
+    description: "新しい制作プロジェクトを作る。title 必須。styleGuide (絵柄・タッチの指定) と worldSetting (世界観・時代背景)、notes (あらすじ・構想メモ) は後から drama_update_project でも設定できる",
+    inputSchema: {
+      type: "object",
+      properties: {
+        title: { type: "string", description: "作品タイトル" },
+        styleGuide: { type: "string", description: "絵柄・作画の指定 (例: 劇画調、水彩、90年代セルアニメ風)" },
+        worldSetting: { type: "string", description: "世界観・時代背景" },
+        notes: { type: "string", description: "あらすじ・構想メモ" },
+      },
+      required: ["title"],
+    },
+    handler: async (a) => {
+      const p = dramaMcpPool();
+      const { rows } = await p.query(
+        `INSERT INTO drama_projects (title, style_guide, world_setting, ai_notes, created_by)
+         VALUES ($1,$2,$3,$4,'mcp') RETURNING id`,
+        [String(a.title).slice(0, 200), a.styleGuide || null, a.worldSetting || null, a.notes || null]);
+      return { ok: true, projectId: Number(rows[0].id) };
+    },
+  },
+  {
+    name: "drama_update_project",
+    description: "プロジェクトの title / styleGuide / worldSetting / notes を更新 (渡したものだけ)",
+    inputSchema: {
+      type: "object",
+      properties: {
+        projectId: { type: "number" },
+        title: { type: "string" }, styleGuide: { type: "string" },
+        worldSetting: { type: "string" }, notes: { type: "string" },
+      },
+      required: ["projectId"],
+    },
+    handler: async (a) => {
+      const p = dramaMcpPool();
+      const cols = { title: a.title, style_guide: a.styleGuide, world_setting: a.worldSetting, ai_notes: a.notes };
+      const sets = []; const vals = [a.projectId];
+      for (const [k, v] of Object.entries(cols)) if (v !== undefined) { vals.push(v); sets.push(`${k}=$${vals.length}`); }
+      if (!sets.length) throw new Error("更新項目がありません");
+      const r = await p.query(`UPDATE drama_projects SET ${sets.join(", ")}, updated_at=now() WHERE id=$1`, vals);
+      if (!r.rowCount) throw new Error("project not found");
+      return { ok: true };
+    },
+  },
+  {
+    name: "drama_get_project",
+    description: "プロジェクトの詳細 (設定・キャラクター一覧と参照画像 URL・動画一覧・累計コスト)",
+    inputSchema: { type: "object", properties: { projectId: { type: "number" } }, required: ["projectId"] },
+    handler: async (a) => {
+      const p = dramaMcpPool();
+      const { rows: proj } = await p.query(
+        `SELECT id::int, title, style_guide AS "styleGuide", world_setting AS "worldSetting",
+                ai_notes AS "notes", style_ref_images AS "styleRefImages", created_at AS "createdAt"
+           FROM drama_projects WHERE id=$1`, [a.projectId]);
+      if (!proj.length) throw new Error("project not found");
+      const { rows: chars } = await p.query(
+        `SELECT id::int, name, description, appearance_prompt AS "appearance",
+                identity_tokens AS "identityTokens", reference_images AS "referenceImages"
+           FROM drama_characters WHERE project_id=$1 ORDER BY id`, [a.projectId]);
+      for (const c of chars) {
+        c.referenceImages = (await Promise.all((c.referenceImages || []).map(dramaRefUrlOf))).filter(Boolean);
+      }
+      const project = proj[0];
+      project.styleRefImages = (await Promise.all((project.styleRefImages || []).map(dramaRefUrlOf))).filter(Boolean);
+      const { rows: videos } = await p.query(
+        `SELECT * FROM drama_videos WHERE project_id=$1 ORDER BY id DESC LIMIT 30`, [a.projectId]);
+      const { rows: cost } = await p.query(
+        `SELECT provider, COALESCE(SUM(cost_yen),0)::float AS yen FROM drama_api_usage WHERE project_id=$1 GROUP BY provider`, [a.projectId]);
+      return {
+        project, characters: chars,
+        videos: videos.map(dramaVideoRowPublic),
+        costYen: Object.fromEntries(cost.map((r) => [r.provider, Math.round(r.yen)])),
+        galleryUrl: DRAMA_GALLERY_URL,
+      };
+    },
+  },
+  {
+    name: "drama_upsert_character",
+    description: "キャラクターを登録/更新 (project 内で name をキーに upsert)。identityTokens は毎回の画像生成で同一人物に見せるための識別特徴 (例: 黒の詰襟、白髪の短髪、右目の泣きぼくろ)",
+    inputSchema: {
+      type: "object",
+      properties: {
+        projectId: { type: "number" },
+        name: { type: "string" },
+        description: { type: "string", description: "性格・役どころ" },
+        appearance: { type: "string", description: "見た目のプロンプト" },
+        identityTokens: { type: "array", items: { type: "string" } },
+      },
+      required: ["projectId", "name"],
+    },
+    handler: async (a) => {
+      const p = dramaMcpPool();
+      const { rows } = await p.query(`SELECT id FROM drama_characters WHERE project_id=$1 AND name=$2`, [a.projectId, a.name]);
+      if (rows.length) {
+        const cols = { description: a.description, appearance_prompt: a.appearance, identity_tokens: a.identityTokens ? JSON.stringify(a.identityTokens) : undefined };
+        const sets = []; const vals = [rows[0].id];
+        for (const [k, v] of Object.entries(cols)) if (v !== undefined) { vals.push(v); sets.push(`${k}=$${vals.length}`); }
+        if (sets.length) await p.query(`UPDATE drama_characters SET ${sets.join(", ")}, updated_at=now() WHERE id=$1`, vals);
+        return { ok: true, characterId: Number(rows[0].id), updated: true };
+      }
+      const ins = await p.query(
+        `INSERT INTO drama_characters (project_id, name, description, appearance_prompt, identity_tokens, status)
+         VALUES ($1,$2,$3,$4,$5,'confirmed') RETURNING id`,
+        [a.projectId, a.name, a.description || null, a.appearance || null, JSON.stringify(a.identityTokens || [])]);
+      return { ok: true, characterId: Number(ins.rows[0].id), created: true };
+    },
+  },
+  {
+    name: "drama_generate_image",
+    description: "静止画を生成する (≈¥6/枚)。キャラデザイン案・キービジュアル・シーン画・漫画のコマ等なんでも。characterNames を渡すとそのキャラの参照画像を自動で使い、プロジェクトの作画基準画像 (styleRef) も既定で参照する。saveAs で生成結果を参照画像として登録できる: 'style_ref' (作画基準に追加) / 'character_ref:キャラ名' (そのキャラの参照に追加)",
+    inputSchema: {
+      type: "object",
+      properties: {
+        projectId: { type: "number" },
+        prompt: { type: "string", description: "描いてほしい画の指示 (日本語OK)" },
+        aspectRatio: { type: "string", description: "既定 9:16 (縦型ショート)。1:1 / 16:9 等も可" },
+        characterNames: { type: "array", items: { type: "string" }, description: "登場させるキャラ名 (参照画像を自動添付)" },
+        referenceImageUrls: { type: "array", items: { type: "string" }, description: "追加の参照画像 URL (過去の生成画像 URL 等)" },
+        useStyleRefs: { type: "boolean", description: "作画基準画像を参照に含める (既定 true)" },
+        saveAs: { type: "string", description: "'style_ref' | 'character_ref:キャラ名' | 省略 (保存だけ)" },
+      },
+      required: ["projectId", "prompt"],
+    },
+    handler: async (a) => {
+      const p = dramaMcpPool();
+      const refUrls = await dramaMcpRefUrls(p, a.projectId, {
+        characterNames: a.characterNames, imageUrls: a.referenceImageUrls,
+        useStyleRefs: a.useStyleRefs !== false, max: 4,
+      });
+      const refParts = await dramaFetchImagePartsSafe(refUrls, 4);
+      const img = await dramaGenerateImage(a.prompt, refParts, { aspectRatio: a.aspectRatio || "9:16" });
+      dramaRecordUsage({ projectId: a.projectId, provider: "gemini", kind: "mcp_image", model: DRAMA_GEMINI_IMAGE_MODEL, costYen: DRAMA_GEMINI_IMAGE_YEN });
+      const saved = await dramaSaveImageToGcs(img, `drama/mcp/${a.projectId}`);
+
+      let savedAs = null;
+      if (a.saveAs === "style_ref") {
+        // style_ref_images は既存 UI との互換で文字列 URL の配列
+        await p.query(
+          `UPDATE drama_projects SET style_ref_images = style_ref_images || $2::jsonb, updated_at=now() WHERE id=$1`,
+          [a.projectId, JSON.stringify([saved.url])]);
+        savedAs = "style_ref";
+      } else if (typeof a.saveAs === "string" && a.saveAs.startsWith("character_ref:")) {
+        const nm = a.saveAs.slice("character_ref:".length).trim();
+        const r = await p.query(
+          `UPDATE drama_characters SET reference_images = reference_images || $3::jsonb, updated_at=now()
+            WHERE project_id=$1 AND name=$2`,
+          [a.projectId, nm, JSON.stringify([{ url: saved.url, gcsUrl: saved.gcsUrl }])]);
+        if (!r.rowCount) throw new Error(`キャラ「${nm}」が未登録です (画像は ${saved.url} に保存済み)`);
+        savedAs = `character_ref:${nm}`;
+      }
+
+      // チャット表示用に縮小プレビューを返す (原寸 base64 は重いので URL で渡す)
+      const preview = await sharp(Buffer.from(img.data, "base64")).resize({ width: 512, withoutEnlargement: true }).jpeg({ quality: 72 }).toBuffer();
+      return {
+        content: [
+          { type: "image", data: preview.toString("base64"), mimeType: "image/jpeg" },
+          { type: "text", text: JSON.stringify({ ok: true, imageUrl: saved.url, savedAs, costYen: DRAMA_GEMINI_IMAGE_YEN, note: "動画や次の画像の参照にするときは referenceImageUrls にこの imageUrl を渡す" }, null, 1) },
+        ],
+      };
+    },
+  },
+  {
+    name: "drama_generate_video",
+    description: "縦型 (9:16) 動画カットを生成する (Seedance、≈¥19/秒・8秒で≈¥150)。非同期なので投げたら 1〜2 分後に drama_check_videos で確認。referenceImageUrls に確認済みの静止画 (drama_generate_image の imageUrl) を渡すと構図・絵柄が安定する。完成するとギャラリー (置き場アプリ) に自動で並ぶ",
+    inputSchema: {
+      type: "object",
+      properties: {
+        projectId: { type: "number" },
+        prompt: { type: "string", description: "動きまで含めたカットの指示" },
+        title: { type: "string", description: "ギャラリーに出す題名 (例: 第1話 カット3)" },
+        durationSec: { type: "number", description: "4〜15 秒、既定 8" },
+        characterNames: { type: "array", items: { type: "string" } },
+        referenceImageUrls: { type: "array", items: { type: "string" } },
+      },
+      required: ["projectId", "prompt"],
+    },
+    handler: async (a) => {
+      const p = dramaMcpPool();
+      const durationSec = Math.max(4, Math.min(15, Math.round(a.durationSec || 8)));
+      const refUrls = await dramaMcpRefUrls(p, a.projectId, {
+        characterNames: a.characterNames, imageUrls: a.referenceImageUrls, useStyleRefs: false, max: 4,
+      });
+      if (!dramaSeedanceConfigured()) {
+        const mock = await dramaGenerateMock({ prompt: a.prompt, durationSec });
+        const { rows } = await p.query(
+          `INSERT INTO drama_videos (project_id, title, prompt, status, model, duration_sec, video_url, note)
+           VALUES ($1,$2,$3,'done',$4,$5,$6,$7) RETURNING id`,
+          [a.projectId, a.title || "", a.prompt, mock.model, durationSec, mock.videoUrl, mock.note]);
+        return { ok: true, videoId: Number(rows[0].id), status: "done", mock: true, galleryUrl: DRAMA_GALLERY_URL };
+      }
+      const { taskId, model } = await dramaCreateVideoTask({ prompt: a.prompt, referenceImageUrls: refUrls, durationSec });
+      const { rows } = await p.query(
+        `INSERT INTO drama_videos (project_id, title, prompt, status, provider_task_id, model, duration_sec)
+         VALUES ($1,$2,$3,'queued',$4,$5,$6) RETURNING id`,
+        [a.projectId, a.title || "", a.prompt, taskId, model, durationSec]);
+      dramaRecordSeedanceUsage(a.projectId, durationSec, model, "mcp_");
+      const costYen = Math.round(DRAMA_SEEDANCE_TOKENS_PER_SEC * durationSec * DRAMA_SEEDANCE_USD_PER_1M / 1e6 * DRAMA_USD_JPY);
+      return { ok: true, videoId: Number(rows[0].id), status: "queued", costYen, note: "1〜2分後に drama_check_videos で確認" };
+    },
+  },
+  {
+    name: "drama_check_videos",
+    description: "生成中の動画の進捗確認と、完成動画一覧の取得。完成した動画はギャラリーに並ぶ",
+    inputSchema: { type: "object", properties: { projectId: { type: "number", description: "省略で全プロジェクト" } } },
+    handler: async (a) => {
+      const p = dramaMcpPool();
+      const { rows } = await p.query(
+        `SELECT * FROM drama_videos ${a.projectId ? "WHERE project_id=$1" : ""} ORDER BY id DESC LIMIT 30`,
+        a.projectId ? [a.projectId] : []);
+      for (const r of rows) await dramaMcpVideoRefresh(p, r);
+      const pending = rows.filter((r) => ["queued", "running"].includes(r.status)).length;
+      return { videos: rows.map(dramaVideoRowPublic), pending, galleryUrl: DRAMA_GALLERY_URL };
+    },
+  },
+  {
+    name: "drama_delete_video",
+    description: "動画をギャラリーから削除する (GCS の実ファイルも消す)",
+    inputSchema: { type: "object", properties: { videoId: { type: "number" } }, required: ["videoId"] },
+    handler: async (a) => {
+      const p = dramaMcpPool();
+      const { rows } = await p.query(`DELETE FROM drama_videos WHERE id=$1 RETURNING gcs_url`, [a.videoId]);
+      if (!rows.length) throw new Error("video not found");
+      if (rows[0].gcs_url && storage) {
+        try {
+          const [, , bucket, ...rest] = rows[0].gcs_url.split("/");
+          await storage.bucket(bucket).file(rest.join("/")).delete();
+        } catch (e) { console.warn("[drama-mcp] gcs delete failed:", e.message); }
+      }
+      return { ok: true };
+    },
+  },
+  {
+    name: "drama_get_costs",
+    description: "API 費用の集計 (円)。projectId 省略で全体",
+    inputSchema: { type: "object", properties: { projectId: { type: "number" } } },
+    handler: async (a) => {
+      const p = dramaMcpPool();
+      const { rows } = await p.query(
+        `SELECT provider, kind, COALESCE(SUM(cost_yen),0)::float AS yen, COUNT(*)::int AS n
+           FROM drama_api_usage ${a.projectId ? "WHERE project_id=$1" : ""} GROUP BY provider, kind ORDER BY yen DESC`,
+        a.projectId ? [a.projectId] : []);
+      const total = Math.round(rows.reduce((s, r) => s + r.yen, 0));
+      return { totalYen: total, breakdown: rows.map((r) => ({ ...r, yen: Math.round(r.yen) })) };
+    },
+  },
+];
+
+const dramaMcpHandler = dramaCreateMcpHandler({
+  name: "auto-drama",
+  version: "1.0.0",
+  instructions: [
+    "ドラマ/アニメ/漫画をチャットから作る制作ツール。基本の流れ:",
+    "1. drama_create_project でプロジェクト作成 (styleGuide に絵柄を書く)",
+    "2. drama_upsert_character でキャラ登録 → drama_generate_image でデザイン案 (≈¥6/枚) → 気に入ったら saveAs: 'character_ref:名前' で参照登録",
+    "3. シーンの静止画を drama_generate_image で確認 (¥6) してから drama_generate_video (8秒≈¥150) に進むと安い",
+    "4. 動画は非同期。drama_check_videos で確認。完成したらギャラリー (置き場アプリ) に自動で並ぶ",
+    "画像同士の連続性は referenceImageUrls / characterNames の参照画像で保つ。",
+  ].join("\n"),
+  tools: DRAMA_MCP_TOOLS,
+});
+
+app.all("/api/drama/mcp/:token", (req, res) => {
+  if (req.params.token !== DRAMA_MCP_TOKEN) return res.status(403).json({ error: "forbidden" });
+  return dramaMcpHandler(req, res);
+});
+
+// ギャラリー (置き場アプリ /auto-drama/) 用の一覧 API。inspect と同じ read-only・認証なし。
+// pending がある時はここで Seedance をポーリングするので、アプリを開くだけで進捗が進む
+app.get("/api/drama/gallery", async (req, res) => {
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  try {
+    const { rows } = await p.query(`
+      SELECT v.*, pr.title AS project_title
+        FROM drama_videos v LEFT JOIN drama_projects pr ON pr.id = v.project_id
+       ORDER BY v.id DESC LIMIT 100`);
+    for (const r of rows) await dramaMcpVideoRefresh(p, r);
+    res.json({
+      videos: rows.map((r) => ({ ...dramaVideoRowPublic(r), projectTitle: r.project_title || "その他" })),
+    });
+  } catch (err) {
+    console.error("[drama] gallery", err);
+    res.status(500).json({ error: err.message });
+  }
+});
 
 // Gate /api/* with a Firebase ID token. The browser calls this service
 // same-origin via Firebase Hosting rewrite, so no CORS/OAuth token is
@@ -1615,6 +2042,26 @@ async function ensureSchema() {
       )
     `);
     await p.query("CREATE INDEX IF NOT EXISTS drama_usage_project_idx ON drama_api_usage (project_id, created_at DESC)");
+    // MCP 経由 (Claude チャット) で作った完成動画の置き場。/auto-drama/ ギャラリーがこれを一覧する
+    await p.query(`
+      CREATE TABLE IF NOT EXISTS drama_videos (
+        id               BIGSERIAL PRIMARY KEY,
+        project_id       BIGINT REFERENCES drama_projects(id) ON DELETE SET NULL,
+        title            TEXT NOT NULL DEFAULT '',
+        prompt           TEXT,
+        status           TEXT NOT NULL DEFAULT 'queued',  -- queued|running|done|failed
+        provider_task_id TEXT,
+        model            TEXT,
+        duration_sec     INTEGER,
+        gcs_url          TEXT,             -- gs://bucket/key (恒久保存)
+        video_url        TEXT,             -- 署名 URL キャッシュ (期限あり)
+        url_expires_at   TIMESTAMPTZ,
+        note             TEXT,
+        created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+        updated_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+      )
+    `);
+    await p.query("CREATE INDEX IF NOT EXISTS drama_videos_project_idx ON drama_videos (project_id, created_at DESC)");
 
     schemaMigrated = true;
     console.log("[schema] migration ok: records.drive_url + tasks + yado_bookings + seko_* + fx_* + drama_* ensured");
