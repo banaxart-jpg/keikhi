@@ -755,6 +755,7 @@ const DRAMA_MCP_TOOLS = [
         durationSec: { type: "number", description: "4〜15 秒、既定 8" },
         characterNames: { type: "array", items: { type: "string" } },
         referenceImageUrls: { type: "array", items: { type: "string" } },
+        model: { type: "string", description: "Seedance モデル ID の上書き (既定はサーバー設定。未開通エラーが出た時に開通済み ID を渡す)" },
       },
       required: ["projectId", "prompt"],
     },
@@ -772,7 +773,10 @@ const DRAMA_MCP_TOOLS = [
           [a.projectId, a.title || "", a.prompt, mock.model, durationSec, mock.videoUrl, mock.note]);
         return { ok: true, videoId: Number(rows[0].id), status: "done", mock: true, galleryUrl: DRAMA_GALLERY_URL };
       }
-      const { taskId, model } = await dramaCreateVideoTask({ prompt: a.prompt, referenceImageUrls: refUrls, durationSec });
+      const { taskId, model } = await dramaCreateVideoTask({
+        prompt: a.prompt, referenceImageUrls: refUrls, durationSec,
+        ...(typeof a.model === "string" && a.model.trim() ? { model: a.model.trim() } : {}),
+      });
       const { rows } = await p.query(
         `INSERT INTO drama_videos (project_id, title, prompt, status, provider_task_id, model, duration_sec)
          VALUES ($1,$2,$3,'queued',$4,$5,$6) RETURNING id`,

@@ -6,8 +6,10 @@
 //   SEEDANCE_API_KEY   … ModelArk の API キー
 //   SEEDANCE_BASE_URL  … 例: https://ark.ap-southeast.bytepluses.com/api/v3
 //
-// モデル ID は小西指示でハードコード (新モデルが出たらここを書き換えて push):
-export const SEEDANCE_MODEL = "dreamina-seedance-2-0-fast-260128";
+// モデル ID は小西指示でハードコード (新モデルが出たらここを書き換えて push)。
+// アカウントで開通済みのモデルが別 ID の場合は Cloud Run の env SEEDANCE_MODEL で上書きできる
+// (未開通エラー: "has not activated the model ..." が出たらこれ)
+export const SEEDANCE_MODEL = (process.env.SEEDANCE_MODEL || "").trim() || "dreamina-seedance-2-0-fast-260128";
 
 const API_KEY = process.env.SEEDANCE_API_KEY || process.env.SEADANCE_API_KEY || "";
 const BASE_URL = (process.env.SEEDANCE_BASE_URL || "https://ark.ap-southeast.bytepluses.com/api/v3").replace(/\/$/, "");
