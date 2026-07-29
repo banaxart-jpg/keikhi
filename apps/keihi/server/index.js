@@ -3295,6 +3295,49 @@ async function upsertYadoBookings(rawRows) {
   return { upserted, latestModified };
 }
 
+// キャンセル/移動で Beds24 から消えた予約を、ローカルキャッシュでも cancelled 扱いにする。
+// Beds24 v2 の /bookings は既定でキャンセル済みを返さないため、差分同期(modifiedFrom)だけでは
+// キャンセルを取りこぼす。表示範囲を全件取り直し、その live 集合に無いローカル予約を消す(照合)。
+// liveIds = 今 Beds24 に存在する予約 id の集合、[from,to] = arrival の照合範囲。
+async function reconcileYadoRange(from, to, liveIds) {
+  const p = getPool();
+  if (!p) return 0;
+  await ensureSchema();
+  const { rows } = await p.query(
+    `SELECT id FROM yado_bookings WHERE arrival >= $1::date AND arrival <= $2::date AND status != 'cancelled'`,
+    [from, to]
+  );
+  const stale = rows.map((r) => Number(r.id)).filter((id) => id && !liveIds.has(id));
+  if (!stale.length) return 0;
+  await p.query(
+    `UPDATE yado_bookings SET status = 'cancelled', synced_at = now() WHERE id = ANY($1::bigint[])`,
+    [stale]
+  );
+  console.log(`[yado] reconcile: ${stale.length}件を cancelled に (Beds24 に無し, ${from}..${to}) ids=${stale.join(",")}`);
+  return stale.length;
+}
+
+// 表示範囲(過去1年〜未来5年)を Beds24 から全件取り直して upsert + 照合。
+// modifiedFrom を渡すと、先に差分 upsert して移動/変更を反映(範囲外へ移動した予約の
+// 誤キャンセルを防ぐ)。返り値に reconciled(消した件数)を含む。
+async function refreshYadoWindow({ modifiedFrom } = {}) {
+  let latest = null, diffUpserted = 0;
+  if (modifiedFrom) {
+    const raw = await fetchBeds24All({ modifiedFrom });
+    const r = await upsertYadoBookings(raw);
+    diffUpserted = r.upserted;
+    latest = r.latestModified;
+  }
+  const y = new Date().getFullYear();
+  const from = `${y - 1}-01-01`, to = `${y + 5}-12-31`;
+  const winRaw = await fetchBeds24All({ arrivalFrom: from, arrivalTo: to });
+  const wr = await upsertYadoBookings(winRaw);
+  if (wr.latestModified && (!latest || wr.latestModified > latest)) latest = wr.latestModified;
+  const liveIds = new Set(winRaw.map((b) => Number(b.id || b.bookId)).filter(Boolean));
+  const reconciled = await reconcileYadoRange(from, to, liveIds);
+  return { fetched: winRaw.length, upserted: wr.upserted + diffUpserted, reconciled, latestModified: latest, window: { from, to } };
+}
+
 async function getYadoMeta(key) {
   const p = getPool();
   if (!p) return null;
@@ -3566,11 +3609,14 @@ app.post("/api/yado/backfill", async (req, res) => {
   try {
     const raw = await fetchBeds24All({ arrivalFrom: from, arrivalTo: to });
     const { upserted, latestModified } = await upsertYadoBookings(raw);
+    // 照合: 指定範囲で Beds24 に無いローカル予約を cancelled に (キャンセル取りこぼし対策)
+    const liveIds = new Set(raw.map((b) => Number(b.id || b.bookId)).filter(Boolean));
+    const reconciled = await reconcileYadoRange(from, to, liveIds);
     if (latestModified) {
       const cur = await getYadoMeta("last_sync_modified");
       if (!cur || latestModified > cur) await setYadoMeta("last_sync_modified", latestModified);
     }
-    res.json({ ok: true, fetched: raw.length, upserted, from, to, latestModified });
+    res.json({ ok: true, fetched: raw.length, upserted, reconciled, from, to, latestModified });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -3584,22 +3630,12 @@ app.post("/api/yado/refresh", async (req, res) => {
   if (!BEDS24_API_TOKEN) return res.status(503).json({ error: "MANCHIKAN_BEDS_KEY not set" });
   try {
     const lastSync = await getYadoMeta("last_sync_modified");
-    let raw, kind;
-    if (lastSync) {
-      // 差分: 前回の最新 modifiedTime 以降
-      raw = await fetchBeds24All({ modifiedFrom: lastSync });
-      kind = "diff";
-    } else {
-      // 初回: 過去 5 年〜未来 5 年を arrival ベースで全部
-      const y = new Date().getFullYear();
-      raw = await fetchBeds24All({ arrivalFrom: `${y - 5}-01-01`, arrivalTo: `${y + 5}-12-31` });
-      kind = "backfill";
+    // 差分 upsert(あれば) + 表示範囲の全件取り直し + 照合(消えた予約を cancelled に)
+    const out = await refreshYadoWindow({ modifiedFrom: lastSync || undefined });
+    if (out.latestModified && (!lastSync || out.latestModified > lastSync)) {
+      await setYadoMeta("last_sync_modified", out.latestModified);
     }
-    const { upserted, latestModified } = await upsertYadoBookings(raw);
-    if (latestModified && (!lastSync || latestModified > lastSync)) {
-      await setYadoMeta("last_sync_modified", latestModified);
-    }
-    res.json({ ok: true, kind, fetched: raw.length, upserted, latestModified });
+    res.json({ ok: true, kind: lastSync ? "diff+reconcile" : "backfill+reconcile", ...out });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -3616,12 +3652,12 @@ app.post("/api/internal/yado/sync-bookings", async (req, res) => {
     if (!modifiedFrom) {
       modifiedFrom = new Date(Date.now() - 30 * 86400000).toISOString();
     }
-    const raw = await fetchBeds24All({ modifiedFrom });
-    const { upserted, latestModified } = await upsertYadoBookings(raw);
-    if (latestModified && latestModified > modifiedFrom) {
-      await setYadoMeta("last_sync_modified", latestModified);
+    // 差分 + 表示範囲の全件取り直し + 照合 (日次でもキャンセルを確実に反映)
+    const out = await refreshYadoWindow({ modifiedFrom });
+    if (out.latestModified && out.latestModified > modifiedFrom) {
+      await setYadoMeta("last_sync_modified", out.latestModified);
     }
-    res.json({ ok: true, fetched: raw.length, upserted, modifiedFrom, latestModified });
+    res.json({ ok: true, fetched: out.fetched, upserted: out.upserted, reconciled: out.reconciled, modifiedFrom, latestModified: out.latestModified });
   } catch (e) {
     console.error("[yado-sync]", e);
     res.status(500).json({ error: e.message });
