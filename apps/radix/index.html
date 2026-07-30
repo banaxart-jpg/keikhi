@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Radix">
+<link rel="apple-touch-icon" href="/icon.png">
+<title>Radix</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=EB+Garamond:ital,wght@0,400;0,500;0,600;1,400;1,500&family=Outfit:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@24,400,0,0">
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+:root {
+  --ink: #14121f; --ink2: #1c1930; --card: #f2e9d4; --card2: #e8dcc0;
+  --text: #efe8d6; --muted: #a49c86; --gold: #d8b45a; --gold2: #b8923a;
+  --g: #6aa0d8; --r: #d8975a; --h: #b07ad8;  /* Germanic / Romance / Hellenic */
+}
+body { font-family: 'Outfit', -apple-system, sans-serif; color: var(--text); min-height: 100vh;
+  background:
+    radial-gradient(120% 80% at 50% -10%, #26223f 0%, #16142400 60%),
+    radial-gradient(100% 60% at 50% 110%, #241d33 0%, #16142400 55%),
+    #14121f;
+  padding-bottom: 50px; }
+.icon { font-family: 'Material Symbols Outlined'; font-size: 1.1em; vertical-align: -0.18em; }
+.serif { font-family: 'EB Garamond', serif; }
+
+.bar { display: flex; justify-content: space-between; align-items: center; padding: 40px 18px 0; }
+.back { padding: 8px 14px; border-radius: 22px; font-size: 12px; font-weight: 700; border: none;
+  color: var(--muted); background: rgba(255,255,255,0.05); box-shadow: inset 0 0 0 1px rgba(216,180,90,0.2);
+  text-decoration: none; }
+.wrap { max-width: 640px; margin: 0 auto; padding: 8px 18px 40px; }
+
+.brand { text-align: center; margin: 18px 0 4px; }
+.brand .logo { font-family: 'EB Garamond', serif; font-weight: 600; font-size: 40px; letter-spacing: 0.14em;
+  color: var(--gold); text-shadow: 0 2px 20px rgba(216,180,90,0.25); }
+.brand .logo .dot { color: var(--r); }
+.brand .tag { font-size: 11px; letter-spacing: 0.32em; color: var(--muted); text-transform: uppercase; margin-top: 4px; }
+
+.hint { text-align: center; font-size: 12px; color: var(--muted); margin: 14px 0 10px; }
+.hint .hl { color: var(--gold); font-weight: 700; }
+
+/* 意味チップ */
+.concepts { display: flex; gap: 8px; overflow-x: auto; scrollbar-width: none; padding: 4px 2px 2px; margin-bottom: 6px; }
+.concepts::-webkit-scrollbar { display: none; }
+.cchip { flex: 0 0 auto; padding: 9px 16px; border-radius: 22px; font-size: 15px; font-weight: 700;
+  border: none; cursor: pointer; font-family: inherit; color: var(--text);
+  background: rgba(255,255,255,0.05); box-shadow: inset 0 0 0 1px rgba(255,255,255,0.08); }
+.cchip.on { color: #1a1420; background: var(--gold); box-shadow: 0 4px 16px rgba(216,180,90,0.35); }
+.cchip .en { font-size: 11px; opacity: 0.6; margin-left: 5px; }
+
+/* 祖先カード */
+.ancestor { margin: 16px 0 14px; padding: 16px 18px; border-radius: 16px;
+  background: linear-gradient(180deg, rgba(216,180,90,0.10), rgba(216,180,90,0.02));
+  box-shadow: inset 0 0 0 1px rgba(216,180,90,0.28); position: relative; }
+.ancestor .lbl { font-size: 10px; letter-spacing: 0.28em; color: var(--gold2); text-transform: uppercase; font-weight: 700; }
+.ancestor .root { font-family: 'EB Garamond', serif; font-style: italic; font-size: 32px; font-weight: 600;
+  color: var(--gold); margin: 4px 0 2px; }
+.ancestor .gloss { font-size: 13px; color: var(--muted); }
+
+/* 言語カード */
+.langs { display: flex; flex-direction: column; gap: 9px; }
+.lang { display: flex; align-items: center; gap: 14px; padding: 13px 16px; border-radius: 14px;
+  background: var(--card); color: #2a2418; box-shadow: 0 6px 18px rgba(0,0,0,0.35);
+  position: relative; overflow: hidden; }
+.lang::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 4px; background: var(--famc); }
+.lang .flag { font-size: 26px; line-height: 1; }
+.lang .mid { flex: 1; min-width: 0; }
+.lang .word { font-family: 'EB Garamond', serif; font-size: 27px; font-weight: 600; line-height: 1.05; }
+.lang .word .hl { color: var(--gold2); text-shadow: 0 0 1px rgba(184,146,58,0.4); }
+.lang .roman { font-family: 'EB Garamond', serif; font-style: italic; font-size: 15px; color: #6a6250; }
+.lang .meta { font-size: 10px; color: #8a8168; font-weight: 700; letter-spacing: 0.06em; margin-top: 3px; }
+.lang .ipa { font-size: 12px; color: #7a7360; }
+.lang .fam { flex: 0 0 auto; font-size: 9px; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase;
+  color: #fff; background: var(--famc); padding: 3px 8px; border-radius: 10px; }
+
+.note { margin-top: 14px; padding: 13px 16px; border-radius: 14px; font-size: 13px; line-height: 1.7;
+  background: rgba(176,122,216,0.08); box-shadow: inset 0 0 0 1px rgba(176,122,216,0.25); color: #d8cfe4; }
+.note b { color: #e6d8f4; }
+.note .h { font-size: 11px; letter-spacing: 0.2em; text-transform: uppercase; color: var(--h); font-weight: 800; display: block; margin-bottom: 5px; }
+
+.legend { display: flex; gap: 14px; justify-content: center; margin-top: 22px; font-size: 11px; color: var(--muted); }
+.legend span { display: inline-flex; align-items: center; gap: 5px; }
+.legend .d { width: 9px; height: 9px; border-radius: 3px; }
+</style>
+</head>
+<body>
+<div class="bar">
+  <a class="back" href="/"><span class="icon">arrow_back</span> 戻る</a>
+  <span style="font-size:11px;letter-spacing:0.24em;color:var(--muted);">ETYMOLOGY</span>
+  <span style="width:64px;"></span>
+</div>
+
+<div class="wrap">
+  <div class="brand">
+    <div class="logo serif">Radi<span class="dot">x</span></div>
+    <div class="tag">言葉の根をたどる</div>
+  </div>
+  <div class="hint">意味を選ぶと、6言語が並びます。<span class="hl">共通の骨組み（子音）が金色で光る</span></div>
+
+  <div class="concepts" id="concepts"></div>
+  <div class="ancestor" id="ancestor"></div>
+  <div class="langs" id="langs"></div>
+  <div id="noteBox"></div>
+
+  <div class="legend">
+    <span><span class="d" style="background:var(--g)"></span>ゲルマン系</span>
+    <span><span class="d" style="background:var(--r)"></span>ロマンス系</span>
+    <span><span class="d" style="background:var(--h)"></span>ギリシャ系</span>
+  </div>
+</div>
+
+<script src="/config.js"></script>
+<script>
+// ── データ（1単語＝1エントリ。増やすのはここに足すだけ）──
+// keys = 光らせる子音（ラテン+ギリシャ）。fam: g=ゲルマン r=ロマンス h=ギリシャ
+const FAMC = { g: "var(--g)", r: "var(--r)", h: "var(--h)" };
+const CONCEPTS = [
+  { key: "mother", ja: "母", root: "*méh₂tēr", gloss: "印欧祖語「母」", keys: "mtdrμτρ", words: [
+    { lang: "ドイツ語", flag: "🇩🇪", text: "Mutter", ipa: "ˈmʊtɐ", fam: "g" },
+    { lang: "英語", flag: "🇬🇧", text: "mother", ipa: "ˈmʌðə", fam: "g" },
+    { lang: "フランス語", flag: "🇫🇷", text: "mère", ipa: "mɛʁ", fam: "r" },
+    { lang: "イタリア語", flag: "🇮🇹", text: "madre", ipa: "ˈmaːdre", fam: "r" },
+    { lang: "スペイン語", flag: "🇪🇸", text: "madre", ipa: "ˈmaðre", fam: "r" },
+    { lang: "ギリシャ語", flag: "🇬🇷", text: "μήτηρ", roman: "mḗtēr", fam: "h" },
+  ]},
+  { key: "father", ja: "父", root: "*ph₂tḗr", gloss: "印欧祖語「父」", keys: "pfvtdrπτρ", words: [
+    { lang: "ドイツ語", flag: "🇩🇪", text: "Vater", ipa: "ˈfaːtɐ", fam: "g" },
+    { lang: "英語", flag: "🇬🇧", text: "father", ipa: "ˈfɑːðə", fam: "g" },
+    { lang: "フランス語", flag: "🇫🇷", text: "père", ipa: "pɛʁ", fam: "r" },
+    { lang: "イタリア語", flag: "🇮🇹", text: "padre", ipa: "ˈpaːdre", fam: "r" },
+    { lang: "スペイン語", flag: "🇪🇸", text: "padre", ipa: "ˈpaðre", fam: "r" },
+    { lang: "ギリシャ語", flag: "🇬🇷", text: "πατήρ", roman: "patḗr", fam: "h" },
+  ]},
+  { key: "name", ja: "名前", root: "*h₁nómn̥", gloss: "印欧祖語「名」", keys: "nmνμ", words: [
+    { lang: "ドイツ語", flag: "🇩🇪", text: "Name", ipa: "ˈnaːmə", fam: "g" },
+    { lang: "英語", flag: "🇬🇧", text: "name", ipa: "neɪm", fam: "g" },
+    { lang: "フランス語", flag: "🇫🇷", text: "nom", ipa: "nɔ̃", fam: "r" },
+    { lang: "イタリア語", flag: "🇮🇹", text: "nome", ipa: "ˈnoːme", fam: "r" },
+    { lang: "スペイン語", flag: "🇪🇸", text: "nombre", ipa: "ˈnombre", fam: "r" },
+    { lang: "ギリシャ語", flag: "🇬🇷", text: "ὄνομα", roman: "ónoma", fam: "h" },
+  ]},
+  { key: "night", ja: "夜", root: "*nókʷts", gloss: "印欧祖語「夜」", keys: "ntντ", words: [
+    { lang: "ドイツ語", flag: "🇩🇪", text: "Nacht", ipa: "naxt", fam: "g" },
+    { lang: "英語", flag: "🇬🇧", text: "night", ipa: "naɪt", fam: "g" },
+    { lang: "フランス語", flag: "🇫🇷", text: "nuit", ipa: "nɥi", fam: "r" },
+    { lang: "イタリア語", flag: "🇮🇹", text: "notte", ipa: "ˈnɔtte", fam: "r" },
+    { lang: "スペイン語", flag: "🇪🇸", text: "noche", ipa: "ˈnotʃe", fam: "r" },
+    { lang: "ギリシャ語", flag: "🇬🇷", text: "νύξ", roman: "nýx（語幹 nykt-）", fam: "h" },
+  ]},
+  { key: "star", ja: "星", root: "*h₂stḗr", gloss: "印欧祖語「星」", keys: "strστρ", words: [
+    { lang: "ドイツ語", flag: "🇩🇪", text: "Stern", ipa: "ʃtɛʁn", fam: "g" },
+    { lang: "英語", flag: "🇬🇧", text: "star", ipa: "stɑː", fam: "g" },
+    { lang: "フランス語", flag: "🇫🇷", text: "étoile", ipa: "etwal", fam: "r" },
+    { lang: "イタリア語", flag: "🇮🇹", text: "stella", ipa: "ˈstella", fam: "r" },
+    { lang: "スペイン語", flag: "🇪🇸", text: "estrella", ipa: "esˈtreʎa", fam: "r" },
+    { lang: "ギリシャ語", flag: "🇬🇷", text: "ἀστήρ", roman: "astḗr", fam: "h" },
+  ]},
+  { key: "three", ja: "三", root: "*tréyes", gloss: "印欧祖語「3」", keys: "tdrτρ", words: [
+    { lang: "ドイツ語", flag: "🇩🇪", text: "drei", ipa: "dʁaɪ", fam: "g" },
+    { lang: "英語", flag: "🇬🇧", text: "three", ipa: "θriː", fam: "g" },
+    { lang: "フランス語", flag: "🇫🇷", text: "trois", ipa: "tʁwa", fam: "r" },
+    { lang: "イタリア語", flag: "🇮🇹", text: "tre", ipa: "tre", fam: "r" },
+    { lang: "スペイン語", flag: "🇪🇸", text: "tres", ipa: "tres", fam: "r" },
+    { lang: "ギリシャ語", flag: "🇬🇷", text: "τρεῖς", roman: "treîs", fam: "h" },
+  ]},
+  { key: "new", ja: "新しい", root: "*néwos", gloss: "印欧祖語「新しい」", keys: "nvwν", words: [
+    { lang: "ドイツ語", flag: "🇩🇪", text: "neu", ipa: "nɔɪ", fam: "g" },
+    { lang: "英語", flag: "🇬🇧", text: "new", ipa: "njuː", fam: "g" },
+    { lang: "フランス語", flag: "🇫🇷", text: "nouveau", ipa: "nuvo", fam: "r" },
+    { lang: "イタリア語", flag: "🇮🇹", text: "nuovo", ipa: "ˈnwɔːvo", fam: "r" },
+    { lang: "スペイン語", flag: "🇪🇸", text: "nuevo", ipa: "ˈnweβo", fam: "r" },
+    { lang: "ギリシャ語", flag: "🇬🇷", text: "νέος", roman: "néos", fam: "h" },
+  ]},
+  { key: "water", ja: "水", root: "*wódr̥ / aqua", gloss: "祖語 *wódr̥ と ラテン aqua の2系統", keys: "", words: [
+    { lang: "ドイツ語", flag: "🇩🇪", text: "Wasser", ipa: "ˈvasɐ", fam: "g" },
+    { lang: "英語", flag: "🇬🇧", text: "water", ipa: "ˈwɔːtə", fam: "g" },
+    { lang: "フランス語", flag: "🇫🇷", text: "eau", ipa: "o", fam: "r" },
+    { lang: "イタリア語", flag: "🇮🇹", text: "acqua", ipa: "ˈakkwa", fam: "r" },
+    { lang: "スペイン語", flag: "🇪🇸", text: "agua", ipa: "ˈaɣwa", fam: "r" },
+    { lang: "ギリシャ語", flag: "🇬🇷", text: "ὕδωρ", roman: "hýdōr", fam: "h" },
+  ], note: "「水」だけ2グループに分かれる。<b>独 Wasser・英 water・ギリシャ hýdōr</b> は祖語 <b>*wódr̥</b> の仲間（h₂o-系）。でも <b>仏 eau・伊 acqua・西 agua</b> はラテン語 <b>aqua</b> から来た別系統。だから「なんでフランス語だけ違うの？」——ロマンス諸語はラテン語の子供だから、です。" },
+];
+
+const $ = (id) => document.getElementById(id);
+function esc(s) { return String(s).replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c])); }
+function hl(text, keys) {
+  if (!keys) return esc(text);
+  const set = new Set(keys.toLowerCase().split(""));
+  return [...text].map(ch => set.has(ch.toLowerCase()) ? `<span class="hl">${esc(ch)}</span>` : esc(ch)).join("");
+}
+
+let cur = 0;
+function render() {
+  const c = CONCEPTS[cur];
+  $("concepts").innerHTML = CONCEPTS.map((x, i) =>
+    `<button class="cchip ${i === cur ? "on" : ""}" data-i="${i}" type="button">${esc(x.ja)}<span class="en">${x.key}</span></button>`
+  ).join("");
+  document.querySelectorAll(".cchip").forEach(b => b.addEventListener("click", () => { cur = Number(b.dataset.i); render(); }));
+
+  $("ancestor").innerHTML = `<div class="lbl">祖先 · ANCESTOR</div>
+    <div class="root">${esc(c.root)}</div><div class="gloss">${esc(c.gloss)}</div>`;
+
+  $("langs").innerHTML = c.words.map(w => `
+    <div class="lang" style="--famc:${FAMC[w.fam]}">
+      <span class="flag">${w.flag}</span>
+      <div class="mid">
+        <div class="word">${hl(w.text, c.keys)}</div>
+        ${w.roman ? `<div class="roman">${esc(w.roman)}</div>` : ""}
+        <div class="meta">${esc(w.lang)}${w.ipa ? ` · <span class="ipa">/${esc(w.ipa)}/</span>` : ""}</div>
+      </div>
+      <span class="fam">${w.fam === "g" ? "Germanic" : w.fam === "r" ? "Romance" : "Hellenic"}</span>
+    </div>`).join("");
+
+  $("noteBox").innerHTML = c.note ? `<div class="note"><span class="h">なぜ違う？</span>${c.note}</div>` : "";
+}
+render();
+</script>
+</body>
+</html>
