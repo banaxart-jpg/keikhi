@@ -73,8 +73,16 @@ body { font-family: 'Outfit', -apple-system, sans-serif; color: var(--text); min
 .lang .roman { font-family: 'EB Garamond', serif; font-style: italic; font-size: 15px; color: #6a6250; }
 .lang .meta { font-size: 10px; color: #8a8168; font-weight: 700; letter-spacing: 0.06em; margin-top: 3px; }
 .lang .ipa { font-size: 12px; color: #7a7360; }
-.lang .fam { flex: 0 0 auto; font-size: 9px; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase;
+.lang .word { cursor: pointer; }
+.lang .rcol { flex: 0 0 auto; display: flex; flex-direction: column; align-items: flex-end; gap: 7px; }
+.lang .fam { font-size: 9px; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase;
   color: #fff; background: var(--famc); padding: 3px 8px; border-radius: 10px; }
+.lang .say { width: 34px; height: 34px; border-radius: 50%; border: none; cursor: pointer;
+  background: #2a2418; color: var(--gold); display: flex; align-items: center; justify-content: center;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.3); }
+.lang .say:active { transform: scale(0.9); }
+.lang .say.speaking { background: var(--gold); color: #1a1420; }
+.lang .say .icon { font-size: 19px; vertical-align: 0; }
 
 .note { margin-top: 14px; padding: 13px 16px; border-radius: 14px; font-size: 13px; line-height: 1.7;
   background: rgba(176,122,216,0.08); box-shadow: inset 0 0 0 1px rgba(176,122,216,0.25); color: #d8cfe4; }
@@ -98,7 +106,7 @@ body { font-family: 'Outfit', -apple-system, sans-serif; color: var(--text); min
     <div class="logo serif">Radi<span class="dot">x</span></div>
     <div class="tag">言葉の根をたどる</div>
   </div>
-  <div class="hint">意味を選ぶと、6言語が並びます。<span class="hl">共通の骨組み（子音）が金色で光る</span></div>
+  <div class="hint">意味を選ぶと6言語が並び、<span class="hl">共通の子音が金色で光る</span>。単語や🔊をタップで発音。</div>
 
   <div class="concepts" id="concepts"></div>
   <div class="ancestor" id="ancestor"></div>
@@ -242,6 +250,24 @@ const CONCEPTS = [
 
 const $ = (id) => document.getElementById(id);
 function esc(s) { return String(s).replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c])); }
+function escAttr(s) { return String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
+
+// ── 発音（iPhone/ブラウザ内蔵の読み上げ。言語ごとの声を使う。追加API不要）──
+const SPEECH = { "ドイツ語": "de-DE", "英語": "en-GB", "フランス語": "fr-FR", "イタリア語": "it-IT", "スペイン語": "es-ES", "ギリシャ語": "el-GR" };
+let VOICES = [];
+function loadVoices() { try { VOICES = window.speechSynthesis ? speechSynthesis.getVoices() : []; } catch { VOICES = []; } }
+if (window.speechSynthesis) { loadVoices(); speechSynthesis.onvoiceschanged = loadVoices; }
+function speak(text, bcp, btn) {
+  if (!window.speechSynthesis) return;
+  speechSynthesis.cancel();
+  const u = new SpeechSynthesisUtterance(text);
+  u.lang = bcp;
+  const v = VOICES.find(x => x.lang === bcp) || VOICES.find(x => x.lang && x.lang.slice(0, 2) === bcp.slice(0, 2));
+  if (v) u.voice = v;
+  u.rate = 0.85;
+  if (btn) { u.onend = u.onerror = () => btn.classList.remove("speaking"); btn.classList.add("speaking"); }
+  speechSynthesis.speak(u);
+}
 function hl(text, keys) {
   if (!keys) return esc(text);
   const set = new Set(keys.toLowerCase().split(""));
@@ -267,8 +293,17 @@ function render() {
         ${w.roman ? `<div class="roman">${esc(w.roman)}</div>` : ""}
         <div class="meta">${esc(w.lang)}${w.ipa ? ` · <span class="ipa">/${esc(w.ipa)}/</span>` : ""}</div>
       </div>
-      <span class="fam">${w.fam === "g" ? "Germanic" : w.fam === "r" ? "Romance" : "Hellenic"}</span>
+      <div class="rcol">
+        <span class="fam">${w.fam === "g" ? "Germanic" : w.fam === "r" ? "Romance" : "Hellenic"}</span>
+        <button class="say" type="button" data-t="${escAttr(w.text)}" data-l="${SPEECH[w.lang] || "en-US"}" aria-label="発音"><span class="icon">volume_up</span></button>
+      </div>
     </div>`).join("");
+  document.querySelectorAll(".lang").forEach(row => {
+    const btn = row.querySelector(".say"), word = row.querySelector(".word");
+    const go = () => speak(btn.dataset.t, btn.dataset.l, btn);
+    btn.addEventListener("click", go);
+    if (word) word.addEventListener("click", go);
+  });
 
   $("noteBox").innerHTML = c.note ? `<div class="note"><span class="h">なぜ違う？</span>${c.note}</div>` : "";
 }
