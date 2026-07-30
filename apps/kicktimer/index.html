@@ -26,16 +26,23 @@ body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); 
 #app { height: 100dvh; display: flex; flex-direction: column; }
 
 /* ───── 待機画面 (ニューモーフィック) ───── */
-.setup { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4vmin; padding: 20px; }
+.setup { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3vmin; padding: 20px; overflow-y: auto; }
 .setup .ttl { font-size: 22px; font-weight: 800; }
-.setup .sub { font-size: 12px; color: var(--text2); font-weight: 600; }
 .rounds-pick { display: flex; align-items: center; gap: 22px; }
-.step-btn { width: 64px; height: 64px; border-radius: 32px; border: none; background: var(--bg); color: var(--text); font-size: 30px; font-weight: 800; font-family: inherit; cursor: pointer; box-shadow: 6px 6px 14px var(--sd), -5px -5px 12px var(--sl); }
+.step-btn { width: 60px; height: 60px; border-radius: 30px; border: none; background: var(--bg); color: var(--text); font-size: 28px; font-weight: 800; font-family: inherit; cursor: pointer; box-shadow: 6px 6px 14px var(--sd), -5px -5px 12px var(--sl); }
 .step-btn:active { box-shadow: inset 4px 4px 10px var(--sd), inset -4px -4px 10px var(--sl); transform: scale(0.95); }
 .step-btn:disabled { opacity: 0.35; }
-.rounds-n { font-size: 15vmin; font-weight: 900; line-height: 1; min-width: 22vmin; text-align: center; }
-.rounds-lbl { font-size: 13px; font-weight: 800; color: var(--text2); letter-spacing: 0.15em; }
-.start-btn { padding: 18px 60px; border-radius: 40px; border: none; background: linear-gradient(145deg, #dc2626, var(--round)); color: #fff; font-size: 20px; font-weight: 900; font-family: inherit; cursor: pointer; box-shadow: 8px 8px 18px rgba(185,28,28,0.35), -5px -5px 12px var(--sl); letter-spacing: 0.1em; }
+.rounds-n { font-size: 13vmin; font-weight: 900; line-height: 1; min-width: 20vmin; text-align: center; }
+.rounds-lbl { font-size: 12px; font-weight: 800; color: var(--text2); letter-spacing: 0.15em; margin-top: -1vmin; }
+/* 運動/休憩の時間チップ (プランク等の 1分+10秒 みたいな組合せ用) */
+.opt-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; justify-content: center; max-width: 640px; }
+.opt-lbl { font-size: 12px; font-weight: 800; letter-spacing: 0.12em; color: var(--text2); min-width: 3em; text-align: right; }
+.chip { padding: 9px 15px; border-radius: 18px; border: none; background: var(--bg); color: var(--text2); font-family: inherit; font-size: 13px; font-weight: 800; cursor: pointer; box-shadow: 4px 4px 10px var(--sd), -4px -4px 10px var(--sl); }
+.chip:active { transform: scale(0.95); }
+.chip.on { color: #fff; }
+.chip.on.work { background: linear-gradient(145deg, #dc2626, var(--round)); box-shadow: 3px 3px 8px rgba(185,28,28,0.4); }
+.chip.on.restc { background: linear-gradient(145deg, #16a34a, var(--rest)); box-shadow: 3px 3px 8px rgba(21,128,61,0.4); }
+.start-btn { padding: 16px 60px; border-radius: 40px; border: none; background: linear-gradient(145deg, #dc2626, var(--round)); color: #fff; font-size: 20px; font-weight: 900; font-family: inherit; cursor: pointer; box-shadow: 8px 8px 18px rgba(185,28,28,0.35), -5px -5px 12px var(--sl); letter-spacing: 0.1em; }
 .start-btn:active { transform: scale(0.96); }
 .back-pill { position: fixed; top: calc(10px + env(safe-area-inset-top)); left: 14px; padding: 8px 15px; border-radius: 24px; font-size: 12px; font-weight: 700; color: var(--text2); background: var(--bg); box-shadow: 4px 4px 10px var(--sd), -4px -4px 10px var(--sl); text-decoration: none; z-index: 5; }
 
@@ -71,25 +78,30 @@ body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); 
 <script type="module">
 import { createApp, ref, computed, onMounted, onBeforeUnmount } from "https://unpkg.com/vue@3.4.27/dist/vue.esm-browser.prod.js";
 
-// タイマー設定 (URL パラメータで上書き可: /kicktimer/?round=120&rest=30&ready=5)
+// URL パラメータでも上書き可: /kicktimer/?round=120&rest=30&ready=5 (秒)
 const qp = new URLSearchParams(location.search);
-const ROUND_SEC = Math.max(1, Number(qp.get("round")) || 180); // 3分
-const REST_SEC  = Math.max(1, Number(qp.get("rest"))  || 60);  // 1分
 const READY_SEC = Math.max(0, Number(qp.get("ready")) || 10);  // 開始前カウント
 
 const TEMPLATE = `
 <div style="display:flex; flex-direction:column; height:100%;">
-  <!-- ───── 待機: ラウンド数を選んで開始 ───── -->
+  <!-- ───── 待機: ラウンド数と時間を選んで開始 ───── -->
   <div v-if="phase === 'idle'" class="setup">
     <a class="back-pill" href="/"><span class="icon">arrow_back</span> 戻る</a>
     <div class="ttl"><span class="icon">sports_mma</span> ラウンドタイマー</div>
-    <div class="sub">{{ fmt(roundSec) }} ラウンド + {{ fmt(restSec) }} 休憩</div>
     <div class="rounds-pick">
       <button class="step-btn" type="button" :disabled="rounds <= 1" @click="setRounds(rounds - 1)">−</button>
       <div class="rounds-n">{{ rounds }}</div>
       <button class="step-btn" type="button" :disabled="rounds >= 20" @click="setRounds(rounds + 1)">＋</button>
     </div>
     <div class="rounds-lbl">ラウンド</div>
+    <div class="opt-row">
+      <span class="opt-lbl">運動</span>
+      <button v-for="s in workOpts" :key="'w' + s" class="chip" :class="{ on: workSec === s, work: workSec === s }" type="button" @click="setWork(s)">{{ durLbl(s) }}</button>
+    </div>
+    <div class="opt-row">
+      <span class="opt-lbl">休憩</span>
+      <button v-for="s in restOpts" :key="'r' + s" class="chip" :class="{ on: restSec === s, restc: restSec === s }" type="button" @click="setRest(s)">{{ durLbl(s) }}</button>
+    </div>
     <button class="start-btn" type="button" @click="start">開始</button>
   </div>
 
@@ -122,6 +134,25 @@ const App = {
       try { localStorage.setItem("kicktimer_rounds", String(rounds.value)); } catch (_) {}
     }
 
+    // 運動/休憩の時間。キック用 3分+1分 も プランク用 1分+10秒 もチップで選ぶ。
+    // 初期値: URL パラメータ > 前回の選択 (localStorage) > デフォルト
+    const WORK_BASE = [30, 45, 60, 90, 120, 180, 300];
+    const REST_BASE = [10, 15, 20, 30, 45, 60];
+    function initDur(qpKey, lsKey, def) {
+      const q = Math.round(Number(qp.get(qpKey)));
+      if (q >= 1) return q;
+      const s = Number(localStorage.getItem(lsKey));
+      return s >= 1 ? s : def;
+    }
+    const workSec = ref(initDur("round", "kicktimer_work", 180));
+    const restSec = ref(initDur("rest", "kicktimer_rest", 60));
+    // URL 指定などリスト外の値もチップとして出す
+    const workOpts = computed(() => [...new Set([...WORK_BASE, workSec.value])].sort((a, b) => a - b));
+    const restOpts = computed(() => [...new Set([...REST_BASE, restSec.value])].sort((a, b) => a - b));
+    function setWork(s) { workSec.value = s; try { localStorage.setItem("kicktimer_work", String(s)); } catch (_) {} }
+    function setRest(s) { restSec.value = s; try { localStorage.setItem("kicktimer_rest", String(s)); } catch (_) {} }
+    function durLbl(s) { return s < 60 ? s + "秒" : (s % 60 === 0 ? (s / 60) + "分" : fmt(s)); }
+
     // phase: idle | ready | round | rest | done
     const phase = ref("idle");
     const curRound = ref(1);
@@ -132,7 +163,6 @@ const App = {
     let timer = null;
     let warned = false;    // 残り10秒警告を1回だけ
 
-    const roundSec = ROUND_SEC, restSec = REST_SEC;
     const remainSec = computed(() => Math.ceil(remainMs.value / 1000));
     const progPct = computed(() => (phaseTotalMs > 0 ? (remainMs.value / phaseTotalMs) * 100 : 0));
     const phaseLabel = computed(() => ({
@@ -193,18 +223,18 @@ const App = {
     function nextPhase() {
       if (phase.value === "ready") {
         soundRoundStart();
-        enterPhase("round", ROUND_SEC);
+        enterPhase("round", workSec.value);
       } else if (phase.value === "round") {
         if (curRound.value >= rounds.value) {
           finish();
         } else {
           soundRoundEnd();
-          enterPhase("rest", REST_SEC);
+          enterPhase("rest", restSec.value);
         }
       } else if (phase.value === "rest") {
         curRound.value++;
         soundRoundStart();
-        enterPhase("round", ROUND_SEC);
+        enterPhase("round", workSec.value);
       }
     }
     function finish() {
@@ -239,7 +269,7 @@ const App = {
         enterPhase("ready", READY_SEC);
       } else {
         soundRoundStart();
-        enterPhase("round", ROUND_SEC);
+        enterPhase("round", workSec.value);
       }
       startTicker();
     }
@@ -271,7 +301,8 @@ const App = {
 
     return {
       rounds, setRounds, phase, curRound, remainSec, paused, progPct, phaseLabel,
-      roundSec, restSec, fmt, start, togglePause, reset,
+      workSec, restSec, workOpts, restOpts, setWork, setRest, durLbl,
+      fmt, start, togglePause, reset,
     };
   },
 };
