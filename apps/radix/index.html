@@ -92,6 +92,37 @@ body { font-family: 'Outfit', -apple-system, sans-serif; color: var(--text); min
 .legend { display: flex; gap: 14px; justify-content: center; margin-top: 22px; font-size: 11px; color: var(--muted); }
 .legend span { display: inline-flex; align-items: center; gap: 5px; }
 .legend .d { width: 9px; height: 9px; border-radius: 3px; }
+
+/* モード切替 */
+.modetabs { display: flex; gap: 6px; justify-content: center; margin: 10px 0 12px; }
+.mtab { padding: 8px 22px; border-radius: 20px; font-size: 13px; font-weight: 800; font-family: inherit;
+  border: none; cursor: pointer; color: var(--muted); background: rgba(255,255,255,0.05);
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,0.08); }
+.mtab.on { color: #1a1420; background: var(--gold); }
+
+/* 家系図 */
+#treeView { overflow-x: auto; scrollbar-width: none; }
+#treeView::-webkit-scrollbar { display: none; }
+.tree { padding: 6px 2px 4px; min-width: 260px; }
+.tnode.root { display: inline-block; font-family: 'EB Garamond', serif; font-style: italic; font-size: 26px;
+  color: var(--gold); padding: 7px 15px; border-radius: 12px; box-shadow: inset 0 0 0 1px rgba(216,180,90,0.35); }
+.tnode.root .tsub { font-family: 'Outfit', sans-serif; font-style: normal; font-size: 11px; color: var(--muted); letter-spacing: 0.08em; margin-left: 6px; }
+.tbranch { margin: 6px 0 0 20px; border-left: 2px solid rgba(216,180,90,0.3); }
+.tfam { position: relative; margin: 12px 0; padding-left: 18px; }
+.tfam::before { content: ""; position: absolute; left: 0; top: 15px; width: 16px; height: 2px; background: rgba(216,180,90,0.3); }
+.tfam .fam2 { display: inline-block; font-weight: 800; font-size: 12px; letter-spacing: 0.06em;
+  color: var(--c); padding: 5px 13px; border-radius: 16px; box-shadow: inset 0 0 0 1px var(--c); }
+.tleaves { margin: 4px 0 0 16px; border-left: 2px solid var(--c); }
+.tleaf { position: relative; margin: 7px 0; padding: 9px 13px 9px 16px; display: flex; align-items: baseline; gap: 9px;
+  background: var(--card); color: #2a2418; border-radius: 10px; cursor: pointer; box-shadow: 0 3px 10px rgba(0,0,0,0.28); }
+.tleaf::before { content: ""; position: absolute; left: -2px; top: 50%; width: 14px; height: 2px; background: var(--c); }
+.tleaf:active { transform: scale(0.98); }
+.tleaf .lflag { font-size: 19px; }
+.tleaf .lword { font-family: 'EB Garamond', serif; font-size: 21px; font-weight: 600; }
+.tleaf .lroman { font-family: 'EB Garamond', serif; font-style: italic; font-size: 13px; color: #6a6250; }
+.tleaf .llang { margin-left: auto; font-size: 10px; font-weight: 700; color: #8a8168; padding-left: 8px; }
+.tleaf .lsay { color: #8a8168; }
+.tleaf .lsay .icon { font-size: 16px; vertical-align: -0.15em; }
 </style>
 </head>
 <body>
@@ -109,8 +140,15 @@ body { font-family: 'Outfit', -apple-system, sans-serif; color: var(--text); min
   <div class="hint">意味を選ぶと6言語が並び、<span class="hl">共通の子音が金色で光る</span>。単語や🔊をタップで発音。</div>
 
   <div class="concepts" id="concepts"></div>
-  <div class="ancestor" id="ancestor"></div>
-  <div class="langs" id="langs"></div>
+  <div class="modetabs" id="modetabs">
+    <button class="mtab on" data-m="compare" type="button">単語比較</button>
+    <button class="mtab" data-m="tree" type="button">家系図</button>
+  </div>
+  <div id="compareView">
+    <div class="ancestor" id="ancestor"></div>
+    <div class="langs" id="langs"></div>
+  </div>
+  <div id="treeView" style="display:none;"></div>
   <div id="noteBox"></div>
 
   <div class="legend">
@@ -246,6 +284,38 @@ const CONCEPTS = [
     { lang: "イタリア語", flag: "🇮🇹", text: "fuoco", ipa: "ˈfwɔːko", fam: "r" },
     { lang: "スペイン語", flag: "🇪🇸", text: "fuego", ipa: "ˈfweɣo", fam: "r" },
   ], note: "火も水と同じで2系統。<b>独 Feuer・英 fire・希 pŷr</b> は祖語 <b>*péh₂wr̥</b>（→英 pyre「火葬の薪」）系。<b>仏 feu・伊 fuoco・西 fuego</b> はラテン語 <b>focus</b>（かまど・炉）系。英語の focus も同じ語。" },
+  { key: "thank", ja: "ありがとう", root: "4つの別語源", gloss: "感謝の言葉は言語ごとにルーツが違う", keys: "", words: [
+    { lang: "ドイツ語", flag: "🇩🇪", text: "danke", ipa: "ˈdaŋkə", fam: "g" },
+    { lang: "英語", flag: "🇬🇧", text: "thank", ipa: "θæŋk", fam: "g" },
+    { lang: "フランス語", flag: "🇫🇷", text: "merci", ipa: "mɛʁsi", fam: "r" },
+    { lang: "イタリア語", flag: "🇮🇹", text: "grazie", ipa: "ˈɡrattsje", fam: "r" },
+    { lang: "スペイン語", flag: "🇪🇸", text: "gracias", ipa: "ˈɡɾaθjas", fam: "r" },
+    { lang: "ギリシャ語", flag: "🇬🇷", text: "ευχαριστώ", roman: "efcharistó", fam: "h" },
+  ], note: "「ありがとう」はなんと <b>4つの別々の語源</b>！<br>・<b>独 danke / 英 thank</b>＝「think（考える・心に留める）」の仲間<br>・<b>伊 grazie / 西 gracias</b>＝ラテン gratia（恵み → grace・gratitude）<br>・<b>仏 merci</b>＝ラテン mercēs（報酬 → 英 mercy「慈悲」）だけ別系統<br>・<b>希 ευχαριστώ</b>＝eu（良い）+ kharis（恵み）→ 英 charisma / Eucharist（聖餐）" },
+  { key: "bread", ja: "パン", root: "*panis ほか", gloss: "「一緒にパンを食べる仲間」＝companion", keys: "", words: [
+    { lang: "ドイツ語", flag: "🇩🇪", text: "Brot", ipa: "broːt", fam: "g" },
+    { lang: "英語", flag: "🇬🇧", text: "bread", ipa: "brɛd", fam: "g" },
+    { lang: "フランス語", flag: "🇫🇷", text: "pain", ipa: "pɛ̃", fam: "r" },
+    { lang: "イタリア語", flag: "🇮🇹", text: "pane", ipa: "ˈpaːne", fam: "r" },
+    { lang: "スペイン語", flag: "🇪🇸", text: "pan", ipa: "pan", fam: "r" },
+    { lang: "ギリシャ語", flag: "🇬🇷", text: "ἄρτος", roman: "ártos", fam: "h" },
+  ], note: "<b>仏 pain・伊 pane・西 pan</b> はラテン語 panis（パン）。ここから英 <b>companion</b>（＝パンを分け合う仲間、com「共に」+ panis）や pantry（パン置き場）が生まれた。<b>独 Brot・英 bread</b> はゲルマン系の別語。" },
+  { key: "wine", ja: "ワイン", root: "*wóyh₁nom", gloss: "印欧祖語「ワイン」→ 英 oenology / vine", keys: "wvnν", words: [
+    { lang: "ドイツ語", flag: "🇩🇪", text: "Wein", ipa: "vaɪn", fam: "g" },
+    { lang: "英語", flag: "🇬🇧", text: "wine", ipa: "waɪn", fam: "g" },
+    { lang: "フランス語", flag: "🇫🇷", text: "vin", ipa: "vɛ̃", fam: "r" },
+    { lang: "イタリア語", flag: "🇮🇹", text: "vino", ipa: "ˈviːno", fam: "r" },
+    { lang: "スペイン語", flag: "🇪🇸", text: "vino", ipa: "ˈbino", fam: "r" },
+    { lang: "ギリシャ語", flag: "🇬🇷", text: "οἶνος", roman: "oînos", fam: "h" },
+  ], note: "めずらしく全部つながる（w↔v↔ο）。ギリシャ oînos → 英 <b>oenology</b>（ワイン学）。ワインとお祭りの神は<b>ディオニュソス</b>（ローマ名バッカス）。" },
+  { key: "milk", ja: "ミルク", root: "*melǵ- / lac", gloss: "ギリシャ語 gála →「galaxy（銀河）」", keys: "", words: [
+    { lang: "ドイツ語", flag: "🇩🇪", text: "Milch", ipa: "mɪlç", fam: "g" },
+    { lang: "英語", flag: "🇬🇧", text: "milk", ipa: "mɪlk", fam: "g" },
+    { lang: "フランス語", flag: "🇫🇷", text: "lait", ipa: "lɛ", fam: "r" },
+    { lang: "イタリア語", flag: "🇮🇹", text: "latte", ipa: "ˈlatte", fam: "r" },
+    { lang: "スペイン語", flag: "🇪🇸", text: "leche", ipa: "ˈletʃe", fam: "r" },
+    { lang: "ギリシャ語", flag: "🇬🇷", text: "γάλα", roman: "gála", fam: "h" },
+  ], note: "<b>独 Milch・英 milk</b> はゲルマン系。<b>仏 lait・伊 latte・西 leche</b> はラテン lac/lactis（→英 lactose）。<b>希 γάλα（gála）</b> は英 <b>galaxy（銀河）</b> の元！ 天の川は女神ヘラの母乳がこぼれてできた、というギリシャ神話から（Milky Way）。" },
 ];
 
 const $ = (id) => document.getElementById(id);
@@ -274,7 +344,9 @@ function hl(text, keys) {
   return [...text].map(ch => set.has(ch.toLowerCase()) ? `<span class="hl">${esc(ch)}</span>` : esc(ch)).join("");
 }
 
-let cur = 0;
+const FAMS = [["g", "ゲルマン系", "var(--g)"], ["r", "ロマンス系", "var(--r)"], ["h", "ギリシャ系", "var(--h)"]];
+let cur = 0, mode = "compare";
+
 function render() {
   const c = CONCEPTS[cur];
   $("concepts").innerHTML = CONCEPTS.map((x, i) =>
@@ -282,9 +354,20 @@ function render() {
   ).join("");
   document.querySelectorAll(".cchip").forEach(b => b.addEventListener("click", () => { cur = Number(b.dataset.i); render(); }));
 
+  document.querySelectorAll(".mtab").forEach(b => {
+    b.classList.toggle("on", b.dataset.m === mode);
+    b.onclick = () => { mode = b.dataset.m; render(); };
+  });
+  $("compareView").style.display = mode === "compare" ? "" : "none";
+  $("treeView").style.display = mode === "tree" ? "" : "none";
+
+  if (mode === "compare") renderCompare(c); else renderTree(c);
+  $("noteBox").innerHTML = c.note ? `<div class="note"><span class="h">なぜ違う？</span>${c.note}</div>` : "";
+}
+
+function renderCompare(c) {
   $("ancestor").innerHTML = `<div class="lbl">祖先 · ANCESTOR</div>
     <div class="root">${esc(c.root)}</div><div class="gloss">${esc(c.gloss)}</div>`;
-
   $("langs").innerHTML = c.words.map(w => `
     <div class="lang" style="--famc:${FAMC[w.fam]}">
       <span class="flag">${w.flag}</span>
@@ -304,9 +387,30 @@ function render() {
     btn.addEventListener("click", go);
     if (word) word.addEventListener("click", go);
   });
-
-  $("noteBox").innerHTML = c.note ? `<div class="note"><span class="h">なぜ違う？</span>${c.note}</div>` : "";
 }
+
+function renderTree(c) {
+  let html = `<div class="tree">
+    <div class="tnode root">${esc(c.root)}<span class="tsub">祖先（PIE）</span></div>
+    <div class="tbranch">`;
+  for (const [f, label, col] of FAMS) {
+    const ws = c.words.filter(w => w.fam === f);
+    if (!ws.length) continue;
+    html += `<div class="tfam" style="--c:${col}"><span class="fam2">${esc(label)}</span>
+      <div class="tleaves">` + ws.map(w => `
+        <div class="tleaf" data-t="${escAttr(w.text)}" data-l="${SPEECH[w.lang] || "en-US"}">
+          <span class="lflag">${w.flag}</span>
+          <span class="lword">${esc(w.text)}</span>
+          ${w.roman ? `<span class="lroman">${esc(w.roman)}</span>` : ""}
+          <span class="llang">${esc(w.lang)}<span class="lsay"><span class="icon">volume_up</span></span></span>
+        </div>`).join("") + `</div></div>`;
+  }
+  html += `</div></div>`;
+  $("treeView").innerHTML = html;
+  $("treeView").querySelectorAll(".tleaf").forEach(el =>
+    el.addEventListener("click", () => speak(el.dataset.t, el.dataset.l)));
+}
+
 render();
 </script>
 </body>
