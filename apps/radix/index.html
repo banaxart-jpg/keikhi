@@ -16,7 +16,7 @@
 :root {
   --ink: #14121f; --ink2: #1c1930; --card: #f2e9d4; --card2: #e8dcc0;
   --text: #efe8d6; --muted: #a49c86; --gold: #d8b45a; --gold2: #b8923a;
-  --g: #6aa0d8; --r: #d8975a; --h: #b07ad8;  /* Germanic / Romance / Hellenic */
+  --g: #6aa0d8; --r: #d8975a; --h: #b07ad8; --i: #cf7a45;  /* ゲルマン / ロマンス / ギリシャ / インド・イラン */
 }
 body { font-family: 'Outfit', -apple-system, sans-serif; color: var(--text); min-height: 100vh;
   background:
@@ -89,7 +89,7 @@ body { font-family: 'Outfit', -apple-system, sans-serif; color: var(--text); min
 .note b { color: #e6d8f4; }
 .note .h { font-size: 11px; letter-spacing: 0.2em; text-transform: uppercase; color: var(--h); font-weight: 800; display: block; margin-bottom: 5px; }
 
-.legend { display: flex; gap: 14px; justify-content: center; margin-top: 22px; font-size: 11px; color: var(--muted); }
+.legend { display: flex; flex-wrap: wrap; gap: 10px 14px; justify-content: center; margin-top: 22px; font-size: 11px; color: var(--muted); }
 .legend span { display: inline-flex; align-items: center; gap: 5px; }
 .legend .d { width: 9px; height: 9px; border-radius: 3px; }
 
@@ -155,6 +155,7 @@ body { font-family: 'Outfit', -apple-system, sans-serif; color: var(--text); min
     <span><span class="d" style="background:var(--g)"></span>ゲルマン系</span>
     <span><span class="d" style="background:var(--r)"></span>ロマンス系</span>
     <span><span class="d" style="background:var(--h)"></span>ギリシャ系</span>
+    <span><span class="d" style="background:var(--i)"></span>インド・イラン系</span>
   </div>
 </div>
 
@@ -162,7 +163,8 @@ body { font-family: 'Outfit', -apple-system, sans-serif; color: var(--text); min
 <script>
 // ── データ（1単語＝1エントリ。増やすのはここに足すだけ）──
 // keys = 光らせる子音（ラテン+ギリシャ）。fam: g=ゲルマン r=ロマンス h=ギリシャ
-const FAMC = { g: "var(--g)", r: "var(--r)", h: "var(--h)" };
+const FAMC = { g: "var(--g)", r: "var(--r)", h: "var(--h)", i: "var(--i)" };
+const FAMLABEL = { g: "Germanic", r: "Romance", h: "Hellenic", i: "Indo-Iranian" };
 const CONCEPTS = [
   { key: "mother", ja: "母", root: "*méh₂tēr", gloss: "印欧祖語「母」", keys: "mtdrμτρ", words: [
     { lang: "ドイツ語", flag: "🇩🇪", text: "Mutter", ipa: "ˈmʊtɐ", fam: "g" },
@@ -171,7 +173,10 @@ const CONCEPTS = [
     { lang: "イタリア語", flag: "🇮🇹", text: "madre", ipa: "ˈmaːdre", fam: "r" },
     { lang: "スペイン語", flag: "🇪🇸", text: "madre", ipa: "ˈmaðre", fam: "r" },
     { lang: "ギリシャ語", flag: "🇬🇷", text: "μήτηρ", roman: "mḗtēr", fam: "h" },
-  ]},
+    { lang: "アイスランド語", flag: "🇮🇸", text: "móðir", fam: "g" },
+    { lang: "サンスクリット", flag: "🇮🇳", text: "मातृ", roman: "mātṛ́", fam: "i" },
+    { lang: "ペルシャ語", flag: "🇮🇷", text: "مادر", roman: "mādar", fam: "i" },
+  ], note: "「母」は最強の証拠。<b>英 mother・独 Mutter</b> だけでなく、<b>アイスランド móðir・ペルシャ mādar・サンスクリット mātṛ́</b> まで全部 *méh₂tēr から！ ヨーロッパの端からインドまで一本でつながる——だからこの家系を <b>「インド・ヨーロッパ語族」</b> と呼ぶ。" },
   { key: "father", ja: "父", root: "*ph₂tḗr", gloss: "印欧祖語「父」", keys: "pfvtdrπτρ", words: [
     { lang: "ドイツ語", flag: "🇩🇪", text: "Vater", ipa: "ˈfaːtɐ", fam: "g" },
     { lang: "英語", flag: "🇬🇧", text: "father", ipa: "ˈfɑːðə", fam: "g" },
@@ -179,6 +184,9 @@ const CONCEPTS = [
     { lang: "イタリア語", flag: "🇮🇹", text: "padre", ipa: "ˈpaːdre", fam: "r" },
     { lang: "スペイン語", flag: "🇪🇸", text: "padre", ipa: "ˈpaðre", fam: "r" },
     { lang: "ギリシャ語", flag: "🇬🇷", text: "πατήρ", roman: "patḗr", fam: "h" },
+    { lang: "アイスランド語", flag: "🇮🇸", text: "faðir", fam: "g" },
+    { lang: "サンスクリット", flag: "🇮🇳", text: "पितृ", roman: "pitṛ́", fam: "i" },
+    { lang: "ペルシャ語", flag: "🇮🇷", text: "پدر", roman: "pedar", fam: "i" },
   ]},
   { key: "name", ja: "名前", root: "*h₁nómn̥", gloss: "印欧祖語「名」", keys: "nmνμ", words: [
     { lang: "ドイツ語", flag: "🇩🇪", text: "Name", ipa: "ˈnaːmə", fam: "g" },
@@ -203,7 +211,10 @@ const CONCEPTS = [
     { lang: "イタリア語", flag: "🇮🇹", text: "stella", ipa: "ˈstella", fam: "r" },
     { lang: "スペイン語", flag: "🇪🇸", text: "estrella", ipa: "esˈtreʎa", fam: "r" },
     { lang: "ギリシャ語", flag: "🇬🇷", text: "ἀστήρ", roman: "astḗr", fam: "h" },
-  ]},
+    { lang: "アイスランド語", flag: "🇮🇸", text: "stjarna", fam: "g" },
+    { lang: "サンスクリット", flag: "🇮🇳", text: "तारा", roman: "tārā", fam: "i" },
+    { lang: "ペルシャ語", flag: "🇮🇷", text: "ستاره", roman: "setāre", fam: "i" },
+  ], note: "英 star・独 Stern に加え、<b>ペルシャ setāre・サンスクリット tārā</b> も同じ祖語 *h₂stḗr。ヨーロッパからインド・イランまで届く＝“インド・ヨーロッパ語族”の名の通り。ギリシャ ἀστήρ → 英 astronomy・disaster（＝dis「悪い」+astro「星」＝星回りが悪い）。" },
   { key: "three", ja: "三", root: "*tréyes", gloss: "印欧祖語「3」", keys: "tdrτρ", words: [
     { lang: "ドイツ語", flag: "🇩🇪", text: "drei", ipa: "dʁaɪ", fam: "g" },
     { lang: "英語", flag: "🇬🇧", text: "three", ipa: "θriː", fam: "g" },
@@ -211,6 +222,9 @@ const CONCEPTS = [
     { lang: "イタリア語", flag: "🇮🇹", text: "tre", ipa: "tre", fam: "r" },
     { lang: "スペイン語", flag: "🇪🇸", text: "tres", ipa: "tres", fam: "r" },
     { lang: "ギリシャ語", flag: "🇬🇷", text: "τρεῖς", roman: "treîs", fam: "h" },
+    { lang: "アイスランド語", flag: "🇮🇸", text: "þrír", fam: "g" },
+    { lang: "サンスクリット", flag: "🇮🇳", text: "त्रि", roman: "trí", fam: "i" },
+    { lang: "ペルシャ語", flag: "🇮🇷", text: "سه", roman: "se", fam: "i" },
   ]},
   { key: "new", ja: "新しい", root: "*néwos", gloss: "印欧祖語「新しい」", keys: "nvwν", words: [
     { lang: "ドイツ語", flag: "🇩🇪", text: "neu", ipa: "nɔɪ", fam: "g" },
@@ -251,6 +265,9 @@ const CONCEPTS = [
     { lang: "イタリア語", flag: "🇮🇹", text: "dente", ipa: "ˈdɛnte", fam: "r" },
     { lang: "スペイン語", flag: "🇪🇸", text: "diente", ipa: "ˈdjente", fam: "r" },
     { lang: "ギリシャ語", flag: "🇬🇷", text: "ὀδούς", roman: "odoús（語幹 odont-）", fam: "h" },
+    { lang: "アイスランド語", flag: "🇮🇸", text: "tönn", fam: "g" },
+    { lang: "サンスクリット", flag: "🇮🇳", text: "दन्त", roman: "dánta", fam: "i" },
+    { lang: "ペルシャ語", flag: "🇮🇷", text: "دندان", roman: "dandān", fam: "i" },
   ]},
   { key: "two", ja: "二", root: "*dwóh₁", gloss: "印欧祖語「2」→ 英 duo / dual", keys: "dtzwvδ", words: [
     { lang: "ドイツ語", flag: "🇩🇪", text: "zwei", ipa: "tsvaɪ", fam: "g" },
@@ -275,7 +292,10 @@ const CONCEPTS = [
     { lang: "イタリア語", flag: "🇮🇹", text: "fratello", ipa: "fraˈtɛllo", fam: "r" },
     { lang: "スペイン語", flag: "🇪🇸", text: "hermano", ipa: "erˈmano", fam: "r" },
     { lang: "ギリシャ語", flag: "🇬🇷", text: "φράτηρ", roman: "phrátēr（氏族の仲間）", fam: "h" },
-  ], note: "スペイン語 <b>hermano</b> だけ仲間外れ。これはラテン語 frater ではなく <b>germanus</b>（「同じ親から生まれた」）が語源。同じロマンス系でもスペイン語は別の単語を選んだ例。" },
+    { lang: "アイスランド語", flag: "🇮🇸", text: "bróðir", fam: "g" },
+    { lang: "サンスクリット", flag: "🇮🇳", text: "भ्रातृ", roman: "bhrā́tṛ", fam: "i" },
+    { lang: "ペルシャ語", flag: "🇮🇷", text: "برادر", roman: "barādar", fam: "i" },
+  ], note: "サンスクリット <b>bhrā́tṛ</b>・ペルシャ <b>barādar</b> まで brother/Bruder とそっくり。スペイン語 <b>hermano</b> だけ仲間外れ。これはラテン語 frater ではなく <b>germanus</b>（「同じ親から生まれた」）が語源。同じロマンス系でもスペイン語は別の単語を選んだ例。" },
   { key: "fire", ja: "火", root: "*péh₂wr̥ / focus", gloss: "祖語 *péh₂wr̥ と ラテン focus の2系統", keys: "", words: [
     { lang: "ドイツ語", flag: "🇩🇪", text: "Feuer", ipa: "ˈfɔɪɐ", fam: "g" },
     { lang: "英語", flag: "🇬🇧", text: "fire", ipa: "ˈfaɪə", fam: "g" },
@@ -372,6 +392,26 @@ const CONCEPTS = [
     { lang: "スペイン語", flag: "🇪🇸", text: "nieve", ipa: "ˈnjeβe", fam: "r" },
     { lang: "ギリシャ語", flag: "🇬🇷", text: "χιών", roman: "khiṓn", fam: "h" },
   ], note: "全部つながる。ラテン nix/nivis → 仏 neige・伊 neve・西 nieve。ギリシャ χιών も同じ祖語 *sneigʷʰ- から（sn↔n↔ch の変化）。" },
+  { key: "hundred", ja: "百", root: "*ḱm̥tóm", gloss: "k↔s で語族が2つに割れる（ケントゥム/サテム）", keys: "", words: [
+    { lang: "ドイツ語", flag: "🇩🇪", text: "hundert", ipa: "ˈhʊndɐt", fam: "g" },
+    { lang: "英語", flag: "🇬🇧", text: "hundred", ipa: "ˈhʌndrəd", fam: "g" },
+    { lang: "アイスランド語", flag: "🇮🇸", text: "hundrað", fam: "g" },
+    { lang: "フランス語", flag: "🇫🇷", text: "cent", ipa: "sɑ̃", fam: "r" },
+    { lang: "イタリア語", flag: "🇮🇹", text: "cento", ipa: "ˈtʃɛnto", fam: "r" },
+    { lang: "スペイン語", flag: "🇪🇸", text: "cien", ipa: "θjen", fam: "r" },
+    { lang: "ギリシャ語", flag: "🇬🇷", text: "ἑκατόν", roman: "hekatón", fam: "h" },
+    { lang: "サンスクリット", flag: "🇮🇳", text: "शतम्", roman: "śatám", fam: "i" },
+    { lang: "ペルシャ語", flag: "🇮🇷", text: "صد", roman: "sad", fam: "i" },
+  ], note: "有名な <b>ケントゥム／サテム</b> の分かれ目。ラテン <b>centum</b>（k音 → 英 cent・percent・century）に対し、サンスクリット <b>śatám</b>・ペルシャ <b>sad</b> は <b>s音</b>。この <b>k↔s</b> で印欧語族は西の「ケントゥム語」と東の「サテム語」の2大グループに割れる。ヨーロッパ＝k、インド・イラン・スラブ＝s。" },
+  { key: "nose", ja: "鼻", root: "*neh₂s-", gloss: "印欧祖語「鼻」→ 英 nasal", keys: "ns", words: [
+    { lang: "ドイツ語", flag: "🇩🇪", text: "Nase", ipa: "ˈnaːzə", fam: "g" },
+    { lang: "英語", flag: "🇬🇧", text: "nose", ipa: "nəʊz", fam: "g" },
+    { lang: "アイスランド語", flag: "🇮🇸", text: "nef", fam: "g" },
+    { lang: "フランス語", flag: "🇫🇷", text: "nez", ipa: "ne", fam: "r" },
+    { lang: "イタリア語", flag: "🇮🇹", text: "naso", ipa: "ˈnaːzo", fam: "r" },
+    { lang: "スペイン語", flag: "🇪🇸", text: "nariz", ipa: "naˈɾiθ", fam: "r" },
+    { lang: "サンスクリット", flag: "🇮🇳", text: "नासा", roman: "nā́sā", fam: "i" },
+  ], note: "ラテン nāsus（→英 nasal）。サンスクリット <b>nā́sā</b> も n-s でそっくり。「鼻」の骨組み n…s が広く共有されている。" },
 ];
 
 const $ = (id) => document.getElementById(id);
@@ -379,7 +419,7 @@ function esc(s) { return String(s).replace(/[&<>]/g, c => ({ "&": "&amp;", "<": 
 function escAttr(s) { return String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
 
 // ── 発音（iPhone/ブラウザ内蔵の読み上げ。言語ごとの声を使う。追加API不要）──
-const SPEECH = { "ドイツ語": "de-DE", "英語": "en-GB", "フランス語": "fr-FR", "イタリア語": "it-IT", "スペイン語": "es-ES", "ギリシャ語": "el-GR" };
+const SPEECH = { "ドイツ語": "de-DE", "英語": "en-GB", "フランス語": "fr-FR", "イタリア語": "it-IT", "スペイン語": "es-ES", "ギリシャ語": "el-GR", "アイスランド語": "is-IS", "スウェーデン語": "sv-SE", "サンスクリット": "hi-IN", "ペルシャ語": "fa-IR" };
 let VOICES = [];
 function loadVoices() { try { VOICES = window.speechSynthesis ? speechSynthesis.getVoices() : []; } catch { VOICES = []; } }
 if (window.speechSynthesis) { loadVoices(); speechSynthesis.onvoiceschanged = loadVoices; }
@@ -400,7 +440,7 @@ function hl(text, keys) {
   return [...text].map(ch => set.has(ch.toLowerCase()) ? `<span class="hl">${esc(ch)}</span>` : esc(ch)).join("");
 }
 
-const FAMS = [["g", "ゲルマン系", "var(--g)"], ["r", "ロマンス系", "var(--r)"], ["h", "ギリシャ系", "var(--h)"]];
+const FAMS = [["g", "ゲルマン系", "var(--g)"], ["r", "ロマンス系", "var(--r)"], ["h", "ギリシャ系", "var(--h)"], ["i", "インド・イラン系", "var(--i)"]];
 let cur = 0, mode = "compare";
 
 function render() {
@@ -433,7 +473,7 @@ function renderCompare(c) {
         <div class="meta">${esc(w.lang)}${w.ipa ? ` · <span class="ipa">/${esc(w.ipa)}/</span>` : ""}</div>
       </div>
       <div class="rcol">
-        <span class="fam">${w.fam === "g" ? "Germanic" : w.fam === "r" ? "Romance" : "Hellenic"}</span>
+        <span class="fam">${FAMLABEL[w.fam] || ""}</span>
         <button class="say" type="button" data-t="${escAttr(w.text)}" data-l="${SPEECH[w.lang] || "en-US"}" aria-label="発音"><span class="icon">volume_up</span></button>
       </div>
     </div>`).join("");
