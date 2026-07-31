@@ -123,6 +123,24 @@ body { font-family: 'Outfit', -apple-system, sans-serif; color: var(--text); min
 .tleaf .llang { margin-left: auto; font-size: 10px; font-weight: 700; color: #8a8168; padding-left: 8px; }
 .tleaf .lsay { color: #8a8168; }
 .tleaf .lsay .icon { font-size: 16px; vertical-align: -0.15em; }
+
+/* 神話モード */
+#mythView { display: flex; flex-direction: column; gap: 9px; }
+.myth-intro { text-align: center; font-size: 12px; color: var(--muted); margin: 2px 0 8px; }
+.mcard { background: var(--card); color: #2a2418; border-radius: 14px; box-shadow: 0 5px 14px rgba(0,0,0,0.3); overflow: hidden; }
+.mhead { display: flex; align-items: center; gap: 12px; padding: 13px 15px; cursor: pointer; }
+.memoji { font-size: 25px; line-height: 1; }
+.mwm { flex: 1; min-width: 0; }
+.mword { font-family: 'EB Garamond', serif; font-size: 22px; font-weight: 600; line-height: 1.1; }
+.mword .mja { font-family: 'Outfit', sans-serif; font-size: 12px; color: #8a8168; font-weight: 700; margin-left: 6px; }
+.msrc { font-size: 12px; color: #7a6a48; font-weight: 700; margin-top: 2px; }
+.msrc .mcul { color: #a8977a; font-weight: 600; margin-left: 4px; }
+.mexp { color: #b8a578; transition: transform 0.2s; }
+.mcard.open .mexp { transform: rotate(180deg); }
+.mstory { max-height: 0; overflow: hidden; transition: max-height 0.3s ease, padding 0.3s; padding: 0 15px; font-size: 13.5px; line-height: 1.8; color: #3a3222; }
+.mcard.open .mstory { max-height: 640px; padding: 0 15px 14px; }
+.mstory b { color: #14100a; }
+.mderiv { margin-top: 9px; font-size: 12px; font-weight: 700; color: #6a5f42; }
 </style>
 </head>
 <body>
@@ -143,7 +161,9 @@ body { font-family: 'Outfit', -apple-system, sans-serif; color: var(--text); min
   <div class="modetabs" id="modetabs">
     <button class="mtab on" data-m="compare" type="button">単語比較</button>
     <button class="mtab" data-m="tree" type="button">家系図</button>
+    <button class="mtab" data-m="myth" type="button">神話</button>
   </div>
+  <div id="mythView" style="display:none;"></div>
   <div id="compareView">
     <div class="ancestor" id="ancestor"></div>
     <div class="langs" id="langs"></div>
@@ -496,6 +516,26 @@ const CONCEPTS = [
   ], note: "全部同じ旅の言葉。アラビア語 <b>qahwa（قهوة）</b> → トルコ語 <b>kahve</b> → ヨーロッパへ。だから Kaffee・café・caffè みんなそっくり。血のつながり（同語源）じゃなく「<b>借用＝旅してきた言葉</b>」の代表。トルコ語が世界に配った言葉のひとつ（yogurt・kiosk も同じ仲間）。" },
 ];
 
+// ── 神話から生まれた言葉（神話モード）──
+const MYTH = [
+  { emoji: "📅", word: "曜日", ja: "days of the week", source: "7つの惑星＝神々", culture: "北欧 × ローマ × 日本", story: "曜日は「7つの星＝神々」の名前。しかも <b>英語（北欧神）・フランス語（ローマ神）・日本語（惑星）が同じ神</b>を指す！<br>🔴 火＝軍神マルス：英 <b>Tuesday</b>（北欧の軍神ティール）＝仏 <b>mardi</b>＝日 <b>火曜</b><br>☿ 水＝メルクリウス：英 <b>Wednesday</b>（オーディン）＝仏 <b>mercredi</b>＝日 <b>水曜</b><br>⚡ 木＝ユピテル：英 <b>Thursday</b>（雷神トール）＝仏 <b>jeudi</b>＝日 <b>木曜</b><br>♀ 金＝ヴィーナス：英 <b>Friday</b>（女神フリッグ）＝仏 <b>vendredi</b>＝日 <b>金曜</b><br>🪐 土＝サトゥルヌス：英 <b>Saturday</b>＝日 <b>土曜</b><br>英語がローマの神を「北欧の対応する神」に置き換えた（interpretatio germanica）から、Tuesday＝火曜がピタッと対応する。" },
+  { emoji: "🐐", word: "panic", ja: "パニック", source: "牧神 パン Pan", culture: "ギリシャ神話", story: "森や山の神 <b>パン</b>（山羊の脚）は、旅人に突然わけもない恐怖を起こすとされた。その「パンが起こす恐怖」が <b>panic</b>。" },
+  { emoji: "🎭", word: "music", ja: "ミュージック", source: "ムーサ Muses", culture: "ギリシャ神話", story: "芸術と学問をつかさどる <b>9人の女神ムーサ（ミューズ）</b>。music は「ムーサの技」。<b>museum</b>（博物館）＝「ムーサの神殿」、mosaic も仲間。", deriv: "museum・mosaic・amuse" },
+  { emoji: "🌊", word: "ocean", ja: "オーシャン", source: "オケアノス Okeanos", culture: "ギリシャ神話", story: "世界の果てを取り巻いて流れる<b>大河の神オケアノス</b>（巨人ティタンの一人）。世界を囲む水＝ocean。" },
+  { emoji: "🔊", word: "echo", ja: "エコー", source: "ニンフ エコー Echo", culture: "ギリシャ神話", story: "美少年ナルキッソスに恋したニンフ <b>エコー</b>。拒まれて悲しみ、体は消えて<b>「声（こだま）」だけ</b>が残った。" },
+  { emoji: "🪞", word: "narcissism", ja: "ナルシシズム", source: "ナルキッソス Narcissus", culture: "ギリシャ神話", story: "水面に映る<b>自分の姿に恋した美少年</b>ナルキッソス。動けず見つめ続けて死に、そこに水仙（narcissus）が咲いた。自己愛＝narcissism。" },
+  { emoji: "🌋", word: "volcano", ja: "ボルケーノ", source: "ウルカヌス Vulcan", culture: "ローマ神話", story: "火と鍛冶の神 <b>ウルカヌス（ヴァルカン）</b>。火山は地下にある<b>神の鍛冶場</b>だと考えられた。" },
+  { emoji: "🌾", word: "cereal", ja: "シリアル", source: "ケレス Ceres", culture: "ローマ神話", story: "穀物と豊穣の女神 <b>ケレス</b>。彼女の恵み＝穀物が <b>cereal</b>。朝食のシリアルも女神の名。" },
+  { emoji: "🗺️", word: "atlas", ja: "アトラス", source: "巨人 アトラス Atlas", culture: "ギリシャ神話", story: "天空を肩で担ぐ罰を受けた巨人 <b>アトラス</b>。昔の地図帳の表紙に彼が描かれ、そのまま「<b>atlas＝地図帳</b>」になった。" },
+  { emoji: "☿️", word: "mercury", ja: "マーキュリー", source: "メルクリウス Mercury", culture: "ローマ神話", story: "翼のサンダルで駆ける俊足の<b>伝令神メルクリウス</b>。動きが速い→<b>水星</b>、素早く変わる→<b>水銀</b>・mercurial（気まぐれ）。", deriv: "水星・水銀・mercurial" },
+  { emoji: "😄", word: "jovial", ja: "ジョビアル", source: "ユピテル Jove", culture: "ローマ神話（占星術）", story: "最高神 <b>ユピテル（Jove）＝木星</b>の生まれは陽気で明るい、という占星術の考えから「<b>陽気な</b>」＝jovial。" },
+  { emoji: "⚔️", word: "martial", ja: "マーシャル", source: "マルス Mars", culture: "ローマ神話", story: "軍神 <b>マルス</b>。martial arts（武術）、<b>火星</b>、そして3月 <b>March</b>（軍を進める季節）まで彼の名。" },
+  { emoji: "💤", word: "morphine", ja: "モルヒネ", source: "モルペウス Morpheus", culture: "ギリシャ神話", story: "夢の神 <b>モルペウス</b>（眠りの神ヒュプノスの息子）。眠りに誘う鎮痛薬 morphine の名の由来。" },
+  { emoji: "🌈", word: "iris", ja: "アイリス", source: "イリス Iris", culture: "ギリシャ神話", story: "虹の女神 <b>イリス</b>（神々の伝令）。虹のように色づく<b>目の虹彩</b>や、花の<b>アヤメ</b>も iris。" },
+  { emoji: "😱", word: "phobia", ja: "フォビア", source: "フォボス Phobos", culture: "ギリシャ神話", story: "<b>恐怖の神フォボス</b>（軍神アレスの息子）。「〜恐怖症」＝〜phobia。火星の衛星フォボスも彼。" },
+  { emoji: "🦢", word: "hypnosis", ja: "ヒプノシス", source: "ヒュプノス Hypnos", culture: "ギリシャ神話", story: "<b>眠りの神ヒュプノス</b>。眠りに似た状態＝hypnosis（催眠）。" },
+];
+
 const $ = (id) => document.getElementById(id);
 function esc(s) { return String(s).replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c])); }
 function escAttr(s) { return String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
@@ -527,6 +567,8 @@ let cur = 0, mode = "compare";
 
 function render() {
   const c = CONCEPTS[cur];
+  const isMyth = mode === "myth";
+  $("concepts").style.display = isMyth ? "none" : "";
   $("concepts").innerHTML = CONCEPTS.map((x, i) =>
     `<button class="cchip ${i === cur ? "on" : ""}" data-i="${i}" type="button">${esc(x.ja)}<span class="en">${x.key}</span></button>`
   ).join("");
@@ -538,9 +580,30 @@ function render() {
   });
   $("compareView").style.display = mode === "compare" ? "" : "none";
   $("treeView").style.display = mode === "tree" ? "" : "none";
+  $("mythView").style.display = isMyth ? "" : "none";
+  const lg = document.querySelector(".legend"); if (lg) lg.style.display = isMyth ? "none" : "";
 
+  if (isMyth) { renderMyth(); $("noteBox").innerHTML = ""; return; }
   if (mode === "compare") renderCompare(c); else renderTree(c);
   $("noteBox").innerHTML = c.note ? `<div class="note"><span class="h">なぜ違う？</span>${c.note}</div>` : "";
+}
+
+function renderMyth() {
+  $("mythView").innerHTML = `<div class="myth-intro">日常の言葉には、神々の名前が隠れている。タップで物語。</div>` +
+    MYTH.map((m, i) => `
+      <div class="mcard" data-i="${i}">
+        <div class="mhead">
+          <span class="memoji">${m.emoji}</span>
+          <div class="mwm">
+            <div class="mword">${esc(m.word)}<span class="mja">${esc(m.ja)}</span></div>
+            <div class="msrc">← ${esc(m.source)}<span class="mcul">${esc(m.culture)}</span></div>
+          </div>
+          <span class="mexp icon">expand_more</span>
+        </div>
+        <div class="mstory">${m.story}${m.deriv ? `<div class="mderiv">派生：${esc(m.deriv)}</div>` : ""}</div>
+      </div>`).join("");
+  $("mythView").querySelectorAll(".mcard").forEach(card =>
+    card.querySelector(".mhead").addEventListener("click", () => card.classList.toggle("open")));
 }
 
 function renderCompare(c) {
