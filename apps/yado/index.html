@@ -44,6 +44,22 @@ body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); 
 .tabs::-webkit-scrollbar { display: none; }
 .tab { padding: 9px 16px; border-radius: 18px; font-size: 13px; font-weight: 700; border: none; color: var(--text2); background: var(--bg); box-shadow: 4px 4px 10px var(--sd), -4px -4px 10px var(--sl); cursor: pointer; flex-shrink: 0; font-family: inherit; transition: all 200ms ease; }
 .tab.on { color: white; background: linear-gradient(145deg, var(--accent2), var(--accent)); box-shadow: 6px 6px 14px rgba(180,83,9,0.35), -3px -3px 10px var(--sl); }
+/* やることタブ */
+.tasks { padding: 0 18px 40px; }
+.task-add { display: flex; gap: 8px; margin: 10px 0 14px; }
+.task-input { flex: 1; min-width: 0; padding: 12px 14px; border-radius: 14px; border: none; font-size: 14px; font-family: inherit; color: var(--text); background: var(--bg); box-shadow: inset 3px 3px 8px var(--sd), inset -3px -3px 8px var(--sl); outline: none; }
+.task-addbtn { padding: 0 18px; border-radius: 14px; border: none; font-weight: 800; font-size: 14px; font-family: inherit; color: white; background: linear-gradient(145deg, var(--accent2), var(--accent)); box-shadow: 4px 4px 10px rgba(180,83,9,0.3); cursor: pointer; flex-shrink: 0; }
+.task-addbtn:disabled { opacity: 0.5; }
+.task-item { display: flex; align-items: center; gap: 10px; padding: 13px 14px; border-radius: 14px; background: var(--bg); box-shadow: 4px 4px 10px var(--sd), -4px -4px 10px var(--sl); margin-bottom: 9px; }
+.task-check { border: none; background: none; color: var(--accent); cursor: pointer; padding: 0; display: flex; flex-shrink: 0; }
+.task-check .icon { font-size: 24px; }
+.task-text { flex: 1; font-size: 14px; font-weight: 600; color: var(--text); line-height: 1.4; word-break: break-word; }
+.task-item.done .task-text { text-decoration: line-through; color: var(--text2); }
+.task-item.done .task-check { color: #2a8c3a; }
+.task-del { border: none; background: none; color: var(--text3); cursor: pointer; padding: 0; display: flex; flex-shrink: 0; }
+.task-del .icon { font-size: 20px; }
+.task-empty { text-align: center; color: var(--text2); font-weight: 600; font-size: 13px; padding: 34px 10px; line-height: 1.7; }
+.task-count { text-align: center; font-size: 11px; color: var(--text3); font-weight: 700; margin-top: 8px; }
 
 /* 月切り替えバー */
 .month-bar { display: flex; align-items: center; justify-content: space-between; padding: 6px 18px 12px; gap: 12px; }
@@ -237,6 +253,7 @@ const TEMPLATE = `
       <button class="tab" :class="{ on: tab === 'sum' }" @click="tab = 'sum'">サマリー</button>
       <button class="tab" :class="{ on: tab === 'rev' }" @click="tab = 'rev'">レビュー</button>
       <button class="tab" :class="{ on: tab === 'str' }" @click="tab = 'str'">戦略</button>
+      <button class="tab" :class="{ on: tab === 'task' }" @click="tab = 'task'">やること</button>
     </div>
   </div>
 
@@ -473,6 +490,22 @@ const TEMPLATE = `
     <div v-if="strategy" class="result">{{ strategy }}</div>
     <div v-if="strategyAt" class="meta">生成: {{ strategyAt }}</div>
   </div>
+
+  <!-- ───── やることタブ ───── -->
+  <div v-else-if="tab === 'task'" class="tasks">
+    <div class="intro">宿の改善アイデア・やりたいことをメモ。みんなで共有されます。</div>
+    <div class="task-add">
+      <input class="task-input" v-model="newTask" @keyup.enter="addTask" placeholder="例：チェックイン説明を英語対応にする" />
+      <button class="task-addbtn" :disabled="!newTask.trim()" @click="addTask">追加</button>
+    </div>
+    <div v-if="sortedTasks.length === 0" class="task-empty">まだ何もありません。<br>上に書いて「追加」。</div>
+    <div v-for="t in sortedTasks" :key="t.id" class="task-item" :class="{ done: t.done }">
+      <button class="task-check" @click="toggleTask(t)"><span class="icon">{{ t.done ? 'check_circle' : 'radio_button_unchecked' }}</span></button>
+      <div class="task-text">{{ t.text }}</div>
+      <button class="task-del" @click="deleteTask(t)"><span class="icon">close</span></button>
+    </div>
+    <div v-if="tasks.length" class="task-count">未完了 {{ openCount }} 件 / 全 {{ tasks.length }} 件</div>
+  </div>
 </div>
 `;
 
@@ -504,6 +537,38 @@ const App = {
     const strategyAt = ref("");
     const generating = ref(false);
     const user = ref(null);
+
+    // やることリスト (Firestore yado_tasks/data に永続化。全員共有)
+    const tasks = ref([]);
+    const newTask = ref("");
+    const sortedTasks = computed(() => [...tasks.value].sort((a, b) => (a.done - b.done) || (b.createdAt - a.createdAt)));
+    const openCount = computed(() => tasks.value.filter((t) => !t.done).length);
+    async function loadTasks() {
+      if (!db) return;
+      try {
+        const snap = await getDoc(doc(db, "yado_tasks", "data"));
+        if (snap.exists() && Array.isArray(snap.data().items)) tasks.value = snap.data().items;
+      } catch (e) { /* silent */ }
+    }
+    async function saveTasks() {
+      if (!db || !user.value) return;
+      try {
+        await setDoc(doc(db, "yado_tasks", "data"), {
+          items: JSON.parse(JSON.stringify(tasks.value)),
+          updatedAt: serverTimestamp(),
+          updatedBy: (user.value.email || "").toLowerCase(),
+        }, { merge: true });
+      } catch (e) { console.warn("task save failed:", e.message); }
+    }
+    function addTask() {
+      const text = newTask.value.trim();
+      if (!text) return;
+      tasks.value.push({ id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6), text, done: false, createdAt: Date.now(), by: (user.value?.email || "").toLowerCase() });
+      newTask.value = "";
+      saveTasks();
+    }
+    function toggleTask(t) { t.done = !t.done; saveTasks(); }
+    function deleteTask(t) { tasks.value = tasks.value.filter((x) => x.id !== t.id); saveTasks(); }
     // ゲストレビュー貼り付け欄。各チャネル分けて持つ。Firestore yado_reviews/data に永続化。
     const reviews = ref({ airbnb: "", booking: "", other: "" });
     const reviewsSaved = ref(false);
@@ -951,6 +1016,7 @@ const App = {
           user.value = u;
           await fetchBookings();
           await loadReviews();
+          await loadTasks();
         });
       } catch (e) {
         err.value = "初期化失敗: " + (e.message || e);
@@ -970,6 +1036,7 @@ const App = {
       revenueByChannel, revenueBarPct, dailyRevenue, maxDayRevenue,
       shiftMonth, formatYen, formatJP, fetchBookings, generateStrategy, syncToSheet, back,
       onReviewInput, onUploadReviews, ocrLoading, ocrProgress,
+      tasks, newTask, sortedTasks, openCount, addTask, toggleTask, deleteTask,
       slideDir, onSwipeStart, onSwipeMove, onSwipeEnd, onSwipeCancel,
     };
   },
