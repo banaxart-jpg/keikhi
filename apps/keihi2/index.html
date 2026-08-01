@@ -736,6 +736,11 @@ function createSwipeCard(r, isBack) {
   addLink.textContent = "+ 現場アプリで追加";
   addLink.style.textDecoration = "none";
   sitesRow.appendChild(addLink);
+  // あとで (振り分けずに次のカードへ。以前の上スワイプの代わり)
+  const later = document.createElement("button");
+  later.type = "button"; later.className = "sw-site"; later.textContent = "→ あとで";
+  later.addEventListener("click", (e) => { e.stopPropagation(); swipeOutNext(card); });
+  sitesRow.appendChild(later);
   // 削除
   const del = document.createElement("button");
   del.type = "button"; del.className = "sw-site danger"; del.textContent = "🗑 削除";
@@ -751,9 +756,8 @@ function createSwipeCard(r, isBack) {
   if (!isBack) {
     const hint = document.createElement("div");
     hint.className = "sw-hint" + (predicted ? "" : " skip");
-    hint.textContent = predicted ? `↑ SWIPE で「${predicted}」に SORT` : "↑ SWIPE で次へ（後で SORT）";
+    hint.textContent = predicted ? `✨「${predicted}」が候補（下の現場ボタンで確定）` : "下の現場ボタンをタップで振り分け";
     card.appendChild(hint);
-    attachSwipe(card, r, predicted);
   }
   return card;
 }
@@ -767,57 +771,6 @@ function swipeOutNext(card) {
     swipeIndex++;
     renderSwipe();
   }, 240);
-}
-
-// touch スワイプハンドラ
-// 上スワイプ: AI が現場を推定できていれば「その現場で SORT 確定」、
-//             推定できていなければ「スキップ」(後で SORT 待ちに残る)
-function attachSwipe(card, record, predicted) {
-  let startY = 0, startX = 0, deltaY = 0, dragging = false;
-  const TH = 120;
-  function down(y, x) { startY = y; startX = x; deltaY = 0; dragging = true; card.style.transition = "none"; }
-  function move(y, x) {
-    if (!dragging) return;
-    const dx = x - startX;
-    deltaY = y - startY;
-    if (Math.abs(dx) > Math.abs(deltaY) && Math.abs(dx) > 10) { dragging = false; card.style.transform = ""; return; }
-    if (deltaY < 0) {
-      const fade = Math.min(1, -deltaY / 400);
-      card.style.transform = `translateY(${deltaY}px) scale(${1 - fade * 0.05})`;
-      card.style.opacity = String(1 - fade * 0.4);
-    } else {
-      card.style.transform = "";
-      card.style.opacity = "1";
-    }
-  }
-  async function up() {
-    if (!dragging) return;
-    dragging = false;
-    if (deltaY < -TH) {
-      if (predicted && sites.some((s) => s.name === predicted)) {
-        // AI 推定の現場で SORT 確定 (現在カード内で選択中の支払方法を引き継ぐ)
-        const curPay = card.querySelector(".sw-pay-btn.active")?.dataset.pay || record.payment || "現金";
-        try {
-          await assignSite(record, predicted, curPay);
-          swipeOutNext(card);
-        } catch (err) {
-          toast("失敗: " + err.message, true);
-          card.style.transition = "transform 0.18s, opacity 0.18s";
-          card.style.transform = ""; card.style.opacity = "1";
-        }
-      } else {
-        // 推定なし → 次へ (未 SORT のまま)
-        swipeOutNext(card);
-      }
-    } else {
-      card.style.transition = "transform 0.18s, opacity 0.18s";
-      card.style.transform = ""; card.style.opacity = "1";
-    }
-  }
-  card.addEventListener("touchstart", (e) => down(e.touches[0].clientY, e.touches[0].clientX), { passive: true });
-  card.addEventListener("touchmove", (e) => move(e.touches[0].clientY, e.touches[0].clientX), { passive: true });
-  card.addEventListener("touchend", up);
-  card.addEventListener("touchcancel", up);
 }
 
 function escapeHtml(s) {
@@ -872,8 +825,6 @@ function renderSort() {
 function makeSortCard(r) {
   const wrap = document.createElement("div");
   wrap.className = "sort-row";
-  const bg = document.createElement("div");
-  bg.className = "swipe-bg"; bg.textContent = "削除";
   const card = document.createElement("div");
   const buyerClass = r.buyer === "小西" ? " b-konishi" : r.buyer === "名取" ? " b-natori" : "";
   card.className = "sort-card" + buyerClass;
@@ -888,45 +839,10 @@ function makeSortCard(r) {
   date.textContent = (r.date || "").slice(0, 10);
   card.append(amt, site, date);
 
-  // 左スワイプで削除、タップで編集モーダル
-  let startX = 0, startY = 0, deltaX = 0, dragging = false, movedAway = false;
-  const TH = 130;
-  card.addEventListener("touchstart", (e) => {
-    startX = e.touches[0].clientX; startY = e.touches[0].clientY;
-    deltaX = 0; dragging = true; movedAway = false;
-    card.style.transition = "none";
-  }, { passive: true });
-  card.addEventListener("touchmove", (e) => {
-    if (!dragging) return;
-    const dx = e.touches[0].clientX - startX;
-    const dy = e.touches[0].clientY - startY;
-    if (Math.abs(dy) > Math.abs(dx) && Math.abs(dy) > 10) {
-      dragging = false; card.style.transform = ""; return;
-    }
-    deltaX = dx;
-    if (Math.abs(deltaX) > 10) movedAway = true;
-    if (deltaX < 0) card.style.transform = `translateX(${deltaX}px)`;
-    else card.style.transform = "";
-  }, { passive: true });
-  card.addEventListener("touchend", () => {
-    if (!dragging) return;
-    dragging = false;
-    if (deltaX < -TH) {
-      card.style.transition = "transform 0.25s, opacity 0.25s";
-      card.style.transform = "translateX(-100vw)";
-      card.style.opacity = "0";
-      setTimeout(() => deleteRecord(r), 220);
-    } else {
-      card.style.transition = "transform 0.2s"; card.style.transform = "";
-    }
-    setTimeout(() => { movedAway = false; }, 60);
-  });
-  card.addEventListener("click", () => {
-    if (movedAway) return;
-    openEdit(r);
-  });
+  // タップで編集モーダル（削除はモーダル内の「削除」から）
+  card.addEventListener("click", () => openEdit(r));
 
-  wrap.append(bg, card);
+  wrap.append(card);
   return wrap;
 }
 
