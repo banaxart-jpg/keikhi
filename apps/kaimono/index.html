@@ -46,6 +46,14 @@ body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); 
 
 /* ── アイテムカード: 默認は最小限の 1 行。タップで詳細展開。 ── */
 .item-card { background: var(--bg); border-radius: 16px; box-shadow: 5px 5px 12px var(--sd), -4px -4px 10px var(--sl); transition: opacity 200ms ease; overflow: hidden; }
+
+/* ── 長押しドラッグ並び替え (未チェック項目のみ) ── */
+.list .item-card { user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
+.lg-move { transition: transform 0.2s cubic-bezier(0.2, 0.7, 0.3, 1); }
+.lg-leave-active { display: none; } /* 削除は即消し (FLIP の残留防止) */
+.item-card.drag-src { opacity: 0.12; }
+.drag-ghost-row { position: fixed; z-index: 400; pointer-events: none; box-shadow: 0 14px 30px rgba(66,69,94,0.32); transform: scale(1.02); }
+.drag-ghost-row .chev { font-family: 'Material Symbols Outlined'; color: var(--text3); }
 .item-card.checked { opacity: 0.55; }
 .item-row { display: flex; align-items: center; gap: 12px; padding: 12px 14px; cursor: pointer; }
 .item-name { flex: 1; font-size: 14px; font-weight: 600; min-width: 0; word-break: break-word; color: var(--text); }
@@ -212,7 +220,7 @@ body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); 
 
 <script src="/config.js"></script>
 <script type="module">
-import { createApp, ref, computed, onMounted, onBeforeUnmount, watch } from "https://unpkg.com/vue@3.4.27/dist/vue.esm-browser.prod.js";
+import { createApp, ref, reactive, computed, onMounted, onBeforeUnmount, watch, nextTick } from "https://unpkg.com/vue@3.4.27/dist/vue.esm-browser.prod.js";
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js";
 import {
   getAuth, onAuthStateChanged, setPersistence, browserLocalPersistence,
@@ -251,7 +259,10 @@ const TEMPLATE = `
     <div class="list">
       <div v-if="sortedSites.length === 0" class="empty">現場がまだ登録されていません。<a href="/genba/?return=/kaimono/" style="color:var(--accent); font-weight:700;">現場アプリで追加 →</a></div>
       <div v-else-if="filteredItems.length === 0" class="empty">「{{ activeSite === ALL_KEY ? 'すべて' : activeSite }}」に追加するものはまだ無し</div>
-      <div v-for="item in filteredItems" :key="item.id" class="item-card" :class="{ checked: item.checked, open: expandedId === item.id }">
+      <TransitionGroup v-else tag="div" name="lg" style="display:flex; flex-direction:column; gap:8px;">
+      <div v-for="item in filteredItems" :key="item.id" class="item-card" :class="{ checked: item.checked, open: expandedId === item.id, 'drag-src': dragSrcId === item.id }"
+        @pointerdown="dragDown($event, item)" @pointermove="dragMove($event)"
+        @pointerup="dragUp($event)" @pointercancel="dragCancel($event)">
         <!-- collapsed row: 最小限の情報だけ -->
         <div class="item-row" @click="toggleDetail(item)">
           <button class="check" @click.stop="toggle(item)" :style="item.checked ? { background: colorForEmail(item.checkedBy), color: 'white', boxShadow: '3px 3px 8px ' + colorForEmail(item.checkedBy) + '55' } : null">{{ item.checked ? 'check' : '' }}</button>
@@ -328,6 +339,16 @@ const TEMPLATE = `
             </div>
           </template>
         </div>
+      </div>
+      </TransitionGroup>
+    </div>
+
+    <!-- ドラッグ中のゴースト (掴んだ行が指に追従) -->
+    <div v-if="dragItem" class="item-card drag-ghost-row" :style="{ left: dragGhost.x + 'px', top: dragGhost.y + 'px', width: dragGhost.w + 'px' }">
+      <div class="item-row">
+        <button class="check"></button>
+        <div class="item-name">{{ displayName(dragItem) }}<span v-if="dragItem.qty" class="qty">× {{ dragItem.qty }} {{ dragItem.unit || '' }}</span></div>
+        <span class="chev">drag_indicator</span>
       </div>
     </div>
 
@@ -529,22 +550,163 @@ const App = {
 
     // アクティブな現場名 Set (完了現場のアイテムを ALL からも除外するため)
     const activeSitesSet = computed(() => new Set(sites.value));
-    const filteredItems = computed(() =>
-      items.value
-        .filter((i) => {
-          if (isArchived(i)) return false;
-          // 「すべて」: 完了済み現場のアイテムは出さない (再開すれば現場名 set に戻り再表示)
-          if (activeSite.value === ALL_KEY) return activeSitesSet.value.has(i.site);
-          return i.site === activeSite.value;
-        })
-        // 未チェック先、済みを下に。同じ状態内は createdAt desc (新しい順)。
-        .sort((a, b) => {
-          if (a.checked !== b.checked) return a.checked ? 1 : -1;
-          const ta = a.createdAt?.toMillis?.() || 0;
-          const tb = b.createdAt?.toMillis?.() || 0;
-          return tb - ta;
-        })
-    );
+    // 並び順キー: 手動並び (order) があればそれ。無い新規は -createdAt で先頭 (新しい順)
+    function orderKeyOf(i) {
+      return typeof i.order === "number" ? i.order : -(i.createdAt?.toMillis?.() || 0);
+    }
+    const dragIds = ref(null);     // ドラッグ中の未チェック項目 id 並び (live)
+    const dragSrcId = ref(null);   // 掴んでる item id (元の行を薄く)
+    const filteredItems = computed(() => {
+      const base = items.value.filter((i) => {
+        if (isArchived(i)) return false;
+        // 「すべて」: 完了済み現場のアイテムは出さない (再開すれば現場名 set に戻り再表示)
+        if (activeSite.value === ALL_KEY) return activeSitesSet.value.has(i.site);
+        return i.site === activeSite.value;
+      });
+      // 未チェック先、済みを下に (済み内は createdAt desc)
+      const unchecked = base.filter((i) => !i.checked).sort((a, b) => {
+        const ka = orderKeyOf(a), kb = orderKeyOf(b);
+        if (ka !== kb) return ka - kb;
+        return (b.createdAt?.toMillis?.() || 0) - (a.createdAt?.toMillis?.() || 0);
+      });
+      const checked = base.filter((i) => i.checked).sort((a, b) =>
+        (b.createdAt?.toMillis?.() || 0) - (a.createdAt?.toMillis?.() || 0));
+      if (dragIds.value) {
+        // ドラッグ中は dragIds の並びを優先 (snapshot に無い新着は先頭)
+        const byId = new Map(unchecked.map((i) => [i.id, i]));
+        const arranged = dragIds.value.map((id) => byId.get(id)).filter(Boolean);
+        const rest = unchecked.filter((i) => !dragIds.value.includes(i.id));
+        return [...rest, ...arranged, ...checked];
+      }
+      return [...unchecked, ...checked];
+    });
+
+    // ── 長押しドラッグ並び替え (未チェック項目のみ、タブ内で有効) ──
+    // 450ms 長押し → ゴーストが指に追従、他の行が FLIP で避ける → 離した並びを
+    // Firestore の order (0..n-1) に一括保存。他端末には onSnapshot で同期される。
+    const LP_MS = 450, LP_MOVE = 8;
+    const dragItem = ref(null);                              // ゴースト表示用 item
+    const dragGhost = reactive({ x: 0, y: 0, w: 0 });        // fixed 座標
+    let dCtx = null;        // 非 reactive: { id, item, pointerId, el, startX, startY, lastY, slots, grabDy, timer }
+    let suppressTap = false; // ドラッグ直後の click で詳細が開かないように
+
+    function blockTouch(e) { e.preventDefault(); } // ドラッグ中のスクロール抑止 (passive:false で登録)
+
+    function dragDown(e, item) {
+      if (item.checked) return;
+      if (dCtx || dragItem.value) return;
+      if (e.target.closest("button") || e.target.closest("input") || e.target.closest("select") || e.target.closest("img")) return;
+      dCtx = { id: item.id, item, pointerId: e.pointerId, el: e.currentTarget,
+               startX: e.clientX, startY: e.clientY, lastY: e.clientY, slots: null, grabDy: 0, timer: null };
+      dCtx.timer = setTimeout(activateDrag, LP_MS);
+    }
+    async function activateDrag() {
+      const ctx = dCtx;
+      if (!ctx) return;
+      ctx.timer = null;
+      expandedId.value = null; // 展開中カードは畳んでから座標を測る
+      await nextTick();
+      if (!dCtx) return;
+      const ids = filteredItems.value.filter((i) => !i.checked).map((i) => i.id);
+      if (ids.length < 2) { dCtx = null; return; }
+      // スロット位置 (document 座標)。枠自体は動かないので snapshot でよい
+      const cards = [...document.querySelectorAll(".list .item-card")].filter((el) => !el.classList.contains("checked"));
+      ctx.slots = cards.slice(0, ids.length).map((el) => {
+        const r = el.getBoundingClientRect();
+        return r.top + r.height / 2 + window.scrollY;
+      });
+      const r = ctx.el.getBoundingClientRect();
+      dragGhost.x = r.left;
+      dragGhost.w = r.width;
+      ctx.grabDy = ctx.startY - r.top;
+      dragGhost.y = ctx.lastY - ctx.grabDy;
+      dragIds.value = ids;
+      dragSrcId.value = ctx.id;
+      dragItem.value = ctx.item;
+      try { ctx.el.setPointerCapture(ctx.pointerId); } catch (_) {}
+      document.addEventListener("touchmove", blockTouch, { passive: false });
+      if (navigator.vibrate) navigator.vibrate(15);
+      autoScrollLoop();
+    }
+    function updateDragTarget() {
+      const ctx = dCtx;
+      if (!ctx || !dragIds.value) return;
+      const docY = dragGhost.y + ctx.grabDy + window.scrollY; // 指位置 (document 座標)
+      let best = 0, bd = Infinity;
+      for (let i = 0; i < ctx.slots.length; i++) {
+        const d = Math.abs(ctx.slots[i] - docY);
+        if (d < bd) { bd = d; best = i; }
+      }
+      const cur = dragIds.value.indexOf(ctx.id);
+      if (best !== cur) {
+        const ids = dragIds.value.slice();
+        ids.splice(cur, 1);
+        ids.splice(best, 0, ctx.id);
+        dragIds.value = ids;
+      }
+    }
+    function dragMove(e) {
+      const ctx = dCtx;
+      if (!ctx) return;
+      if (!dragItem.value) {
+        // 長押し成立前に動いた → スクロール操作なのでキャンセル
+        if (Math.abs(e.clientX - ctx.startX) > LP_MOVE || Math.abs(e.clientY - ctx.startY) > LP_MOVE) cancelPending();
+        return;
+      }
+      if (e.pointerId !== ctx.pointerId) return;
+      ctx.lastY = e.clientY;
+      dragGhost.y = e.clientY - ctx.grabDy;
+      updateDragTarget();
+    }
+    // 画面端に近づいたら自動スクロール (リストが長い時用)
+    function autoScrollLoop() {
+      if (!dCtx || !dragItem.value) return;
+      const y = dCtx.lastY, M = 110, V = 12;
+      let dy = 0;
+      if (y < M) dy = -V * (1 - y / M);
+      else if (y > window.innerHeight - M) dy = V * (1 - (window.innerHeight - y) / M);
+      if (dy) {
+        window.scrollBy(0, dy);
+        updateDragTarget();
+      }
+      requestAnimationFrame(autoScrollLoop);
+    }
+    function dragUp(e) {
+      const ctx = dCtx;
+      if (!ctx) return;
+      if (!dragItem.value) { cancelPending(); return; } // 長押し前に離した → ただのタップ
+      if (e.pointerId !== ctx.pointerId) return;
+      suppressTap = true;
+      setTimeout(() => { suppressTap = false; }, 350);
+      commitOrder();
+      endDrag();
+    }
+    function dragCancel() {
+      if (!dCtx) return;
+      if (dragItem.value) { commitOrder(); endDrag(); }
+      else cancelPending();
+    }
+    function cancelPending() {
+      if (dCtx?.timer) clearTimeout(dCtx.timer);
+      dCtx = null;
+    }
+    function endDrag() {
+      document.removeEventListener("touchmove", blockTouch);
+      dragItem.value = null;
+      dragSrcId.value = null;
+      dCtx = null;
+    }
+    function commitOrder() {
+      const ids = dragIds.value;
+      if (!ids || !db) { dragIds.value = null; return; }
+      try {
+        const batch = writeBatch(db);
+        ids.forEach((id, i) => batch.update(doc(db, SHOPPING, id), { order: i }));
+        batch.commit().catch((e) => console.warn("order save failed:", e?.message || e));
+      } catch (e) { console.warn("order save failed:", e?.message || e); }
+      // onSnapshot (latency compensation) が order 反映してから素の並びに戻す
+      setTimeout(() => { dragIds.value = null; }, 400);
+    }
 
     const countBySite = computed(() => {
       const m = { [ALL_KEY]: 0 };
@@ -755,6 +917,7 @@ const App = {
 
     // ── 詳細パネル (画像 + 説明) ────────────────────────────
     function toggleDetail(item) {
+      if (suppressTap) return; // ドラッグ直後の click は無視
       expandedId.value = expandedId.value === item.id ? null : item.id;
       // 詳細閉じたら編集モードもキャンセル
       if (expandedId.value !== item.id) cancelDetailEdit();
@@ -983,6 +1146,7 @@ const App = {
       showArchive, archExpandedId, archivedByDay, restore,
       isOwner, canSeedKomagome,
       filteredItems, countBySite, tabItems, hasChecked, checkedCount, inputPlaceholder,
+      dragItem, dragGhost, dragSrcId, dragDown, dragMove, dragUp, dragCancel,
       formatMeta, displayName, catClass, hasDetail,
       colorForEmail, displayNameOf, formatTimeShort,
       add, toggle, del, clearChecked, back, seedKomagome,
