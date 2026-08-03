@@ -550,9 +550,10 @@ const App = {
 
     // アクティブな現場名 Set (完了現場のアイテムを ALL からも除外するため)
     const activeSitesSet = computed(() => new Set(sites.value));
-    // 並び順キー: 手動並び (order) があればそれ。無い新規は -createdAt で先頭 (新しい順)
+    // 並び順キー: 手動並び (order) があればそれ。無い新規は createdAt で末尾に追記
+    // (order は 0..n の小さい数、createdAt millis は巨大なので必ず後ろに並ぶ)
     function orderKeyOf(i) {
-      return typeof i.order === "number" ? i.order : -(i.createdAt?.toMillis?.() || 0);
+      return typeof i.order === "number" ? i.order : (i.createdAt?.toMillis?.() || Number.MAX_SAFE_INTEGER);
     }
     const dragIds = ref(null);     // ドラッグ中の未チェック項目 id 並び (live)
     const dragSrcId = ref(null);   // 掴んでる item id (元の行を薄く)
@@ -567,16 +568,16 @@ const App = {
       const unchecked = base.filter((i) => !i.checked).sort((a, b) => {
         const ka = orderKeyOf(a), kb = orderKeyOf(b);
         if (ka !== kb) return ka - kb;
-        return (b.createdAt?.toMillis?.() || 0) - (a.createdAt?.toMillis?.() || 0);
+        return (a.createdAt?.toMillis?.() || 0) - (b.createdAt?.toMillis?.() || 0);
       });
       const checked = base.filter((i) => i.checked).sort((a, b) =>
         (b.createdAt?.toMillis?.() || 0) - (a.createdAt?.toMillis?.() || 0));
       if (dragIds.value) {
-        // ドラッグ中は dragIds の並びを優先 (snapshot に無い新着は先頭)
+        // ドラッグ中は dragIds の並びを優先 (snapshot に無い新着は末尾)
         const byId = new Map(unchecked.map((i) => [i.id, i]));
         const arranged = dragIds.value.map((id) => byId.get(id)).filter(Boolean);
         const rest = unchecked.filter((i) => !dragIds.value.includes(i.id));
-        return [...rest, ...arranged, ...checked];
+        return [...arranged, ...rest, ...checked];
       }
       return [...unchecked, ...checked];
     });
