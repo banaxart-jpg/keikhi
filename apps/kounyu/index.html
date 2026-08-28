@@ -144,7 +144,7 @@ const STATUS = {
 // 旧ステータス(tobuy/ordered)を新5段階に読み替え
 function normStatus(s) { return ({ tobuy: "unbought", ordered: "shipping" })[s] || s; }
 // 次の段階へ進めるボタン [次のstatus, ラベル]
-const NEXT = { unbought: ["bought", "購入した"], hold: ["bought", "購入した"], bought: ["shipping", "発送された"], shipping: ["arrived", "到着✓"] };
+const NEXT = { unbought: ["bought", "→ 購入済"], hold: ["bought", "→ 購入済"], bought: ["shipping", "→ 発送中"], shipping: ["arrived", "→ 到着済"] };
 
 let items = [], sites = [], cur = null, tab = "list";
 let calMonth = new Date(); calMonth.setDate(1);
