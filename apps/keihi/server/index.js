@@ -852,6 +852,572 @@ app.all("/api/drama/mcp/:token", (req, res) => {
   return dramaMcpHandler(req, res);
 });
 
+// ═══════════════════ Google Sheets MCP (claude.ai カスタムコネクタ) ═══════════════════
+// 小西の Claude チャットからスプレッドシートを直接読み書きする用 (見積書・請求書づくり)。
+// 認証は URL の推測不能トークン (drama MCP と同じ流儀)。
+// 接続 URL: https://<keihi-api の Cloud Run URL>/api/sheets/mcp/<token>
+//
+// 前提: Cloud Run の実行 SA を対象シート (またはフォルダ) に編集者として共有しておく。
+// SHEETS_MCP_ALLOWED_IDS (カンマ区切り) を設定するとそれ以外のシートは拒否。
+// このサーバー経由で copy/create した新規シートは自動で許可リストに加わる。
+
+const SHEETS_MCP_TOKEN = (process.env.SHEETS_MCP_TOKEN || "kx9m2sheets7vqt4wp8zh").trim();
+const sheetsMcpAllowed = new Set(
+  (process.env.SHEETS_MCP_ALLOWED_IDS || "").split(",").map((s) => s.trim()).filter(Boolean)
+);
+function sheetsMcpCheck(id) {
+  if (!id) throw new Error("spreadsheet_id が空です");
+  if (sheetsMcpAllowed.size && !sheetsMcpAllowed.has(id)) {
+    throw new Error(`このスプレッドシートは許可されていません: ${id}`);
+  }
+}
+// "B2:D10" / "B2" / "A:C" / "2:8" → GridRange (シート名なしの A1 記法)
+function sheetsA1ToGrid(sheetId, a1) {
+  const parts = String(a1).replace(/\$/g, "").split(":");
+  const parse = (ref) => {
+    const m = /^([A-Za-z]*)([0-9]*)$/.exec(ref.trim());
+    if (!m || (!m[1] && !m[2])) throw new Error(`A1 範囲が読めません: ${a1}`);
+    let col = 0;
+    for (const ch of m[1].toUpperCase()) col = col * 26 + (ch.charCodeAt(0) - 64);
+    return { col: m[1] ? col : null, row: m[2] ? Number(m[2]) : null };
+  };
+  const s = parse(parts[0]), e = parse(parts[1] ?? parts[0]);
+  const g = { sheetId };
+  if (s.row != null) g.startRowIndex = s.row - 1;
+  if (e.row != null) g.endRowIndex = e.row;
+  if (s.col != null) g.startColumnIndex = s.col - 1;
+  if (e.col != null) g.endColumnIndex = e.col;
+  return g;
+}
+// "#RRGGBB" → Sheets API Color
+function sheetsHexColor(hex) {
+  const m = /^#?([0-9a-fA-F]{6})$/.exec(String(hex).trim());
+  if (!m) throw new Error(`色は #RRGGBB 形式で指定: ${hex}`);
+  const n = parseInt(m[1], 16);
+  return { red: ((n >> 16) & 255) / 255, green: ((n >> 8) & 255) / 255, blue: (n & 255) / 255 };
+}
+async function sheetsMcpBatch(spreadsheetId, requests) {
+  const sheets = await getSheetsApi();
+  const res = await sheets.spreadsheets.batchUpdate({ spreadsheetId, requestBody: { requests } });
+  return res.data;
+}
+const SHEETS_MCP_ID_PROP = { type: "string", description: "スプレッドシート ID (URL の /d/ と /edit の間)" };
+const SHEETS_MCP_SHEETID_PROP = { type: "number", description: "シート(タブ)の数値 ID。list_tabs で取得" };
+
+const SHEETS_MCP_TOOLS = [
+  // ─── 読み取り ───
+  {
+    name: "list_tabs",
+    description: "スプレッドシート内の全シート(タブ)の名前・sheet_id・行列数を返す。最初にこれで構造を把握する",
+    inputSchema: { type: "object", properties: { spreadsheet_id: SHEETS_MCP_ID_PROP }, required: ["spreadsheet_id"] },
+    handler: async (a) => {
+      sheetsMcpCheck(a.spreadsheet_id);
+      const sheets = await getSheetsApi();
+      const res = await sheets.spreadsheets.get({ spreadsheetId: a.spreadsheet_id, fields: "properties.title,sheets.properties" });
+      return {
+        title: res.data.properties?.title,
+        tabs: (res.data.sheets || []).map((s) => ({
+          title: s.properties.title,
+          sheet_id: s.properties.sheetId,
+          rows: s.properties.gridProperties?.rowCount,
+          cols: s.properties.gridProperties?.columnCount,
+        })),
+      };
+    },
+  },
+  {
+    name: "read_range",
+    description: "A1 記法の範囲を読む (値)。例: '請求書!A1:H40'",
+    inputSchema: {
+      type: "object",
+      properties: { spreadsheet_id: SHEETS_MCP_ID_PROP, a1_range: { type: "string", description: "シート名込みの A1 範囲" } },
+      required: ["spreadsheet_id", "a1_range"],
+    },
+    handler: async (a) => {
+      sheetsMcpCheck(a.spreadsheet_id);
+      const sheets = await getSheetsApi();
+      const res = await sheets.spreadsheets.values.get({
+        spreadsheetId: a.spreadsheet_id, range: a.a1_range, valueRenderOption: "UNFORMATTED_VALUE",
+      });
+      return res.data.values || [];
+    },
+  },
+  {
+    name: "read_formulas",
+    description: "値ではなく数式を読む (=SUM(...) 等の検証用)",
+    inputSchema: {
+      type: "object",
+      properties: { spreadsheet_id: SHEETS_MCP_ID_PROP, a1_range: { type: "string" } },
+      required: ["spreadsheet_id", "a1_range"],
+    },
+    handler: async (a) => {
+      sheetsMcpCheck(a.spreadsheet_id);
+      const sheets = await getSheetsApi();
+      const res = await sheets.spreadsheets.values.get({
+        spreadsheetId: a.spreadsheet_id, range: a.a1_range, valueRenderOption: "FORMULA",
+      });
+      return res.data.values || [];
+    },
+  },
+  // ─── 値の書き込み ───
+  {
+    name: "write_range",
+    description: "指定範囲を上書き。数式は '=SUM(H5:H40)' のようにそのまま渡せる",
+    inputSchema: {
+      type: "object",
+      properties: {
+        spreadsheet_id: SHEETS_MCP_ID_PROP,
+        a1_range: { type: "string" },
+        values: { type: "array", items: { type: "array" }, description: "2次元配列 [[行1], [行2], ...]" },
+      },
+      required: ["spreadsheet_id", "a1_range", "values"],
+    },
+    handler: async (a) => {
+      sheetsMcpCheck(a.spreadsheet_id);
+      const sheets = await getSheetsApi();
+      const res = await sheets.spreadsheets.values.update({
+        spreadsheetId: a.spreadsheet_id, range: a.a1_range,
+        valueInputOption: "USER_ENTERED", requestBody: { values: a.values },
+      });
+      return { updated_cells: res.data.updatedCells, range: res.data.updatedRange };
+    },
+  },
+  {
+    name: "batch_write",
+    description: "複数範囲をまとめて更新。updates = [{range:'請求書!G5', values:[[118000]]}, ...]",
+    inputSchema: {
+      type: "object",
+      properties: {
+        spreadsheet_id: SHEETS_MCP_ID_PROP,
+        updates: { type: "array", items: { type: "object", properties: { range: { type: "string" }, values: { type: "array", items: { type: "array" } } }, required: ["range", "values"] } },
+      },
+      required: ["spreadsheet_id", "updates"],
+    },
+    handler: async (a) => {
+      sheetsMcpCheck(a.spreadsheet_id);
+      const sheets = await getSheetsApi();
+      const res = await sheets.spreadsheets.values.batchUpdate({
+        spreadsheetId: a.spreadsheet_id,
+        requestBody: {
+          valueInputOption: "USER_ENTERED",
+          data: a.updates.map((u) => ({ range: u.range, values: u.values })),
+        },
+      });
+      return { updated_cells: res.data.totalUpdatedCells };
+    },
+  },
+  {
+    name: "append_rows",
+    description: "表の末尾に行を追加。a1_range は表のどこか一箇所でよい (例: '明細!A1')",
+    inputSchema: {
+      type: "object",
+      properties: { spreadsheet_id: SHEETS_MCP_ID_PROP, a1_range: { type: "string" }, values: { type: "array", items: { type: "array" } } },
+      required: ["spreadsheet_id", "a1_range", "values"],
+    },
+    handler: async (a) => {
+      sheetsMcpCheck(a.spreadsheet_id);
+      const sheets = await getSheetsApi();
+      const res = await sheets.spreadsheets.values.append({
+        spreadsheetId: a.spreadsheet_id, range: a.a1_range,
+        valueInputOption: "USER_ENTERED", insertDataOption: "INSERT_ROWS",
+        requestBody: { values: a.values },
+      });
+      return { updated_range: res.data.updates?.updatedRange };
+    },
+  },
+  {
+    name: "clear_range",
+    description: "範囲の値を消す (書式は残る)",
+    inputSchema: {
+      type: "object",
+      properties: { spreadsheet_id: SHEETS_MCP_ID_PROP, a1_range: { type: "string" } },
+      required: ["spreadsheet_id", "a1_range"],
+    },
+    handler: async (a) => {
+      sheetsMcpCheck(a.spreadsheet_id);
+      const sheets = await getSheetsApi();
+      await sheets.spreadsheets.values.clear({ spreadsheetId: a.spreadsheet_id, range: a.a1_range });
+      return { ok: true };
+    },
+  },
+  {
+    name: "find_replace",
+    description: "検索置換。テンプレートの {{宛名}} {{日付}} 等の差し込みに便利。sheet_id 省略で全シート対象",
+    inputSchema: {
+      type: "object",
+      properties: {
+        spreadsheet_id: SHEETS_MCP_ID_PROP,
+        find: { type: "string" },
+        replacement: { type: "string" },
+        sheet_id: { ...SHEETS_MCP_SHEETID_PROP, description: "省略で全シート" },
+        match_case: { type: "boolean" },
+      },
+      required: ["spreadsheet_id", "find", "replacement"],
+    },
+    handler: async (a) => {
+      sheetsMcpCheck(a.spreadsheet_id);
+      const fr = { find: a.find, replacement: a.replacement, matchCase: !!a.match_case };
+      if (a.sheet_id != null) fr.sheetId = a.sheet_id; else fr.allSheets = true;
+      const res = await sheetsMcpBatch(a.spreadsheet_id, [{ findReplace: fr }]);
+      return { replaced: res.replies?.[0]?.findReplace?.occurrencesChanged || 0 };
+    },
+  },
+  // ─── 行・列 ───
+  {
+    name: "insert_rows",
+    description: "行(または列)を挿入。start_index は0始まり (3行目の上に入れるなら 2)。書式は直前の行から引き継ぐ",
+    inputSchema: {
+      type: "object",
+      properties: {
+        spreadsheet_id: SHEETS_MCP_ID_PROP, sheet_id: SHEETS_MCP_SHEETID_PROP,
+        start_index: { type: "number" }, count: { type: "number", description: "省略で1" },
+        dimension: { type: "string", enum: ["ROWS", "COLUMNS"], description: "省略で ROWS" },
+      },
+      required: ["spreadsheet_id", "sheet_id", "start_index"],
+    },
+    handler: async (a) => {
+      sheetsMcpCheck(a.spreadsheet_id);
+      const count = a.count || 1;
+      await sheetsMcpBatch(a.spreadsheet_id, [{ insertDimension: {
+        range: { sheetId: a.sheet_id, dimension: a.dimension || "ROWS", startIndex: a.start_index, endIndex: a.start_index + count },
+        inheritFromBefore: a.start_index > 0,
+      } }]);
+      return `${count}${a.dimension === "COLUMNS" ? "列" : "行"} 挿入しました`;
+    },
+  },
+  {
+    name: "delete_rows",
+    description: "行(または列)を削除。start_index は0始まり",
+    inputSchema: {
+      type: "object",
+      properties: {
+        spreadsheet_id: SHEETS_MCP_ID_PROP, sheet_id: SHEETS_MCP_SHEETID_PROP,
+        start_index: { type: "number" }, count: { type: "number" },
+        dimension: { type: "string", enum: ["ROWS", "COLUMNS"] },
+      },
+      required: ["spreadsheet_id", "sheet_id", "start_index"],
+    },
+    handler: async (a) => {
+      sheetsMcpCheck(a.spreadsheet_id);
+      const count = a.count || 1;
+      await sheetsMcpBatch(a.spreadsheet_id, [{ deleteDimension: {
+        range: { sheetId: a.sheet_id, dimension: a.dimension || "ROWS", startIndex: a.start_index, endIndex: a.start_index + count },
+      } }]);
+      return `${count}${a.dimension === "COLUMNS" ? "列" : "行"} 削除しました`;
+    },
+  },
+  {
+    name: "set_dimension_size",
+    description: "列幅・行高をピクセルで設定。start/end は0始まり (end は含まない)",
+    inputSchema: {
+      type: "object",
+      properties: {
+        spreadsheet_id: SHEETS_MCP_ID_PROP, sheet_id: SHEETS_MCP_SHEETID_PROP,
+        dimension: { type: "string", enum: ["ROWS", "COLUMNS"] },
+        start_index: { type: "number" }, end_index: { type: "number" },
+        pixels: { type: "number" },
+      },
+      required: ["spreadsheet_id", "sheet_id", "dimension", "start_index", "end_index", "pixels"],
+    },
+    handler: async (a) => {
+      sheetsMcpCheck(a.spreadsheet_id);
+      await sheetsMcpBatch(a.spreadsheet_id, [{ updateDimensionProperties: {
+        range: { sheetId: a.sheet_id, dimension: a.dimension, startIndex: a.start_index, endIndex: a.end_index },
+        properties: { pixelSize: a.pixels }, fields: "pixelSize",
+      } }]);
+      return { ok: true };
+    },
+  },
+  // ─── 書式 (請求書の見た目づくり) ───
+  {
+    name: "format_cells",
+    description: "セル範囲の書式設定。金額なら number_format='¥#,##0'。指定した項目だけ変更される",
+    inputSchema: {
+      type: "object",
+      properties: {
+        spreadsheet_id: SHEETS_MCP_ID_PROP, sheet_id: SHEETS_MCP_SHEETID_PROP,
+        a1_range: { type: "string", description: "シート名なしの範囲 (例 'B2:D10')" },
+        bold: { type: "boolean" },
+        font_size: { type: "number" },
+        number_format: { type: "string", description: "表示形式パターン。例 '¥#,##0' '0.0%' 'yyyy/mm/dd'" },
+        number_format_type: { type: "string", enum: ["NUMBER", "CURRENCY", "PERCENT", "DATE", "TIME", "TEXT"], description: "省略で NUMBER (日付パターンなら DATE を指定)" },
+        bg_color: { type: "string", description: "#RRGGBB" },
+        font_color: { type: "string", description: "#RRGGBB" },
+        h_align: { type: "string", enum: ["LEFT", "CENTER", "RIGHT"] },
+        v_align: { type: "string", enum: ["TOP", "MIDDLE", "BOTTOM"] },
+        wrap: { type: "boolean", description: "true で折り返し" },
+      },
+      required: ["spreadsheet_id", "sheet_id", "a1_range"],
+    },
+    handler: async (a) => {
+      sheetsMcpCheck(a.spreadsheet_id);
+      const fmt = {};
+      const fields = [];
+      if (a.bold != null || a.font_size != null || a.font_color) {
+        fmt.textFormat = {};
+        if (a.bold != null) { fmt.textFormat.bold = a.bold; fields.push("userEnteredFormat.textFormat.bold"); }
+        if (a.font_size != null) { fmt.textFormat.fontSize = a.font_size; fields.push("userEnteredFormat.textFormat.fontSize"); }
+        if (a.font_color) { fmt.textFormat.foregroundColor = sheetsHexColor(a.font_color); fields.push("userEnteredFormat.textFormat.foregroundColor"); }
+      }
+      if (a.number_format) {
+        fmt.numberFormat = { type: a.number_format_type || "NUMBER", pattern: a.number_format };
+        fields.push("userEnteredFormat.numberFormat");
+      }
+      if (a.bg_color) { fmt.backgroundColor = sheetsHexColor(a.bg_color); fields.push("userEnteredFormat.backgroundColor"); }
+      if (a.h_align) { fmt.horizontalAlignment = a.h_align; fields.push("userEnteredFormat.horizontalAlignment"); }
+      if (a.v_align) { fmt.verticalAlignment = a.v_align; fields.push("userEnteredFormat.verticalAlignment"); }
+      if (a.wrap != null) { fmt.wrapStrategy = a.wrap ? "WRAP" : "OVERFLOW_CELL"; fields.push("userEnteredFormat.wrapStrategy"); }
+      if (!fields.length) throw new Error("変更する書式が指定されていません");
+      await sheetsMcpBatch(a.spreadsheet_id, [{ repeatCell: {
+        range: sheetsA1ToGrid(a.sheet_id, a.a1_range),
+        cell: { userEnteredFormat: fmt },
+        fields: fields.join(","),
+      } }]);
+      return { ok: true };
+    },
+  },
+  {
+    name: "set_borders",
+    description: "範囲に罫線を引く。edges=外枠、inner=内側の線",
+    inputSchema: {
+      type: "object",
+      properties: {
+        spreadsheet_id: SHEETS_MCP_ID_PROP, sheet_id: SHEETS_MCP_SHEETID_PROP,
+        a1_range: { type: "string", description: "シート名なしの範囲" },
+        style: { type: "string", enum: ["SOLID", "SOLID_MEDIUM", "SOLID_THICK", "DASHED", "DOTTED", "DOUBLE", "NONE"], description: "省略で SOLID。NONE で消す" },
+        edges: { type: "boolean", description: "外枠 (省略で true)" },
+        inner: { type: "boolean", description: "内側 (省略で false)" },
+        color: { type: "string", description: "#RRGGBB (省略で黒)" },
+      },
+      required: ["spreadsheet_id", "sheet_id", "a1_range"],
+    },
+    handler: async (a) => {
+      sheetsMcpCheck(a.spreadsheet_id);
+      const style = a.style || "SOLID";
+      const border = style === "NONE" ? { style: "NONE" } : { style, color: sheetsHexColor(a.color || "#000000") };
+      const req = { range: sheetsA1ToGrid(a.sheet_id, a.a1_range) };
+      if (a.edges !== false) { req.top = border; req.bottom = border; req.left = border; req.right = border; }
+      if (a.inner) { req.innerHorizontal = border; req.innerVertical = border; }
+      await sheetsMcpBatch(a.spreadsheet_id, [{ updateBorders: req }]);
+      return { ok: true };
+    },
+  },
+  {
+    name: "merge_cells",
+    description: "セルを結合する (タイトル行など)",
+    inputSchema: {
+      type: "object",
+      properties: {
+        spreadsheet_id: SHEETS_MCP_ID_PROP, sheet_id: SHEETS_MCP_SHEETID_PROP,
+        a1_range: { type: "string" },
+        merge_type: { type: "string", enum: ["MERGE_ALL", "MERGE_COLUMNS", "MERGE_ROWS"], description: "省略で MERGE_ALL" },
+      },
+      required: ["spreadsheet_id", "sheet_id", "a1_range"],
+    },
+    handler: async (a) => {
+      sheetsMcpCheck(a.spreadsheet_id);
+      await sheetsMcpBatch(a.spreadsheet_id, [{ mergeCells: {
+        range: sheetsA1ToGrid(a.sheet_id, a.a1_range), mergeType: a.merge_type || "MERGE_ALL",
+      } }]);
+      return { ok: true };
+    },
+  },
+  {
+    name: "unmerge_cells",
+    description: "セル結合を解除する",
+    inputSchema: {
+      type: "object",
+      properties: { spreadsheet_id: SHEETS_MCP_ID_PROP, sheet_id: SHEETS_MCP_SHEETID_PROP, a1_range: { type: "string" } },
+      required: ["spreadsheet_id", "sheet_id", "a1_range"],
+    },
+    handler: async (a) => {
+      sheetsMcpCheck(a.spreadsheet_id);
+      await sheetsMcpBatch(a.spreadsheet_id, [{ unmergeCells: { range: sheetsA1ToGrid(a.sheet_id, a.a1_range) } }]);
+      return { ok: true };
+    },
+  },
+  // ─── タブ操作 ───
+  {
+    name: "add_tab",
+    description: "新しいシート(タブ)を追加",
+    inputSchema: {
+      type: "object",
+      properties: { spreadsheet_id: SHEETS_MCP_ID_PROP, title: { type: "string" } },
+      required: ["spreadsheet_id", "title"],
+    },
+    handler: async (a) => {
+      sheetsMcpCheck(a.spreadsheet_id);
+      const res = await sheetsMcpBatch(a.spreadsheet_id, [{ addSheet: { properties: { title: a.title } } }]);
+      const props = res.replies[0].addSheet.properties;
+      return { sheet_id: props.sheetId, title: props.title };
+    },
+  },
+  {
+    name: "duplicate_tab",
+    description: "シートを同じファイル内に複製。破壊的な編集前のバックアップにも",
+    inputSchema: {
+      type: "object",
+      properties: { spreadsheet_id: SHEETS_MCP_ID_PROP, sheet_id: SHEETS_MCP_SHEETID_PROP, new_title: { type: "string" } },
+      required: ["spreadsheet_id", "sheet_id", "new_title"],
+    },
+    handler: async (a) => {
+      sheetsMcpCheck(a.spreadsheet_id);
+      const res = await sheetsMcpBatch(a.spreadsheet_id, [{ duplicateSheet: { sourceSheetId: a.sheet_id, newSheetName: a.new_title } }]);
+      const props = res.replies[0].duplicateSheet.properties;
+      return { new_sheet_id: props.sheetId, title: props.title };
+    },
+  },
+  {
+    name: "rename_tab",
+    description: "シート(タブ)の名前を変更",
+    inputSchema: {
+      type: "object",
+      properties: { spreadsheet_id: SHEETS_MCP_ID_PROP, sheet_id: SHEETS_MCP_SHEETID_PROP, new_title: { type: "string" } },
+      required: ["spreadsheet_id", "sheet_id", "new_title"],
+    },
+    handler: async (a) => {
+      sheetsMcpCheck(a.spreadsheet_id);
+      await sheetsMcpBatch(a.spreadsheet_id, [{ updateSheetProperties: {
+        properties: { sheetId: a.sheet_id, title: a.new_title }, fields: "title",
+      } }]);
+      return { ok: true };
+    },
+  },
+  {
+    name: "delete_tab",
+    description: "シート(タブ)を削除する (元に戻せないので注意)",
+    inputSchema: {
+      type: "object",
+      properties: { spreadsheet_id: SHEETS_MCP_ID_PROP, sheet_id: SHEETS_MCP_SHEETID_PROP },
+      required: ["spreadsheet_id", "sheet_id"],
+    },
+    handler: async (a) => {
+      sheetsMcpCheck(a.spreadsheet_id);
+      await sheetsMcpBatch(a.spreadsheet_id, [{ deleteSheet: { sheetId: a.sheet_id } }]);
+      return { ok: true };
+    },
+  },
+  {
+    name: "copy_tab_to",
+    description: "シート(タブ)を別のスプレッドシートへコピーする",
+    inputSchema: {
+      type: "object",
+      properties: {
+        spreadsheet_id: SHEETS_MCP_ID_PROP, sheet_id: SHEETS_MCP_SHEETID_PROP,
+        dest_spreadsheet_id: { type: "string", description: "コピー先スプレッドシート ID" },
+      },
+      required: ["spreadsheet_id", "sheet_id", "dest_spreadsheet_id"],
+    },
+    handler: async (a) => {
+      sheetsMcpCheck(a.spreadsheet_id);
+      sheetsMcpCheck(a.dest_spreadsheet_id);
+      const sheets = await getSheetsApi();
+      const res = await sheets.spreadsheets.sheets.copyTo({
+        spreadsheetId: a.spreadsheet_id, sheetId: a.sheet_id,
+        requestBody: { destinationSpreadsheetId: a.dest_spreadsheet_id },
+      });
+      return { new_sheet_id: res.data.sheetId, title: res.data.title };
+    },
+  },
+  // ─── ファイル操作 (Drive) ───
+  {
+    name: "copy_spreadsheet",
+    description: "スプレッドシート全体を複製して新しいファイルを作る。請求書テンプレ→今月の請求書、の起点はこれ",
+    inputSchema: {
+      type: "object",
+      properties: {
+        spreadsheet_id: { ...SHEETS_MCP_ID_PROP, description: "コピー元 (テンプレート) の ID" },
+        new_title: { type: "string", description: "新しいファイル名 (例 '請求書_田中様邸_2026-08')" },
+        folder_id: { type: "string", description: "置き先フォルダ ID (省略でコピー元と同じ場所)" },
+      },
+      required: ["spreadsheet_id", "new_title"],
+    },
+    handler: async (a) => {
+      sheetsMcpCheck(a.spreadsheet_id);
+      const drive = await getDriveApi();
+      const body = { name: a.new_title };
+      if (a.folder_id) body.parents = [a.folder_id];
+      const res = await drive.files.copy({ fileId: a.spreadsheet_id, requestBody: body, supportsAllDrives: true });
+      sheetsMcpAllowed.size && sheetsMcpAllowed.add(res.data.id); // 作ったものは許可リスト入り
+      return { id: res.data.id, title: res.data.name, url: `https://docs.google.com/spreadsheets/d/${res.data.id}/edit` };
+    },
+  },
+  {
+    name: "create_spreadsheet",
+    description: "空のスプレッドシートを新規作成。既存テンプレがあるなら copy_spreadsheet の方が早い",
+    inputSchema: {
+      type: "object",
+      properties: {
+        title: { type: "string" },
+        folder_id: { type: "string", description: "置き先フォルダ ID (推奨。省略すると SA のマイドライブに入って人から見えにくい)" },
+      },
+      required: ["title"],
+    },
+    handler: async (a) => {
+      const drive = await getDriveApi();
+      const body = { name: a.title, mimeType: "application/vnd.google-apps.spreadsheet" };
+      if (a.folder_id) body.parents = [a.folder_id];
+      const res = await drive.files.create({ requestBody: body, supportsAllDrives: true });
+      sheetsMcpAllowed.size && sheetsMcpAllowed.add(res.data.id);
+      return { id: res.data.id, url: `https://docs.google.com/spreadsheets/d/${res.data.id}/edit` };
+    },
+  },
+  {
+    name: "export_pdf",
+    description: "シートを PDF に書き出して 7 日有効のダウンロード URL を返す。請求書の送付用",
+    inputSchema: {
+      type: "object",
+      properties: {
+        spreadsheet_id: SHEETS_MCP_ID_PROP,
+        sheet_id: { ...SHEETS_MCP_SHEETID_PROP, description: "省略で全シート" },
+        portrait: { type: "boolean", description: "省略で縦 (true)" },
+      },
+      required: ["spreadsheet_id"],
+    },
+    handler: async (a) => {
+      sheetsMcpCheck(a.spreadsheet_id);
+      if (!storage || !RECEIPTS_BUCKET) throw new Error("GCS 未設定で PDF を保存できません");
+      const authClient = await getGoogleAuth();
+      const t = await authClient.getAccessToken();
+      const token = typeof t === "string" ? t : t?.token;
+      const params = new URLSearchParams({
+        format: "pdf", size: "A4",
+        portrait: String(a.portrait !== false),
+        fitw: "true", gridlines: "false",
+      });
+      if (a.sheet_id != null) params.set("gid", String(a.sheet_id));
+      const r = await fetch(
+        `https://docs.google.com/spreadsheets/d/${a.spreadsheet_id}/export?${params}`,
+        { headers: { authorization: `Bearer ${token}` } }
+      );
+      if (!r.ok) throw new Error(`PDF 書き出し失敗: HTTP ${r.status}`);
+      const buf = Buffer.from(await r.arrayBuffer());
+      const file = storage.bucket(RECEIPTS_BUCKET).file(`sheets-mcp/pdf/${Date.now()}-${a.spreadsheet_id.slice(0, 8)}.pdf`);
+      await file.save(buf, { contentType: "application/pdf" });
+      const [url] = await file.getSignedUrl({ action: "read", expires: Date.now() + 7 * 24 * 60 * 60 * 1000 });
+      return { url, kb: Math.round(buf.length / 1024), note: "リンクは7日間有効" };
+    },
+  },
+];
+
+const sheetsMcpHandler = dramaCreateMcpHandler({
+  name: "sheets",
+  instructions: [
+    "Google スプレッドシートの読み書きツール (BANAX の見積書・請求書づくり用)。",
+    "spreadsheet_id は URL の /d/ と /edit の間の文字列。sheet_id (タブの数値 ID) は list_tabs で調べる。",
+    "破壊的な編集 (delete_tab / delete_rows / 大きな上書き) の前は duplicate_tab でバックアップを取ると安全。",
+    "請求書づくりの定石: copy_spreadsheet でテンプレを複製 → find_replace で {{宛名}} 等を差し込み →",
+    "write_range / append_rows で明細を入れる → format_cells (¥#,##0) と set_borders で整える → export_pdf で送付用 PDF。",
+    "シートにアクセスできないエラーが出たら、そのシートをサーバーのサービスアカウントに編集者として共有してもらう。",
+  ].join("\n"),
+  tools: SHEETS_MCP_TOOLS,
+});
+
+app.all("/api/sheets/mcp/:token", (req, res) => {
+  if (req.params.token !== SHEETS_MCP_TOKEN) return res.status(403).json({ error: "forbidden" });
+  return sheetsMcpHandler(req, res);
+});
+
 // ギャラリー (置き場アプリ /auto-drama/) 用の一覧 API。inspect と同じ read-only・認証なし。
 // pending がある時はここで Seedance をポーリングするので、アプリを開くだけで進捗が進む
 app.get("/api/drama/gallery", async (req, res) => {
