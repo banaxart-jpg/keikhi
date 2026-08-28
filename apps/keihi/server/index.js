@@ -9135,7 +9135,7 @@ app.post("/api/kounyu", async (req, res) => {
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
        RETURNING id, created_at AS "createdAt"`,
       [id, b.name || "", b.site || "", b.destination || "", Number(b.qty) || 1, b.unit || "個",
-       b.status || "tobuy", b.shipDate || null, b.arrivalDate || null, b.url || "", b.memo || "", req.user?.email || ""]
+       b.status || "unbought", b.shipDate || null, b.arrivalDate || null, b.url || "", b.memo || "", req.user?.email || ""]
     );
     res.status(201).json(rows[0]);
   } catch (err) {

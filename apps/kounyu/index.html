@@ -16,7 +16,7 @@
 :root {
   --bg: #e4e6ee; --bg2: #d8dae4; --sl: rgba(255,255,255,1); --sd: rgba(168,172,192,0.75);
   --text: #42455e; --text2: rgba(66,69,94,0.52); --text3: rgba(66,69,94,0.28);
-  --accent: #2563eb; --tobuy: #d97706; --ordered: #2563eb; --arrived: #2a8c3a;
+  --accent: #2563eb; --unbought: #d97706; --hold: #7c8194; --bought: #7c3aed; --shipping: #2563eb; --arrived: #2a8c3a;
 }
 body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; padding-bottom: 40px; }
 .icon { font-family: 'Material Symbols Outlined'; font-weight: normal; font-size: 1.1em; display: inline-block; line-height: 1; vertical-align: -0.18em; }
@@ -42,7 +42,7 @@ body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); 
 .item .arr { text-align: right; font-size: 13px; font-weight: 800; white-space: nowrap; }
 .item .arr .d { font-size: 11px; color: var(--text2); font-weight: 700; }
 .qa { border: none; border-radius: 12px; font-family: inherit; font-size: 12px; font-weight: 800; padding: 9px 12px; cursor: pointer; color: #fff; white-space: nowrap; }
-.qa.buy { background: var(--tobuy); } .qa.arr { background: var(--arrived); }
+.qa.buy { background: var(--bought); } .qa.ship { background: var(--shipping); } .qa.arr { background: var(--arrived); }
 .list-empty { text-align: center; color: var(--text2); font-weight: 600; font-size: 13px; padding: 22px; }
 
 /* カレンダー */
@@ -75,10 +75,12 @@ textarea.inp { min-height: 52px; resize: vertical; }
 .chips { display: flex; flex-wrap: wrap; gap: 7px; }
 .pick { padding: 9px 14px; border-radius: 20px; font-size: 13px; font-weight: 700; border: none; font-family: inherit; color: var(--text2); background: var(--bg); box-shadow: 3px 3px 8px var(--sd), -3px -3px 8px var(--sl); cursor: pointer; }
 .pick.on { color: #fff; background: var(--accent); }
-.seg { display: flex; gap: 6px; }
-.seg .pick { flex: 1; text-align: center; }
-.seg .pick.on.s-tobuy { background: var(--tobuy); }
-.seg .pick.on.s-ordered { background: var(--ordered); }
+.seg { display: flex; flex-wrap: wrap; gap: 6px; }
+.seg .pick { flex: 1 1 28%; text-align: center; font-size: 12px; padding: 9px 6px; }
+.seg .pick.on.s-unbought { background: var(--unbought); }
+.seg .pick.on.s-hold { background: var(--hold); }
+.seg .pick.on.s-bought { background: var(--bought); }
+.seg .pick.on.s-shipping { background: var(--shipping); }
 .seg .pick.on.s-arrived { background: var(--arrived); }
 .stepper { display: flex; align-items: center; gap: 10px; }
 .stepper button { width: 40px; height: 40px; border-radius: 12px; border: none; background: var(--bg); box-shadow: 3px 3px 8px var(--sd), -3px -3px 8px var(--sl); font-size: 20px; font-weight: 800; color: var(--accent); cursor: pointer; }
@@ -132,7 +134,17 @@ textarea.inp { min-height: 52px; resize: vertical; }
 import { initAuthBoot, api } from "/api-auth.js";
 const $ = (id) => document.getElementById(id);
 const DEST_PRESET = ["会社", "現場", "倉庫", "自宅"];
-const STATUS = { tobuy: { label: "買う", icon: "shopping_cart", color: "var(--tobuy)" }, ordered: { label: "注文済み", icon: "local_shipping", color: "var(--ordered)" }, arrived: { label: "到着", icon: "check_circle", color: "var(--arrived)" } };
+const STATUS = {
+  unbought: { label: "未購入", color: "var(--unbought)" },
+  hold: { label: "保留", color: "var(--hold)" },
+  bought: { label: "購入済", color: "var(--bought)" },
+  shipping: { label: "発送中", color: "var(--shipping)" },
+  arrived: { label: "到着済", color: "var(--arrived)" },
+};
+// 旧ステータス(tobuy/ordered)を新5段階に読み替え
+function normStatus(s) { return ({ tobuy: "unbought", ordered: "shipping" })[s] || s; }
+// 次の段階へ進めるボタン [次のstatus, ラベル]
+const NEXT = { unbought: ["bought", "購入した"], hold: ["bought", "購入した"], bought: ["shipping", "発送された"], shipping: ["arrived", "到着✓"] };
 
 let items = [], sites = [], cur = null, tab = "list";
 let calMonth = new Date(); calMonth.setDate(1);
@@ -154,7 +166,7 @@ async function load() {
       api("GET", "/api/kounyu"),
       api("GET", "/api/sites").catch(() => []),
     ]);
-    items = it || [];
+    items = (it || []).map(x => ({ ...x, status: normStatus(x.status) }));
     sites = (si || []).map(s => (typeof s === "string" ? s : s.name)).filter(Boolean);
   } catch (e) { toast("読み込み失敗: " + e.message, true); items = []; }
   render();
@@ -177,40 +189,44 @@ function itemCard(it) {
   if (it.site) metaBits.push(`<span class="chip"><span class="icon" style="font-size:13px;">place</span>${esc(it.site)}</span>`);
   if (it.destination) metaBits.push(`<span class="chip">→ ${esc(it.destination)}</span>`);
   if (Number(it.qty) > 1) metaBits.push(`×${Number(it.qty)}${esc(it.unit || "")}`);
-  let right = "";
-  if (it.status === "tobuy") right = `<button class="qa buy" data-order="${it.id}" type="button">注文した</button>`;
-  else if (it.status === "ordered") {
-    const dd = it.arrivalDate ? `<div class="arr">${fmtMD(it.arrivalDate)}<div class="d">到着予定</div></div>` : "";
-    right = `<div style="display:flex;align-items:center;gap:8px;">${dd}<button class="qa arr" data-arrived="${it.id}" type="button">到着✓</button></div>`;
-  } else right = it.arrivalDate ? `<div class="arr" style="color:var(--arrived)">${fmtMD(it.arrivalDate)}<div class="d">到着済</div></div>` : "";
+  let dateHtml = "";
+  if (it.arrivalDate && (it.status === "bought" || it.status === "shipping")) dateHtml = `<div class="arr">${fmtMD(it.arrivalDate)}<div class="d">到着予定</div></div>`;
+  else if (it.arrivalDate && it.status === "arrived") dateHtml = `<div class="arr" style="color:var(--arrived)">${fmtMD(it.arrivalDate)}<div class="d">到着済</div></div>`;
+  const nx = NEXT[it.status];
+  const btn = nx ? `<button class="qa" style="background:${STATUS[nx[0]].color}" data-adv="${it.id}" data-to="${nx[0]}" type="button">${nx[1]}</button>` : "";
   return `<div class="item" style="--sc:${sc}" data-edit="${it.id}">
     <div style="min-width:0;"><div class="nm">${esc(it.name || "(名称なし)")}</div>
     <div class="meta">${metaBits.join("")}</div></div>
-    <div>${right}</div></div>`;
+    <div style="display:flex;align-items:center;gap:8px;">${dateHtml}${btn}</div></div>`;
 }
 function renderList() {
   const groups = [
-    ["tobuy", "🛒 買うもの"],
-    ["ordered", "🚚 注文済み（到着待ち）"],
+    ["unbought", "🛒 未購入"],
+    ["hold", "⏸️ 保留"],
+    ["bought", "💳 購入済"],
+    ["shipping", "🚚 発送中"],
     ["arrived", "✅ 到着済み"],
   ];
   let html = "";
   for (const [st, label] of groups) {
     let arr = items.filter(i => i.status === st);
-    if (st === "ordered") arr.sort((a, b) => (a.arrivalDate || "9999").localeCompare(b.arrivalDate || "9999"));
+    if (st === "bought" || st === "shipping") arr.sort((a, b) => (a.arrivalDate || "9999").localeCompare(b.arrivalDate || "9999"));
     if (st === "arrived") arr = arr.slice(0, 30);
-    if (!arr.length && st === "arrived") continue;
+    if (!arr.length && st !== "unbought") continue;   // 未購入だけは空でも表示
     html += `<div class="sect">${label}<span class="cnt">${arr.length}</span></div>`;
-    html += arr.length ? arr.map(itemCard).join("") : `<div class="list-empty">なし</div>`;
+    html += arr.length ? arr.map(itemCard).join("") : `<div class="list-empty">まだありません。右上の「追加」から。</div>`;
   }
   $("listView").innerHTML = html;
-  $("listView").querySelectorAll("[data-edit]").forEach(el => el.addEventListener("click", (e) => { if (e.target.closest("[data-order],[data-arrived]")) return; openEdit(items.find(i => i.id === el.dataset.edit)); }));
-  $("listView").querySelectorAll("[data-order]").forEach(el => el.addEventListener("click", () => { const it = items.find(i => i.id === el.dataset.order); openEdit(it, "toOrder"); }));
-  $("listView").querySelectorAll("[data-arrived]").forEach(el => el.addEventListener("click", () => markArrived(el.dataset.arrived)));
+  $("listView").querySelectorAll("[data-edit]").forEach(el => el.addEventListener("click", (e) => { if (e.target.closest("[data-adv]")) return; openEdit(items.find(i => i.id === el.dataset.edit)); }));
+  $("listView").querySelectorAll("[data-adv]").forEach(el => el.addEventListener("click", () => advance(el.dataset.adv, el.dataset.to)));
 }
-async function markArrived(id) {
+// 次段階へ進める。発送→到着予定を自動補完(手入力削減)
+async function advance(id, to) {
   const it = items.find(i => i.id === id); if (!it) return;
-  try { await api("PUT", `/api/kounyu/${id}`, { ...payloadOf(it), status: "arrived" }); toast("到着にしました✓"); await load(); }
+  const p = payloadOf(it); p.status = to;
+  if (to === "shipping") { if (!p.shipDate) p.shipDate = todayStr(); if (!p.arrivalDate) p.arrivalDate = addDays(p.shipDate, 2); }
+  if (to === "arrived") { if (!p.arrivalDate) p.arrivalDate = todayStr(); }
+  try { await api("PUT", `/api/kounyu/${id}`, p); toast(STATUS[to].label + "にしました"); await load(); }
   catch (e) { toast("失敗: " + e.message, true); }
 }
 
@@ -220,7 +236,7 @@ function renderCal() {
   const first = new Date(y, m, 1), startDow = first.getDay(), days = new Date(y, m + 1, 0).getDate();
   const today = todayStr();
   const byDay = {};
-  items.forEach(i => { if (i.arrivalDate && (i.status === "ordered" || i.status === "arrived")) (byDay[i.arrivalDate] ||= []).push(i); });
+  items.forEach(i => { if (i.arrivalDate && i.status !== "unbought" && i.status !== "hold") (byDay[i.arrivalDate] ||= []).push(i); });
   const dow = ["日", "月", "火", "水", "木", "金", "土"];
   let cells = dow.map(d => `<div class="cal-dow">${d}</div>`).join("");
   for (let i = 0; i < startDow; i++) cells += `<div class="cal-cell empty"></div>`;
@@ -245,28 +261,27 @@ function renderCal() {
   $("calPrev").addEventListener("click", () => { calMonth.setMonth(m - 1); selDay = null; renderCal(); });
   $("calNext").addEventListener("click", () => { calMonth.setMonth(m + 1); selDay = null; renderCal(); });
   $("calView").querySelectorAll("[data-day]").forEach(el => el.addEventListener("click", () => { selDay = selDay === el.dataset.day ? null : el.dataset.day; renderCal(); }));
-  $("calView").querySelectorAll(".cal-day [data-edit]").forEach(el => el.addEventListener("click", (e) => { if (e.target.closest("[data-order],[data-arrived]")) return; openEdit(items.find(i => i.id === el.dataset.edit)); }));
-  $("calView").querySelectorAll(".cal-day [data-arrived]").forEach(el => el.addEventListener("click", () => markArrived(el.dataset.arrived)));
+  $("calView").querySelectorAll(".cal-day [data-edit]").forEach(el => el.addEventListener("click", (e) => { if (e.target.closest("[data-adv]")) return; openEdit(items.find(i => i.id === el.dataset.edit)); }));
+  $("calView").querySelectorAll(".cal-day [data-adv]").forEach(el => el.addEventListener("click", () => advance(el.dataset.adv, el.dataset.to)));
 }
 
 // ── 追加/編集 ──
 function payloadOf(it) { return { name: it.name, site: it.site, destination: it.destination, qty: it.qty, unit: it.unit, status: it.status, shipDate: it.shipDate || null, arrivalDate: it.arrivalDate || null, url: it.url, memo: it.memo }; }
-function openEdit(it, mode) {
-  cur = it ? { ...it } : { id: null, name: "", site: "", destination: "", qty: 1, unit: "個", status: "tobuy", shipDate: "", arrivalDate: "", url: "", memo: "" };
-  if (mode === "toOrder") cur.status = "ordered";
+function openEdit(it) {
+  cur = it ? { ...it } : { id: null, name: "", site: "", destination: "", qty: 1, unit: "個", status: "unbought", shipDate: "", arrivalDate: "", url: "", memo: "" };
   renderEdit();
   $("eModal").classList.add("open");
 }
 function renderEdit() {
   const dests = [...DEST_PRESET, ...destMem()];
-  const showDates = cur.status !== "tobuy";
+  const showDates = ["bought", "shipping", "arrived"].includes(cur.status);
   $("eBody").innerHTML = `
     <div class="field-label">品名</div>
     <input class="inp" id="fName" placeholder="例：ビス 3.8×50 / 養生テープ" value="${attr(cur.name)}">
 
     <div class="field-label">状態</div>
     <div class="seg" id="segStatus">
-      ${["tobuy", "ordered", "arrived"].map(s => `<button class="pick ${cur.status === s ? "on s-" + s : ""}" data-s="${s}" type="button">${STATUS[s].label}</button>`).join("")}
+      ${["unbought", "hold", "bought", "shipping", "arrived"].map(s => `<button class="pick ${cur.status === s ? "on s-" + s : ""}" data-s="${s}" type="button">${STATUS[s].label}</button>`).join("")}
     </div>
 
     <div class="field-label">現場（タップで選択）</div>
@@ -324,7 +339,7 @@ function renderEdit() {
   $("siteOther").addEventListener("click", () => { const v = prompt("現場名を入力"); if (v) { cur.site = v.trim(); renderEdit(); } });
   $("destChips").querySelectorAll("[data-dest]").forEach(b => b.addEventListener("click", () => { cur.destination = cur.destination === b.dataset.dest ? "" : b.dataset.dest; renderEdit(); }));
   $("destOther").addEventListener("click", () => { const v = prompt("到着場所を入力"); if (v) { cur.destination = v.trim(); rememberDest(cur.destination); renderEdit(); } });
-  if (cur.status !== "tobuy") {
+  if (showDates) {
     $("fShip").addEventListener("change", e => { cur.shipDate = e.target.value; if (cur.shipDate && !cur.arrivalDate) { cur.arrivalDate = addDays(cur.shipDate, 2); $("fArr").value = cur.arrivalDate; toast("到着予定を翌々日に設定"); } });
     $("fArr").addEventListener("change", e => cur.arrivalDate = e.target.value);
     $("qNext").addEventListener("click", () => { const base = cur.shipDate || todayStr(); cur.arrivalDate = addDays(base, 1); $("fArr").value = cur.arrivalDate; });
