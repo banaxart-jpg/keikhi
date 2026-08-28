@@ -1,0 +1,371 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="購入品">
+<link rel="apple-touch-icon" href="/icon.png">
+<title>購入品</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@24,400,0,0">
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+:root {
+  --bg: #e4e6ee; --bg2: #d8dae4; --sl: rgba(255,255,255,1); --sd: rgba(168,172,192,0.75);
+  --text: #42455e; --text2: rgba(66,69,94,0.52); --text3: rgba(66,69,94,0.28);
+  --accent: #2563eb; --tobuy: #d97706; --ordered: #2563eb; --arrived: #2a8c3a;
+}
+body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; padding-bottom: 40px; }
+.icon { font-family: 'Material Symbols Outlined'; font-weight: normal; font-size: 1.1em; display: inline-block; line-height: 1; vertical-align: -0.18em; }
+.bar { display: flex; justify-content: space-between; align-items: center; padding: 40px 18px 0; gap: 8px; }
+.pill { padding: 8px 14px; border-radius: 24px; font-size: 12px; font-weight: 700; border: none; color: var(--text2); background: var(--bg); box-shadow: 4px 4px 10px var(--sd), -4px -4px 10px var(--sl); cursor: pointer; font-family: inherit; text-decoration: none; }
+.pill:active { box-shadow: inset 3px 3px 8px var(--sd), inset -3px -3px 8px var(--sl); transform: scale(0.97); }
+.pill.primary { background: var(--accent); color: #fff; }
+.pill:disabled { opacity: 0.5; }
+.wrap { padding: 12px 16px 40px; max-width: 680px; margin: 0 auto; }
+.title { font-size: 22px; font-weight: 800; }
+
+.tabs { display: flex; gap: 8px; margin: 12px 0 14px; }
+.tab { flex: 1; padding: 10px; border-radius: 16px; font-size: 14px; font-weight: 800; border: none; font-family: inherit; color: var(--text2); background: var(--bg); box-shadow: 4px 4px 10px var(--sd), -4px -4px 10px var(--sl); cursor: pointer; }
+.tab.on { color: #fff; background: var(--accent); }
+
+.sect { font-size: 12px; font-weight: 800; letter-spacing: 0.06em; color: var(--text2); margin: 18px 4px 9px; display: flex; align-items: center; gap: 6px; }
+.sect .cnt { color: var(--text3); }
+.item { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: center; padding: 13px 15px; border-radius: 15px; background: var(--bg); box-shadow: 4px 4px 10px var(--sd), -4px -4px 10px var(--sl); margin-bottom: 9px; cursor: pointer; border-left: 4px solid var(--sc); }
+.item:active { transform: scale(0.995); }
+.item .nm { font-size: 15px; font-weight: 800; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.item .meta { font-size: 11px; color: var(--text2); font-weight: 600; margin-top: 3px; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.item .chip { background: var(--bg2); box-shadow: inset 1px 1px 3px var(--sd); border-radius: 8px; padding: 2px 7px; font-weight: 700; }
+.item .arr { text-align: right; font-size: 13px; font-weight: 800; white-space: nowrap; }
+.item .arr .d { font-size: 11px; color: var(--text2); font-weight: 700; }
+.qa { border: none; border-radius: 12px; font-family: inherit; font-size: 12px; font-weight: 800; padding: 9px 12px; cursor: pointer; color: #fff; white-space: nowrap; }
+.qa.buy { background: var(--tobuy); } .qa.arr { background: var(--arrived); }
+.list-empty { text-align: center; color: var(--text2); font-weight: 600; font-size: 13px; padding: 22px; }
+
+/* カレンダー */
+.cal-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+.cal-nav { width: 40px; height: 40px; border-radius: 50%; border: none; background: var(--bg); box-shadow: 4px 4px 10px var(--sd), -4px -4px 10px var(--sl); cursor: pointer; color: var(--text); }
+.cal-title { font-size: 17px; font-weight: 800; }
+.cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; }
+.cal-dow { text-align: center; font-size: 10px; font-weight: 800; color: var(--text3); padding: 2px 0; }
+.cal-cell { min-height: 58px; border-radius: 10px; background: var(--bg); box-shadow: 2px 2px 6px var(--sd), -2px -2px 6px var(--sl); padding: 4px; cursor: pointer; display: flex; flex-direction: column; gap: 2px; overflow: hidden; }
+.cal-cell.empty { background: transparent; box-shadow: none; cursor: default; }
+.cal-cell.today { box-shadow: inset 0 0 0 2px var(--accent); }
+.cal-cell.sel { background: var(--accent); }
+.cal-cell.sel .cd, .cal-cell.sel .cbar { color: #fff; }
+.cal-cell .cd { font-size: 11px; font-weight: 800; color: var(--text2); }
+.cal-cell .cbar { font-size: 9px; font-weight: 700; border-radius: 4px; padding: 1px 3px; background: rgba(37,99,235,0.16); color: var(--accent); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: 1.35; }
+.cal-cell.sel .cbar { background: rgba(255,255,255,0.25); }
+.cal-day { margin-top: 16px; }
+.cal-day-h { font-size: 13px; font-weight: 800; margin: 0 2px 8px; }
+
+/* シート */
+.modal { position: fixed; inset: 0; z-index: 300; display: flex; align-items: flex-end; justify-content: center; background: rgba(180,184,205,0); visibility: hidden; opacity: 0; transition: background .2s, opacity .2s, visibility 0s linear .2s; }
+.modal.open { background: rgba(180,184,205,0.42); visibility: visible; opacity: 1; transition: background .2s, opacity .2s; }
+.sheet { background: var(--bg); border-radius: 28px 28px 0 0; width: 100%; max-width: 680px; max-height: 92vh; overflow-y: auto; padding: 6px 18px calc(24px + env(safe-area-inset-bottom)); transform: translateY(100%); transition: transform .2s cubic-bezier(.2,.8,.2,1); box-shadow: -2px -10px 30px rgba(148,152,176,0.35); }
+.modal.open .sheet { transform: translateY(0); }
+.grab { padding: 14px 18px 6px; margin: 0 -18px 4px; touch-action: none; position: sticky; top: 0; background: var(--bg); z-index: 2; }
+.grab .handle { width: 46px; height: 5px; border-radius: 3px; background: rgba(168,172,192,0.45); margin: 0 auto; }
+.field-label { font-size: 11px; font-weight: 800; letter-spacing: 0.05em; color: var(--text2); margin: 14px 2px 7px; }
+input.inp, textarea.inp { width: 100%; padding: 11px 13px; border-radius: 12px; border: none; font-size: 14px; font-family: inherit; color: var(--text); background: var(--bg); box-shadow: inset 3px 3px 8px var(--sd), inset -3px -3px 8px var(--sl); outline: none; }
+textarea.inp { min-height: 52px; resize: vertical; }
+.chips { display: flex; flex-wrap: wrap; gap: 7px; }
+.pick { padding: 9px 14px; border-radius: 20px; font-size: 13px; font-weight: 700; border: none; font-family: inherit; color: var(--text2); background: var(--bg); box-shadow: 3px 3px 8px var(--sd), -3px -3px 8px var(--sl); cursor: pointer; }
+.pick.on { color: #fff; background: var(--accent); }
+.seg { display: flex; gap: 6px; }
+.seg .pick { flex: 1; text-align: center; }
+.seg .pick.on.s-tobuy { background: var(--tobuy); }
+.seg .pick.on.s-ordered { background: var(--ordered); }
+.seg .pick.on.s-arrived { background: var(--arrived); }
+.stepper { display: flex; align-items: center; gap: 10px; }
+.stepper button { width: 40px; height: 40px; border-radius: 12px; border: none; background: var(--bg); box-shadow: 3px 3px 8px var(--sd), -3px -3px 8px var(--sl); font-size: 20px; font-weight: 800; color: var(--accent); cursor: pointer; }
+.stepper input { width: 64px; text-align: center; }
+.stepper .unit { width: 70px; }
+.two { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.hintline { font-size: 11px; color: var(--text2); font-weight: 600; margin: 6px 2px 0; }
+.quickdays { display: flex; gap: 7px; margin-top: 7px; }
+.actions { display: flex; gap: 10px; margin-top: 22px; }
+.actions .pill { flex: 1; text-align: center; padding: 13px; font-size: 14px; }
+.danger { color: #b04040; }
+.toast { position: fixed; left: 50%; bottom: 30px; transform: translateX(-50%); background: var(--text); color: #fff; padding: 11px 18px; border-radius: 20px; font-size: 13px; font-weight: 700; z-index: 500; display: none; box-shadow: 0 6px 20px rgba(0,0,0,0.25); }
+.toast.err { background: #b04040; }
+#signinOverlay { display: none; position: fixed; inset: 0; z-index: 400; background: var(--bg); flex-direction: column; align-items: center; justify-content: center; padding: 32px; text-align: center; gap: 18px; }
+</style>
+</head>
+<body>
+<div id="signinOverlay">
+  <div style="font-size:24px;font-weight:800;">購入品</div>
+  <a class="pill" href="/" style="text-decoration:none;">トップに戻る</a>
+  <div id="signinErr" style="font-size:11px;color:#b04040;font-family:monospace;"></div>
+</div>
+
+<div id="app" style="display:none;">
+  <div class="bar">
+    <a class="pill" href="/"><span class="icon">arrow_back</span> 戻る</a>
+    <span style="font-size:11px;letter-spacing:0.2em;color:var(--text3);font-weight:700;">KOUNYU</span>
+    <button class="pill primary" id="newBtn" type="button"><span class="icon">add</span> 追加</button>
+  </div>
+  <div class="wrap">
+    <div class="title">購入品・到着</div>
+    <div class="tabs">
+      <button class="tab on" id="tabList" type="button">リスト</button>
+      <button class="tab" id="tabCal" type="button">到着カレンダー</button>
+    </div>
+    <div id="listView"></div>
+    <div id="calView" style="display:none;"></div>
+  </div>
+</div>
+
+<div class="modal" id="eModal">
+  <div class="sheet" id="eSheet">
+    <div class="grab" id="eGrab"><div class="handle"></div></div>
+    <div id="eBody"></div>
+  </div>
+</div>
+<div class="toast" id="toast"></div>
+
+<script src="/config.js"></script>
+<script type="module">
+import { initAuthBoot, api } from "/api-auth.js";
+const $ = (id) => document.getElementById(id);
+const DEST_PRESET = ["会社", "現場", "倉庫", "自宅"];
+const STATUS = { tobuy: { label: "買う", icon: "shopping_cart", color: "var(--tobuy)" }, ordered: { label: "注文済み", icon: "local_shipping", color: "var(--ordered)" }, arrived: { label: "到着", icon: "check_circle", color: "var(--arrived)" } };
+
+let items = [], sites = [], cur = null, tab = "list";
+let calMonth = new Date(); calMonth.setDate(1);
+let selDay = null;
+
+let _tt = null;
+function toast(m, e = false) { const t = $("toast"); t.textContent = m; t.classList.toggle("err", !!e); t.style.display = "block"; clearTimeout(_tt); _tt = setTimeout(() => t.style.display = "none", e ? 4000 : 1500); }
+function esc(s) { return String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); }
+function attr(s) { return String(s ?? "").replace(/"/g, "&quot;"); }
+function todayStr() { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; }
+function addDays(dateStr, n) { if (!dateStr) return ""; const d = new Date(dateStr + "T00:00:00"); d.setDate(d.getDate() + n); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; }
+function fmtMD(dateStr) { if (!dateStr) return ""; const [y, m, d] = dateStr.split("-"); return `${Number(m)}/${Number(d)}`; }
+function destMem() { try { return JSON.parse(localStorage.getItem("kounyu_dests") || "[]"); } catch { return []; } }
+function rememberDest(d) { if (!d || DEST_PRESET.includes(d)) return; const m = destMem(); if (!m.includes(d)) { m.unshift(d); localStorage.setItem("kounyu_dests", JSON.stringify(m.slice(0, 6))); } }
+
+async function load() {
+  try {
+    const [it, si] = await Promise.all([
+      api("GET", "/api/kounyu"),
+      api("GET", "/api/sites").catch(() => []),
+    ]);
+    items = it || [];
+    sites = (si || []).map(s => (typeof s === "string" ? s : s.name)).filter(Boolean);
+  } catch (e) { toast("読み込み失敗: " + e.message, true); items = []; }
+  render();
+}
+function render() { tab === "list" ? renderList() : renderCal(); }
+
+function setTab(t) {
+  tab = t;
+  $("tabList").classList.toggle("on", t === "list");
+  $("tabCal").classList.toggle("on", t === "cal");
+  $("listView").style.display = t === "list" ? "" : "none";
+  $("calView").style.display = t === "cal" ? "" : "none";
+  render();
+}
+
+// ── リスト ──
+function itemCard(it) {
+  const sc = STATUS[it.status]?.color || "var(--text3)";
+  const metaBits = [];
+  if (it.site) metaBits.push(`<span class="chip"><span class="icon" style="font-size:13px;">place</span>${esc(it.site)}</span>`);
+  if (it.destination) metaBits.push(`<span class="chip">→ ${esc(it.destination)}</span>`);
+  if (Number(it.qty) > 1) metaBits.push(`×${Number(it.qty)}${esc(it.unit || "")}`);
+  let right = "";
+  if (it.status === "tobuy") right = `<button class="qa buy" data-order="${it.id}" type="button">注文した</button>`;
+  else if (it.status === "ordered") {
+    const dd = it.arrivalDate ? `<div class="arr">${fmtMD(it.arrivalDate)}<div class="d">到着予定</div></div>` : "";
+    right = `<div style="display:flex;align-items:center;gap:8px;">${dd}<button class="qa arr" data-arrived="${it.id}" type="button">到着✓</button></div>`;
+  } else right = it.arrivalDate ? `<div class="arr" style="color:var(--arrived)">${fmtMD(it.arrivalDate)}<div class="d">到着済</div></div>` : "";
+  return `<div class="item" style="--sc:${sc}" data-edit="${it.id}">
+    <div style="min-width:0;"><div class="nm">${esc(it.name || "(名称なし)")}</div>
+    <div class="meta">${metaBits.join("")}</div></div>
+    <div>${right}</div></div>`;
+}
+function renderList() {
+  const groups = [
+    ["tobuy", "🛒 買うもの"],
+    ["ordered", "🚚 注文済み（到着待ち）"],
+    ["arrived", "✅ 到着済み"],
+  ];
+  let html = "";
+  for (const [st, label] of groups) {
+    let arr = items.filter(i => i.status === st);
+    if (st === "ordered") arr.sort((a, b) => (a.arrivalDate || "9999").localeCompare(b.arrivalDate || "9999"));
+    if (st === "arrived") arr = arr.slice(0, 30);
+    if (!arr.length && st === "arrived") continue;
+    html += `<div class="sect">${label}<span class="cnt">${arr.length}</span></div>`;
+    html += arr.length ? arr.map(itemCard).join("") : `<div class="list-empty">なし</div>`;
+  }
+  $("listView").innerHTML = html;
+  $("listView").querySelectorAll("[data-edit]").forEach(el => el.addEventListener("click", (e) => { if (e.target.closest("[data-order],[data-arrived]")) return; openEdit(items.find(i => i.id === el.dataset.edit)); }));
+  $("listView").querySelectorAll("[data-order]").forEach(el => el.addEventListener("click", () => { const it = items.find(i => i.id === el.dataset.order); openEdit(it, "toOrder"); }));
+  $("listView").querySelectorAll("[data-arrived]").forEach(el => el.addEventListener("click", () => markArrived(el.dataset.arrived)));
+}
+async function markArrived(id) {
+  const it = items.find(i => i.id === id); if (!it) return;
+  try { await api("PUT", `/api/kounyu/${id}`, { ...payloadOf(it), status: "arrived" }); toast("到着にしました✓"); await load(); }
+  catch (e) { toast("失敗: " + e.message, true); }
+}
+
+// ── カレンダー ──
+function renderCal() {
+  const y = calMonth.getFullYear(), m = calMonth.getMonth();
+  const first = new Date(y, m, 1), startDow = first.getDay(), days = new Date(y, m + 1, 0).getDate();
+  const today = todayStr();
+  const byDay = {};
+  items.forEach(i => { if (i.arrivalDate && (i.status === "ordered" || i.status === "arrived")) (byDay[i.arrivalDate] ||= []).push(i); });
+  const dow = ["日", "月", "火", "水", "木", "金", "土"];
+  let cells = dow.map(d => `<div class="cal-dow">${d}</div>`).join("");
+  for (let i = 0; i < startDow; i++) cells += `<div class="cal-cell empty"></div>`;
+  for (let d = 1; d <= days; d++) {
+    const ds = `${y}-${String(m + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+    const list = byDay[ds] || [];
+    const bars = list.slice(0, 2).map(i => `<div class="cbar">${esc(i.name)}</div>`).join("") + (list.length > 2 ? `<div class="cbar">+${list.length - 2}</div>` : "");
+    cells += `<div class="cal-cell${ds === today ? " today" : ""}${ds === selDay ? " sel" : ""}" data-day="${ds}"><span class="cd">${d}</span>${bars}</div>`;
+  }
+  let dayHtml = "";
+  if (selDay) {
+    const list = byDay[selDay] || [];
+    dayHtml = `<div class="cal-day"><div class="cal-day-h">${fmtMD(selDay)} の到着</div>${list.length ? list.map(itemCard).join("") : `<div class="list-empty">この日の到着予定はなし</div>`}</div>`;
+  }
+  $("calView").innerHTML = `
+    <div class="cal-head">
+      <button class="cal-nav" id="calPrev" type="button"><span class="icon">chevron_left</span></button>
+      <div class="cal-title">${y}年 ${m + 1}月</div>
+      <button class="cal-nav" id="calNext" type="button"><span class="icon">chevron_right</span></button>
+    </div>
+    <div class="cal-grid">${cells}</div>${dayHtml}`;
+  $("calPrev").addEventListener("click", () => { calMonth.setMonth(m - 1); selDay = null; renderCal(); });
+  $("calNext").addEventListener("click", () => { calMonth.setMonth(m + 1); selDay = null; renderCal(); });
+  $("calView").querySelectorAll("[data-day]").forEach(el => el.addEventListener("click", () => { selDay = selDay === el.dataset.day ? null : el.dataset.day; renderCal(); }));
+  $("calView").querySelectorAll(".cal-day [data-edit]").forEach(el => el.addEventListener("click", (e) => { if (e.target.closest("[data-order],[data-arrived]")) return; openEdit(items.find(i => i.id === el.dataset.edit)); }));
+  $("calView").querySelectorAll(".cal-day [data-arrived]").forEach(el => el.addEventListener("click", () => markArrived(el.dataset.arrived)));
+}
+
+// ── 追加/編集 ──
+function payloadOf(it) { return { name: it.name, site: it.site, destination: it.destination, qty: it.qty, unit: it.unit, status: it.status, shipDate: it.shipDate || null, arrivalDate: it.arrivalDate || null, url: it.url, memo: it.memo }; }
+function openEdit(it, mode) {
+  cur = it ? { ...it } : { id: null, name: "", site: "", destination: "", qty: 1, unit: "個", status: "tobuy", shipDate: "", arrivalDate: "", url: "", memo: "" };
+  if (mode === "toOrder") cur.status = "ordered";
+  renderEdit();
+  $("eModal").classList.add("open");
+}
+function renderEdit() {
+  const dests = [...DEST_PRESET, ...destMem()];
+  const showDates = cur.status !== "tobuy";
+  $("eBody").innerHTML = `
+    <div class="field-label">品名</div>
+    <input class="inp" id="fName" placeholder="例：ビス 3.8×50 / 養生テープ" value="${attr(cur.name)}">
+
+    <div class="field-label">状態</div>
+    <div class="seg" id="segStatus">
+      ${["tobuy", "ordered", "arrived"].map(s => `<button class="pick ${cur.status === s ? "on s-" + s : ""}" data-s="${s}" type="button">${STATUS[s].label}</button>`).join("")}
+    </div>
+
+    <div class="field-label">現場（タップで選択）</div>
+    <div class="chips" id="siteChips">
+      ${sites.map(s => `<button class="pick ${cur.site === s ? "on" : ""}" data-site="${attr(s)}" type="button">${esc(s)}</button>`).join("") || '<span class="hintline">現場が読み込めませんでした</span>'}
+      <button class="pick" id="siteOther" type="button">＋手入力</button>
+    </div>
+
+    <div class="field-label">到着場所（どこに届く）</div>
+    <div class="chips" id="destChips">
+      ${dests.map(d => `<button class="pick ${cur.destination === d ? "on" : ""}" data-dest="${attr(d)}" type="button">${esc(d)}</button>`).join("")}
+      <button class="pick" id="destOther" type="button">＋</button>
+    </div>
+
+    <div class="field-label">数量</div>
+    <div class="stepper">
+      <button id="qMinus" type="button">−</button>
+      <input class="inp" id="fQty" type="number" inputmode="decimal" value="${attr(cur.qty)}">
+      <button id="qPlus" type="button">＋</button>
+      <input class="inp unit" id="fUnit" value="${attr(cur.unit)}" placeholder="単位">
+    </div>
+
+    <div id="dateBlock" style="${showDates ? "" : "display:none;"}">
+      <div class="two">
+        <div><div class="field-label">発送日</div><input class="inp" id="fShip" type="date" value="${attr(cur.shipDate)}"></div>
+        <div><div class="field-label">到着予定</div><input class="inp" id="fArr" type="date" value="${attr(cur.arrivalDate)}"></div>
+      </div>
+      <div class="hintline">発送日を入れると到着予定を自動で入れます（既定：翌々日）</div>
+      <div class="quickdays">
+        <button class="pick" id="qNext" type="button">翌日着</button>
+        <button class="pick" id="qNext2" type="button">翌々日着</button>
+        <button class="pick" id="qToday" type="button">今日着</button>
+      </div>
+    </div>
+
+    <div class="field-label">購入リンク（任意）</div>
+    <input class="inp" id="fUrl" placeholder="AmazonなどのURL" value="${attr(cur.url)}">
+    <div class="field-label">メモ（任意）</div>
+    <textarea class="inp" id="fMemo" placeholder="型番・色・注意など">${esc(cur.memo)}</textarea>
+
+    <div class="actions">
+      ${cur.id ? `<button class="pill danger" id="delBtn" type="button"><span class="icon">delete</span></button>` : ""}
+      <button class="pill primary" id="saveBtn" type="button"><span class="icon">save</span> ${cur.id ? "保存" : "追加"}</button>
+    </div>
+  `;
+  $("fName").addEventListener("input", e => cur.name = e.target.value);
+  $("fQty").addEventListener("input", e => cur.qty = e.target.value);
+  $("fUnit").addEventListener("input", e => cur.unit = e.target.value);
+  $("fUrl").addEventListener("input", e => cur.url = e.target.value);
+  $("fMemo").addEventListener("input", e => cur.memo = e.target.value);
+  $("qMinus").addEventListener("click", () => { cur.qty = Math.max(1, (Number(cur.qty) || 1) - 1); $("fQty").value = cur.qty; });
+  $("qPlus").addEventListener("click", () => { cur.qty = (Number(cur.qty) || 1) + 1; $("fQty").value = cur.qty; });
+  $("segStatus").querySelectorAll("[data-s]").forEach(b => b.addEventListener("click", () => { cur.status = b.dataset.s; renderEdit(); }));
+  $("siteChips").querySelectorAll("[data-site]").forEach(b => b.addEventListener("click", () => { cur.site = cur.site === b.dataset.site ? "" : b.dataset.site; renderEdit(); }));
+  $("siteOther").addEventListener("click", () => { const v = prompt("現場名を入力"); if (v) { cur.site = v.trim(); renderEdit(); } });
+  $("destChips").querySelectorAll("[data-dest]").forEach(b => b.addEventListener("click", () => { cur.destination = cur.destination === b.dataset.dest ? "" : b.dataset.dest; renderEdit(); }));
+  $("destOther").addEventListener("click", () => { const v = prompt("到着場所を入力"); if (v) { cur.destination = v.trim(); rememberDest(cur.destination); renderEdit(); } });
+  if (cur.status !== "tobuy") {
+    $("fShip").addEventListener("change", e => { cur.shipDate = e.target.value; if (cur.shipDate && !cur.arrivalDate) { cur.arrivalDate = addDays(cur.shipDate, 2); $("fArr").value = cur.arrivalDate; toast("到着予定を翌々日に設定"); } });
+    $("fArr").addEventListener("change", e => cur.arrivalDate = e.target.value);
+    $("qNext").addEventListener("click", () => { const base = cur.shipDate || todayStr(); cur.arrivalDate = addDays(base, 1); $("fArr").value = cur.arrivalDate; });
+    $("qNext2").addEventListener("click", () => { const base = cur.shipDate || todayStr(); cur.arrivalDate = addDays(base, 2); $("fArr").value = cur.arrivalDate; });
+    $("qToday").addEventListener("click", () => { cur.arrivalDate = todayStr(); $("fArr").value = cur.arrivalDate; });
+  }
+  $("saveBtn").addEventListener("click", save);
+  $("delBtn")?.addEventListener("click", del);
+}
+async function save() {
+  const btn = $("saveBtn"); btn.disabled = true;
+  if (!(cur.name || "").trim()) { toast("品名を入れてね"); btn.disabled = false; return; }
+  rememberDest(cur.destination);
+  const payload = { ...payloadOf(cur), qty: Number(cur.qty) || 1 };
+  try {
+    if (!cur.id) await api("POST", "/api/kounyu", payload);
+    else await api("PUT", `/api/kounyu/${cur.id}`, payload);
+    toast("保存しました"); $("eModal").classList.remove("open"); await load();
+  } catch (e) { toast("保存失敗: " + e.message, true); btn.disabled = false; }
+}
+async function del() {
+  if (!cur?.id || !confirm("削除しますか？")) return;
+  try { await api("DELETE", `/api/kounyu/${cur.id}`); toast("削除しました"); $("eModal").classList.remove("open"); await load(); }
+  catch (e) { toast("削除失敗: " + e.message, true); }
+}
+
+// モーダル閉じる
+$("eModal").addEventListener("click", e => { if (e.target === $("eModal")) $("eModal").classList.remove("open"); });
+(() => {
+  const grab = $("eGrab"), sheet = $("eSheet"); let sy = null, dy = 0;
+  grab.addEventListener("pointerdown", e => { sy = e.clientY; dy = 0; sheet.style.transition = "none"; });
+  grab.addEventListener("pointermove", e => { if (sy === null) return; dy = e.clientY - sy; if (dy > 0) sheet.style.transform = `translateY(${dy}px)`; });
+  const end = () => { if (sy === null) return; sy = null; sheet.style.transition = ""; if (dy > 100) $("eModal").classList.remove("open"); sheet.style.transform = ""; dy = 0; };
+  grab.addEventListener("pointerup", end); grab.addEventListener("pointercancel", end);
+})();
+
+$("newBtn").addEventListener("click", () => openEdit(null));
+$("tabList").addEventListener("click", () => setTab("list"));
+$("tabCal").addEventListener("click", () => setTab("cal"));
+
+initAuthBoot({ returnPath: "/kounyu/", onReady: async () => { $("app").style.display = ""; $("listView").innerHTML = '<div class="list-empty">読み込み中…</div>'; await load(); } });
+</script>
+</body>
+</html>

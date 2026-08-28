@@ -1633,6 +1633,27 @@ async function ensureSchema() {
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       )
     `);
+    // 購入品 (kounyu): ネット購入品の買う/注文/到着トラッキング + 到着予定カレンダー。全員共有。
+    // status: 'tobuy'(買う) | 'ordered'(注文/発送済) | 'arrived'(到着)
+    await p.query(`
+      CREATE TABLE IF NOT EXISTS kounyu_items (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL DEFAULT '',
+        site TEXT NOT NULL DEFAULT '',
+        destination TEXT NOT NULL DEFAULT '',
+        qty NUMERIC NOT NULL DEFAULT 1,
+        unit TEXT NOT NULL DEFAULT '個',
+        status TEXT NOT NULL DEFAULT 'tobuy',
+        ship_date DATE,
+        arrival_date DATE,
+        url TEXT NOT NULL DEFAULT '',
+        memo TEXT NOT NULL DEFAULT '',
+        created_by TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `);
+    await p.query("CREATE INDEX IF NOT EXISTS kounyu_items_arrival_idx ON kounyu_items (arrival_date)");
     // My SketchUp (sketchup): 共有した 3D モデルのメタ情報。実ファイルは GCS
     // (sketchup/<id>/<filename>)。閲覧はリンク + Google ログインで誰でも可。
     await p.query(`
@@ -9076,6 +9097,83 @@ app.delete("/api/mitsumori/:id", async (req, res) => {
   if (!p) return res.status(503).json({ error: "DB not configured" });
   try {
     await p.query("DELETE FROM mitsumori_estimates WHERE id = $1", [req.params.id]);
+    res.status(204).end();
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─────────────────────────────
+// 購入品 (kounyu): ネット購入品の買う/注文/到着トラッキング。全員共有。
+// ─────────────────────────────
+app.get("/api/kounyu", async (req, res) => {
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  try {
+    const { rows } = await p.query(
+      `SELECT id, name, site, destination, qty::float8 AS qty, unit, status,
+              ship_date::text AS "shipDate", arrival_date::text AS "arrivalDate",
+              url, memo, created_by AS "createdBy", created_at AS "createdAt", updated_at AS "updatedAt"
+         FROM kounyu_items
+        ORDER BY arrival_date ASC NULLS LAST, created_at DESC LIMIT 1000`
+    );
+    res.json(rows);
+  } catch (err) {
+    console.error("kounyu list error", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post("/api/kounyu", async (req, res) => {
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  try {
+    const b = req.body || {};
+    const id = b.id || (Date.now().toString(36) + Math.random().toString(36).slice(2, 8));
+    const { rows } = await p.query(
+      `INSERT INTO kounyu_items (id, name, site, destination, qty, unit, status, ship_date, arrival_date, url, memo, created_by)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+       RETURNING id, created_at AS "createdAt"`,
+      [id, b.name || "", b.site || "", b.destination || "", Number(b.qty) || 1, b.unit || "個",
+       b.status || "tobuy", b.shipDate || null, b.arrivalDate || null, b.url || "", b.memo || "", req.user?.email || ""]
+    );
+    res.status(201).json(rows[0]);
+  } catch (err) {
+    console.error("kounyu insert error", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.put("/api/kounyu/:id", async (req, res) => {
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  try {
+    const b = req.body || {};
+    const { rows } = await p.query(
+      `UPDATE kounyu_items SET
+         name = COALESCE($2, name), site = COALESCE($3, site), destination = COALESCE($4, destination),
+         qty = COALESCE($5, qty), unit = COALESCE($6, unit), status = COALESCE($7, status),
+         ship_date = $8, arrival_date = $9, url = COALESCE($10, url), memo = COALESCE($11, memo),
+         updated_at = NOW()
+       WHERE id = $1
+       RETURNING id, updated_at AS "updatedAt"`,
+      [req.params.id, b.name ?? null, b.site ?? null, b.destination ?? null,
+       b.qty != null ? Number(b.qty) : null, b.unit ?? null, b.status ?? null,
+       b.shipDate || null, b.arrivalDate || null, b.url ?? null, b.memo ?? null]
+    );
+    if (!rows.length) return res.status(404).json({ error: "not found" });
+    res.json(rows[0]);
+  } catch (err) {
+    console.error("kounyu update error", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete("/api/kounyu/:id", async (req, res) => {
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  try {
+    await p.query("DELETE FROM kounyu_items WHERE id = $1", [req.params.id]);
     res.status(204).end();
   } catch (err) {
     res.status(500).json({ error: err.message });
