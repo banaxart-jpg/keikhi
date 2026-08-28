@@ -1362,6 +1362,106 @@ const SHEETS_MCP_TOOLS = [
       return { id: res.data.id, url: `https://docs.google.com/spreadsheets/d/${res.data.id}/edit` };
     },
   },
+  // ─── フォルダ整理 (Drive) ───
+  {
+    name: "list_files",
+    description: "Drive のファイル/フォルダ一覧。folder_id 省略で SA から見える全ファイルを検索。フォルダ整理の最初はこれ",
+    inputSchema: {
+      type: "object",
+      properties: {
+        folder_id: { type: "string", description: "このフォルダの直下だけを一覧" },
+        name_query: { type: "string", description: "名前の部分一致で絞り込み" },
+      },
+    },
+    handler: async (a) => {
+      const drive = await getDriveApi();
+      const q = ["trashed=false"];
+      if (a.folder_id) q.push(`'${String(a.folder_id).replace(/'/g, "")}' in parents`);
+      if (a.name_query) q.push(`name contains '${String(a.name_query).replace(/'/g, "\\'")}'`);
+      const res = await drive.files.list({
+        q: q.join(" and "),
+        fields: "files(id,name,mimeType,parents,modifiedTime)",
+        pageSize: 100, orderBy: "folder,name",
+        supportsAllDrives: true, includeItemsFromAllDrives: true,
+      });
+      return (res.data.files || []).map((f) => ({
+        id: f.id, name: f.name,
+        type: f.mimeType === "application/vnd.google-apps.folder" ? "folder"
+          : f.mimeType === "application/vnd.google-apps.spreadsheet" ? "spreadsheet" : f.mimeType,
+        parents: f.parents, modified: f.modifiedTime,
+      }));
+    },
+  },
+  {
+    name: "create_folder",
+    description: "Drive にフォルダを作る (例: 現場ごと・月ごとの請求書フォルダ)",
+    inputSchema: {
+      type: "object",
+      properties: {
+        name: { type: "string" },
+        parent_folder_id: { type: "string", description: "親フォルダ ID (省略で SA のマイドライブ)" },
+      },
+      required: ["name"],
+    },
+    handler: async (a) => {
+      const drive = await getDriveApi();
+      const body = { name: a.name, mimeType: "application/vnd.google-apps.folder" };
+      if (a.parent_folder_id) body.parents = [a.parent_folder_id];
+      const res = await drive.files.create({ requestBody: body, supportsAllDrives: true });
+      return { id: res.data.id, name: a.name };
+    },
+  },
+  {
+    name: "move_file",
+    description: "ファイル (またはフォルダ) を別のフォルダに移動する",
+    inputSchema: {
+      type: "object",
+      properties: {
+        file_id: { type: "string" },
+        folder_id: { type: "string", description: "移動先フォルダ ID" },
+      },
+      required: ["file_id", "folder_id"],
+    },
+    handler: async (a) => {
+      const drive = await getDriveApi();
+      const cur = await drive.files.get({ fileId: a.file_id, fields: "parents,name", supportsAllDrives: true });
+      await drive.files.update({
+        fileId: a.file_id,
+        addParents: a.folder_id,
+        removeParents: (cur.data.parents || []).join(","),
+        supportsAllDrives: true,
+      });
+      return { ok: true, moved: cur.data.name };
+    },
+  },
+  {
+    name: "rename_file",
+    description: "ファイル (またはフォルダ) の名前を変える",
+    inputSchema: {
+      type: "object",
+      properties: { file_id: { type: "string" }, new_name: { type: "string" } },
+      required: ["file_id", "new_name"],
+    },
+    handler: async (a) => {
+      const drive = await getDriveApi();
+      await drive.files.update({ fileId: a.file_id, requestBody: { name: a.new_name }, supportsAllDrives: true });
+      return { ok: true };
+    },
+  },
+  {
+    name: "trash_file",
+    description: "ファイルをゴミ箱に移す (完全削除はしない。Drive のゴミ箱から復元可能)",
+    inputSchema: {
+      type: "object",
+      properties: { file_id: { type: "string" } },
+      required: ["file_id"],
+    },
+    handler: async (a) => {
+      const drive = await getDriveApi();
+      await drive.files.update({ fileId: a.file_id, requestBody: { trashed: true }, supportsAllDrives: true });
+      return { ok: true, note: "ゴミ箱に移しました (30日以内なら復元可)" };
+    },
+  },
   {
     name: "export_pdf",
     description: "シートを PDF に書き出して 7 日有効のダウンロード URL を返す。請求書の送付用",
@@ -1407,7 +1507,8 @@ const sheetsMcpHandler = dramaCreateMcpHandler({
     "spreadsheet_id は URL の /d/ と /edit の間の文字列。sheet_id (タブの数値 ID) は list_tabs で調べる。",
     "破壊的な編集 (delete_tab / delete_rows / 大きな上書き) の前は duplicate_tab でバックアップを取ると安全。",
     "請求書づくりの定石: copy_spreadsheet でテンプレを複製 → find_replace で {{宛名}} 等を差し込み →",
-    "write_range / append_rows で明細を入れる → format_cells (¥#,##0) と set_borders で整える → export_pdf で送付用 PDF。",
+    "write_range / append_rows で明細を入れる → format_cells (¥#,##0 や bg_color) と set_borders で整える → export_pdf で送付用 PDF。",
+    "フォルダ整理は list_files で現状把握 → create_folder / move_file / rename_file / trash_file。",
     "シートにアクセスできないエラーが出たら、そのシートをサーバーのサービスアカウントに編集者として共有してもらう。",
   ].join("\n"),
   tools: SHEETS_MCP_TOOLS,
