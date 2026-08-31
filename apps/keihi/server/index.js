@@ -947,6 +947,42 @@ async function getCalendarApi() {
   sheetsCalendarApi = google.calendar({ version: "v3", auth: await getGoogleAuth() });
   return sheetsCalendarApi;
 }
+// 期間内の日本の法定祝日を取る。工事の休日判定用なので、七五三・節分みたいな「行事」は入れない。
+// 1. holidays-jp (内閣府の祝日 CSV ベースの静的 JSON。法定祝日のみ) を優先
+// 2. だめなら Google の祝日カレンダー。ただし description が「祝日」のイベントだけ拾う (「行事」を除外)
+// 3. 両方だめなら空 set (呼び元は日曜だけで続行)
+async function sheetsFetchHolidays(startIso, endIso) {
+  try {
+    const r = await fetch("https://holidays-jp.github.io/api/v1/date.json");
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const j = await r.json();
+    const years = new Set(Object.keys(j).map((d) => d.slice(0, 4)));
+    for (const y of new Set([startIso.slice(0, 4), endIso.slice(0, 4)])) {
+      if (!years.has(y)) throw new Error(`${y}年のデータが無い`);
+    }
+    return { set: new Set(Object.keys(j).filter((d) => d >= startIso && d <= endIso)), source: "holidays-jp" };
+  } catch (e) {
+    console.warn("[sheets-mcp] holidays-jp failed:", e.message);
+  }
+  try {
+    const cal = await getCalendarApi();
+    const res = await cal.events.list({
+      calendarId: "ja.japanese#holiday@group.v.calendar.google.com",
+      timeMin: `${startIso}T00:00:00Z`,
+      timeMax: `${endIso}T23:59:59Z`,
+      singleEvents: true, maxResults: 100,
+    });
+    const set = new Set();
+    for (const ev of res.data.items || []) {
+      // 終日イベントかつ「祝日」だけ。「行事」(七五三等) は除外
+      if (ev.start?.date && /(祝日|Public holiday)/.test(ev.description || "")) set.add(ev.start.date);
+    }
+    return { set, source: "google-calendar" };
+  } catch (e) {
+    console.warn("[sheets-mcp] holiday calendar failed:", e.message);
+  }
+  return { set: new Set(), source: "none" };
+}
 const SHEETS_MCP_ID_PROP = { type: "string", description: "スプレッドシート ID (URL の /d/ と /edit の間)" };
 const SHEETS_MCP_SHEETID_PROP = { type: "number", description: "シート(タブ)の数値 ID。list_tabs で取得" };
 
@@ -1466,24 +1502,9 @@ const SHEETS_MCP_TOOLS = [
       for (let i = 0; i < days; i++) dates.push(new Date(start.getFullYear(), start.getMonth(), start.getDate() + i));
       const iso = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 
-      // 祝日: Google の日本の祝日カレンダー。引けなくても落とさず日曜判定だけで続行
-      const holidaySet = new Set();
-      let holidayCalendar = "ok";
-      try {
-        const cal = await getCalendarApi();
-        const res = await cal.events.list({
-          calendarId: "ja.japanese#holiday@group.v.calendar.google.com",
-          timeMin: new Date(start.getTime() - 86400000).toISOString(),
-          timeMax: new Date(dates[days - 1].getTime() + 2 * 86400000).toISOString(),
-          singleEvents: true, maxResults: 100,
-        });
-        for (const ev of res.data.items || []) {
-          if (ev.start?.date) holidaySet.add(ev.start.date); // 終日イベントの日付 = 祝日
-        }
-      } catch (e) {
-        console.warn("[sheets-mcp] holiday calendar failed:", e.message);
-        holidayCalendar = "unavailable";
-      }
+      // 祝日 (法定祝日のみ。行事は含まない)。取れなくても落とさず日曜判定だけで続行
+      const { set: holidaySet, source: holidaySource } = await sheetsFetchHolidays(iso(dates[0]), iso(dates[days - 1]));
+      const holidayCalendar = holidaySource === "none" ? "unavailable" : "ok";
 
       const requests = [];
       const colSpan = { startColumnIndex: firstCol, endColumnIndex: firstCol + days };
@@ -1556,7 +1577,8 @@ const SHEETS_MCP_TOOLS = [
       await sheetsMcpBatch(a.spreadsheet_id, requests);
       return {
         ok: true, start: iso(dates[0]), end: iso(dates[days - 1]), days,
-        holidays: holidaysInRange, sundays, holiday_calendar: holidayCalendar,
+        holidays: holidaysInRange, sundays,
+        holiday_calendar: holidayCalendar, holiday_source: holidaySource,
       };
     },
   },
