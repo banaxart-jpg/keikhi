@@ -901,6 +901,52 @@ async function sheetsMcpBatch(spreadsheetId, requests) {
   const res = await sheets.spreadsheets.batchUpdate({ spreadsheetId, requestBody: { requests } });
   return res.data;
 }
+// format_cells / format_cells_batch 共通: 1範囲分の書式指定 → repeatCell リクエスト
+function sheetsBuildRepeatCell(sheetId, a) {
+  const fmt = {};
+  const fields = [];
+  if (a.bold != null || a.font_size != null || a.font_color) {
+    fmt.textFormat = {};
+    if (a.bold != null) { fmt.textFormat.bold = a.bold; fields.push("userEnteredFormat.textFormat.bold"); }
+    if (a.font_size != null) { fmt.textFormat.fontSize = a.font_size; fields.push("userEnteredFormat.textFormat.fontSize"); }
+    if (a.font_color) { fmt.textFormat.foregroundColor = sheetsHexColor(a.font_color); fields.push("userEnteredFormat.textFormat.foregroundColor"); }
+  }
+  if (a.number_format) {
+    fmt.numberFormat = { type: a.number_format_type || "NUMBER", pattern: a.number_format };
+    fields.push("userEnteredFormat.numberFormat");
+  }
+  if (a.bg_color) { fmt.backgroundColor = sheetsHexColor(a.bg_color); fields.push("userEnteredFormat.backgroundColor"); }
+  if (a.h_align) { fmt.horizontalAlignment = a.h_align; fields.push("userEnteredFormat.horizontalAlignment"); }
+  if (a.v_align) { fmt.verticalAlignment = a.v_align; fields.push("userEnteredFormat.verticalAlignment"); }
+  if (a.wrap != null) { fmt.wrapStrategy = a.wrap ? "WRAP" : "OVERFLOW_CELL"; fields.push("userEnteredFormat.wrapStrategy"); }
+  if (!fields.length) throw new Error(`変更する書式が指定されていません (${a.a1_range})`);
+  return { repeatCell: {
+    range: sheetsA1ToGrid(sheetId, a.a1_range),
+    cell: { userEnteredFormat: fmt },
+    fields: fields.join(","),
+  } };
+}
+// 1始まりの列番号 → 列文字 (6 → 'F')
+function sheetsColLetter(n) {
+  let s = "";
+  while (n > 0) { s = String.fromCharCode(65 + ((n - 1) % 26)) + s; n = Math.floor((n - 1) / 26); }
+  return s;
+}
+// sheet_id → タブ名 (values API は A1 記法でタブ名が要るため)
+async function sheetsMcpTabTitle(spreadsheetId, sheetId) {
+  const sheets = await getSheetsApi();
+  const res = await sheets.spreadsheets.get({ spreadsheetId, fields: "sheets.properties" });
+  const s = (res.data.sheets || []).find((x) => x.properties.sheetId === sheetId);
+  if (!s) throw new Error(`sheet_id ${sheetId} のタブが見つかりません`);
+  return s.properties.title;
+}
+const sheetsMcpQuoteTab = (t) => `'${String(t).replace(/'/g, "''")}'`;
+let sheetsCalendarApi = null;
+async function getCalendarApi() {
+  if (sheetsCalendarApi) return sheetsCalendarApi;
+  sheetsCalendarApi = google.calendar({ version: "v3", auth: await getGoogleAuth() });
+  return sheetsCalendarApi;
+}
 const SHEETS_MCP_ID_PROP = { type: "string", description: "スプレッドシート ID (URL の /d/ と /edit の間)" };
 const SHEETS_MCP_SHEETID_PROP = { type: "number", description: "シート(タブ)の数値 ID。list_tabs で取得" };
 
@@ -1151,29 +1197,50 @@ const SHEETS_MCP_TOOLS = [
     },
     handler: async (a) => {
       sheetsMcpCheck(a.spreadsheet_id);
-      const fmt = {};
-      const fields = [];
-      if (a.bold != null || a.font_size != null || a.font_color) {
-        fmt.textFormat = {};
-        if (a.bold != null) { fmt.textFormat.bold = a.bold; fields.push("userEnteredFormat.textFormat.bold"); }
-        if (a.font_size != null) { fmt.textFormat.fontSize = a.font_size; fields.push("userEnteredFormat.textFormat.fontSize"); }
-        if (a.font_color) { fmt.textFormat.foregroundColor = sheetsHexColor(a.font_color); fields.push("userEnteredFormat.textFormat.foregroundColor"); }
-      }
-      if (a.number_format) {
-        fmt.numberFormat = { type: a.number_format_type || "NUMBER", pattern: a.number_format };
-        fields.push("userEnteredFormat.numberFormat");
-      }
-      if (a.bg_color) { fmt.backgroundColor = sheetsHexColor(a.bg_color); fields.push("userEnteredFormat.backgroundColor"); }
-      if (a.h_align) { fmt.horizontalAlignment = a.h_align; fields.push("userEnteredFormat.horizontalAlignment"); }
-      if (a.v_align) { fmt.verticalAlignment = a.v_align; fields.push("userEnteredFormat.verticalAlignment"); }
-      if (a.wrap != null) { fmt.wrapStrategy = a.wrap ? "WRAP" : "OVERFLOW_CELL"; fields.push("userEnteredFormat.wrapStrategy"); }
-      if (!fields.length) throw new Error("変更する書式が指定されていません");
-      await sheetsMcpBatch(a.spreadsheet_id, [{ repeatCell: {
-        range: sheetsA1ToGrid(a.sheet_id, a.a1_range),
-        cell: { userEnteredFormat: fmt },
-        fields: fields.join(","),
-      } }]);
+      await sheetsMcpBatch(a.spreadsheet_id, [sheetsBuildRepeatCell(a.sheet_id, a)]);
       return { ok: true };
+    },
+  },
+  {
+    name: "format_cells_batch",
+    description: "複数範囲の書式をまとめて設定する。format_cells の複数版。formats の順に適用され、範囲が重なった場合は後勝ち。ガントチャートのバーを塗ってから休日列を上書きする、といった用途に使う",
+    inputSchema: {
+      type: "object",
+      properties: {
+        spreadsheet_id: SHEETS_MCP_ID_PROP,
+        sheet_id: SHEETS_MCP_SHEETID_PROP,
+        formats: {
+          type: "array",
+          description: "1〜100件。各要素は format_cells と同じ書式指定 + a1_range",
+          items: {
+            type: "object",
+            properties: {
+              a1_range: { type: "string", description: "シート名なしの範囲 (例 'B7:G7')" },
+              bold: { type: "boolean" },
+              font_size: { type: "number" },
+              number_format: { type: "string" },
+              number_format_type: { type: "string", enum: ["NUMBER", "CURRENCY", "PERCENT", "DATE", "TIME", "TEXT"] },
+              bg_color: { type: "string", description: "#RRGGBB" },
+              font_color: { type: "string", description: "#RRGGBB" },
+              h_align: { type: "string", enum: ["LEFT", "CENTER", "RIGHT"] },
+              v_align: { type: "string", enum: ["TOP", "MIDDLE", "BOTTOM"] },
+              wrap: { type: "boolean" },
+            },
+            required: ["a1_range"],
+          },
+        },
+      },
+      required: ["spreadsheet_id", "sheet_id", "formats"],
+    },
+    handler: async (a) => {
+      sheetsMcpCheck(a.spreadsheet_id);
+      if (!Array.isArray(a.formats) || a.formats.length < 1 || a.formats.length > 100) {
+        throw new Error("formats は 1〜100 件の配列で指定");
+      }
+      // 1回の batchUpdate に順番どおり詰める → 適用順が保証され、途中失敗は全ロールバック
+      const requests = a.formats.map((f) => sheetsBuildRepeatCell(a.sheet_id, f));
+      await sheetsMcpBatch(a.spreadsheet_id, requests);
+      return { ok: true, applied: requests.length };
     },
   },
   {
@@ -1362,6 +1429,232 @@ const SHEETS_MCP_TOOLS = [
       return { id: res.data.id, url: `https://docs.google.com/spreadsheets/d/${res.data.id}/edit` };
     },
   },
+  // ─── 工程表・見積書の業務ロジック (決定的な処理はサーバー側に固定して事故を減らす) ───
+  {
+    name: "schedule_setup",
+    description: "工程表 (ガントチャート) の日付まわりを一括生成する: 日・曜日・月ヘッダ結合・日曜と日本の祝日の列を縦に色塗り。バーを塗る前に実行すること。休日以外の列を白に戻すので、バーを塗ったあとに実行すると塗った色が消える",
+    inputSchema: {
+      type: "object",
+      properties: {
+        spreadsheet_id: SHEETS_MCP_ID_PROP,
+        sheet_id: SHEETS_MCP_SHEETID_PROP,
+        start_date: { type: "string", description: "'2026-11-02' 形式" },
+        days: { type: "number", description: "省略で46" },
+        first_col: { type: "number", description: "日付の開始列 (1始まり)。省略で2 (B列)" },
+        month_row: { type: "number", description: "省略で3" },
+        date_row: { type: "number", description: "省略で4" },
+        weekday_row: { type: "number", description: "省略で5" },
+        bottom_row: { type: "number", description: "チャート最終行。省略で39" },
+        holiday_color: { type: "string", description: "省略で '#FFFF00'" },
+      },
+      required: ["spreadsheet_id", "sheet_id", "start_date"],
+    },
+    handler: async (a) => {
+      sheetsMcpCheck(a.spreadsheet_id);
+      const days = a.days || 46;
+      if (days < 1 || days > 200) throw new Error("days は 1〜200");
+      const firstCol = (a.first_col ?? 2) - 1;      // ここから 0 始まり
+      const monthRow = (a.month_row ?? 3) - 1;
+      const dateRow = (a.date_row ?? 4) - 1;
+      const weekdayRow = (a.weekday_row ?? 5) - 1;
+      const bottomRow = a.bottom_row ?? 39;         // 1始まりのまま endRowIndex に使う
+      const holidayColor = sheetsHexColor(a.holiday_color || "#FFFF00");
+      const dm = /^(\d{4})-(\d{1,2})-(\d{1,2})$/.exec(String(a.start_date || "").trim());
+      if (!dm) throw new Error("start_date は 'YYYY-MM-DD' 形式で");
+      const start = new Date(Number(dm[1]), Number(dm[2]) - 1, Number(dm[3]));
+      const dates = [];
+      for (let i = 0; i < days; i++) dates.push(new Date(start.getFullYear(), start.getMonth(), start.getDate() + i));
+      const iso = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+
+      // 祝日: Google の日本の祝日カレンダー。引けなくても落とさず日曜判定だけで続行
+      const holidaySet = new Set();
+      let holidayCalendar = "ok";
+      try {
+        const cal = await getCalendarApi();
+        const res = await cal.events.list({
+          calendarId: "ja.japanese#holiday@group.v.calendar.google.com",
+          timeMin: new Date(start.getTime() - 86400000).toISOString(),
+          timeMax: new Date(dates[days - 1].getTime() + 2 * 86400000).toISOString(),
+          singleEvents: true, maxResults: 100,
+        });
+        for (const ev of res.data.items || []) {
+          if (ev.start?.date) holidaySet.add(ev.start.date); // 終日イベントの日付 = 祝日
+        }
+      } catch (e) {
+        console.warn("[sheets-mcp] holiday calendar failed:", e.message);
+        holidayCalendar = "unavailable";
+      }
+
+      const requests = [];
+      const colSpan = { startColumnIndex: firstCol, endColumnIndex: firstCol + days };
+      const WD = "日月火水木金土";
+      // 1. 月ヘッダの既存結合を解除
+      requests.push({ unmergeCells: { range: { sheetId: a.sheet_id, startRowIndex: monthRow, endRowIndex: monthRow + 1, ...colSpan } } });
+      // 2. 値: 月ラベル (月替わりの列だけ) / 日 / 曜日
+      requests.push({ updateCells: {
+        start: { sheetId: a.sheet_id, rowIndex: monthRow, columnIndex: firstCol },
+        rows: [{ values: dates.map((d, i) => ({ userEnteredValue: { stringValue: (i === 0 || d.getDate() === 1) ? `${d.getMonth() + 1}月` : "" } })) }],
+        fields: "userEnteredValue",
+      } });
+      requests.push({ updateCells: {
+        start: { sheetId: a.sheet_id, rowIndex: dateRow, columnIndex: firstCol },
+        rows: [{ values: dates.map((d) => ({ userEnteredValue: { numberValue: d.getDate() } })) }],
+        fields: "userEnteredValue",
+      } });
+      requests.push({ updateCells: {
+        start: { sheetId: a.sheet_id, rowIndex: weekdayRow, columnIndex: firstCol },
+        rows: [{ values: dates.map((d) => ({ userEnteredValue: { stringValue: WD[d.getDay()] } })) }],
+        fields: "userEnteredValue",
+      } });
+      // 3. 月替わり区切りで結合し直し (1列だけの月は結合不可なのでスキップ) + 中央揃え
+      let segStart = 0;
+      for (let i = 1; i <= days; i++) {
+        if (i === days || dates[i].getDate() === 1) {
+          if (i - segStart >= 2) {
+            requests.push({ mergeCells: { mergeType: "MERGE_ALL", range: {
+              sheetId: a.sheet_id, startRowIndex: monthRow, endRowIndex: monthRow + 1,
+              startColumnIndex: firstCol + segStart, endColumnIndex: firstCol + i,
+            } } });
+          }
+          segStart = i;
+        }
+      }
+      requests.push({ repeatCell: {
+        range: { sheetId: a.sheet_id, startRowIndex: monthRow, endRowIndex: monthRow + 1, ...colSpan },
+        cell: { userEnteredFormat: { horizontalAlignment: "CENTER" } },
+        fields: "userEnteredFormat.horizontalAlignment",
+      } });
+      // 4. date_row〜bottom_row を一度すべて白に戻す
+      requests.push({ repeatCell: {
+        range: { sheetId: a.sheet_id, startRowIndex: dateRow, endRowIndex: bottomRow, ...colSpan },
+        cell: { userEnteredFormat: { backgroundColor: sheetsHexColor("#FFFFFF") } },
+        fields: "userEnteredFormat.backgroundColor",
+      } });
+      // 5. 日曜と祝日の列だけ縦に塗る (白の後に積むので上書きになる)。土曜は工事日なので塗らない
+      let sundays = 0;
+      const holidaysInRange = [];
+      dates.forEach((d, i) => {
+        const isSunday = d.getDay() === 0;
+        const isHoliday = holidaySet.has(iso(d));
+        if (isSunday) sundays++;
+        if (isHoliday) holidaysInRange.push(iso(d));
+        if (!isSunday && !isHoliday) return;
+        requests.push({ repeatCell: {
+          range: { sheetId: a.sheet_id, startRowIndex: dateRow, endRowIndex: bottomRow, startColumnIndex: firstCol + i, endColumnIndex: firstCol + i + 1 },
+          cell: { userEnteredFormat: { backgroundColor: holidayColor } },
+          fields: "userEnteredFormat.backgroundColor",
+        } });
+      });
+      // 6. 日・曜日行: フォント9 + 中央揃え
+      for (const r of [dateRow, weekdayRow]) {
+        requests.push({ repeatCell: {
+          range: { sheetId: a.sheet_id, startRowIndex: r, endRowIndex: r + 1, ...colSpan },
+          cell: { userEnteredFormat: { horizontalAlignment: "CENTER", textFormat: { fontSize: 9 } } },
+          fields: "userEnteredFormat.horizontalAlignment,userEnteredFormat.textFormat.fontSize",
+        } });
+      }
+      await sheetsMcpBatch(a.spreadsheet_id, requests);
+      return {
+        ok: true, start: iso(dates[0]), end: iso(dates[days - 1]), days,
+        holidays: holidaysInRange, sundays, holiday_calendar: holidayCalendar,
+      };
+    },
+  },
+  {
+    name: "document_finish",
+    description: "見積書・請求書の仕上げ: 明細枠 (18〜69行) の使っていない行を削り、原価列を非表示にし、明細合計と小計を検算する。明細を入れ終わってから実行する",
+    inputSchema: {
+      type: "object",
+      properties: {
+        spreadsheet_id: SHEETS_MCP_ID_PROP,
+        sheet_id: { ...SHEETS_MCP_SHEETID_PROP, description: "「見積書」か「請求書」タブの sheet_id" },
+        first_row: { type: "number", description: "明細枠の先頭行。省略で18" },
+        last_row: { type: "number", description: "明細枠の最終行。省略で69" },
+        min_rows: { type: "number", description: "最低残す行数 (見た目用)。省略で15" },
+        buffer_rows: { type: "number", description: "余らせる行数 (=SUM の範囲を守る)。省略で3" },
+        qty_col: { type: "number", description: "数量の列 (1始まり)。省略で6 (F列)" },
+        hide_cost_columns: { type: "boolean", description: "明細シートの I〜N 列を非表示にする。省略で true" },
+        meisai_sheet_id: { type: "number", description: "明細シートの sheet_id。指定すると原価列非表示と検算をする" },
+      },
+      required: ["spreadsheet_id", "sheet_id"],
+    },
+    handler: async (a) => {
+      sheetsMcpCheck(a.spreadsheet_id);
+      const firstRow = a.first_row ?? 18;
+      const lastRow = a.last_row ?? 69;
+      const minRows = a.min_rows ?? 15;
+      const bufferRows = a.buffer_rows ?? 3;
+      const qtyCol = a.qty_col ?? 6;
+      const sheets = await getSheetsApi();
+      const title = await sheetsMcpTabTitle(a.spreadsheet_id, a.sheet_id);
+      const colL = sheetsColLetter(qtyCol);
+      // 1. 数量列で最後に使っている行を探す
+      const qtyRes = await sheets.spreadsheets.values.get({
+        spreadsheetId: a.spreadsheet_id,
+        range: `${sheetsMcpQuoteTab(title)}!${colL}${firstRow}:${colL}${lastRow}`,
+        valueRenderOption: "UNFORMATTED_VALUE",
+      });
+      let used = 0;
+      (qtyRes.data.values || []).forEach((row, i) => {
+        if (row[0] !== "" && row[0] != null) used = i + 1;
+      });
+      // 2. 明細が空のまま削るのは事故なので止める
+      if (!used) throw new Error(`明細が空です (${colL}${firstRow}:${colL}${lastRow} に数量が入っていません)。先に明細を入れてから実行してください`);
+      // 3. 残す行数: 見た目の最低 min_rows、数式保護に buffer_rows 余らせる
+      const frameRows = lastRow - firstRow + 1;
+      const keep = Math.min(Math.max(minRows, used + bufferRows), frameRows);
+      const deleteCount = frameRows - keep;
+      // 4. 余った行を削除
+      if (deleteCount > 0) {
+        await sheetsMcpBatch(a.spreadsheet_id, [{ deleteDimension: { range: {
+          sheetId: a.sheet_id, dimension: "ROWS", startIndex: firstRow - 1 + keep, endIndex: lastRow,
+        } } }]);
+      }
+      const out = { ok: true, used_rows: used, kept_rows: keep, deleted_rows: Math.max(0, deleteCount), cost_columns_hidden: false };
+      // 5. 明細シートの原価列 (I〜N) を非表示
+      if (a.hide_cost_columns !== false && a.meisai_sheet_id != null) {
+        await sheetsMcpBatch(a.spreadsheet_id, [{ updateDimensionProperties: {
+          range: { sheetId: a.meisai_sheet_id, dimension: "COLUMNS", startIndex: 8, endIndex: 14 },
+          properties: { hiddenByUser: true }, fields: "hiddenByUser",
+        } }]);
+        out.cost_columns_hidden = true;
+      }
+      // 6. 検算: 明細 H 列の合計 vs 書類側の小計。ずれても処理は止めない (判断は AI 側)
+      if (a.meisai_sheet_id != null) {
+        try {
+          const mTitle = await sheetsMcpTabTitle(a.spreadsheet_id, a.meisai_sheet_id);
+          const hRes = await sheets.spreadsheets.values.get({
+            spreadsheetId: a.spreadsheet_id,
+            range: `${sheetsMcpQuoteTab(mTitle)}!H1:H500`,
+            valueRenderOption: "UNFORMATTED_VALUE",
+          });
+          const meisaiTotal = (hRes.data.values || []).reduce((s, r) => s + (typeof r[0] === "number" ? r[0] : 0), 0);
+          // 小計: 明細枠の下 20 行から「小計」ラベルの行を探し、その行の右端の数値を取る
+          const scanRes = await sheets.spreadsheets.values.get({
+            spreadsheetId: a.spreadsheet_id,
+            range: `${sheetsMcpQuoteTab(title)}!A${firstRow + keep}:N${firstRow + keep + 20}`,
+            valueRenderOption: "UNFORMATTED_VALUE",
+          });
+          let subtotal = null;
+          for (const row of scanRes.data.values || []) {
+            if (!row.some((c) => typeof c === "string" && c.includes("小計"))) continue;
+            for (let i = row.length - 1; i >= 0; i--) {
+              if (typeof row[i] === "number") { subtotal = row[i]; break; }
+            }
+            if (subtotal != null) break;
+          }
+          out.check = {
+            meisai_total: meisaiTotal,
+            document_subtotal: subtotal,
+            match: subtotal != null && Math.abs(meisaiTotal - subtotal) < 1,
+          };
+        } catch (e) {
+          out.check = { error: "検算失敗: " + e.message };
+        }
+      }
+      return out;
+    },
+  },
   // ─── フォルダ整理 (Drive) ───
   {
     name: "list_files",
@@ -1509,6 +1802,8 @@ const sheetsMcpHandler = dramaCreateMcpHandler({
     "請求書づくりの定石: copy_spreadsheet でテンプレを複製 → find_replace で {{宛名}} 等を差し込み →",
     "write_range / append_rows で明細を入れる → format_cells (¥#,##0 や bg_color) と set_borders で整える → export_pdf で送付用 PDF。",
     "フォルダ整理は list_files で現状把握 → create_folder / move_file / rename_file / trash_file。",
+    "工程表 (ガントチャート) は schedule_setup で日付・曜日・休日列を先に作り、そのあと format_cells_batch でバーをまとめて塗る。",
+    "見積書・請求書の仕上げ (余り行の削除・原価列非表示・検算) は document_finish に任せる。",
     "シートにアクセスできないエラーが出たら、そのシートをサーバーのサービスアカウントに編集者として共有してもらう。",
   ].join("\n"),
   tools: SHEETS_MCP_TOOLS,
@@ -1604,6 +1899,7 @@ async function getGoogleAuth() {
     scopes: [
       "https://www.googleapis.com/auth/spreadsheets",
       "https://www.googleapis.com/auth/drive",
+      "https://www.googleapis.com/auth/calendar.readonly", // sheets-mcp schedule_setup の祝日取得
     ],
   });
   googleAuthClient = await auth.getClient();
