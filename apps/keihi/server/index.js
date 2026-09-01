@@ -1815,28 +1815,9 @@ const SHEETS_MCP_TOOLS = [
   },
 ];
 
-const sheetsMcpHandler = dramaCreateMcpHandler({
-  name: "sheets",
-  instructions: [
-    "Google スプレッドシートの読み書きツール (BANAX の見積書・請求書づくり用)。",
-    "spreadsheet_id は URL の /d/ と /edit の間の文字列。sheet_id (タブの数値 ID) は list_tabs で調べる。",
-    "破壊的な編集 (delete_tab / delete_rows / 大きな上書き) の前は duplicate_tab でバックアップを取ると安全。",
-    "請求書づくりの定石: copy_spreadsheet でテンプレを複製 → find_replace で {{宛名}} 等を差し込み →",
-    "write_range / append_rows で明細を入れる → format_cells (¥#,##0 や bg_color) と set_borders で整える → export_pdf で送付用 PDF。",
-    "フォルダ整理は list_files で現状把握 → create_folder / move_file / rename_file / trash_file。",
-    "工程表 (ガントチャート) は schedule_setup で日付・曜日・休日列を先に作り、そのあと format_cells_batch でバーをまとめて塗る。",
-    "見積書・請求書の仕上げ (余り行の削除・原価列非表示・検算) は document_finish に任せる。",
-    "シートにアクセスできないエラーが出たら、そのシートをサーバーのサービスアカウントに編集者として共有してもらう。",
-  ].join("\n"),
-  tools: SHEETS_MCP_TOOLS,
-});
+// ハンドラ生成とルート登録は、下の現場写真ツール群を統合するため 現場写真 MCP セクションの末尾で行う
 
-app.all("/api/sheets/mcp/:token", (req, res) => {
-  if (req.params.token !== SHEETS_MCP_TOKEN) return res.status(403).json({ error: "forbidden" });
-  return sheetsMcpHandler(req, res);
-});
-
-// ═══════════════════ 現場写真 MCP (claude.ai カスタムコネクタ) ═══════════════════
+// ═══════════════════ 現場写真 MCP (スプレッドシート操作 MCP に統合) ═══════════════════
 // Drive の案件フォルダに置いた現場写真を Claude が直接見るための読み取り専用 MCP。
 // 接続 URL: https://<keihi-api の Cloud Run URL>/api/photos/mcp/<token>
 // 流れ: list_site_photos (一覧・安価) → contact_sheet (12枚グリッドで俯瞰) → read_site_photos (高解像)。
@@ -2163,21 +2144,33 @@ const PHOTOS_MCP_TOOLS = [
   },
 ];
 
-const photosMcpHandler = dramaCreateMcpHandler({
-  name: "現場写真",
+// スプレッドシート操作 + 現場写真 を1つの MCP に統合 (コネクタ1個で済ませる)
+const sheetsMcpHandler = dramaCreateMcpHandler({
+  name: "sheets",
   instructions: [
-    "Drive の案件フォルダにある現場写真を読むツール (読み取り専用)。",
-    "使い方: list_site_photos で一覧 (テキストのみで安価) → contact_sheet で12枚ずつ俯瞰 →",
-    "気になった写真だけ read_site_photos (indexes 指定、最大8枚) で高解像で読む。",
-    "index は撮影日時の昇順 = 現場を回った順。部屋の順番を読み解く手がかりになる。",
-    "BANAX 共有ドライブ配下のフォルダしか扱えない。",
+    "Google スプレッドシートの読み書き + 現場写真の閲覧ツール (BANAX の見積・請求・工程表・現地調査用)。",
+    "spreadsheet_id は URL の /d/ と /edit の間の文字列。sheet_id (タブの数値 ID) は list_tabs で調べる。",
+    "破壊的な編集 (delete_tab / delete_rows / 大きな上書き) の前は duplicate_tab でバックアップを取ると安全。",
+    "請求書づくりの定石: copy_spreadsheet でテンプレを複製 → find_replace で {{宛名}} 等を差し込み →",
+    "write_range / append_rows で明細を入れる → format_cells (¥#,##0 や bg_color) と set_borders で整える → export_pdf で送付用 PDF。",
+    "フォルダ整理は list_files で現状把握 → create_folder / move_file / rename_file / trash_file。",
+    "工程表 (ガントチャート) は schedule_setup で日付・曜日・休日列を先に作り、そのあと format_cells_batch でバーをまとめて塗る。",
+    "見積書・請求書の仕上げ (余り行の削除・原価列非表示・検算) は document_finish に任せる。",
+    "現場写真: list_site_photos で一覧 (安価) → contact_sheet で12枚ずつ俯瞰 → 気になる写真だけ read_site_photos (最大8枚) で高解像。",
+    "写真の index は撮影日時の昇順 = 現場を回った順で、部屋のつながりを読み解く手がかりになる。",
+    "シートにアクセスできないエラーが出たら、そのシートをサーバーのサービスアカウントに編集者として共有してもらう。",
   ].join("\n"),
-  tools: PHOTOS_MCP_TOOLS,
+  tools: [...SHEETS_MCP_TOOLS, ...PHOTOS_MCP_TOOLS],
 });
 
+app.all("/api/sheets/mcp/:token", (req, res) => {
+  if (req.params.token !== SHEETS_MCP_TOKEN) return res.status(403).json({ error: "forbidden" });
+  return sheetsMcpHandler(req, res);
+});
+// 旧 現場写真コネクタの URL も同じ統合ハンドラで生かしておく (登録済みでも壊れない)
 app.all("/api/photos/mcp/:token", (req, res) => {
   if (req.params.token !== PHOTOS_MCP_TOKEN) return res.status(403).json({ error: "forbidden" });
-  return photosMcpHandler(req, res);
+  return sheetsMcpHandler(req, res);
 });
 
 // ギャラリー (置き場アプリ /auto-drama/) 用の一覧 API。inspect と同じ read-only・認証なし。
