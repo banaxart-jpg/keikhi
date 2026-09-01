@@ -1836,6 +1836,350 @@ app.all("/api/sheets/mcp/:token", (req, res) => {
   return sheetsMcpHandler(req, res);
 });
 
+// ═══════════════════ 現場写真 MCP (claude.ai カスタムコネクタ) ═══════════════════
+// Drive の案件フォルダに置いた現場写真を Claude が直接見るための読み取り専用 MCP。
+// 接続 URL: https://<keihi-api の Cloud Run URL>/api/photos/mcp/<token>
+// 流れ: list_site_photos (一覧・安価) → contact_sheet (12枚グリッドで俯瞰) → read_site_photos (高解像)。
+// BANAX 共有ドライブ配下のフォルダしか扱わない。書き込み・削除の口は無い。
+
+const PHOTOS_MCP_TOKEN = (process.env.PHOTOS_MCP_TOKEN || "kx9m2photos7vqt4wp8zh").trim();
+const PHOTOS_DRIVE_ID = (process.env.PHOTOS_DRIVE_ID || "0APPTsnIOCPwrUk9PVA").trim();
+const PHOTOS_LONG_EDGE = 1568;   // これ以上大きくしても読める情報は増えずトークンだけ増える
+const PHOTOS_THUMB_EDGE = 512;
+const PHOTOS_CACHE_DIR = "/tmp/photos-mcp-cache";
+const PHOTOS_CACHE_MAX = 200 * 1024 * 1024;
+
+// 共有ドライブ配下チェック (フォルダにもファイルにも使う)。外なら拒否
+async function photosAssertInDrive(fileId) {
+  const drive = await getDriveApi();
+  const res = await drive.files.get({
+    fileId, fields: "id,name,mimeType,driveId,trashed", supportsAllDrives: true,
+  });
+  if (res.data.driveId !== PHOTOS_DRIVE_ID) {
+    throw new Error("この ID は BANAX 共有ドライブの外にあるので扱えません");
+  }
+  if (res.data.trashed) throw new Error("この ID はゴミ箱の中です");
+  return res.data;
+}
+
+// フォルダ内の画像一覧。撮影日時 (EXIF、Drive の imageMediaMetadata.time) の昇順で index を振る。
+// 同時刻は file_id で決定 → 同じフォルダなら毎回同じ index になる
+async function photosListImages(folderId, recursive) {
+  const drive = await getDriveApi();
+  const files = [];
+  const skipped = {};
+  const queue = [folderId];
+  const seen = new Set();
+  while (queue.length) {
+    const fid = queue.shift();
+    if (seen.has(fid) || seen.size > 30) continue;
+    seen.add(fid);
+    let pageToken;
+    do {
+      const res = await drive.files.list({
+        q: `'${String(fid).replace(/'/g, "")}' in parents and trashed=false`,
+        fields: "nextPageToken,files(id,name,mimeType,size,modifiedTime,imageMediaMetadata(time,width,height))",
+        pageSize: 200, pageToken,
+        supportsAllDrives: true, includeItemsFromAllDrives: true,
+      });
+      for (const f of res.data.files || []) {
+        if (f.mimeType === "application/vnd.google-apps.folder") {
+          if (recursive) queue.push(f.id);
+          continue;
+        }
+        if (!/^image\//.test(f.mimeType || "")) {
+          skipped[f.mimeType || "不明"] = (skipped[f.mimeType || "不明"] || 0) + 1;
+          continue;
+        }
+        files.push(f);
+      }
+      pageToken = res.data.nextPageToken;
+    } while (pageToken && files.length < 400);
+  }
+  const entries = files.map((f) => {
+    // EXIF 撮影日時: "2026:08:24 15:32:11"。現場写真は日本前提なので +09:00 として扱う
+    const t = f.imageMediaMetadata?.time;
+    const m = t && /^(\d{4}):(\d{2}):(\d{2})[ T](\d{2}):(\d{2}):(\d{2})/.exec(t);
+    const taken = m ? `${m[1]}-${m[2]}-${m[3]}T${m[4]}:${m[5]}:${m[6]}+09:00` : (f.modifiedTime || "");
+    return {
+      file_id: f.id, name: f.name,
+      taken_at: taken,
+      taken_at_source: m ? "exif" : "modified",
+      width: f.imageMediaMetadata?.width, height: f.imageMediaMetadata?.height,
+      size_bytes: Number(f.size) || 0,
+      mimeType: f.mimeType,
+      sortKey: Date.parse(taken) || 0,
+    };
+  });
+  entries.sort((a, b) => (a.sortKey - b.sortKey) || (a.file_id < b.file_id ? -1 : 1));
+  const truncated = entries.length > 200;
+  const list = entries.slice(0, 200).map((e, i) => {
+    const { sortKey, ...rest } = e;
+    return { index: i + 1, ...rest };
+  });
+  return { list, skipped, truncated };
+}
+
+// 写真1枚を JPEG (EXIF回転適用・長辺 longEdge・メタ情報なし) にする。/tmp に LRU キャッシュ
+async function photosFetchJpeg(entry, longEdge) {
+  const cachePath = `${PHOTOS_CACHE_DIR}/${entry.file_id}_${longEdge}.jpg`;
+  try {
+    const buf = fs.readFileSync(cachePath);
+    fs.utimesSync(cachePath, new Date(), new Date()); // LRU 用に touch
+    return buf;
+  } catch (_) {}
+  const drive = await getDriveApi();
+  const res = await drive.files.get(
+    { fileId: entry.file_id, alt: "media", supportsAllDrives: true },
+    { responseType: "arraybuffer" }
+  );
+  let buf = Buffer.from(res.data);
+  if (/hei[cf]/i.test(entry.mimeType || "") || /\.hei[cf]$/i.test(entry.name || "")) {
+    const { default: heicConvert } = await import("heic-convert");
+    buf = Buffer.from(await heicConvert({ buffer: buf, format: "JPEG", quality: 0.9 }));
+  }
+  // .rotate() 引数なし = EXIF Orientation を焼き込み (縦位置写真が横倒しになるのを防ぐ)。
+  // sharp は既定でメタ情報を落とすので EXIF は残らない
+  let quality = 80;
+  let out;
+  for (;;) {
+    out = await sharp(buf)
+      .rotate()
+      .resize({ width: longEdge, height: longEdge, fit: "inside", withoutEnlargement: true })
+      .jpeg({ quality })
+      .toBuffer();
+    if (out.length <= 1.5 * 1024 * 1024 || quality <= 60) break;
+    quality -= 10;
+  }
+  try {
+    fs.mkdirSync(PHOTOS_CACHE_DIR, { recursive: true });
+    fs.writeFileSync(cachePath, out);
+    photosCacheEvict();
+  } catch (_) {}
+  return out;
+}
+function photosCacheEvict() {
+  try {
+    const files = fs.readdirSync(PHOTOS_CACHE_DIR).map((n) => {
+      const p = `${PHOTOS_CACHE_DIR}/${n}`;
+      const st = fs.statSync(p);
+      return { p, size: st.size, mtime: st.mtimeMs };
+    });
+    let total = files.reduce((s, f) => s + f.size, 0);
+    if (total <= PHOTOS_CACHE_MAX) return;
+    files.sort((a, b) => a.mtime - b.mtime);
+    for (const f of files) {
+      fs.unlinkSync(f.p);
+      total -= f.size;
+      if (total <= PHOTOS_CACHE_MAX) break;
+    }
+  } catch (_) {}
+}
+
+// index 番号ラベル (フォント無し環境でも確実に描けるよう 3x5 ピクセルフォントを自前描画)
+const PHOTOS_FONT = {
+  "0": ["111", "101", "101", "101", "111"],
+  "1": ["010", "110", "010", "010", "111"],
+  "2": ["111", "001", "111", "100", "111"],
+  "3": ["111", "001", "111", "001", "111"],
+  "4": ["101", "101", "111", "001", "001"],
+  "5": ["111", "100", "111", "001", "111"],
+  "6": ["111", "100", "111", "101", "111"],
+  "7": ["111", "001", "001", "001", "001"],
+  "8": ["111", "101", "111", "101", "111"],
+  "9": ["111", "101", "111", "001", "111"],
+};
+function photosNumberLabel(n, scale = 8) {
+  const s = String(n);
+  const dw = 3, dh = 5, gap = 1;
+  const w = (s.length * (dw + gap) - gap) * scale;
+  const h = dh * scale;
+  const buf = Buffer.alloc(w * h * 3, 255);
+  s.split("").forEach((ch, di) => {
+    const rows = PHOTOS_FONT[ch];
+    if (!rows) return;
+    for (let y = 0; y < dh; y++) {
+      for (let x = 0; x < dw; x++) {
+        if (rows[y][x] !== "1") continue;
+        for (let yy = 0; yy < scale; yy++) {
+          for (let xx = 0; xx < scale; xx++) {
+            const o = (((y * scale + yy) * w) + (di * (dw + gap) + x) * scale + xx) * 3;
+            buf[o] = buf[o + 1] = buf[o + 2] = 0;
+          }
+        }
+      }
+    }
+  });
+  return { input: buf, raw: { width: w, height: h, channels: 3 }, width: w, height: h };
+}
+
+const PHOTOS_MCP_TOOLS = [
+  {
+    name: "list_site_photos",
+    description: "フォルダ内の現場写真を一覧する (テキストのみで安価)。撮影日時の昇順 = 現場を回った順に index を振る。最初にこれを呼ぶ",
+    inputSchema: {
+      type: "object",
+      properties: {
+        folder_id: { type: "string", description: "Drive フォルダ ID" },
+        recursive: { type: "boolean", description: "サブフォルダも辿る。既定 false" },
+      },
+      required: ["folder_id"],
+    },
+    handler: async (a) => {
+      const meta = await photosAssertInDrive(a.folder_id);
+      if (meta.mimeType !== "application/vnd.google-apps.folder") throw new Error("folder_id がフォルダではありません");
+      const { list, skipped, truncated } = await photosListImages(a.folder_id, !!a.recursive);
+      const out = { folder: meta.name, images: list.length, list: list.map(({ mimeType, ...e }) => e) };
+      const sk = Object.entries(skipped);
+      if (sk.length) out.skipped = `${sk.reduce((s, [, n]) => s + n, 0)}件 (${sk.map(([t, n]) => `${t}: ${n}`).join(", ")})`;
+      if (truncated) out.note = "200件を超えたため先頭200件のみ";
+      return out;
+    },
+  },
+  {
+    name: "contact_sheet",
+    description: "写真を 3×4 の12枚グリッド1枚に合成して返す (各セルの下に index 番号入り)。フォルダ全体を安く俯瞰して、気になる写真の index を見つけてから read_site_photos で高解像を読む",
+    inputSchema: {
+      type: "object",
+      properties: {
+        folder_id: { type: "string" },
+        page: { type: "number", description: "1始まり。既定 1" },
+      },
+      required: ["folder_id"],
+    },
+    handler: async (a) => {
+      const meta = await photosAssertInDrive(a.folder_id);
+      if (meta.mimeType !== "application/vnd.google-apps.folder") throw new Error("folder_id がフォルダではありません");
+      const { list } = await photosListImages(a.folder_id, false);
+      if (!list.length) return { images: 0, note: "画像0枚" };
+      const PER = 12, COLS = 3, ROWS = 4;
+      const pages = Math.ceil(list.length / PER);
+      const page = a.page || 1;
+      if (page < 1 || page > pages) return { note: `page ${page} は範囲外です (全 ${pages} ページ・${list.length}枚)` };
+      const items = list.slice((page - 1) * PER, (page - 1) * PER + PER);
+      const CELL = PHOTOS_THUMB_EDGE;
+      const LABEL_H = 56;
+      const cellH = CELL + LABEL_H;
+      const composites = [];
+      const broken = [];
+      for (let i = 0; i < items.length; i++) {
+        const it = items[i];
+        const col = i % COLS, row = Math.floor(i / COLS);
+        try {
+          const jb = await photosFetchJpeg(it, CELL);
+          const m = await sharp(jb).metadata();
+          composites.push({
+            input: jb,
+            left: col * CELL + Math.max(0, Math.round((CELL - m.width) / 2)),
+            top: row * cellH + Math.max(0, Math.round((CELL - m.height) / 2)),
+          });
+        } catch (e) {
+          broken.push(`index ${it.index} (${it.name}): ${e.message}`);
+        }
+        const lbl = photosNumberLabel(it.index, 8);
+        composites.push({
+          input: lbl.input, raw: lbl.raw,
+          left: col * CELL + Math.round((CELL - lbl.width) / 2),
+          top: row * cellH + CELL + Math.round((LABEL_H - lbl.height) / 2),
+        });
+      }
+      const sheet = await sharp({ create: { width: COLS * CELL, height: ROWS * cellH, channels: 3, background: { r: 255, g: 255, b: 255 } } })
+        .composite(composites)
+        .png()
+        .toBuffer();
+      const finalJpeg = await sharp(sheet)
+        .resize({ width: PHOTOS_LONG_EDGE, height: PHOTOS_LONG_EDGE, fit: "inside", withoutEnlargement: true })
+        .jpeg({ quality: 75 })
+        .toBuffer();
+      const lines = items.map((it) => `${it.index}. ${it.name} (${it.taken_at})`);
+      let text = `page ${page}/${pages} (全${list.length}枚)\n` + lines.join("\n");
+      if (broken.length) text += `\n読めなかった写真: ${broken.join(" / ")}`;
+      return { content: [
+        { type: "text", text },
+        { type: "image", data: finalJpeg.toString("base64"), mimeType: "image/jpeg" },
+      ] };
+    },
+  },
+  {
+    name: "read_site_photos",
+    description: "指定した写真を高解像 (長辺1568px) で返す。contact_sheet で当たりをつけた index を渡す。一度に最大8枚",
+    inputSchema: {
+      type: "object",
+      properties: {
+        folder_id: { type: "string" },
+        indexes: { type: "array", items: { type: "number" }, description: "list_site_photos / contact_sheet の index。最大8" },
+        file_ids: { type: "array", items: { type: "string" }, description: "file_id 直接指定の場合 (indexes とどちらか一方)" },
+      },
+      required: ["folder_id"],
+    },
+    handler: async (a) => {
+      const useIdx = Array.isArray(a.indexes) && a.indexes.length > 0;
+      const useIds = Array.isArray(a.file_ids) && a.file_ids.length > 0;
+      if (!useIdx && !useIds) throw new Error("indexes か file_ids のどちらかを指定してください");
+      let picks = [];
+      let note = "";
+      if (useIdx) {
+        const meta = await photosAssertInDrive(a.folder_id);
+        if (meta.mimeType !== "application/vnd.google-apps.folder") throw new Error("folder_id がフォルダではありません");
+        const { list } = await photosListImages(a.folder_id, false);
+        const byIdx = new Map(list.map((e) => [e.index, e]));
+        const missing = [];
+        for (const i of a.indexes) {
+          const e = byIdx.get(Number(i));
+          if (e) picks.push(e); else missing.push(i);
+        }
+        if (missing.length) note += `見つからない index: ${missing.join(", ")}\n`;
+      } else {
+        for (const id of a.file_ids.slice(0, 12)) {
+          const f = await photosAssertInDrive(id); // 共有ドライブ外はここで拒否
+          picks.push({ index: null, file_id: f.id, name: f.name, taken_at: "", mimeType: f.mimeType });
+        }
+      }
+      if (picks.length > 8) {
+        note += `一度に返せるのは8枚までなので先頭8枚だけ返します (${picks.length - 8}枚切り捨て)\n`;
+        picks = picks.slice(0, 8);
+      }
+      const content = [];
+      let total = 0;
+      const MAX_TOTAL = 8 * 1024 * 1024;
+      for (const p of picks) {
+        try {
+          const jb = await photosFetchJpeg(p, PHOTOS_LONG_EDGE);
+          if (total + jb.length > MAX_TOTAL) {
+            note += `合計8MBの上限に達したため index ${p.index ?? p.name} 以降は省略しました\n`;
+            break;
+          }
+          total += jb.length;
+          content.push({ type: "text", text: `index ${p.index ?? "-"} / ${p.name} / ${p.taken_at || "撮影時刻不明"}` });
+          content.push({ type: "image", data: jb.toString("base64"), mimeType: "image/jpeg" });
+        } catch (e) {
+          content.push({ type: "text", text: `index ${p.index ?? "-"} (${p.name}): 読めませんでした (${e.message})` });
+        }
+      }
+      if (note) content.unshift({ type: "text", text: note.trim() });
+      if (!content.length) content.push({ type: "text", text: "返せる写真がありませんでした" });
+      return { content };
+    },
+  },
+];
+
+const photosMcpHandler = dramaCreateMcpHandler({
+  name: "現場写真",
+  instructions: [
+    "Drive の案件フォルダにある現場写真を読むツール (読み取り専用)。",
+    "使い方: list_site_photos で一覧 (テキストのみで安価) → contact_sheet で12枚ずつ俯瞰 →",
+    "気になった写真だけ read_site_photos (indexes 指定、最大8枚) で高解像で読む。",
+    "index は撮影日時の昇順 = 現場を回った順。部屋の順番を読み解く手がかりになる。",
+    "BANAX 共有ドライブ配下のフォルダしか扱えない。",
+  ].join("\n"),
+  tools: PHOTOS_MCP_TOOLS,
+});
+
+app.all("/api/photos/mcp/:token", (req, res) => {
+  if (req.params.token !== PHOTOS_MCP_TOKEN) return res.status(403).json({ error: "forbidden" });
+  return photosMcpHandler(req, res);
+});
+
 // ギャラリー (置き場アプリ /auto-drama/) 用の一覧 API。inspect と同じ read-only・認証なし。
 // pending がある時はここで Seedance をポーリングするので、アプリを開くだけで進捗が進む
 app.get("/api/drama/gallery", async (req, res) => {
