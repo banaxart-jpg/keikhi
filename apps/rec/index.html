@@ -99,6 +99,10 @@ input.tin { font-size: 16px; font-weight: 800; }
     <div class="recbtn-wrap">
       <button class="recbtn" id="recBtn" type="button"><span class="icon">mic</span><span class="lbl">録音する</span></button>
     </div>
+    <div style="text-align:center;margin:-6px 0 22px;">
+      <button class="pill" id="fileBtn" type="button"><span class="icon">upload_file</span> 音声ファイルから</button>
+      <input type="file" id="fileIn" accept="audio/*" style="display:none">
+    </div>
     <div id="list"></div>
   </div>
 </div>
@@ -208,13 +212,18 @@ async function finalize() {
   if (canceled) { segBlobs = []; chunks = []; return; }
   const blobs = segBlobs.filter(b => b.size > 800);
   if (!blobs.length) { toast("録音が短すぎたみたい。もう一度どうぞ", true); return; }
+  await processBlobs(blobs);
+}
+// blobs を要約してメモ結果を出す。録音（複数セグメント）とファイル取込（1つ）で共通。
+async function processBlobs(blobs, mimeOverride) {
+  const mimeOf = (b) => (mimeOverride || b.type || "audio/mp4").split(";")[0];
   $("procOverlay").classList.add("on");
   try {
     let r;
     if (blobs.length === 1) {
       setProc("AIが要約中…");
       const b64 = await blobToB64(blobs[0]);
-      r = await api("POST", "/api/rec/summarize", { audio: b64, mimeType: (blobs[0].type || "audio/mp4").split(";")[0] });
+      r = await api("POST", "/api/rec/summarize", { audio: b64, mimeType: mimeOf(blobs[0]) });
       r.transcript = r.transcript || "";
       r.summary = composeSummary(r);
     } else {
@@ -222,7 +231,7 @@ async function finalize() {
       for (let i = 0; i < blobs.length; i++) {
         setProc(`文字起こし ${i + 1}/${blobs.length} …`);
         const b64 = await blobToB64(blobs[i]);
-        const t = await api("POST", "/api/rec/transcribe", { audio: b64, mimeType: (blobs[i].type || "audio/mp4").split(";")[0] });
+        const t = await api("POST", "/api/rec/transcribe", { audio: b64, mimeType: mimeOf(blobs[i]) });
         full += (t.transcript || "") + "\n";
       }
       setProc("全体をまとめています…");
@@ -238,6 +247,16 @@ async function finalize() {
     $("procOverlay").classList.remove("on"); setProc("AIが要約中…");
     toast("要約失敗: " + e.message, true);
   }
+}
+function audioDuration(f) { return new Promise((res) => { try { const a = document.createElement("audio"); a.preload = "metadata"; a.onloadedmetadata = () => { res(isFinite(a.duration) ? a.duration : 0); URL.revokeObjectURL(a.src); }; a.onerror = () => res(0); a.src = URL.createObjectURL(f); } catch { res(0); } }); }
+async function onFilePicked(e) {
+  const f = e.target.files && e.target.files[0]; e.target.value = "";
+  if (!f) return;
+  if (f.size > 18 * 1024 * 1024) { toast("このファイルは大きすぎます。長い音声はアプリ内録音（自動分割）を使ってね", true); return; }
+  let mt = f.type || "";
+  if (!mt || /m4a|aac/i.test(f.name) || /m4a|x-/i.test(mt)) mt = "audio/mp4";
+  recDuration = await audioDuration(f);
+  await processBlobs([f], mt);
 }
 function blobToB64(blob) { return new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(String(r.result).split(",")[1] || ""); r.onerror = rej; r.readAsDataURL(blob); }); }
 function composeSummary(r) {
@@ -309,6 +328,8 @@ $("mModal").addEventListener("click", e => { if (e.target === $("mModal")) $("mM
 $("recBtn").addEventListener("click", startRec);
 $("ovStop").addEventListener("click", () => stopRec(true));
 $("ovCancel").addEventListener("click", () => stopRec(false));
+$("fileBtn").addEventListener("click", () => $("fileIn").click());
+$("fileIn").addEventListener("change", onFilePicked);
 
 initAuthBoot({ returnPath: "/rec/", onReady: async () => { $("app").style.display = ""; $("list").innerHTML = '<div class="list-empty">読み込み中…</div>'; await load(); } });
 </script>
