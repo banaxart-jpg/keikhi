@@ -10558,6 +10558,57 @@ app.post("/api/rec/summarize", async (req, res) => {
   }
 });
 
+// 長時間録音用: 1セグメント(~9分)の音声を文字起こしだけする
+app.post("/api/rec/transcribe", async (req, res) => {
+  try {
+    if (!genAI) return res.status(503).json({ error: "GEMINI_API_KEY not configured" });
+    const b = req.body || {};
+    const audio = b.audio || "", mimeType = b.mimeType || "audio/mp4";
+    if (!audio) return res.status(400).json({ error: "audio (base64) is required" });
+    if (audio.length > 26 * 1024 * 1024) return res.status(413).json({ error: "セグメントが大きすぎます" });
+    const prompt = "次の日本語音声を文字起こししてください。話し言葉のまま簡潔に整形し、聞き取れない箇所は無理に補完しない。文字起こしテキストのみを出力（前置き・記号・JSONは不要）。";
+    const { result } = await callGeminiWithFallback([
+      { text: prompt },
+      { inlineData: { data: audio, mimeType } },
+    ], { primaryModel: "gemini-2.5-flash", maxOutputTokens: 8192 });
+    res.json({ transcript: String(result?.response?.text?.() || "") });
+  } catch (err) {
+    console.error("rec transcribe error", err);
+    const msg = String(err?.message || err);
+    const isTransient = /\b(503|429|500)\b|UNAVAILABLE|overload/i.test(msg);
+    res.status(isTransient ? 503 : 500).json({ error: isTransient ? "Gemini が混雑中です。少し待って再実行してください" : msg });
+  }
+});
+
+// 長時間録音用: 連結した文字起こし全体を1つのメモにまとめる
+app.post("/api/rec/combine", async (req, res) => {
+  try {
+    if (!genAI) return res.status(503).json({ error: "GEMINI_API_KEY not configured" });
+    const text = String(req.body?.transcript || "").trim();
+    if (!text) return res.status(400).json({ error: "transcript is required" });
+    const prompt = `次は打ち合わせの文字起こしです(長時間を分割して連結したもの)。全体を読んで1つのメモにまとめてください。JSON のみを出力。
+形式:
+{
+  "title": "内容を表す短いタイトル(15字程度)",
+  "points": ["全体の要点を箇条書き(4〜8個)"],
+  "decisions": ["決まったこと(無ければ空配列)"],
+  "todos": ["やること・宿題。担当や期限が分かれば添える(無ければ空配列)"]
+}
+重複する話題はまとめ、時系列より論点で整理する。
+文字起こし:
+${text.slice(0, 200000)}`;
+    const { result } = await callGeminiWithFallback(prompt, { primaryModel: "gemini-2.5-flash", maxOutputTokens: 8192, jsonMode: true });
+    const raw = parseLooseJson(result?.response?.text?.() || "") || {};
+    const arr = (x) => Array.isArray(x) ? x.map((s) => String(s)).filter(Boolean) : [];
+    res.json({ title: String(raw.title || "打ち合わせメモ").slice(0, 60), points: arr(raw.points), decisions: arr(raw.decisions), todos: arr(raw.todos) });
+  } catch (err) {
+    console.error("rec combine error", err);
+    const msg = String(err?.message || err);
+    const isTransient = /\b(503|429|500)\b|UNAVAILABLE|overload/i.test(msg);
+    res.status(isTransient ? 503 : 500).json({ error: isTransient ? "Gemini が混雑中です。少し待って再実行してください" : msg });
+  }
+});
+
 app.get("/api/rec", async (req, res) => {
   const p = getPool();
   if (!p) return res.status(503).json({ error: "DB not configured" });

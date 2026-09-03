@@ -107,7 +107,7 @@ input.tin { font-size: 16px; font-weight: 800; }
 <div class="overlay" id="recOverlay">
   <div class="pulse"><span class="icon">mic</span></div>
   <div class="rectime" id="recTime">0:00</div>
-  <div class="hint">話し終わったら「停止」</div>
+  <div class="hint">話し終わったら「停止」（長い会議は自動で区切ります）</div>
   <div class="overlay-btns">
     <button class="ov-cancel" id="ovCancel" type="button">やめる</button>
     <button class="ov-stop" id="ovStop" type="button">■ 停止して要約</button>
@@ -135,7 +135,9 @@ import { initAuthBoot, api } from "/api-auth.js";
 const $ = (id) => document.getElementById(id);
 
 let memos = [], cur = null;
-let stream = null, mr = null, chunks = [], startTime = 0, recTimer = null, recDuration = 0, showTrans = false;
+let stream = null, mr = null, chunks = [], recTimer = null, recDuration = 0, showTrans = false;
+const SEG_MS = 9 * 60 * 1000;   // 9分ごとに自動で区切る（長い会議対策）
+let segBlobs = [], canceled = false, totalStart = 0, segTimer = null, recording = false;
 
 let _tt = null;
 function toast(m, e = false) { const t = $("toast"); t.textContent = m; t.classList.toggle("err", !!e); t.style.display = "block"; clearTimeout(_tt); _tt = setTimeout(() => t.style.display = "none", e ? 4500 : 1600); }
@@ -170,44 +172,70 @@ async function startRec() {
   if (!navigator.mediaDevices?.getUserMedia) { toast("この端末は録音に対応していません", true); return; }
   try { stream = await navigator.mediaDevices.getUserMedia({ audio: true }); }
   catch (e) { toast("マイクが使えません。設定で許可してね", true); return; }
+  segBlobs = []; canceled = false; recording = true; totalStart = Date.now();
+  beginSegment();
+  updTime(); recTimer = setInterval(updTime, 250);
+  $("recOverlay").classList.add("on");
+}
+function beginSegment() {
   chunks = [];
   const mt = pickMime();
   try { mr = mt ? new MediaRecorder(stream, { mimeType: mt }) : new MediaRecorder(stream); }
   catch { mr = new MediaRecorder(stream); }
   mr.ondataavailable = (e) => { if (e.data && e.data.size) chunks.push(e.data); };
-  mr.onstop = onStopped;
+  mr.onstop = handleSegStop;
   mr.start();
-  startTime = Date.now();
-  updTime();
-  recTimer = setInterval(updTime, 250);
-  $("recOverlay").classList.add("on");
+  segTimer = setTimeout(() => { if (recording && mr && mr.state !== "inactive") mr.stop(); }, SEG_MS); // 自動区切り
 }
-function updTime() { $("recTime").textContent = fmtDur((Date.now() - startTime) / 1000); }
+function handleSegStop() {
+  clearTimeout(segTimer);
+  if (chunks.length) segBlobs.push(new Blob(chunks, { type: (mr && mr.mimeType) || chunks[0].type || "audio/mp4" }));
+  if (recording) beginSegment();   // まだ録音中＝自動区切り → 次のセグメントへ
+  else finalize();                 // 停止 → 仕上げ
+}
+function updTime() { $("recTime").textContent = fmtDur((Date.now() - totalStart) / 1000); }
 function stopTracks() { if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; } }
 function stopRec(process) {
-  clearInterval(recTimer);
-  recDuration = (Date.now() - startTime) / 1000;
-  mr._process = process;
-  if (mr && mr.state !== "inactive") mr.stop(); else stopTracks();
+  recording = false; canceled = !process;
+  clearInterval(recTimer); clearTimeout(segTimer);
+  recDuration = (Date.now() - totalStart) / 1000;
   $("recOverlay").classList.remove("on");
+  if (mr && mr.state !== "inactive") mr.stop(); else finalize();
 }
-async function onStopped() {
-  const process = mr._process;
+function setProc(msg) { const el = document.querySelector("#procOverlay .rectime"); if (el) el.textContent = msg; }
+async function finalize() {
   stopTracks();
-  if (!process) { chunks = []; return; }   // キャンセル
-  const blob = new Blob(chunks, { type: (mr && mr.mimeType) || (chunks[0] && chunks[0].type) || "audio/mp4" });
-  if (blob.size < 1200) { toast("録音が短すぎたみたい。もう一度どうぞ", true); return; }
+  if (canceled) { segBlobs = []; chunks = []; return; }
+  const blobs = segBlobs.filter(b => b.size > 800);
+  if (!blobs.length) { toast("録音が短すぎたみたい。もう一度どうぞ", true); return; }
   $("procOverlay").classList.add("on");
   try {
-    const b64 = await blobToB64(blob);
-    const r = await api("POST", "/api/rec/summarize", { audio: b64, mimeType: (blob.type || "audio/mp4").split(";")[0] });
-    $("procOverlay").classList.remove("on");
-    cur = { id: null, title: r.title || "無題のメモ", points: r.points || [], decisions: r.decisions || [], todos: r.todos || [], transcript: r.transcript || "", summary: composeSummary(r), duration: recDuration, isNew: true };
+    let r;
+    if (blobs.length === 1) {
+      setProc("AIが要約中…");
+      const b64 = await blobToB64(blobs[0]);
+      r = await api("POST", "/api/rec/summarize", { audio: b64, mimeType: (blobs[0].type || "audio/mp4").split(";")[0] });
+      r.transcript = r.transcript || "";
+      r.summary = composeSummary(r);
+    } else {
+      let full = "";
+      for (let i = 0; i < blobs.length; i++) {
+        setProc(`文字起こし ${i + 1}/${blobs.length} …`);
+        const b64 = await blobToB64(blobs[i]);
+        const t = await api("POST", "/api/rec/transcribe", { audio: b64, mimeType: (blobs[i].type || "audio/mp4").split(";")[0] });
+        full += (t.transcript || "") + "\n";
+      }
+      setProc("全体をまとめています…");
+      const c = await api("POST", "/api/rec/combine", { transcript: full });
+      r = { title: c.title, points: c.points, decisions: c.decisions, todos: c.todos, transcript: full.trim(), summary: composeSummary(c) };
+    }
+    $("procOverlay").classList.remove("on"); setProc("AIが要約中…");
+    cur = { id: null, title: r.title || "無題のメモ", summary: r.summary || composeSummary(r), transcript: r.transcript || "", duration: recDuration, isNew: true };
     showTrans = false;
     renderMemo();
     $("mModal").classList.add("open");
   } catch (e) {
-    $("procOverlay").classList.remove("on");
+    $("procOverlay").classList.remove("on"); setProc("AIが要約中…");
     toast("要約失敗: " + e.message, true);
   }
 }
