@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="録音メモ">
+<link rel="apple-touch-icon" href="/icon.png">
+<title>録音メモ</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@24,400,0,0">
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+:root {
+  --bg: #e4e6ee; --bg2: #d8dae4; --sl: rgba(255,255,255,1); --sd: rgba(168,172,192,0.75);
+  --text: #42455e; --text2: rgba(66,69,94,0.52); --text3: rgba(66,69,94,0.28);
+  --accent: #7c3aed; --rec: #dc2626;
+}
+body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; padding-bottom: 40px; }
+.icon { font-family: 'Material Symbols Outlined'; font-weight: normal; font-size: 1.1em; display: inline-block; line-height: 1; vertical-align: -0.18em; }
+.bar { display: flex; justify-content: space-between; align-items: center; padding: 40px 18px 0; gap: 8px; }
+.pill { padding: 8px 14px; border-radius: 24px; font-size: 12px; font-weight: 700; border: none; color: var(--text2); background: var(--bg); box-shadow: 4px 4px 10px var(--sd), -4px -4px 10px var(--sl); cursor: pointer; font-family: inherit; text-decoration: none; }
+.pill:active { box-shadow: inset 3px 3px 8px var(--sd), inset -3px -3px 8px var(--sl); transform: scale(0.97); }
+.pill.primary { background: var(--accent); color: #fff; }
+.pill:disabled { opacity: 0.5; }
+.wrap { padding: 14px 16px 40px; max-width: 680px; margin: 0 auto; }
+.title { font-size: 22px; font-weight: 800; }
+.subtitle { font-size: 12px; color: var(--text2); font-weight: 600; margin: 2px 0 16px; }
+
+.recbtn-wrap { display: flex; justify-content: center; margin: 10px 0 22px; }
+.recbtn { width: 118px; height: 118px; border-radius: 50%; border: none; cursor: pointer; background: var(--bg); box-shadow: 10px 10px 24px var(--sd), -8px -8px 20px var(--sl); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; color: var(--rec); font-family: inherit; }
+.recbtn:active { box-shadow: inset 6px 6px 16px var(--sd), inset -6px -6px 16px var(--sl); }
+.recbtn .icon { font-size: 44px; }
+.recbtn .lbl { font-size: 12px; font-weight: 800; color: var(--text2); }
+
+.memo { padding: 15px; border-radius: 16px; background: var(--bg); box-shadow: 5px 5px 12px var(--sd), -4px -4px 10px var(--sl); margin-bottom: 10px; cursor: pointer; }
+.memo:active { transform: scale(0.995); }
+.memo .mt { font-size: 15px; font-weight: 800; }
+.memo .mm { font-size: 11px; color: var(--text2); font-weight: 600; margin-top: 3px; }
+.memo .mp { font-size: 12px; color: var(--text2); margin-top: 7px; line-height: 1.5; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.list-empty { text-align: center; color: var(--text2); font-weight: 600; font-size: 13px; padding: 30px 20px; line-height: 1.7; }
+
+/* 録音中オーバーレイ */
+.overlay { position: fixed; inset: 0; z-index: 350; background: rgba(20,20,32,0.92); display: none; flex-direction: column; align-items: center; justify-content: center; gap: 26px; color: #fff; }
+.overlay.on { display: flex; }
+.pulse { width: 150px; height: 150px; border-radius: 50%; background: var(--rec); display: flex; align-items: center; justify-content: center; animation: pulse 1.4s ease-in-out infinite; box-shadow: 0 0 0 0 rgba(220,38,38,0.5); }
+.pulse .icon { font-size: 60px; color: #fff; }
+@keyframes pulse { 0%,100% { box-shadow: 0 0 0 0 rgba(220,38,38,0.45); } 50% { box-shadow: 0 0 0 26px rgba(220,38,38,0); } }
+.rectime { font-size: 40px; font-weight: 800; font-variant-numeric: tabular-nums; letter-spacing: 0.04em; }
+.overlay .hint { font-size: 13px; color: rgba(255,255,255,0.6); }
+.overlay-btns { display: flex; gap: 16px; }
+.ov-stop { padding: 16px 34px; border-radius: 30px; border: none; font-family: inherit; font-size: 16px; font-weight: 800; cursor: pointer; background: #fff; color: #14141f; }
+.ov-cancel { padding: 16px 24px; border-radius: 30px; border: 1px solid rgba(255,255,255,0.3); background: transparent; color: #fff; font-family: inherit; font-size: 14px; font-weight: 700; cursor: pointer; }
+.spinner { width: 54px; height: 54px; border: 5px solid rgba(255,255,255,0.2); border-top-color: #fff; border-radius: 50%; animation: spin 0.9s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* シート */
+.modal { position: fixed; inset: 0; z-index: 300; display: flex; align-items: flex-end; justify-content: center; background: rgba(180,184,205,0); visibility: hidden; opacity: 0; transition: background .2s, opacity .2s, visibility 0s linear .2s; }
+.modal.open { background: rgba(180,184,205,0.42); visibility: visible; opacity: 1; transition: background .2s, opacity .2s; }
+.sheet { background: var(--bg); border-radius: 28px 28px 0 0; width: 100%; max-width: 680px; max-height: 92vh; overflow-y: auto; padding: 6px 18px calc(24px + env(safe-area-inset-bottom)); transform: translateY(100%); transition: transform .2s cubic-bezier(.2,.8,.2,1); box-shadow: -2px -10px 30px rgba(148,152,176,0.35); }
+.modal.open .sheet { transform: translateY(0); }
+.grab { padding: 14px 18px 6px; margin: 0 -18px 4px; touch-action: none; position: sticky; top: 0; background: var(--bg); z-index: 2; }
+.grab .handle { width: 46px; height: 5px; border-radius: 3px; background: rgba(168,172,192,0.45); margin: 0 auto; }
+.field-label { font-size: 11px; font-weight: 800; letter-spacing: 0.06em; color: var(--text2); margin: 16px 2px 7px; }
+input.inp, textarea.inp { width: 100%; padding: 11px 13px; border-radius: 12px; border: none; font-size: 14px; font-family: inherit; color: var(--text); background: var(--bg); box-shadow: inset 3px 3px 8px var(--sd), inset -3px -3px 8px var(--sl); outline: none; }
+input.tin { font-size: 16px; font-weight: 800; }
+.block { border-radius: 14px; background: var(--bg); box-shadow: inset 2px 2px 6px var(--sd), inset -2px -2px 6px var(--sl); padding: 13px 15px; margin-top: 8px; }
+.block h4 { font-size: 12px; font-weight: 800; letter-spacing: 0.06em; color: var(--accent); margin-bottom: 7px; }
+.block ul { margin: 0; padding-left: 18px; }
+.block li { font-size: 14px; line-height: 1.7; margin-bottom: 3px; }
+.trans { font-size: 13px; line-height: 1.75; color: var(--text); white-space: pre-wrap; }
+.tog { font-size: 12px; font-weight: 800; color: var(--accent); cursor: pointer; margin-top: 12px; display: inline-block; }
+.actions { display: flex; gap: 10px; margin-top: 22px; }
+.actions .pill { flex: 1; text-align: center; padding: 13px; font-size: 14px; }
+.danger { color: #b04040; }
+.toast { position: fixed; left: 50%; bottom: 30px; transform: translateX(-50%); background: var(--text); color: #fff; padding: 11px 18px; border-radius: 20px; font-size: 13px; font-weight: 700; z-index: 500; display: none; box-shadow: 0 6px 20px rgba(0,0,0,0.25); }
+.toast.err { background: #b04040; }
+#signinOverlay { display: none; position: fixed; inset: 0; z-index: 400; background: var(--bg); flex-direction: column; align-items: center; justify-content: center; padding: 32px; text-align: center; gap: 18px; }
+</style>
+</head>
+<body>
+<div id="signinOverlay">
+  <div style="font-size:24px;font-weight:800;">録音メモ</div>
+  <a class="pill" href="/" style="text-decoration:none;">トップに戻る</a>
+  <div id="signinErr" style="font-size:11px;color:#b04040;font-family:monospace;"></div>
+</div>
+
+<div id="app" style="display:none;">
+  <div class="bar">
+    <a class="pill" href="/"><span class="icon">arrow_back</span> 戻る</a>
+    <span style="font-size:11px;letter-spacing:0.2em;color:var(--text3);font-weight:700;">REC MEMO</span>
+    <span style="width:52px;"></span>
+  </div>
+  <div class="wrap">
+    <div class="title">録音メモ</div>
+    <div class="subtitle">録音すると、AIが文字起こし＆要約してメモにします。</div>
+    <div class="recbtn-wrap">
+      <button class="recbtn" id="recBtn" type="button"><span class="icon">mic</span><span class="lbl">録音する</span></button>
+    </div>
+    <div id="list"></div>
+  </div>
+</div>
+
+<!-- 録音中 -->
+<div class="overlay" id="recOverlay">
+  <div class="pulse"><span class="icon">mic</span></div>
+  <div class="rectime" id="recTime">0:00</div>
+  <div class="hint">話し終わったら「停止」</div>
+  <div class="overlay-btns">
+    <button class="ov-cancel" id="ovCancel" type="button">やめる</button>
+    <button class="ov-stop" id="ovStop" type="button">■ 停止して要約</button>
+  </div>
+</div>
+<!-- 処理中 -->
+<div class="overlay" id="procOverlay">
+  <div class="spinner"></div>
+  <div class="rectime" style="font-size:18px;">AIが要約中…</div>
+  <div class="hint">録音の長さによって数十秒かかります</div>
+</div>
+
+<!-- メモ詳細/結果シート -->
+<div class="modal" id="mModal">
+  <div class="sheet" id="mSheet">
+    <div class="grab" id="mGrab"><div class="handle"></div></div>
+    <div id="mBody"></div>
+  </div>
+</div>
+<div class="toast" id="toast"></div>
+
+<script src="/config.js"></script>
+<script type="module">
+import { initAuthBoot, api } from "/api-auth.js";
+const $ = (id) => document.getElementById(id);
+
+let memos = [], cur = null;
+let stream = null, mr = null, chunks = [], startTime = 0, recTimer = null, recDuration = 0, showTrans = false;
+
+let _tt = null;
+function toast(m, e = false) { const t = $("toast"); t.textContent = m; t.classList.toggle("err", !!e); t.style.display = "block"; clearTimeout(_tt); _tt = setTimeout(() => t.style.display = "none", e ? 4500 : 1600); }
+function esc(s) { return String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); }
+function attr(s) { return String(s ?? "").replace(/"/g, "&quot;"); }
+function fmtDur(s) { s = Math.round(s || 0); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`; }
+function fmtDate(iso) { if (!iso) return ""; const d = new Date(iso); return `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`; }
+
+async function load() {
+  try { memos = await api("GET", "/api/rec"); } catch (e) { toast("読み込み失敗: " + e.message, true); memos = []; }
+  renderList();
+}
+function firstLine(summary) { return String(summary || "").replace(/【[^】]*】/g, "").replace(/\n+/g, " ").replace(/・/g, "").trim().slice(0, 70); }
+function renderList() {
+  if (!memos.length) { $("list").innerHTML = `<div class="list-empty">まだメモはありません。<br>上の🎙️ボタンで録音してみて。</div>`; return; }
+  $("list").innerHTML = memos.map(m => `
+    <div class="memo" data-id="${m.id}">
+      <div class="mt">${esc(m.title || "無題のメモ")}</div>
+      <div class="mm">${fmtDate(m.createdAt)}${m.duration ? " ・ " + fmtDur(m.duration) : ""}${m.createdBy ? " ・ " + esc(String(m.createdBy).split("@")[0]) : ""}</div>
+      <div class="mp">${esc(firstLine(m.summary))}</div>
+    </div>`).join("");
+  document.querySelectorAll(".memo").forEach(el => el.addEventListener("click", () => openMemo(memos.find(m => m.id === el.dataset.id))));
+}
+
+// ── 録音 ──
+function pickMime() {
+  const cands = ["audio/mp4", "audio/webm;codecs=opus", "audio/webm", "audio/mpeg", "audio/aac"];
+  for (const c of cands) { try { if (window.MediaRecorder && MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(c)) return c; } catch {} }
+  return "";
+}
+async function startRec() {
+  if (!navigator.mediaDevices?.getUserMedia) { toast("この端末は録音に対応していません", true); return; }
+  try { stream = await navigator.mediaDevices.getUserMedia({ audio: true }); }
+  catch (e) { toast("マイクが使えません。設定で許可してね", true); return; }
+  chunks = [];
+  const mt = pickMime();
+  try { mr = mt ? new MediaRecorder(stream, { mimeType: mt }) : new MediaRecorder(stream); }
+  catch { mr = new MediaRecorder(stream); }
+  mr.ondataavailable = (e) => { if (e.data && e.data.size) chunks.push(e.data); };
+  mr.onstop = onStopped;
+  mr.start();
+  startTime = Date.now();
+  updTime();
+  recTimer = setInterval(updTime, 250);
+  $("recOverlay").classList.add("on");
+}
+function updTime() { $("recTime").textContent = fmtDur((Date.now() - startTime) / 1000); }
+function stopTracks() { if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; } }
+function stopRec(process) {
+  clearInterval(recTimer);
+  recDuration = (Date.now() - startTime) / 1000;
+  mr._process = process;
+  if (mr && mr.state !== "inactive") mr.stop(); else stopTracks();
+  $("recOverlay").classList.remove("on");
+}
+async function onStopped() {
+  const process = mr._process;
+  stopTracks();
+  if (!process) { chunks = []; return; }   // キャンセル
+  const blob = new Blob(chunks, { type: (mr && mr.mimeType) || (chunks[0] && chunks[0].type) || "audio/mp4" });
+  if (blob.size < 1200) { toast("録音が短すぎたみたい。もう一度どうぞ", true); return; }
+  $("procOverlay").classList.add("on");
+  try {
+    const b64 = await blobToB64(blob);
+    const r = await api("POST", "/api/rec/summarize", { audio: b64, mimeType: (blob.type || "audio/mp4").split(";")[0] });
+    $("procOverlay").classList.remove("on");
+    cur = { id: null, title: r.title || "無題のメモ", points: r.points || [], decisions: r.decisions || [], todos: r.todos || [], transcript: r.transcript || "", summary: composeSummary(r), duration: recDuration, isNew: true };
+    showTrans = false;
+    renderMemo();
+    $("mModal").classList.add("open");
+  } catch (e) {
+    $("procOverlay").classList.remove("on");
+    toast("要約失敗: " + e.message, true);
+  }
+}
+function blobToB64(blob) { return new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(String(r.result).split(",")[1] || ""); r.onerror = rej; r.readAsDataURL(blob); }); }
+function composeSummary(r) {
+  let s = "";
+  if (r.points?.length) s += "【要点】\n" + r.points.map(p => "・" + p).join("\n") + "\n";
+  if (r.decisions?.length) s += "\n【決定事項】\n" + r.decisions.map(p => "・" + p).join("\n") + "\n";
+  if (r.todos?.length) s += "\n【やること】\n" + r.todos.map(p => "・" + p).join("\n") + "\n";
+  return s.trim();
+}
+
+// ── メモ詳細/結果 ──
+function openMemo(m) {
+  if (!m) return;
+  cur = { id: m.id, title: m.title, summary: m.summary || "", transcript: m.transcript || "", duration: m.duration, isNew: false };
+  showTrans = false;
+  renderMemo();
+  $("mModal").classList.add("open");
+}
+function renderMemo() {
+  const sumHtml = cur.summary
+    ? cur.summary.split(/\n(?=【)/).map(block => {
+        const mm = block.match(/^【([^】]+)】\n?([\s\S]*)$/);
+        if (!mm) return `<div class="trans">${esc(block)}</div>`;
+        const items = mm[2].split("\n").map(x => x.replace(/^・/, "").trim()).filter(Boolean);
+        return `<div class="block"><h4>${esc(mm[1])}</h4><ul>${items.map(i => `<li>${esc(i)}</li>`).join("")}</ul></div>`;
+      }).join("")
+    : `<div class="block"><div class="trans">${esc(cur.transcript).slice(0, 400) || "(要約なし)"}</div></div>`;
+  $("mBody").innerHTML = `
+    <div class="field-label">タイトル</div>
+    <input class="inp tin" id="fTitle" value="${attr(cur.title)}">
+    <div class="field-label">要約${cur.duration ? " ・ " + fmtDur(cur.duration) : ""}</div>
+    ${sumHtml}
+    ${cur.transcript ? `<div class="tog" id="togTrans">${showTrans ? "文字起こしを隠す" : "文字起こし（全文）を見る"}</div>
+      <div class="block" id="transBox" style="${showTrans ? "" : "display:none;"}"><div class="trans">${esc(cur.transcript)}</div></div>` : ""}
+    <div class="actions">
+      ${cur.isNew ? `<button class="pill" id="discardBtn" type="button">破棄</button>` : `<button class="pill danger" id="delBtn" type="button"><span class="icon">delete</span></button>`}
+      <button class="pill primary" id="saveBtn" type="button"><span class="icon">save</span> ${cur.isNew ? "保存" : "更新"}</button>
+    </div>`;
+  $("fTitle").addEventListener("input", e => cur.title = e.target.value);
+  $("togTrans")?.addEventListener("click", () => { showTrans = !showTrans; renderMemo(); });
+  $("saveBtn").addEventListener("click", saveMemo);
+  $("discardBtn")?.addEventListener("click", () => { $("mModal").classList.remove("open"); });
+  $("delBtn")?.addEventListener("click", delMemo);
+}
+async function saveMemo() {
+  const btn = $("saveBtn"); btn.disabled = true;
+  try {
+    if (cur.isNew) await api("POST", "/api/rec", { title: cur.title, summary: cur.summary, transcript: cur.transcript, duration: cur.duration });
+    else await api("PUT", `/api/rec/${cur.id}`, { title: cur.title });
+    toast("保存しました"); $("mModal").classList.remove("open"); await load();
+  } catch (e) { toast("保存失敗: " + e.message, true); btn.disabled = false; }
+}
+async function delMemo() {
+  if (!cur?.id || !confirm("このメモを削除しますか？")) return;
+  try { await api("DELETE", `/api/rec/${cur.id}`); toast("削除しました"); $("mModal").classList.remove("open"); await load(); }
+  catch (e) { toast("削除失敗: " + e.message, true); }
+}
+
+// モーダル閉じる
+$("mModal").addEventListener("click", e => { if (e.target === $("mModal")) $("mModal").classList.remove("open"); });
+(() => {
+  const grab = $("mGrab"), sheet = $("mSheet"); let sy = null, dy = 0;
+  grab.addEventListener("pointerdown", e => { sy = e.clientY; dy = 0; sheet.style.transition = "none"; });
+  grab.addEventListener("pointermove", e => { if (sy === null) return; dy = e.clientY - sy; if (dy > 0) sheet.style.transform = `translateY(${dy}px)`; });
+  const end = () => { if (sy === null) return; sy = null; sheet.style.transition = ""; if (dy > 100) $("mModal").classList.remove("open"); sheet.style.transform = ""; dy = 0; };
+  grab.addEventListener("pointerup", end); grab.addEventListener("pointercancel", end);
+})();
+
+$("recBtn").addEventListener("click", startRec);
+$("ovStop").addEventListener("click", () => stopRec(true));
+$("ovCancel").addEventListener("click", () => stopRec(false));
+
+initAuthBoot({ returnPath: "/rec/", onReady: async () => { $("app").style.display = ""; $("list").innerHTML = '<div class="list-empty">読み込み中…</div>'; await load(); } });
+</script>
+</body>
+</html>

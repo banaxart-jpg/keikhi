@@ -2976,6 +2976,19 @@ async function ensureSchema() {
       )
     `);
     await p.query("CREATE INDEX IF NOT EXISTS kounyu_items_arrival_idx ON kounyu_items (arrival_date)");
+    // 録音メモ (rec): 音声を Gemini で文字起こし+要約したメモ。全員共有 (音声自体は保存しない)。
+    await p.query(`
+      CREATE TABLE IF NOT EXISTS rec_memos (
+        id TEXT PRIMARY KEY,
+        title TEXT NOT NULL DEFAULT '',
+        summary TEXT NOT NULL DEFAULT '',
+        transcript TEXT NOT NULL DEFAULT '',
+        duration INT,
+        created_by TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `);
     // My SketchUp (sketchup): 共有した 3D モデルのメタ情報。実ファイルは GCS
     // (sketchup/<id>/<filename>)。閲覧はリンク + Google ログインで誰でも可。
     await p.query(`
@@ -10496,6 +10509,112 @@ app.delete("/api/kounyu/:id", async (req, res) => {
   if (!p) return res.status(503).json({ error: "DB not configured" });
   try {
     await p.query("DELETE FROM kounyu_items WHERE id = $1", [req.params.id]);
+    res.status(204).end();
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─────────────────────────────
+// 録音メモ (rec): 音声を Gemini で文字起こし+要約。全員共有。
+// ─────────────────────────────
+app.post("/api/rec/summarize", async (req, res) => {
+  try {
+    if (!genAI) return res.status(503).json({ error: "GEMINI_API_KEY not configured" });
+    const b = req.body || {};
+    const audio = b.audio || "";
+    const mimeType = b.mimeType || "audio/mp4";
+    if (!audio) return res.status(400).json({ error: "audio (base64) is required" });
+    // インライン上限(~20MB)を超える巨大音声は弾く
+    if (audio.length > 26 * 1024 * 1024) return res.status(413).json({ error: "録音が長すぎます（目安10分以内でお願いします）" });
+    const prompt = `あなたは打ち合わせ・現場メモの書記です。次の日本語音声を聞いて、メモにまとめてください。JSON のみを出力（前後に文章やコードフェンス不要）。
+形式:
+{
+  "title": "内容を表す短いタイトル(15字程度)",
+  "points": ["要点を箇条書き(3〜7個)"],
+  "decisions": ["決まったこと(無ければ空配列)"],
+  "todos": ["やること・宿題。担当や期限が分かれば添える(無ければ空配列)"],
+  "transcript": "聞き取れた内容の文字起こし(話し言葉のまま、簡潔に整形)"
+}
+聞き取りにくい箇所は無理に創作しない。雑談や無音が多ければその旨を title か points に反映。`;
+    const { result } = await callGeminiWithFallback([
+      { text: prompt },
+      { inlineData: { data: audio, mimeType } },
+    ], { primaryModel: "gemini-2.5-flash", maxOutputTokens: 8192, jsonMode: true });
+    const raw = parseLooseJson(result?.response?.text?.() || "") || {};
+    const arr = (x) => Array.isArray(x) ? x.map((s) => String(s)).filter(Boolean) : [];
+    res.json({
+      title: String(raw.title || "無題のメモ").slice(0, 60),
+      points: arr(raw.points),
+      decisions: arr(raw.decisions),
+      todos: arr(raw.todos),
+      transcript: String(raw.transcript || ""),
+    });
+  } catch (err) {
+    console.error("rec summarize error", err);
+    const msg = String(err?.message || err);
+    const isTransient = /\b(503|429|500)\b|UNAVAILABLE|overload/i.test(msg);
+    res.status(isTransient ? 503 : 500).json({ error: isTransient ? "Gemini が混雑中です。少し待って再実行してください" : msg });
+  }
+});
+
+app.get("/api/rec", async (req, res) => {
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  try {
+    const { rows } = await p.query(
+      `SELECT id, title, summary, transcript, duration, created_by AS "createdBy",
+              created_at AS "createdAt", updated_at AS "updatedAt"
+         FROM rec_memos ORDER BY created_at DESC LIMIT 500`
+    );
+    res.json(rows);
+  } catch (err) {
+    console.error("rec list error", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post("/api/rec", async (req, res) => {
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  try {
+    const b = req.body || {};
+    const id = b.id || (Date.now().toString(36) + Math.random().toString(36).slice(2, 8));
+    const { rows } = await p.query(
+      `INSERT INTO rec_memos (id, title, summary, transcript, duration, created_by)
+       VALUES ($1,$2,$3,$4,$5,$6) RETURNING id, created_at AS "createdAt"`,
+      [id, b.title || "無題のメモ", b.summary || "", b.transcript || "", b.duration != null ? Math.round(Number(b.duration)) : null, req.user?.email || ""]
+    );
+    res.status(201).json(rows[0]);
+  } catch (err) {
+    console.error("rec insert error", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.put("/api/rec/:id", async (req, res) => {
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  try {
+    const b = req.body || {};
+    const { rows } = await p.query(
+      `UPDATE rec_memos SET title = COALESCE($2, title), summary = COALESCE($3, summary),
+              transcript = COALESCE($4, transcript), updated_at = NOW()
+         WHERE id = $1 RETURNING id, updated_at AS "updatedAt"`,
+      [req.params.id, b.title ?? null, b.summary ?? null, b.transcript ?? null]
+    );
+    if (!rows.length) return res.status(404).json({ error: "not found" });
+    res.json(rows[0]);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete("/api/rec/:id", async (req, res) => {
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  try {
+    await p.query("DELETE FROM rec_memos WHERE id = $1", [req.params.id]);
     res.status(204).end();
   } catch (err) {
     res.status(500).json({ error: err.message });
