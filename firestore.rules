@@ -79,10 +79,6 @@ service cloud.firestore {
     match /fungi_progress/{uid} {
       allow read, write: if request.auth != null && request.auth.uid == uid;
     }
-    // 鮫学クイズ (shark) も fungi と同型 (個人成績、owner-only)。
-    match /shark_progress/{uid} {
-      allow read, write: if request.auth != null && request.auth.uid == uid;
-    }
 
     // それ以外は禁止 (明示)
     match /{document=**} {
