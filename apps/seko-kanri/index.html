@@ -185,6 +185,10 @@ body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); 
 .result-answer { font-size: 13px; margin-bottom: 8px; }
 .result-answer strong { color: var(--accent); }
 .result-explanation { font-size: 13px; color: var(--text); line-height: 1.7; }
+/* 記述の点数バー (0〜100、60 で合格ライン) */
+.score-bar { position: relative; height: 6px; border-radius: 3px; background: rgba(66,69,94,0.12); margin: 6px 0 10px; overflow: hidden; }
+.score-bar > div { height: 100%; border-radius: 3px; transition: width 0.4s ease; }
+.score-bar::after { content: ""; position: absolute; left: 60%; top: -2px; width: 2px; height: 10px; background: rgba(66,69,94,0.35); }
 .result-claude { margin-top: 10px; padding: 10px 12px; background: rgba(109,40,217,0.06); border-radius: 10px; font-size: 12px; line-height: 1.6; color: var(--text2); }
 .result-claude .lbl { font-size: 10px; font-weight: 800; color: var(--accent); margin-bottom: 4px; letter-spacing: 0.1em; text-transform: uppercase; }
 
@@ -1249,20 +1253,38 @@ function renderResult(r) {
     ? `<span class="icon" style="font-size:14px;vertical-align:-0.18em;">celebration</span> 結果を見る →`
     : (r.is_correct ? `次の問題へ → (あと${state.queue.length}問)` : `もう一度挑戦 → (あと${state.queue.length}問)`);
   const cls = r.is_correct ? "correct" : "incorrect";
-  const statusText = r.is_correct
-    ? `<span class="icon" style="vertical-align:-0.18em;">celebration</span> 正解！`
-    : `<span class="icon" style="vertical-align:-0.18em;">water_drop</span> おしい`;
+  const isFree = typeof r.score === "number";
+  const statusText = isFree
+    ? (r.is_correct
+        ? `<span class="icon" style="vertical-align:-0.18em;">celebration</span> ${r.score}点 合格ライン`
+        : `<span class="icon" style="vertical-align:-0.18em;">water_drop</span> ${r.score}点 (60点で合格)`)
+    : (r.is_correct
+        ? `<span class="icon" style="vertical-align:-0.18em;">celebration</span> 正解！`
+        : `<span class="icon" style="vertical-align:-0.18em;">water_drop</span> おしい`);
+  // 記述: 観点別フィードバック (良い点 / 足りない点 / 誤り) + 模範解答は常に表示
+  const fb = r.feedback || null;
+  const fbList = (items, icon, color) => (items && items.length)
+    ? items.map((t) => `<div style="display:flex;gap:6px;align-items:flex-start;font-size:12px;line-height:1.5;margin-top:4px;color:${color};"><span class="icon" style="font-size:14px;flex-shrink:0;margin-top:2px;">${icon}</span><span>${escapeHtml(t)}</span></div>`).join("")
+    : "";
+  const fbHtml = isFree && fb ? `
+      <div class="score-bar"><div style="width:${r.score}%;background:${r.is_correct ? "#2a8c3a" : "#d97706"};"></div></div>
+      ${fbList(fb.good, "check_circle", "#2a8c3a")}
+      ${fbList(fb.missing, "radio_button_unchecked", "var(--text)")}
+      ${fbList(fb.wrong, "cancel", "#b04040")}
+      ${fb.advice ? `<div style="font-size:12px;color:var(--text2);margin-top:8px;">${escapeHtml(fb.advice)}</div>` : ""}
+      ${fb.source === "keyword" ? `<div style="font-size:10px;color:var(--text3);margin-top:4px;">(AI 採点が使えずキーワード判定)</div>` : ""}` : "";
   ra.innerHTML = `
     <div class="result-card ${cls}">
       <div class="result-status ${cls}">${statusText}</div>
-      ${!r.is_correct ? `<div class="result-answer">正解: <strong>${escapeHtml(r.answer)}</strong></div>` : ""}
+      ${fbHtml}
+      ${(isFree || !r.is_correct) ? `<div class="result-answer">${isFree ? "模範解答" : "正解"}: <strong>${escapeHtml(r.answer)}</strong></div>` : ""}
       <div class="result-explanation">${escapeHtml(r.explanation)}</div>
       ${r.claude_example ? `
       <div class="result-claude">
         <div class="lbl">Claude Code への指示の例</div>
         ${escapeHtml(r.claude_example)}
       </div>` : ""}
-      ${r.ai_reason ? `<div style="font-size:10px;color:var(--text3);margin-top:8px;">AI 判定: ${escapeHtml(r.ai_reason)}</div>` : ""}
+      ${(!isFree && r.ai_reason) ? `<div style="font-size:10px;color:var(--text3);margin-top:8px;">AI 判定: ${escapeHtml(r.ai_reason)}</div>` : ""}
     </div>
     <button class="next-btn" onclick="nextQuestion()">${nextLabel}</button>`;
   // 結果カードまでスクロール

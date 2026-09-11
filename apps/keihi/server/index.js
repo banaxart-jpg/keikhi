@@ -3079,6 +3079,9 @@ async function ensureSchema() {
       )
     `);
     await p.query("CREATE INDEX IF NOT EXISTS seko_p_user_idx ON seko_progress (user_email, answered_at DESC)");
+    // 記述問題のルーブリック採点結果 (0〜100 点 + 観点別フィードバック)。択一は NULL
+    await p.query("ALTER TABLE seko_progress ADD COLUMN IF NOT EXISTS ai_score INTEGER");
+    await p.query("ALTER TABLE seko_progress ADD COLUMN IF NOT EXISTS ai_feedback JSONB");
     await p.query(`
       CREATE TABLE IF NOT EXISTS seko_users (
         user_email      TEXT PRIMARY KEY,
@@ -8145,6 +8148,87 @@ JSON 配列でだけ返す (前置きや説明禁止)。配列の長さは ${ite
   return out;
 }
 
+// 記述回答のルーブリック採点。Gemini に観点別で 0〜100 点を付けさせる。
+// 模範解答は「参考」扱い (違う観点でも施工上正しければ加点)。一般論だけの回答は低得点。
+// Gemini が使えない時はキーワード一致でざっくり点数化 (source: "keyword") して落とさない。
+async function sekoGradeFreeAnswer(q, ua) {
+  const norm = (s) => String(s || "").trim().toLowerCase()
+    .replace(/[!-~]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xFEE0))
+    .replace(/\s+/g, "").replace(/[、。,.()()「」『』:;・]/g, "")
+    .replace(/ヴァ/g, "バ").replace(/ヴィ/g, "ビ").replace(/ヴェ/g, "ベ").replace(/ヴォ/g, "ボ").replace(/ヴュ/g, "ビュ").replace(/ヴ/g, "ブ");
+  const keywords = Array.isArray(q.keywords) ? q.keywords.filter(Boolean) : [];
+  if (!ua) return { score: 0, feedback: { good: [], missing: ["回答が空です"], wrong: [], advice: "まず知っている範囲で書いてみる", source: "empty" } };
+  if (norm(ua) === norm(q.answer)) {
+    return { score: 100, feedback: { good: ["模範解答と一致"], missing: [], wrong: [], advice: "", source: "exact" } };
+  }
+  // ── Gemini ルーブリック採点 ──
+  if (genAI) {
+    try {
+      const prompt = `あなたは 2級建築施工管理技術検定 第二次検定の採点者です。受験者の記述回答を採点してください。
+
+【問題】
+${q.question}
+
+【模範解答 (参考。これと違う観点でも施工上正しければ同等に評価する)】
+${q.answer}
+
+【採点の観点 (参考キーワード)】
+${keywords.length ? keywords.join(" / ") : "(なし)"}
+
+【受験者の回答】
+${ua}
+
+採点基準 (100 点満点、整数):
+- 用語の説明を求める問題: 「説明の正確さ」50 点 + 「施工上の留意点の具体性」50 点。片方しか書いていなければその分だけ
+- 留意点・対策・理由などを複数求める問題: 要求された個数で均等配分。各項目は「具体的で施工上正しい」なら満点、一般論なら半分
+- 「安全に注意する」「丁寧に施工する」「基準を守る」のような一般論・抽象語だけの記述は 0〜20 点
+- 技術的に誤った記述 (数値・手順・用語の誤用) はその項目 0 点。明らかな誤解は全体から減点
+- 模範解答と言い回しが違っても意味が同じなら満点。模範解答に無い別の正しい観点も加点
+- キーワードが含まれていても文として意味が通っていなければ点を与えない (単語の羅列は低得点)
+- 誤字・表記ゆれ・敬体常体は減点しない
+
+JSON でだけ返す (前置きや説明禁止):
+{"score": 0〜100の整数, "good": ["評価できる点 (最大3つ、各40字以内)"], "missing": ["足りない点 (最大3つ、各40字以内)"], "wrong": ["誤っている点 (あれば、各40字以内)"], "advice": "次に書くときの一言 (40字以内)"}`;
+      const { result } = await callGeminiWithFallback(prompt, {
+        primaryModel: "gemini-2.5-flash",
+        maxOutputTokens: 800,
+        jsonMode: true,
+      });
+      const text = (result.response.text() || "").trim();
+      const m = text.match(/\{[\s\S]*\}/);
+      if (m) {
+        const j = JSON.parse(m[0]);
+        const clip = (arr) => (Array.isArray(arr) ? arr : []).map((s) => String(s).slice(0, 80)).filter(Boolean).slice(0, 4);
+        let score = Number(j.score);
+        if (!Number.isFinite(score)) throw new Error("score が数値でない");
+        score = Math.max(0, Math.min(100, Math.round(score)));
+        return {
+          score,
+          feedback: { good: clip(j.good), missing: clip(j.missing), wrong: clip(j.wrong), advice: String(j.advice || "").slice(0, 80), source: "ai" },
+        };
+      }
+      throw new Error("JSON が取れない: " + text.slice(0, 80));
+    } catch (e) {
+      console.warn("[seko] ルーブリック採点失敗 (キーワード判定にフォールバック):", e.message);
+    }
+  }
+  // ── フォールバック: キーワード一致率で点数化 ──
+  const nu = norm(ua);
+  const hit = keywords.filter((k) => norm(k) && nu.includes(norm(k)));
+  const miss = keywords.filter((k) => !hit.includes(k));
+  const score = keywords.length ? Math.round((hit.length / keywords.length) * 100) : 0;
+  return {
+    score,
+    feedback: {
+      good: hit.length ? [`キーワード一致: ${hit.join("、")}`] : [],
+      missing: miss.length ? [`触れていないキーワード: ${miss.join("、")}`] : [],
+      wrong: [],
+      advice: "AI 採点が使えなかったためキーワード判定です",
+      source: "keyword",
+    },
+  };
+}
+
 // ───── seko endpoints ─────
 
 app.get("/api/seko/genres", (req, res) => {
@@ -8541,9 +8625,10 @@ app.post("/api/seko/answer", async (req, res) => {
     if (!qRows.length) return res.status(404).json({ error: "question not found" });
     const q = qRows[0];
     const ua = String(user_answer || "").trim();
-
     let isCorrect = false;
     let aiReason = null;
+    let aiScore = null;      // 記述のみ 0〜100
+    let aiFeedback = null;   // 記述のみ { good[], missing[], wrong[], advice, source }
     if (q.type === "choice") {
       isCorrect = ua === q.answer;
       if (!isCorrect && /^[A-D]$/i.test(String(q.answer || "").trim())) {
@@ -8554,70 +8639,24 @@ app.post("/api/seko/answer", async (req, res) => {
         }
       }
     } else {
-      // 正規化: 全角空白除去 + 小文字化 + カタカナ揺れ吸収 (ヴァ→バ, ヴィ→ビ, ヴ→ブ等) + 半角化
-      const norm = (s) => {
-        let t = String(s || "").trim().toLowerCase();
-        // 全角英数→半角
-        t = t.replace(/[!-~]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xFEE0));
-        // 空白除去
-        t = t.replace(/\s+/g, "");
-        // 句読点・記号除去
-        t = t.replace(/[、。,.()()「」『』:;・]/g, "");
-        // カタカナのヴ揺れ: ヴァヴィヴェヴォヴュ → バビベボビュ、ヴ→ブ
-        t = t.replace(/ヴァ/g, "バ").replace(/ヴィ/g, "ビ").replace(/ヴェ/g, "ベ").replace(/ヴォ/g, "ボ").replace(/ヴュ/g, "ビュ").replace(/ヴ/g, "ブ");
-        return t;
-      };
-      const normUa = norm(ua);
-      if (normUa === norm(q.answer)) {
-        isCorrect = true;
-      } else if (Array.isArray(q.keywords) && q.keywords.length) {
-        // キーワード hits: 2 個以上 or 25% 以上含めば正解扱い (部分得点で合格)。
-        let hit = 0;
-        for (const k of q.keywords) {
-          const nk = norm(k);
-          if (nk && normUa.includes(nk)) hit++;
-        }
-        const threshold = Math.max(2, Math.ceil(q.keywords.length * 0.25));
-        if (hit >= threshold) isCorrect = true;
-      }
-      if (!isCorrect && genAI && ua) {
-        try {
-          const judgePrompt = `次のユーザー回答が、正解と意味的に同じか判定してください。
-建築施工管理の文脈で、用語のゆらぎ・言い換えは正解として認めます。
-
-問題: ${q.question}
-正解: ${q.answer}
-正解として認める同義語: ${JSON.stringify(q.keywords || [])}
-ユーザー回答: ${ua}
-
-JSON でだけ返す (前置きや説明禁止):
-{"correct": true|false, "reason": "1文の理由"}`;
-          const { result } = await callGeminiWithFallback(judgePrompt, {
-            primaryModel: "gemini-2.5-flash",
-            maxOutputTokens: 500,
-          });
-          const text = (result.response.text() || "").trim();
-          const m = text.match(/\{[\s\S]*\}/);
-          if (m) {
-            const j = JSON.parse(m[0]);
-            isCorrect = !!j.correct;
-            aiReason = j.reason || null;
-          }
-        } catch (e) {
-          console.warn("[seko] AI 判定失敗:", e.message);
-        }
-      }
+      // 記述: ルーブリック採点 (0〜100 点) → 60 点以上で正解扱い (本試験の合格基準と同じ)。
+      // 旧ロジック (キーワード2個で正解 / AI に「意味が同じか」二値判定) は
+      // 単語を並べただけで通る・別観点の正答が落ちる、で精度が悪かったので置き換え。
+      const g = await sekoGradeFreeAnswer(q, ua);
+      aiScore = g.score;
+      aiFeedback = g.feedback;
+      isCorrect = g.score >= 60;
+      aiReason = g.feedback?.advice || null;
     }
-
     const { rows: attemptRows } = await p.query(
       `SELECT count(*)::int AS n FROM seko_progress WHERE user_email=$1 AND question_id=$2`,
       [req.user.email, question_id]
     );
     const attempts = (attemptRows[0]?.n || 0) + 1;
     await p.query(
-      `INSERT INTO seko_progress (user_email, question_id, is_correct, user_answer, attempts)
-       VALUES ($1,$2,$3,$4,$5)`,
-      [req.user.email, question_id, isCorrect, ua, attempts]
+      `INSERT INTO seko_progress (user_email, question_id, is_correct, user_answer, attempts, ai_score, ai_feedback)
+       VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+      [req.user.email, question_id, isCorrect, ua, attempts, aiScore, aiFeedback ? JSON.stringify(aiFeedback) : null]
     );
     await p.query(
       `UPDATE seko_users
@@ -8635,6 +8674,8 @@ JSON でだけ返す (前置きや説明禁止):
       explanation: q.explanation,
       claude_example: q.claude_example,
       ai_reason: aiReason,
+      score: aiScore,
+      feedback: aiFeedback,
     });
   } catch (err) {
     console.error("seko answer", err);
