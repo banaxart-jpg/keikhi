@@ -8236,7 +8236,7 @@ JSON でだけ返す (前置きや説明禁止):
           primaryModel: opts.model || "gemini-2.5-flash",
           maxOutputTokens: 2500,
           jsonMode: true,
-          temperature: typeof opts.temperature === "number" ? opts.temperature : 0.2,
+          temperature: typeof opts.temperature === "number" ? opts.temperature : 0, // 同じ回答は同じ点 (実測でブレ 0)
           thinkingBudget: typeof opts.thinking === "number" ? opts.thinking : 0,
         });
         text = (result.response.text() || "").trim();
