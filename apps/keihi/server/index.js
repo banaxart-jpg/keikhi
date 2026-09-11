@@ -2173,6 +2173,36 @@ app.all("/api/photos/mcp/:token", (req, res) => {
   return sheetsMcpHandler(req, res);
 });
 
+// ═══════════════════ seko 記述採点のデバッグ API ═══════════════════
+// 採点精度をチューニングする用。認証外だが推測不能トークン。DB には書かない。
+// POST { cases: [{ id, question, answer, keywords, user_answer }], rubric?: string, model?: string }
+// → { results: [{ id, score, feedback, ms }] }。rubric を渡すと採点基準を差し替えて A/B できる。
+const SEKO_DEBUG_TOKEN = (process.env.SEKO_DEBUG_TOKEN || "kx9m2seko7vqt4wp8zh").trim();
+app.post("/api/seko/debug-grade/:token", async (req, res) => {
+  if (req.params.token !== SEKO_DEBUG_TOKEN) return res.status(403).json({ error: "forbidden" });
+  const cases = Array.isArray(req.body?.cases) ? req.body.cases.slice(0, 30) : [];
+  if (!cases.length) return res.status(400).json({ error: "cases required" });
+  const { rubric, model } = req.body || {};
+  const results = new Array(cases.length);
+  let i = 0;
+  // 4 並列で回す (1 ケース 2〜4 秒)
+  await Promise.all(Array.from({ length: 4 }, async () => {
+    while (i < cases.length) {
+      const idx = i++;
+      const c = cases[idx];
+      const q = { question: String(c.question || ""), answer: String(c.answer || ""), keywords: Array.isArray(c.keywords) ? c.keywords : [] };
+      const t0 = Date.now();
+      try {
+        const g = await sekoGradeFreeAnswer(q, String(c.user_answer || ""), { rubric, model });
+        results[idx] = { id: c.id ?? idx, ...g, ms: Date.now() - t0 };
+      } catch (e) {
+        results[idx] = { id: c.id ?? idx, error: e.message, ms: Date.now() - t0 };
+      }
+    }
+  }));
+  res.json({ results, rubric_used: (rubric && String(rubric).trim()) || SEKO_GRADE_RUBRIC, model: model || "gemini-2.5-flash" });
+});
+
 // ギャラリー (置き場アプリ /auto-drama/) 用の一覧 API。inspect と同じ read-only・認証なし。
 // pending がある時はここで Seedance をポーリングするので、アプリを開くだけで進捗が進む
 app.get("/api/drama/gallery", async (req, res) => {
@@ -8151,7 +8181,16 @@ JSON 配列でだけ返す (前置きや説明禁止)。配列の長さは ${ite
 // 記述回答のルーブリック採点。Gemini に観点別で 0〜100 点を付けさせる。
 // 模範解答は「参考」扱い (違う観点でも施工上正しければ加点)。一般論だけの回答は低得点。
 // Gemini が使えない時はキーワード一致でざっくり点数化 (source: "keyword") して落とさない。
-async function sekoGradeFreeAnswer(q, ua) {
+// 採点基準 (デバッグ API から差し替えて A/B できるよう定数化)
+const SEKO_GRADE_RUBRIC = `採点基準 (100 点満点、整数):
+- 用語の説明を求める問題: 「説明の正確さ」50 点 + 「施工上の留意点の具体性」50 点。片方しか書いていなければその分だけ
+- 留意点・対策・理由などを複数求める問題: 要求された個数で均等配分。各項目は「具体的で施工上正しい」なら満点、一般論なら半分
+- 「安全に注意する」「丁寧に施工する」「基準を守る」のような一般論・抽象語だけの記述は 0〜20 点
+- 技術的に誤った記述 (数値・手順・用語の誤用) はその項目 0 点。明らかな誤解は全体から減点
+- 模範解答と言い回しが違っても意味が同じなら満点。模範解答に無い別の正しい観点も加点
+- キーワードが含まれていても文として意味が通っていなければ点を与えない (単語の羅列は低得点)
+- 誤字・表記ゆれ・敬体常体は減点しない`;
+async function sekoGradeFreeAnswer(q, ua, opts = {}) {
   const norm = (s) => String(s || "").trim().toLowerCase()
     .replace(/[!-~]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xFEE0))
     .replace(/\s+/g, "").replace(/[、。,.()()「」『』:;・]/g, "")
@@ -8164,6 +8203,7 @@ async function sekoGradeFreeAnswer(q, ua) {
   // ── Gemini ルーブリック採点 ──
   if (genAI) {
     try {
+      const rubric = (opts.rubric && String(opts.rubric).trim()) || SEKO_GRADE_RUBRIC;
       const prompt = `あなたは 2級建築施工管理技術検定 第二次検定の採点者です。受験者の記述回答を採点してください。
 
 【問題】
@@ -8178,19 +8218,12 @@ ${keywords.length ? keywords.join(" / ") : "(なし)"}
 【受験者の回答】
 ${ua}
 
-採点基準 (100 点満点、整数):
-- 用語の説明を求める問題: 「説明の正確さ」50 点 + 「施工上の留意点の具体性」50 点。片方しか書いていなければその分だけ
-- 留意点・対策・理由などを複数求める問題: 要求された個数で均等配分。各項目は「具体的で施工上正しい」なら満点、一般論なら半分
-- 「安全に注意する」「丁寧に施工する」「基準を守る」のような一般論・抽象語だけの記述は 0〜20 点
-- 技術的に誤った記述 (数値・手順・用語の誤用) はその項目 0 点。明らかな誤解は全体から減点
-- 模範解答と言い回しが違っても意味が同じなら満点。模範解答に無い別の正しい観点も加点
-- キーワードが含まれていても文として意味が通っていなければ点を与えない (単語の羅列は低得点)
-- 誤字・表記ゆれ・敬体常体は減点しない
+${rubric}
 
 JSON でだけ返す (前置きや説明禁止):
 {"score": 0〜100の整数, "good": ["評価できる点 (最大3つ、各40字以内)"], "missing": ["足りない点 (最大3つ、各40字以内)"], "wrong": ["誤っている点 (あれば、各40字以内)"], "advice": "次に書くときの一言 (40字以内)"}`;
       const { result } = await callGeminiWithFallback(prompt, {
-        primaryModel: "gemini-2.5-flash",
+        primaryModel: opts.model || "gemini-2.5-flash",
         maxOutputTokens: 800,
         jsonMode: true,
       });
