@@ -2182,18 +2182,22 @@ app.post("/api/seko/debug-grade/:token", async (req, res) => {
   if (req.params.token !== SEKO_DEBUG_TOKEN) return res.status(403).json({ error: "forbidden" });
   const cases = Array.isArray(req.body?.cases) ? req.body.cases.slice(0, 30) : [];
   if (!cases.length) return res.status(400).json({ error: "cases required" });
-  const { rubric, model } = req.body || {};
+  const { rubric, model, thinking, temperature } = req.body || {};
+  const conc = Math.max(1, Math.min(4, Number(req.body?.concurrency) || 2));
   const results = new Array(cases.length);
   let i = 0;
-  // 4 並列で回す (1 ケース 2〜4 秒)
-  await Promise.all(Array.from({ length: 4 }, async () => {
+  await Promise.all(Array.from({ length: conc }, async () => {
     while (i < cases.length) {
       const idx = i++;
       const c = cases[idx];
       const q = { question: String(c.question || ""), answer: String(c.answer || ""), keywords: Array.isArray(c.keywords) ? c.keywords : [] };
       const t0 = Date.now();
       try {
-        const g = await sekoGradeFreeAnswer(q, String(c.user_answer || ""), { rubric, model });
+        const g = await sekoGradeFreeAnswer(q, String(c.user_answer || ""), {
+          rubric, model, debug: true,
+          ...(typeof thinking === "number" ? { thinking } : {}),
+          ...(typeof temperature === "number" ? { temperature } : {}),
+        });
         results[idx] = { id: c.id ?? idx, ...g, ms: Date.now() - t0 };
       } catch (e) {
         results[idx] = { id: c.id ?? idx, error: e.message, ms: Date.now() - t0 };
@@ -3643,7 +3647,7 @@ function parseLooseJson(text, { logErr = true } = {}) {
   return null;
 }
 
-async function callGeminiWithFallback(content, { primaryModel, maxOutputTokens, useGoogleSearch, jsonMode } = {}) {
+async function callGeminiWithFallback(content, { primaryModel, maxOutputTokens, useGoogleSearch, jsonMode, temperature, thinkingBudget } = {}) {
   const fallbackChain = [
     ...new Set([primaryModel || GEMINI_MODEL, "gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-flash-latest"]),
   ];
@@ -3654,6 +3658,9 @@ async function callGeminiWithFallback(content, { primaryModel, maxOutputTokens, 
         const generationConfig = {};
         if (maxOutputTokens) generationConfig.maxOutputTokens = maxOutputTokens;
         if (jsonMode) generationConfig.responseMimeType = "application/json";
+        if (typeof temperature === "number") generationConfig.temperature = temperature;
+        // 2.5 系は既定で思考トークンを使い maxOutputTokens を食うので、短い JSON 応答では予算を明示する
+        if (typeof thinkingBudget === "number") generationConfig.thinkingConfig = { thinkingBudget };
         const m = genAI.getGenerativeModel({
           model: name,
           ...(Object.keys(generationConfig).length ? { generationConfig } : {}),
@@ -8191,6 +8198,7 @@ const SEKO_GRADE_RUBRIC = `採点基準 (100 点満点、整数):
 - キーワードが含まれていても文として意味が通っていなければ点を与えない (単語の羅列は低得点)
 - 誤字・表記ゆれ・敬体常体は減点しない`;
 async function sekoGradeFreeAnswer(q, ua, opts = {}) {
+  let lastGradeError = null, lastGradeRaw = "";
   const norm = (s) => String(s || "").trim().toLowerCase()
     .replace(/[!-~]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xFEE0))
     .replace(/\s+/g, "").replace(/[、。,.()()「」『』:;・]/g, "")
@@ -8202,7 +8210,7 @@ async function sekoGradeFreeAnswer(q, ua, opts = {}) {
   }
   // ── Gemini ルーブリック採点 ──
   if (genAI) {
-    try {
+    {
       const rubric = (opts.rubric && String(opts.rubric).trim()) || SEKO_GRADE_RUBRIC;
       const prompt = `あなたは 2級建築施工管理技術検定 第二次検定の採点者です。受験者の記述回答を採点してください。
 
@@ -8222,27 +8230,33 @@ ${rubric}
 
 JSON でだけ返す (前置きや説明禁止):
 {"score": 0〜100の整数, "good": ["評価できる点 (最大3つ、各40字以内)"], "missing": ["足りない点 (最大3つ、各40字以内)"], "wrong": ["誤っている点 (あれば、各40字以内)"], "advice": "次に書くときの一言 (40字以内)"}`;
-      const { result } = await callGeminiWithFallback(prompt, {
-        primaryModel: opts.model || "gemini-2.5-flash",
-        maxOutputTokens: 800,
-        jsonMode: true,
-      });
-      const text = (result.response.text() || "").trim();
-      const m = text.match(/\{[\s\S]*\}/);
-      if (m) {
+      let text = "";
+      try {
+        const { result } = await callGeminiWithFallback(prompt, {
+          primaryModel: opts.model || "gemini-2.5-flash",
+          maxOutputTokens: 2500,
+          jsonMode: true,
+          temperature: typeof opts.temperature === "number" ? opts.temperature : 0.2,
+          thinkingBudget: typeof opts.thinking === "number" ? opts.thinking : 0,
+        });
+        text = (result.response.text() || "").trim();
+        const m = text.match(/\{[\s\S]*\}/);
+        if (!m) throw new Error("JSON が取れない: " + text.slice(0, 80));
         const j = JSON.parse(m[0]);
         const clip = (arr) => (Array.isArray(arr) ? arr : []).map((s) => String(s).slice(0, 80)).filter(Boolean).slice(0, 4);
         let score = Number(j.score);
-        if (!Number.isFinite(score)) throw new Error("score が数値でない");
+        if (!Number.isFinite(score)) throw new Error("score が数値でない: " + JSON.stringify(j.score));
         score = Math.max(0, Math.min(100, Math.round(score)));
-        return {
+        const out = {
           score,
           feedback: { good: clip(j.good), missing: clip(j.missing), wrong: clip(j.wrong), advice: String(j.advice || "").slice(0, 80), source: "ai" },
         };
+        if (opts.debug) out.raw = text.slice(0, 1500);
+        return out;
+      } catch (e) {
+        console.warn("[seko] ルーブリック採点失敗 (キーワード判定にフォールバック):", e.message);
+        if (opts.debug) { lastGradeError = e.message; lastGradeRaw = text.slice(0, 1500); }
       }
-      throw new Error("JSON が取れない: " + text.slice(0, 80));
-    } catch (e) {
-      console.warn("[seko] ルーブリック採点失敗 (キーワード判定にフォールバック):", e.message);
     }
   }
   // ── フォールバック: キーワード一致率で点数化 ──
@@ -8259,6 +8273,7 @@ JSON でだけ返す (前置きや説明禁止):
       advice: "AI 採点が使えなかったためキーワード判定です",
       source: "keyword",
     },
+    ...(opts.debug ? { error: lastGradeError, raw: lastGradeRaw } : {}),
   };
 }
 
