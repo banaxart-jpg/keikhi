@@ -3133,6 +3133,10 @@ async function ensureSchema() {
     `);
     // 既存テーブルに shubetsu カラム追加 (ALTER ... IF NOT EXISTS は PG 9.6+)
     await p.query(`ALTER TABLE seko_users ADD COLUMN IF NOT EXISTS shubetsu TEXT`);
+    // XP (絶対に減らない累積値)。level はここから算出する
+    await p.query(`ALTER TABLE seko_users ADD COLUMN IF NOT EXISTS xp BIGINT NOT NULL DEFAULT 0`);
+    // XP 導入前のユーザーは過去の正解数から引き継ぐ (1 正解 = 10 XP)。level が 1 に戻らないように。
+    await p.query(`UPDATE seko_users SET xp = total_correct * 10 WHERE xp = 0 AND total_correct > 0`);
     // seko_questions に image_url カラム追加 (図解が要る問題で AI 生成 SVG を data URI で保存)
     await p.query(`ALTER TABLE seko_questions ADD COLUMN IF NOT EXISTS image_url TEXT`);
 
@@ -8323,6 +8327,37 @@ async function buildSekoProgress(p, email, examTarget, shubetsu) {
   return groups;
 }
 
+// ───── XP とレベル ─────
+// レベル n に到達するのに必要な累積 XP = 10*(n-1)*(n+8)。lv2=100, lv3=220, lv5=520, lv10=1620。
+// 1 問 10〜25 XP なので序盤はサクサク上がり、後半はじわじわ伸びる。XP は絶対に減らない。
+const sekoXpForLevel = (n) => (n <= 1 ? 0 : 10 * (n - 1) * (n + 8));
+function sekoLevelFromXp(xp) {
+  let lv = 1;
+  while (lv < 200 && xp >= sekoXpForLevel(lv + 1)) lv++;
+  return lv;
+}
+// ホームやセッションの XP バー用: 今のレベル内の進捗
+function sekoXpProgress(xp) {
+  const x = Math.max(0, Number(xp) || 0);
+  const level = sekoLevelFromXp(x);
+  const base = sekoXpForLevel(level);
+  const next = sekoXpForLevel(level + 1);
+  return { xp: x, level, levelXpBase: base, nextLevelXp: next, intoLevel: x - base, needForNext: next - base };
+}
+// 1 回答分の XP。択一は正解 10 / 不正解 1、記述は点数比例 (100点=10, 60点=6, 0点でも1)。
+// 初めて正解した問題は +5、コンボは 2 連続目から ×1.1 ずつ最大 ×2.0、8% でクリティカル ×2。
+function sekoAnswerXp({ isCorrect, type, score, combo, firstClear }) {
+  const base = type === "choice"
+    ? (isCorrect ? 10 : 1)
+    : Math.max(1, Math.round((Number(score) || 0) / 10));
+  const bonus = isCorrect && firstClear ? 5 : 0;
+  const streakLen = isCorrect ? Math.max(1, Math.min(11, Number(combo) || 1)) : 1;
+  const comboMult = 1 + 0.1 * (streakLen - 1);
+  const critical = isCorrect && Math.random() < 0.08;
+  const gain = Math.max(1, Math.round((base + bonus) * comboMult * (critical ? 2 : 1)));
+  return { gain, comboMult: Math.round(comboMult * 100) / 100, critical, firstClear: !!(isCorrect && firstClear) };
+}
+
 async function computeSekoStreak(p, email) {
   const SEKO_STREAK_DAILY_MIN = 5;
   // 直近 60 日で何日連続で 1 問以上正解しているか + 今日の活動状況
@@ -8395,8 +8430,15 @@ app.get("/api/seko/me", async (req, res) => {
         LIMIT 60`,
       [req.user.email]
     );
+    const xpProg = sekoXpProgress(user.xp);
+    if (xpProg.level !== Number(user.level)) {
+      // XP から出したレベルと DB がズレてたら (旧仕様の ±1 調整の残り) 揃える
+      await p.query(`UPDATE seko_users SET level=$1 WHERE user_email=$2`, [xpProg.level, req.user.email]);
+      user.level = xpProg.level;
+    }
     res.json({
       user,
+      xp: xpProg,
       streak,
       groups,
       pool,
@@ -8701,18 +8743,35 @@ app.post("/api/seko/answer", async (req, res) => {
       [req.user.email, question_id]
     );
     const attempts = (attemptRows[0]?.n || 0) + 1;
+    // この問題を過去に正解していたか (初正解ボーナス判定)
+    const { rows: priorRows } = await p.query(
+      `SELECT 1 FROM seko_progress WHERE user_email=$1 AND question_id=$2 AND is_correct LIMIT 1`,
+      [req.user.email, question_id]
+    );
+    const firstClear = priorRows.length === 0;
     await p.query(
       `INSERT INTO seko_progress (user_email, question_id, is_correct, user_answer, attempts, ai_score, ai_feedback)
        VALUES ($1,$2,$3,$4,$5,$6,$7)`,
       [req.user.email, question_id, isCorrect, ua, attempts, aiScore, aiFeedback ? JSON.stringify(aiFeedback) : null]
     );
-    await p.query(
+    // XP 付与 → level を XP から再計算 (level は下がらない)
+    const xpRes = sekoAnswerXp({
+      isCorrect, type: q.type, score: aiScore, combo: Number(req.body?.combo) || 1, firstClear,
+    });
+    const { rows: userRows } = await p.query(
       `UPDATE seko_users
           SET total_correct = total_correct + $1, total_answers = total_answers + 1,
-              last_session_at = now(), updated_at = now()
-        WHERE user_email = $2`,
-      [isCorrect ? 1 : 0, req.user.email]
+              xp = xp + $2, last_session_at = now(), updated_at = now()
+        WHERE user_email = $3
+      RETURNING xp, level`,
+      [isCorrect ? 1 : 0, xpRes.gain, req.user.email]
     );
+    const newXp = Number(userRows[0]?.xp || xpRes.gain);
+    const oldLevel = Number(userRows[0]?.level || 1);
+    const prog = sekoXpProgress(newXp);
+    if (prog.level !== oldLevel) {
+      await p.query(`UPDATE seko_users SET level=$1 WHERE user_email=$2`, [prog.level, req.user.email]);
+    }
 
     res.json({
       is_correct: isCorrect,
@@ -8724,6 +8783,16 @@ app.post("/api/seko/answer", async (req, res) => {
       ai_reason: aiReason,
       score: aiScore,
       feedback: aiFeedback,
+      xp_gain: xpRes.gain,
+      xp_total: prog.xp,
+      combo_mult: xpRes.comboMult,
+      critical: xpRes.critical,
+      first_clear: xpRes.firstClear,
+      level: prog.level,
+      level_up: prog.level > oldLevel,
+      old_level: oldLevel,
+      level_xp_base: prog.levelXpBase,
+      next_level_xp: prog.nextLevelXp,
     });
   } catch (err) {
     console.error("seko answer", err);
@@ -8735,25 +8804,36 @@ app.post("/api/seko/sessions/end", async (req, res) => {
   const p = getPool();
   if (!p) return res.json({ ok: true });
   try {
-    // 直近 10 回答の正解率で簡易レベル調整 (≥70% → +1、<40% → -1、min 1)
-    const { rows } = await p.query(
-      `SELECT is_correct FROM seko_progress WHERE user_email = $1
-        ORDER BY answered_at DESC LIMIT 10`,
+    // level は answer 時に XP から更新済み。ここでは締めの集計と演出用データだけ返す。
+    const user = await ensureSekoUser(p, req.user.email);
+    const streak = await computeSekoStreak(p, req.user.email);
+    const prog = sekoXpProgress(user.xp);
+    const b = req.body || {};
+    const sessionCorrect = Math.max(0, Number(b.correct) || 0);
+    const sessionXp = Math.max(0, Number(b.xp) || 0);
+    const maxCombo = Math.max(0, Number(b.maxCombo) || 0);
+    const levelUps = Math.max(0, Number(b.levelUps) || 0);
+    // 今日の正解数が、このセッション中に日課ライン (daily_min) を跨いだか
+    const before = streak.today_correct - sessionCorrect;
+    const dailyGoalJustReached = streak.today_correct >= streak.daily_min && before < streak.daily_min;
+    const { rows: uniqRows } = await p.query(
+      `SELECT COUNT(DISTINCT question_id)::int AS n FROM seko_progress
+        WHERE user_email = $1 AND is_correct`,
       [req.user.email]
     );
-    if (rows.length >= 5) {
-      const acc = rows.filter((r) => r.is_correct).length / rows.length;
-      let delta = 0;
-      if (acc >= 0.7) delta = 1;
-      else if (acc < 0.4) delta = -1;
-      if (delta !== 0) {
-        await p.query(
-          `UPDATE seko_users SET level = GREATEST(1, level + $1), updated_at=now() WHERE user_email = $2`,
-          [delta, req.user.email]
-        );
-      }
-    }
-    res.json({ ok: true });
+    const totalUniqCorrect = uniqRows[0]?.n || 0;
+    const ICON = (n, c) => `<span class="icon" style="vertical-align:-0.18em;color:${c};">${n}</span>`;
+    let message;
+    if (levelUps > 0) message = `${ICON("military_tech", "#f59e0b")} レベル ${prog.level} に到達`;
+    else if (dailyGoalJustReached) message = `${ICON("local_fire_department", "#f59e0b")} 今日の日課クリア 連続 ${streak.streak} 日`;
+    else if (maxCombo >= 5) message = `${ICON("bolt", "#f59e0b")} ${maxCombo} 連続正解`;
+    else if (!streak.today_active) message = `あと ${Math.max(1, streak.daily_min - streak.today_correct)} 問で今日の日課クリア`;
+    else message = `+${sessionXp} XP 獲得`;
+    res.json({
+      ok: true, level: prog.level, xp: prog, streak,
+      dailyGoalJustReached, streakDays: streak.streak, totalUniqCorrect,
+      sessionXp, maxCombo, levelUps, message,
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

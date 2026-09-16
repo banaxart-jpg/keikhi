@@ -152,6 +152,56 @@ body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); 
 @keyframes btn-shake { 0%, 100% { transform: translateX(0); } 25% { transform: translateX(-8px); } 75% { transform: translateX(8px); } }
 
 /* 派手目フィードバック演出 */
+/* ───── XP バー / コンボ / 日課リング (報酬まわり) ───── */
+.xp-row { display: flex; align-items: center; gap: 8px; margin-top: 14px; }
+.xp-lv { font-size: 10px; font-weight: 800; color: var(--text2); letter-spacing: 0.1em; white-space: nowrap; }
+.xp-bar { flex: 1; height: 10px; border-radius: 5px; background: rgba(154,160,184,0.22); box-shadow: inset 2px 2px 5px var(--sd); overflow: hidden; }
+.xp-bar > div { height: 100%; border-radius: 5px; background: linear-gradient(90deg, #8b5cf6, #6d28d9); transition: width 0.5s cubic-bezier(0.2,0.8,0.3,1); }
+.xp-bar.burst > div { background: linear-gradient(90deg, #fbbf24, #f59e0b); }
+.xp-rest { font-size: 10px; font-weight: 700; color: var(--text3); white-space: nowrap; font-variant-numeric: tabular-nums; }
+
+/* 今日の日課リング */
+.daily-row { display: flex; align-items: center; gap: 14px; margin-top: 16px; }
+.daily-ring { width: 56px; height: 56px; flex-shrink: 0; transform: rotate(-90deg); }
+.daily-ring circle { fill: none; stroke-width: 7; stroke-linecap: round; }
+.daily-ring .track { stroke: rgba(154,160,184,0.22); }
+.daily-ring .val { stroke: #6d28d9; transition: stroke-dashoffset 0.6s cubic-bezier(0.2,0.8,0.3,1); }
+.daily-ring.done .val { stroke: #f59e0b; }
+.daily-txt { font-size: 12px; font-weight: 700; color: var(--text); line-height: 1.5; }
+.daily-txt .sub { font-size: 11px; color: var(--text2); font-weight: 600; }
+.daily-txt .hit { color: #f59e0b; }
+
+/* セッション中のコンボ / XP 表示 */
+.sess-meta { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 6px; }
+.combo-chip { font-size: 11px; font-weight: 900; letter-spacing: 0.08em; color: var(--text3); font-variant-numeric: tabular-nums; }
+.combo-chip.on { color: #f59e0b; }
+.combo-chip .icon { font-size: 14px; vertical-align: -0.18em; }
+
+/* 回答直後のポップ (コンボ数 / 獲得 XP) */
+.pop-layer { position: fixed; inset: 0; pointer-events: none; z-index: 1001; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; padding-bottom: 180px; }
+.combo-pop { font-size: 64px; font-weight: 900; letter-spacing: -0.03em; color: #f59e0b; text-shadow: 0 6px 24px rgba(245,158,11,0.45); animation: combo-pop 0.9s cubic-bezier(0.2,1.6,0.4,1) forwards; }
+.combo-pop .unit { font-size: 22px; font-weight: 800; letter-spacing: 0.2em; margin-left: 4px; }
+@keyframes combo-pop { 0% { transform: scale(0.3) translateY(10px); opacity: 0; } 35% { transform: scale(1.15); opacity: 1; } 75% { transform: scale(1); opacity: 1; } 100% { transform: scale(1) translateY(-26px); opacity: 0; } }
+.xp-pop { font-size: 30px; font-weight: 900; color: #6d28d9; font-variant-numeric: tabular-nums; animation: xp-pop 1.1s ease-out forwards; }
+.xp-pop.crit { color: #f59e0b; font-size: 38px; }
+.xp-pop .mult { font-size: 15px; font-weight: 800; margin-left: 6px; color: var(--text2); }
+.xp-pop.crit .mult { color: #f59e0b; }
+@keyframes xp-pop { 0% { transform: scale(0.6); opacity: 0; } 25% { transform: scale(1.1); opacity: 1; } 70% { opacity: 1; } 100% { transform: translateY(-40px); opacity: 0; } }
+.break-pop { font-size: 20px; font-weight: 900; letter-spacing: 0.14em; color: var(--text3); animation: xp-pop 0.9s ease-out forwards; }
+.crit-flash { position: fixed; inset: 0; pointer-events: none; z-index: 999; background: radial-gradient(circle at center, rgba(251,191,36,0.55), rgba(251,191,36,0.06) 45%, transparent 72%); animation: fb-flash 0.8s ease-out forwards; }
+
+/* 音トグル */
+.sound-pill { padding: 7px 10px; border-radius: 30px; border: none; background: var(--bg); color: var(--text2); box-shadow: 4px 4px 10px var(--sd), -3px -3px 8px var(--sl); cursor: pointer; font-family: inherit; }
+.sound-pill.off { color: var(--text3); }
+.sound-pill .icon { font-size: 16px; vertical-align: -0.2em; }
+
+/* サマリーの獲得内容 */
+.sum-stats { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; margin-top: 16px; }
+.sum-stat { text-align: center; }
+.sum-stat .n { font-size: 26px; font-weight: 900; color: var(--accent); line-height: 1; font-variant-numeric: tabular-nums; }
+.sum-stat .n.gold { color: #f59e0b; }
+.sum-stat .l { font-size: 9px; font-weight: 800; letter-spacing: 0.12em; color: var(--text2); text-transform: uppercase; margin-top: 5px; }
+
 .fb-overlay { position: fixed; inset: 0; pointer-events: none; z-index: 1000; display: flex; align-items: center; justify-content: center; opacity: 0; }
 .fb-overlay.show { animation: fb-flash 0.7s ease-out; }
 .fb-overlay.show.correct { background: radial-gradient(circle at center, rgba(42,140,58,0.4), rgba(42,140,58,0.05) 40%, transparent 70%); }
@@ -383,7 +433,8 @@ body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); 
   <span class="hint" id="appHint">施工管理2級</span>
   <div style="display:flex; gap:8px;">
     <a class="pill" id="backBtn" href="/" style="display:none; text-decoration:none;">← 戻る</a>
-    <button class="pill" id="signoutPill" onclick="doSignOut()">サインアウト</button>
+    <button class="sound-pill" id="soundPill" onclick="toggleSound()" title="効果音"><span class="icon">volume_up</span></button>
+      <button class="pill" id="signoutPill" onclick="doSignOut()">サインアウト</button>
   </div>
 </div>
 
@@ -432,6 +483,18 @@ body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); 
             <div class="hero-lbl" id="myStreakLbl">連続0日</div>
           </div>
         </div>
+        <div class="xp-row">
+          <div class="xp-lv" id="xpLv">LV 1</div>
+          <div class="xp-bar" id="xpBar"><div style="width:0%"></div></div>
+          <div class="xp-rest" id="xpRest">-</div>
+        </div>
+        <div class="daily-row">
+          <svg class="daily-ring" id="dailyRing" viewBox="0 0 56 56">
+            <circle class="track" cx="28" cy="28" r="23"></circle>
+            <circle class="val" id="dailyRingVal" cx="28" cy="28" r="23" stroke-dasharray="144.5" stroke-dashoffset="144.5"></circle>
+          </svg>
+          <div class="daily-txt" id="dailyTxt"></div>
+        </div>
         <div class="level-lbl" id="myLevelStats" style="margin-top:14px;"></div>
       </div>
     </div>
@@ -475,8 +538,16 @@ body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); 
   <!-- セッション画面 -->
   <div class="view" id="sessionView">
     <div class="session-progress">
-      <div class="text" id="sessionProgressText">1 / 10</div>
+      <div class="sess-meta">
+        <div class="text" id="sessionProgressText">1 / 10</div>
+        <div class="combo-chip" id="comboChip"></div>
+      </div>
       <div class="bar-wrap"><div class="bar-fill" id="sessionProgressFill" style="width:10%;"></div></div>
+      <div class="xp-row" style="margin-top:8px;">
+        <div class="xp-lv" id="sessXpLv">LV 1</div>
+        <div class="xp-bar" id="sessXpBar"><div style="width:0%"></div></div>
+        <div class="xp-rest" id="sessXpRest"></div>
+      </div>
     </div>
 
     <div class="card">
@@ -511,6 +582,11 @@ body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); 
         <div class="summary-score" id="summaryScore">-</div>
         <div class="summary-score-label" id="summaryScoreLabel">20 問中の完了</div>
         <div class="summary-level-change" id="summaryLevelChange"></div>
+        <div class="sum-stats">
+          <div class="sum-stat"><div class="n" id="sumXp">0</div><div class="l">獲得 XP</div></div>
+          <div class="sum-stat"><div class="n gold" id="sumCombo">0</div><div class="l">最大コンボ</div></div>
+          <div class="sum-stat"><div class="n" id="sumAcc">0<span style="font-size:15px;">%</span></div><div class="l">正答率</div></div>
+        </div>
       </div>
     </div>
 
@@ -637,8 +713,78 @@ function renderPace(groups, pace) {
 }
 window.renderPace = renderPace;
 
+// ───── 効果音 (WebAudio で合成。音源ファイルなし) ─────
+// 正解はコンボが伸びるほど音程が上がる (ペンタトニック)。これが一番「効く」ので中心に据える。
+const sfx = {
+  ctx: null,
+  on: (() => { try { return localStorage.getItem("seko_sound") !== "off"; } catch (_) { return true; } })(),
+  // iOS は「ユーザー操作の中で」AudioContext を起こす必要がある → タップ時に呼ぶ
+  prime() {
+    try {
+      if (!this.ctx) this.ctx = new (window.AudioContext || window.webkitAudioContext)();
+      if (this.ctx.state === "suspended") this.ctx.resume();
+    } catch (_) {}
+  },
+  tone(freq, dur, delay = 0, type = "sine", vol = 0.3) {
+    if (!this.on || !this.ctx) return;
+    try {
+      const t = this.ctx.currentTime + delay;
+      const o = this.ctx.createOscillator(), g = this.ctx.createGain();
+      o.type = type; o.frequency.value = freq;
+      g.gain.setValueAtTime(0.0001, t);
+      g.gain.exponentialRampToValueAtTime(vol, t + 0.012);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+      o.connect(g); g.connect(this.ctx.destination);
+      o.start(t); o.stop(t + dur + 0.05);
+    } catch (_) {}
+  },
+  // コンボ n 連続目の正解音。C5 起点のペンタトニックを上っていく
+  correct(combo) {
+    const steps = [0, 2, 4, 7, 9, 12, 14, 16, 19, 21, 24];
+    const semi = steps[Math.min(steps.length - 1, Math.max(0, (combo || 1) - 1))];
+    const f = 523.25 * Math.pow(2, semi / 12);
+    this.tone(f, 0.22, 0, "triangle", 0.3);
+    this.tone(f * 2, 0.14, 0.01, "sine", 0.1);
+  },
+  critical() { [0, 0.07, 0.14, 0.21].forEach((d, i) => this.tone(1046.5 * Math.pow(2, [0, 4, 7, 12][i] / 12), 0.3, d, "triangle", 0.26)); },
+  wrong() { this.tone(220, 0.16, 0, "square", 0.16); this.tone(165, 0.22, 0.12, "square", 0.14); },
+  comboBreak() { this.tone(392, 0.12, 0, "sine", 0.16); this.tone(294, 0.18, 0.1, "sine", 0.14); },
+  levelUp() { [523.25, 659.25, 783.99, 1046.5].forEach((f, i) => { this.tone(f, 0.45, i * 0.11, "triangle", 0.3); this.tone(f * 2, 0.3, i * 0.11, "sine", 0.08); }); },
+  daily() { [783.99, 1046.5, 1318.5].forEach((f, i) => this.tone(f, 0.35, i * 0.1, "triangle", 0.26)); },
+  tick() { this.tone(1500, 0.04, 0, "square", 0.06); },
+};
+function renderSoundPill() {
+  const el = $("soundPill");
+  if (!el) return;
+  el.classList.toggle("off", !sfx.on);
+  el.innerHTML = `<span class="icon">${sfx.on ? "volume_up" : "volume_off"}</span>`;
+}
+function toggleSound() {
+  sfx.on = !sfx.on;
+  try { localStorage.setItem("seko_sound", sfx.on ? "on" : "off"); } catch (_) {}
+  if (sfx.on) { sfx.prime(); sfx.correct(3); }
+  renderSoundPill();
+}
+window.toggleSound = toggleSound;
+
+// 画面中央に出す一瞬のポップ (コンボ数・獲得 XP・コンボ断)
+function popFx(html, cls = "") {
+  const layer = document.createElement("div");
+  layer.className = "pop-layer";
+  layer.innerHTML = html;
+  document.body.appendChild(layer);
+  setTimeout(() => layer.remove(), cls === "long" ? 1400 : 1200);
+}
+
 const state = {
   view: "home",
+  combo: 0,                // 連続正解数 (不正解で 0)
+  maxCombo: 0,             // このセッションの最大コンボ
+  sessionXp: 0,            // このセッションの獲得 XP
+  levelUps: 0,             // このセッションのレベルアップ回数
+  xp: null,                // { xp, level, levelXpBase, nextLevelXp } 直近の XP 進捗
+  daily: null,             // セッション開始時点の { today_correct, daily_min, streak }
+  dailyHitShown: false,    // 日課クリア演出を出したか (1 日 1 回)
   questionMap: new Map(),  // id → question
   queue: [],               // [questionId, ...] 先頭から出題、不正解で末尾に再追加
   currentQId: null,
@@ -703,6 +849,7 @@ async function api(method, path, body, { timeoutMs = 45000 } = {}) {
 
 // ───── ホーム画面 ─────
 async function loadHome() {
+  renderSoundPill();
   const errEl = $("homeErr");
   errEl.innerHTML = `<span style="color:var(--text2);font-family:'Outfit';font-weight:700;"><span class="icon" style="vertical-align:-0.18em;">cloud_sync</span> 読み込み中… (初回は最大45秒、cold start のため)</span>`;
   errEl.style.display = "";
@@ -762,6 +909,36 @@ async function loadHome() {
   renderPeers(peers);
 }
 
+// XP バー: レベル内の進捗 % + 次レベルまでの残り
+function renderXpBar(lvId, barId, restId, xp) {
+  const lv = $(lvId), bar = $(barId), rest = $(restId);
+  if (!bar) return;
+  const into = Math.max(0, xp.intoLevel ?? (xp.xp - xp.levelXpBase));
+  const need = Math.max(1, xp.needForNext ?? (xp.nextLevelXp - xp.levelXpBase));
+  const pct = Math.max(2, Math.min(100, Math.round((into / need) * 100)));
+  if (lv) lv.textContent = `LV ${xp.level}`;
+  bar.firstElementChild.style.width = pct + "%";
+  if (rest) rest.textContent = `次まで ${Math.max(0, need - into)}`;
+}
+
+// 今日の日課リング (daily_min 問正解でクリア → 金色)
+function renderDailyRing(s) {
+  const ring = $("dailyRing"), val = $("dailyRingVal"), txt = $("dailyTxt");
+  if (!ring || !val) return;
+  const min = s.daily_min || 5;
+  const done = Math.min(min, s.today_correct || 0);
+  const C = 2 * Math.PI * 23;
+  val.setAttribute("stroke-dasharray", C.toFixed(1));
+  val.setAttribute("stroke-dashoffset", (C * (1 - done / min)).toFixed(1));
+  const cleared = done >= min;
+  ring.classList.toggle("done", cleared);
+  if (txt) {
+    txt.innerHTML = cleared
+      ? `<span class="hit">今日の日課クリア</span><div class="sub">連続 ${s.streak} 日 ・ 今日 ${s.today_correct} 問正解</div>`
+      : `今日 ${done} / ${min} 問<div class="sub">${s.streak > 0 ? `あと ${min - done} 問で連続 ${s.streak + 1} 日目` : `${min} 問正解で連続記録スタート`}</div>`;
+  }
+}
+
 function renderMe(me, peers) {
   // 他ミニアプリにもアクセス権ある社内ユーザーだけ「← 戻る」を出す
   const backBtn = $("backBtn");
@@ -773,6 +950,12 @@ function renderMe(me, peers) {
   $("myLevel").textContent = me.user.level;
   $("myLevelStats").textContent =
     `通算 正解 ${me.user.total_correct} / ${me.user.total_answers}`;
+
+  // XP バー (レベル内の進捗。XP は絶対に減らない)
+  if (me.xp) {
+    state.xp = me.xp;
+    renderXpBar("xpLv", "xpBar", "xpRest", me.xp);
+  }
 
   // 全ジャンル平均%
   let totT = 0, totC = 0;
@@ -798,6 +981,8 @@ function renderMe(me, peers) {
     streakEl.textContent = `あと${Math.max(0, s.daily_min - s.today_correct)}問で継続`;
     streakStat.classList.add("streak-today-pending");
   }
+  renderDailyRing(s);
+  state.daily = { today_correct: s.today_correct || 0, daily_min: s.daily_min || 5, streak: s.streak || 0 };
 
   // owner だけ peer overlay (最初の1人と比較)
   const peer = (peers || [])[0] || null;
@@ -934,7 +1119,7 @@ function renderRadarChart(myGroups, peerGroupMap, myName, peerName) {
     html += `<polygon class="peer-poly" points="${peerPts}"/>`;
   }
   // 自分 polygon
-  const myPts = myGroups.map((g, i) => point(i, g.pct).join(",")).join(" ");
+  const myPts = myGroups.map((g, i) => point(i, g.pct || 0).join(",")).join(" ");
   html += `<polygon class="me-poly" points="${myPts}"/>`;
   // ラベル (短縮名、軸の外側に)
   for (let i = 0; i < N; i++) {
@@ -1062,6 +1247,7 @@ window.openPeerLearned = async function (email, displayName) {
 // ───── セッション (キュー方式 + リトライループ) ─────
 async function startSession(genre) {
   if (state.busy) return;
+  sfx.prime();   // iOS は「タップの中で」AudioContext を起こす必要がある
   state.busy = true;
   const btn = $("startBtn");
   const originalLabel = btn.innerHTML;
@@ -1084,6 +1270,12 @@ async function startSession(genre) {
     state.totalUnique = questions.length;
     state.attemptCount = 0;
     state.currentQId = null;
+    state.combo = 0;
+    state.maxCombo = 0;
+    state.sessionXp = 0;
+    state.levelUps = 0;
+    renderComboChip();
+    if (state.xp) renderXpBar("sessXpLv", "sessXpBar", "sessXpRest", state.xp);
     showSession();
     nextQuestion();
   } catch (e) {
@@ -1153,13 +1345,96 @@ function renderCurrentQuestion() {
 
 function handleAnswerResult(qId, r) {
   state.attemptCount++;
+  const brokeCombo = !r.is_correct && state.combo >= 3;
   if (r.is_correct) {
     state.completedIds.add(qId);
+    state.combo++;
+    state.maxCombo = Math.max(state.maxCombo, state.combo);
   } else {
+    state.combo = 0;
     // 不正解 → キュー末尾に再追加 (正解出るまで終わらない)
     state.queue.push(qId);
   }
+  // XP / レベル (サーバー計算)
+  if (typeof r.xp_gain === "number") {
+    state.sessionXp += r.xp_gain;
+    if (r.level_up) state.levelUps++;
+    state.xp = { xp: r.xp_total, level: r.level, levelXpBase: r.level_xp_base, nextLevelXp: r.next_level_xp };
+    renderXpBar("sessXpLv", "sessXpBar", "sessXpRest", state.xp);
+  }
+  renderComboChip();
   showFeedback(r.is_correct);
+  showRewardFx(r, brokeCombo);
+  checkDailyHit(r.is_correct);
+}
+
+// 今日の正解数が日課ライン (daily_min) を跨いだ瞬間に演出する。ここが毎日戻ってくる動機になる
+function checkDailyHit(isCorrect) {
+  if (!isCorrect || !state.daily || state.dailyHitShown) return;
+  const total = state.daily.today_correct + state.completedIds.size;
+  if (total < state.daily.daily_min) return;
+  state.dailyHitShown = true;
+  setTimeout(() => {
+    sfx.daily();
+    spawnConfetti();
+    popFx(`<div class="combo-pop"><span class="icon" style="font-size:56px;">local_fire_department</span></div>`
+      + `<div class="xp-pop crit">今日の日課クリア<span class="mult">連続 ${state.daily.streak + 1} 日</span></div>`, "long");
+    try { navigator.vibrate?.([30, 50, 30, 50, 90]); } catch (e) {}
+  }, 900);
+}
+
+function renderComboChip() {
+  const el = $("comboChip");
+  if (!el) return;
+  if (state.combo >= 2) {
+    el.className = "combo-chip on";
+    el.innerHTML = `<span class="icon">bolt</span> ${state.combo} COMBO ×${(1 + 0.1 * Math.min(10, state.combo - 1)).toFixed(1)}`;
+  } else {
+    el.className = "combo-chip";
+    el.textContent = state.maxCombo >= 3 ? `最大 ${state.maxCombo} コンボ` : "";
+  }
+}
+
+// 獲得 XP / コンボ / クリティカル / レベルアップ の演出をまとめて出す
+function showRewardFx(r, brokeCombo) {
+  const gain = typeof r.xp_gain === "number" ? r.xp_gain : 0;
+  if (r.is_correct) {
+    if (r.critical) {
+      sfx.critical();
+      const f = document.createElement("div");
+      f.className = "crit-flash";
+      document.body.appendChild(f);
+      setTimeout(() => f.remove(), 900);
+      try { navigator.vibrate?.([30, 40, 30, 40, 60]); } catch (e) {}
+    } else {
+      sfx.correct(state.combo);
+      if (state.combo >= 5) { try { navigator.vibrate?.([20, 30, 20]); } catch (e) {} }
+    }
+  } else {
+    if (brokeCombo) sfx.comboBreak(); else sfx.wrong();
+  }
+  // ポップ: コンボ (3 連続以上) → 獲得 XP → コンボ断
+  const parts = [];
+  if (r.is_correct && state.combo >= 3) parts.push(`<div class="combo-pop">${state.combo}<span class="unit">COMBO</span></div>`);
+  if (gain > 0) {
+    const mult = r.combo_mult > 1 ? `<span class="mult">×${r.combo_mult}</span>` : "";
+    const crit = r.critical ? `<span class="mult">CRITICAL ×2</span>` : "";
+    const fc = r.first_clear && !r.critical && !mult ? `<span class="mult">初正解 +5</span>` : "";
+    parts.push(`<div class="xp-pop${r.critical ? " crit" : ""}">+${gain} XP${crit || mult || fc}</div>`);
+  }
+  if (brokeCombo) parts.push(`<div class="break-pop">COMBO BREAK</div>`);
+  if (parts.length) popFx(parts.join(""));
+  // レベルアップは最後に重ねる (音 + 紙吹雪 + バーを金色に)
+  if (r.level_up) {
+    setTimeout(() => {
+      sfx.levelUp();
+      spawnConfetti();
+      const bar = $("sessXpBar");
+      if (bar) { bar.classList.add("burst"); setTimeout(() => bar.classList.remove("burst"), 1400); }
+      popFx(`<div class="combo-pop">LV ${r.level}</div><div class="xp-pop crit">LEVEL UP</div>`, "long");
+      try { navigator.vibrate?.([40, 60, 40, 60, 80]); } catch (e) {}
+    }, 620);
+  }
 }
 
 // 派手目フィードバック演出
@@ -1204,7 +1479,7 @@ async function submitChoice(opt, btn) {
   document.querySelectorAll(".choice-btn").forEach((b) => b.disabled = true);
   try {
     const qId = state.currentQId;
-    const r = await api("POST", "/api/seko/answer", { question_id: qId, user_answer: opt });
+    const r = await api("POST", "/api/seko/answer", { question_id: qId, user_answer: opt, combo: state.combo + 1 });
     document.querySelectorAll(".choice-btn").forEach((b) => {
       if (b.textContent === r.answer) b.classList.add("correct");
       else if (b === btn && !r.is_correct) b.classList.add("incorrect");
@@ -1229,7 +1504,7 @@ async function submitFree() {
   $("freeSubmit").textContent = "判定中…";
   try {
     const qId = state.currentQId;
-    const r = await api("POST", "/api/seko/answer", { question_id: qId, user_answer: ua });
+    const r = await api("POST", "/api/seko/answer", { question_id: qId, user_answer: ua, combo: state.combo + 1 });
     handleAnswerResult(qId, r);
     renderResult(r);
   } catch (e) {
@@ -1304,7 +1579,12 @@ window.nextQuestion = nextQuestion;
 
 async function endSession() {
   try {
-    const r = await api("POST", "/api/seko/sessions/end");
+    const r = await api("POST", "/api/seko/sessions/end", {
+      correct: state.completedIds.size,
+      xp: state.sessionXp,
+      maxCombo: state.maxCombo,
+      levelUps: state.levelUps,
+    });
     showSummary(r);
   } catch (e) {
     $("sessionErr").textContent = e.message;
@@ -1322,19 +1602,40 @@ function showSummary(r) {
   const sl = $("summaryScoreLabel");
   if (sl) sl.textContent = `${state.totalUnique} 問中の完了 (総回答 ${state.attemptCount})`;
   const lc = $("summaryLevelChange");
-  if (r.levelChanged && r.newLevel > r.oldLevel) {
-    lc.innerHTML = `<span class="icon" style="vertical-align:-0.18em;">school</span> レベルアップ ${r.oldLevel} → ${r.newLevel}`;
+  if (state.levelUps > 0) {
+    lc.innerHTML = `<span class="icon" style="vertical-align:-0.18em;">military_tech</span> レベル ${r.level} に到達`;
     lc.className = "summary-level-change up";
-  } else if (r.levelChanged && r.newLevel < r.oldLevel) {
-    lc.textContent = `レベル ${r.oldLevel} → ${r.newLevel} (基礎を復習しよう)`;
-    lc.className = "summary-level-change down";
   } else {
-    lc.textContent = `レベル ${r.newLevel} 継続`;
+    const rest = r.xp ? Math.max(0, r.xp.nextLevelXp - r.xp.xp) : null;
+    lc.textContent = rest != null ? `レベル ${r.level} ・ 次まで ${rest} XP` : `レベル ${r.level}`;
     lc.className = "summary-level-change same";
   }
+  // 獲得内容 (XP はカウントアップ、正答率は attempt ベース)
+  const acc = state.attemptCount ? Math.round((state.completedIds.size / state.attemptCount) * 100) : 0;
+  if ($("sumCombo")) $("sumCombo").textContent = state.maxCombo;
+  if ($("sumAcc")) $("sumAcc").firstChild.textContent = acc;
+  countUp($("sumXp"), state.sessionXp);
+  if (r.xp) renderXpBar("sessXpLv", "sessXpBar", "sessXpRest", r.xp);
 
   // 派手目演出 → 自動でホームに戻る
   triggerCelebrate(r);
+}
+
+// 数字をカウントアップ (音つき)。ドーパミン的に「増えていく過程」を見せるのが大事
+function countUp(el, to, ms = 900) {
+  if (!el) return;
+  const from = 0;
+  const t0 = performance.now();
+  let lastTick = 0;
+  const step = (now) => {
+    const k = Math.min(1, (now - t0) / ms);
+    const eased = 1 - Math.pow(1 - k, 3);
+    const v = Math.round(from + (to - from) * eased);
+    el.textContent = v;
+    if (v !== lastTick && k < 1) { lastTick = v; if (v % 2 === 0) sfx.tick(); }
+    if (k < 1) requestAnimationFrame(step);
+  };
+  requestAnimationFrame(step);
 }
 
 // レベルアップ / 継続/ 続続記録 演出
@@ -1342,12 +1643,14 @@ let celebrateTimer = null;
 function triggerCelebrate(r) {
   const o = $("celebrateOverlay");
   if (!o) return;
-  const oldLv = r.oldLevel ?? r.newLevel ?? 1;
-  const newLv = r.newLevel ?? oldLv;
+  const newLv = r.level ?? 1;
+  const oldLv = Math.max(1, newLv - (state.levelUps || 0));
   const burst = $("celebrateBurst");
-  if (newLv > oldLv) burst.textContent = "Level Up";
-  else if (newLv < oldLv) burst.textContent = "Level Down";
+  if (state.levelUps > 0) burst.textContent = "Level Up";
+  else if (r.dailyGoalJustReached) burst.textContent = "Daily Clear";
   else burst.textContent = "Session Done";
+  if (state.levelUps > 0) sfx.levelUp();
+  else if (r.dailyGoalJustReached) sfx.daily();
   $("celebrateOld").textContent = oldLv;
   $("celebrateNew").textContent = newLv;
   // r.message にはサーバー側で <span class="icon"> 形式で埋め込まれてる前提
@@ -1356,16 +1659,18 @@ function triggerCelebrate(r) {
   const sub = $("celebrateSub");
   const parts = [];
   parts.push(`正解 ${state.completedIds.size} / ${state.totalUnique}`);
+  parts.push(`+${state.sessionXp} XP`);
+  if (state.maxCombo >= 3) parts.push(`<span class="icon" style="font-size:13px;color:#f59e0b;vertical-align:-0.18em;">bolt</span> 最大 ${state.maxCombo} コンボ`);
   if (r.streak?.streak) parts.push(`<span class="icon" style="font-size:13px;color:#f59e0b;vertical-align:-0.18em;">local_fire_department</span> 連続 ${r.streak.streak} 日`);
-  if (r.totalUniqCorrect != null) parts.push(`通算 ${r.totalUniqCorrect} 語`);
+  if (r.totalUniqCorrect != null) parts.push(`通算 ${r.totalUniqCorrect} 問`);
   sub.innerHTML = parts.join(" ・ ");
 
   o.classList.add("show");
-  spawnSparks(newLv > oldLv ? 18 : 6);
+  spawnSparks(state.levelUps > 0 ? 18 : (r.dailyGoalJustReached ? 14 : 6));
 
   // 自動でホーム遷移
   clearTimeout(celebrateTimer);
-  celebrateTimer = setTimeout(() => window.dismissCelebrate(), newLv > oldLv ? 6200 : 4200);
+  celebrateTimer = setTimeout(() => window.dismissCelebrate(), state.levelUps > 0 ? 6200 : 4200);
 }
 
 function spawnSparks(n) {
