@@ -87,12 +87,19 @@ for (const c of CASES) {
   ok(!/<\s*(script|foreignObject|image|use)\b/i.test(j.svg), `${c.id}: 危険要素なし`);
   ok(!/<!--|<title|<desc/i.test(j.svg), `${c.id}: コメント/title なし`);
   ok(/viewBox\s*=\s*"0 0 440 300"/.test(j.svg), `${c.id}: viewBox 440x300`);
+  // ラベルが画面外に切れていないか (x<4 や x>432 に文字を置いていないか)
+  const outX = (j.svg.match(/<text[^>]*\sx="(-?\d+(?:\.\d+)?)"/g) || [])
+    .map((m) => Number(m.match(/x="(-?\d+(?:\.\d+)?)"/)[1])).filter((x) => x < 4 || x > 432);
+  ok(outX.length === 0, `${c.id}: 文字が画面内${outX.length ? " (はみ出し x=" + outX.join(",") + ")" : ""}`);
   // 白縁取りは属性でも <style>/class 経由でも可
   const styleHasPaintOrder = /paint-order\s*:\s*stroke/i.test(j.svg);
   const noStroke = styleHasPaintOrder ? 0 : (j.svg.match(/<text(?![^>]*paint-order)[^>]*>/g) || []).length;
   ok(noStroke === 0, `${c.id}: 文字に白縁取り${noStroke ? " (無し: " + noStroke + " 個)" : ""}`);
   // 部材名の二重ラベル (同じ語が 2 回以上) を検出
-  const labels = (j.svg.match(/<text[^>]*>([\s\S]*?)<\/text>/g) || []).map((t) => t.replace(/<[^>]*>/g, "").trim()).filter((t) => t.length >= 3);
+  // 数値・%・寸法は同じ値が複数出て当然なので、部材名 (漢字/カナを含む語) だけ重複を見る
+  const labels = (j.svg.match(/<text[^>]*>([\s\S]*?)<\/text>/g) || [])
+    .map((t) => t.replace(/<[^>]*>/g, "").trim())
+    .filter((t) => t.length >= 3 && /[\u3040-\u30ff\u4e00-\u9fff]/.test(t) && !/^[\d\s,.%a-zA-Z@]+$/.test(t));
   const dup = labels.filter((t, i) => labels.indexOf(t) !== i);
   ok(dup.length === 0, `${c.id}: ラベル重複なし${dup.length ? " (重複: " + [...new Set(dup)].join(", ") + ")" : ""}`);
   ok((j.svg.match(/<text/g) || []).length >= 3, `${c.id}: 文字が入っている (${(j.svg.match(/<text/g) || []).length} 個)`);
