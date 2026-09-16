@@ -87,8 +87,14 @@ for (const c of CASES) {
   ok(!/<\s*(script|foreignObject|image|use)\b/i.test(j.svg), `${c.id}: 危険要素なし`);
   ok(!/<!--|<title|<desc/i.test(j.svg), `${c.id}: コメント/title なし`);
   ok(/viewBox\s*=\s*"0 0 440 300"/.test(j.svg), `${c.id}: viewBox 440x300`);
-  const noStroke = (j.svg.match(/<text(?![^>]*paint-order)[^>]*>/g) || []).length;
-  ok(noStroke === 0, `${c.id}: 全 text に白縁取り${noStroke ? " (無し: " + noStroke + " 個)" : ""}`);
+  // 白縁取りは属性でも <style>/class 経由でも可
+  const styleHasPaintOrder = /paint-order\s*:\s*stroke/i.test(j.svg);
+  const noStroke = styleHasPaintOrder ? 0 : (j.svg.match(/<text(?![^>]*paint-order)[^>]*>/g) || []).length;
+  ok(noStroke === 0, `${c.id}: 文字に白縁取り${noStroke ? " (無し: " + noStroke + " 個)" : ""}`);
+  // 部材名の二重ラベル (同じ語が 2 回以上) を検出
+  const labels = (j.svg.match(/<text[^>]*>([\s\S]*?)<\/text>/g) || []).map((t) => t.replace(/<[^>]*>/g, "").trim()).filter((t) => t.length >= 3);
+  const dup = labels.filter((t, i) => labels.indexOf(t) !== i);
+  ok(dup.length === 0, `${c.id}: ラベル重複なし${dup.length ? " (重複: " + [...new Set(dup)].join(", ") + ")" : ""}`);
   ok((j.svg.match(/<text/g) || []).length >= 3, `${c.id}: 文字が入っている (${(j.svg.match(/<text/g) || []).length} 個)`);
   const shown = (j.svg.match(/<text[^>]*>([\s\S]*?)<\/text>/g) || []).join(" ").replace(/<[^>]*>/g, " ");
   const leaked = c.forbid.filter((w) => shown.includes(w));
