@@ -85,8 +85,13 @@ for (const c of CASES) {
   ok(/^<svg[\s\S]*<\/svg>$/.test(j.svg.trim()), `${c.id}: svg 要素のみ`);
   ok(/viewBox\s*=/.test(j.svg), `${c.id}: viewBox あり`);
   ok(!/<\s*(script|foreignObject|image|use)\b/i.test(j.svg), `${c.id}: 危険要素なし`);
+  ok(!/<!--|<title|<desc/i.test(j.svg), `${c.id}: コメント/title なし`);
+  ok(/viewBox\s*=\s*"0 0 440 300"/.test(j.svg), `${c.id}: viewBox 440x300`);
+  const noStroke = (j.svg.match(/<text(?![^>]*paint-order)[^>]*>/g) || []).length;
+  ok(noStroke === 0, `${c.id}: 全 text に白縁取り${noStroke ? " (無し: " + noStroke + " 個)" : ""}`);
   ok((j.svg.match(/<text/g) || []).length >= 3, `${c.id}: 文字が入っている (${(j.svg.match(/<text/g) || []).length} 個)`);
-  const leaked = c.forbid.filter((w) => j.svg.includes(w));
+  const shown = (j.svg.match(/<text[^>]*>([\s\S]*?)<\/text>/g) || []).join(" ").replace(/<[^>]*>/g, " ");
+  const leaked = c.forbid.filter((w) => shown.includes(w));
   ok(leaked.length === 0, `${c.id}: 答えが図に出ていない${leaked.length ? " (漏れ: " + leaked.join(", ") + ")" : ""}`);
 }
 

@@ -8120,6 +8120,8 @@ function sekoSanitizeSvg(raw) {
   const m = t.match(/<svg[\s\S]*<\/svg>/i);
   if (!m) return null;
   t = m[0];
+  // コメントや title/desc に答えのヒントが書かれることがあるので落とす (表示もされない)
+  t = t.replace(/<!--[\s\S]*?-->/g, "").replace(/<(title|desc)[\s\S]*?<\/\1>/gi, "");
   // 外部読み込み・スクリプト・イベントハンドラは一切許さない (data URI で img に出すので)
   if (/<\s*(script|foreignObject|iframe|image|use|animate|set|handler)\b/i.test(t)) return null;
   if (/\son[a-z]+\s*=/i.test(t)) return null;
@@ -8144,7 +8146,13 @@ ${spec}
 
 条件 (守らないと使えません):
 - 出力は <svg ...> から </svg> までの 1 個だけ。前置き・説明・コードフェンス禁止
-- viewBox="0 0 400 260" を必ず付ける。width/height 属性は付けない
+- viewBox="0 0 440 300" を必ず付ける。width/height 属性は付けない
+- **図形は x=110〜330 の帯の中だけに描く**。左右の余白 (x<110 と x>330) はラベル専用にする
+- ラベルは左右の余白に置き、図形まで引出線 (stroke-width="1") で結ぶ。図形の上に文字を重ねない。
+  帯の中に書くのは、その図形の中に収まる短い名前だけ
+- すべての <text> に paint-order="stroke" stroke="#fff" stroke-width="3" stroke-linejoin="round" を付ける
+  (線と重なっても読めるようにするため)。text-anchor は左余白なら end、右余白なら start
+- 同じ座標に複数の文字を置かない。y 座標は 14 以上離す
 - 外部ファイル参照・script・foreignObject・image・use は禁止。図形とテキストだけで描く
 - 線は stroke="#42455e" stroke-width="1.6" 基調、強調だけ #b45309。塗りは白か薄いグレー (#eef0f5)
 - 文字は日本語可、font-family="sans-serif" font-size="11" 以上。図からはみ出さない
