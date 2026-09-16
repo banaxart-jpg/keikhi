@@ -2178,6 +2178,28 @@ app.all("/api/photos/mcp/:token", (req, res) => {
 // POST { cases: [{ id, question, answer, keywords, user_answer }], rubric?: string, model?: string }
 // → { results: [{ id, score, feedback, ms }] }。rubric を渡すと採点基準を差し替えて A/B できる。
 const SEKO_DEBUG_TOKEN = (process.env.SEKO_DEBUG_TOKEN || "kx9m2seko7vqt4wp8zh").trim();
+// 図解の動作確認用。{ question, options?, answer?, spec } → { svg, dataUri, ok }
+app.post("/api/seko/debug-diagram/:token", async (req, res) => {
+  if (req.params.token !== SEKO_DEBUG_TOKEN) return res.status(403).json({ error: "forbidden" });
+  const b = req.body || {};
+  if (!b.question || !b.spec) return res.status(400).json({ error: "question と spec が必要" });
+  const t0 = Date.now();
+  try {
+    const uri = await sekoBuildDiagram(
+      { question: String(b.question), options: Array.isArray(b.options) ? b.options : null, answer: String(b.answer || "") },
+      String(b.spec)
+    );
+    res.json({
+      ok: !!uri,
+      ms: Date.now() - t0,
+      bytes: uri ? uri.length : 0,
+      svg: uri ? decodeURIComponent(uri.replace("data:image/svg+xml;utf8,", "")) : null,
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 app.post("/api/seko/debug-grade/:token", async (req, res) => {
   if (req.params.token !== SEKO_DEBUG_TOKEN) return res.status(403).json({ error: "forbidden" });
   const cases = Array.isArray(req.body?.cases) ? req.body.cases.slice(0, 30) : [];
@@ -8041,8 +8063,9 @@ async function prewarmSekoPool(p, user) {
     [allowedGenres, allowedGroupIds]
   );
   const fresh = cnt[0]?.n || 0;
-  const TARGET = 12;   // 直近 1 週間分のプール目標
-  const need = Math.min(5, TARGET - fresh);
+  // セッションは 10 問。3 セッション分 + 予備を常に温めておく (足りないと開始時に同期生成 = ラグ)
+  const TARGET = 40;
+  const need = Math.min(10, TARGET - fresh);
   if (need <= 0) return;
   const lock = `${user.user_email}::${examTarget}::${shubetsu || "_"}`;
   if (_sekoPrewarmRunning.has(lock)) return;
@@ -8061,6 +8084,16 @@ async function prewarmSekoPool(p, user) {
     }
     const gen = await generateSekoQuestionsBatch(p, items, shubetsu);
     console.log(`[seko] prewarm: +${gen.length} for ${lock}`);
+    // 図が要る問題に SVG を後付けする (プリウォームは非同期なので待ってよい)。コスト上限として 3 問/回
+    let diagrams = 0;
+    for (const row of gen) {
+      if (diagrams >= 3 || !row._diagram) continue;
+      const uri = await sekoBuildDiagram(row, row._diagram);
+      if (!uri) continue;
+      await p.query(`UPDATE seko_questions SET image_url=$1 WHERE id=$2`, [uri, row.id]);
+      diagrams++;
+    }
+    if (diagrams) console.log(`[seko] prewarm: +${diagrams} diagrams`);
   } finally {
     _sekoPrewarmRunning.delete(lock);
   }
@@ -8076,6 +8109,60 @@ async function ensureSekoUser(p, email) {
     [email, display]
   );
   return rows[0];
+}
+
+// ───── 問題の図解 (SVG) ─────
+// 工程表・応力図・断面・納まりは図がないと本試験の形にならない。
+// JSON の中に SVG を詰めると Gemini が壊すので、問題本文とは別リクエストで SVG だけ作らせる。
+const SEKO_SVG_MAX = 14000;
+function sekoSanitizeSvg(raw) {
+  let t = String(raw || "").trim();
+  const m = t.match(/<svg[\s\S]*<\/svg>/i);
+  if (!m) return null;
+  t = m[0];
+  // 外部読み込み・スクリプト・イベントハンドラは一切許さない (data URI で img に出すので)
+  if (/<\s*(script|foreignObject|iframe|image|use|animate|set|handler)\b/i.test(t)) return null;
+  if (/\son[a-z]+\s*=/i.test(t)) return null;
+  if (/(?:xlink:)?href\s*=\s*["']?(?!#)/i.test(t)) return null;
+  if (/url\s*\(\s*["']?(?!#)/i.test(t)) return null;
+  if (!/viewBox\s*=/i.test(t)) return null;
+  if (t.length > SEKO_SVG_MAX) return null;
+  return t;
+}
+async function sekoBuildDiagram(q, spec) {
+  if (!genAI || !spec) return null;
+  const prompt = `2級建築施工管理技士検定の問題に添える図を SVG で描いてください。
+
+【問題】
+${q.question}
+${Array.isArray(q.options) && q.options.length ? "【選択肢】\n" + q.options.join(" / ") : ""}
+【正解】
+${q.answer}
+【この図に描くもの】
+${spec}
+
+条件 (守らないと使えません):
+- 出力は <svg ...> から </svg> までの 1 個だけ。前置き・説明・コードフェンス禁止
+- viewBox="0 0 400 260" を必ず付ける。width/height 属性は付けない
+- 外部ファイル参照・script・foreignObject・image・use は禁止。図形とテキストだけで描く
+- 線は stroke="#42455e" stroke-width="1.6" 基調、強調だけ #b45309。塗りは白か薄いグレー (#eef0f5)
+- 文字は日本語可、font-family="sans-serif" font-size="11" 以上。図からはみ出さない
+- **答えそのものを図に書かない** (例: クリティカルパスを問う図に「CP」と書かない、部材寸法を問う図に答えの数値を書かない)
+- 寸法線・部材名・作業名・日数など、問題を解くのに必要な情報は図の中に入れる`;
+  try {
+    const { result } = await callGeminiWithFallback(prompt, {
+      primaryModel: "gemini-2.5-flash",
+      maxOutputTokens: 4000,
+      temperature: 0.4,
+      thinkingBudget: 0,
+    });
+    const svg = sekoSanitizeSvg(result.response.text() || "");
+    if (!svg) return null;
+    return "data:image/svg+xml;utf8," + encodeURIComponent(svg);
+  } catch (e) {
+    console.warn("[seko] diagram failed:", e.message);
+    return null;
+  }
 }
 
 // AI で N 問まとめて生成して seko_questions に INSERT、行配列を返す。
@@ -8123,6 +8210,8 @@ ${lines}
   ・四肢択一: 「四つのうち最も不適当なものはどれか」「次のうち正しいものはどれか」型。options 4 つ、answer は正解の選択肢の文字列そのまま (A/B/C/D の記号不要)。type は "choice"。
   ・記述式: 本試験二次の形式。設問は短答記述 (例「鉄筋工事における配筋検査の留意事項を 2 つ簡潔に述べよ」「コンクリート打設時の留意点を 80 字程度で述べよ」)。options は null。answer には模範解答の要点 (50-150 字) を入れる。keywords に採点キーワード 3-5 個を入れる (これが含まれれば部分正解扱い)。type は "free"。
 - 解説は 3-5 文。なぜ正解か、誤答はなぜ違うか (択一)、模範解答のポイント (記述)、現場の留意点を 1 文。
+- 図がないと解けない問題 (ネットワーク工程表・バーチャート・梁の応力・断面や納まり・配筋・足場・割付) を作ったときだけ、
+  "diagram" にその図に描く内容を 1-2 文で書く。文章だけで解ける問題は "diagram" は空文字にする。
 
 JSON 配列でだけ返す (前置きや説明禁止)。配列の長さは ${items.length} 件、入力順:
 [
@@ -8135,6 +8224,7 @@ JSON 配列でだけ返す (前置きや説明禁止)。配列の長さは ${ite
     "answer": "...",
     "keywords": ["..."],
     "explanation": "3-5 文",
+    "diagram": "図が必須なら描画内容、不要なら空文字",
     "claude_example": ""
   },
   ... (合計 ${items.length} 件)
@@ -8181,7 +8271,7 @@ JSON 配列でだけ返す (前置きや説明禁止)。配列の長さは ${ite
           imageUrl,
         ]
       );
-      out.push(ins.rows[0]);
+      out.push({ ...ins.rows[0], _diagram: String(parsed.diagram || "").trim().slice(0, 300) });
     } catch (e) {
       console.warn("[seko] insert failed for item", i, e.message);
     }
@@ -8513,6 +8603,23 @@ app.get("/api/seko/ui-demos-list", (req, res) => res.json([]));
 
 // セッション開始: ユーザーの exam_target に合うジャンルから 10 問選ぶ。
 // プール薄ければ inline で AI 生成して埋める (最大 4 問 / 30 秒タイムアウト)。
+// セッションの出題を size 問になるまで埋める。
+// 1) 直近に出ていない問題を優先 → 2) それでも足りなければ直近に出た問題も混ぜる (復習扱い)。
+// 15 秒かけて AI 生成を待つより、既存プールで即開始する方が体験が良いのでこの順序。
+function sekoFillPicked(picked, candidates, recentIds, size) {
+  const out = picked.slice();
+  const seen = new Set(out.map((q) => q.id));
+  for (const pass of [0, 1]) {
+    for (const q of candidates || []) {
+      if (out.length >= size) return out;
+      if (seen.has(q.id)) continue;
+      if (pass === 0 && recentIds.has(q.id)) continue;
+      out.push(q); seen.add(q.id);
+    }
+  }
+  return out;
+}
+
 app.post("/api/seko/sessions/start", async (req, res) => {
   const p = getPool();
   if (!p) return res.status(503).json({ error: "DB not configured" });
@@ -8613,7 +8720,7 @@ app.post("/api/seko/sessions/start", async (req, res) => {
     // 直近 出題済の質問 ID (再出題を避けるため 50 件)
     const { rows: recentRows } = await p.query(
       `SELECT question_id FROM seko_progress WHERE user_email = $1
-        ORDER BY answered_at DESC LIMIT 50`,
+        ORDER BY answered_at DESC LIMIT 30`,
       [req.user.email]
     );
     const recentIds = new Set(recentRows.map((r) => r.question_id));
@@ -8633,15 +8740,24 @@ app.post("/api/seko/sessions/start", async (req, res) => {
         WHERE genre = ANY($1::text[])
           AND (group_id = ANY($2::text[]) OR group_id IS NULL)
         ORDER BY random()
-        LIMIT 50`,
+        LIMIT 120`,
       [targetGenres, allowedGroupIds]
     );
-    const fresh = pool.filter((q) => !recentIds.has(q.id));
-
-    let picked = fresh.slice(0, SESSION_SIZE);
-
-    // 足りなければ AI で 1 リクエストにまとめて生成 (~10 秒で N 問取れる)
-    const need = SESSION_SIZE - picked.length;
+    let picked = sekoFillPicked([], pool, recentIds, SESSION_SIZE);
+    // ジャンル配分で足りないときは対象 group の別ジャンルから補充 (待たせないのを最優先)
+    if (picked.length < SESSION_SIZE) {
+      const { rows: wider } = await p.query(
+        `SELECT * FROM seko_questions
+          WHERE genre = ANY($1::text[])
+            AND (group_id = ANY($2::text[]) OR group_id IS NULL)
+          ORDER BY random()
+          LIMIT 120`,
+        [allowedGenres, allowedGroupIds]
+      );
+      picked = sekoFillPicked(picked, wider, recentIds, SESSION_SIZE);
+    }
+    // それでも足りない = プールが実質空。同期生成は 3 問までに抑えて体感を優先する
+    const need = Math.min(3, SESSION_SIZE - picked.length);
     if (need > 0) {
       const items = [];
       const userLevel = user.level || 1;
@@ -8684,6 +8800,8 @@ app.post("/api/seko/sessions/start", async (req, res) => {
       });
     }
 
+    // 次のセッション分をバックグラウンドで仕込む (2 回目以降の待ち時間をゼロにする)
+    prewarmSekoPool(p, user).catch((e) => console.warn("[seko] prewarm after start failed:", e.message));
     res.json({
       total: picked.length,
       questions: picked.map((q) => ({
@@ -8806,6 +8924,8 @@ app.post("/api/seko/sessions/end", async (req, res) => {
   try {
     // level は answer 時に XP から更新済み。ここでは締めの集計と演出用データだけ返す。
     const user = await ensureSekoUser(p, req.user.email);
+    // 次のセッション分を先に作っておく (セッション直後が一番時間に余裕がある)
+    prewarmSekoPool(p, user).catch((e) => console.warn("[seko] prewarm after end failed:", e.message));
     const streak = await computeSekoStreak(p, req.user.email);
     const prog = sekoXpProgress(user.xp);
     const b = req.body || {};
