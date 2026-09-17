@@ -2193,6 +2193,7 @@ app.post("/api/seko/debug-photo/:token", async (req, res) => {
       ok: !!picked, ms: Date.now() - t0,
       picked,
       candidates: raw.map((c) => ({ title: c.title, source: c.source, imageUrl: c.imageUrl })),
+      reason: picked?.reason || null,
     });
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -8263,18 +8264,68 @@ async function sekoFindPhoto(q, queries) {
     const idx = (Array.isArray(arr) ? arr : []).map(Number)
       .filter((n) => Number.isInteger(n) && n >= 1 && n <= candidates.length);
     if (!idx.length) return null;
-    const pick = candidates[idx[0] - 1];
-    if (!pick?.imageUrl || !/^https:\/\//.test(pick.imageUrl)) return null;
-    return {
-      imageUrl: pick.imageUrl,
-      credit: `${pick.title || "無題"} — ${pick.source}`.slice(0, 200),
-      pageUrl: pick.pageUrl || null,
-      candidates: candidates.length,
-      picked: pick.title,
-    };
+    // タイトルだけでは無関係な画像が通ってしまう (実測: 「suspended ceiling」→ 駅の装飾天井、
+    // 「ceramic tile」→ 人物写真)。採用前に画像そのものを見て判定する。
+    for (const n of idx.slice(0, 3)) {
+      const pick = candidates[n - 1];
+      if (!pick?.imageUrl || !/^https:\/\//.test(pick.imageUrl)) continue;
+      const verdict = await sekoVerifyPhoto(pick.imageUrl, qs, q.question);
+      if (!verdict.ok) {
+        console.log(`[seko] photo rejected: ${String(pick.title).slice(0, 50)} — ${verdict.reason}`);
+        continue;
+      }
+      return {
+        imageUrl: pick.imageUrl,
+        credit: `${pick.title || "無題"} — ${pick.source}`.slice(0, 200),
+        pageUrl: pick.pageUrl || null,
+        candidates: candidates.length,
+        picked: pick.title,
+        reason: verdict.reason,
+      };
+    }
+    return null;
   } catch (e) {
     console.warn("[seko] photo vet failed:", e.message);
     return null;
+  }
+}
+
+// 候補画像を実際にダウンロードして Gemini に見せ、対象が主題として写っているかを判定する。
+// タイトル審査だけでは無関係な画像 (別分野の写真・人物・装飾) を掴むので、採用の最終条件にする。
+async function sekoVerifyPhoto(imageUrl, targets, question) {
+  if (!genAI) return { ok: false, reason: "Gemini 未設定" };
+  try {
+    const ac = new AbortController();
+    const tid = setTimeout(() => ac.abort(), 8000);
+    let buf, mime;
+    try {
+      const r = await fetch(imageUrl, { signal: ac.signal, headers: { "user-agent": "keihi-seko/1.0 (study reference)" } });
+      if (!r.ok) return { ok: false, reason: `HTTP ${r.status}` };
+      mime = (r.headers.get("content-type") || "image/jpeg").split(";")[0];
+      if (!/^image\/(jpeg|png|webp|gif)$/.test(mime)) return { ok: false, reason: `非対応 ${mime}` };
+      const ab = await r.arrayBuffer();
+      if (ab.byteLength > 6 * 1024 * 1024) return { ok: false, reason: "画像が大きすぎる" };
+      buf = Buffer.from(ab);
+    } finally {
+      clearTimeout(tid);
+    }
+    const { result } = await callGeminiWithFallback([
+      {
+        text: `この画像は、2級建築施工管理技士検定の問題「${String(question || "").slice(0, 150)}」の参考写真として使えますか。\n` +
+          `見せたい対象: ${(Array.isArray(targets) ? targets : [targets]).join(" / ")}\n\n` +
+          `判定基準 (厳しく判定してください。無関係な写真を出すと受験生が誤って覚えるため):\n` +
+          `- その対象が画像の主題として、はっきり分かる大きさで写っているか\n` +
+          `- 建築・建設の現場写真または部材の写真であるか (人物・動物・風景・絵画・ロゴ・地図は不可)\n` +
+          `- 別の工法や別の部材を写したものではないか\n\n` +
+          `JSON でだけ返す: {"ok": true|false, "what": "画像に写っているものを 20 字以内で", "reason": "判断理由を 30 字以内で"}`,
+      },
+      { inlineData: { mimeType: mime, data: buf.toString("base64") } },
+    ], { primaryModel: "gemini-2.5-flash", maxOutputTokens: 400, jsonMode: true, thinkingBudget: 0 });
+    const t = (result.response.text() || "").trim();
+    const j = JSON.parse(t.slice(t.indexOf("{"), t.lastIndexOf("}") + 1));
+    return { ok: !!j.ok, reason: `${j.what || ""} / ${j.reason || ""}`.slice(0, 80) };
+  } catch (e) {
+    return { ok: false, reason: "判定失敗: " + e.message.slice(0, 40) };
   }
 }
 
