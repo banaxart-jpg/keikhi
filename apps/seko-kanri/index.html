@@ -139,6 +139,8 @@ body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); 
 
 .q-category { display: inline-block; font-size: 10px; font-weight: 800; padding: 3px 8px; border-radius: 8px; color: white; letter-spacing: 0.06em; margin-bottom: 12px; }
 .q-text { font-size: 16px; font-weight: 700; line-height: 1.6; margin-bottom: 16px; white-space: pre-wrap; }
+.q-image-credit { font-size: 9px; color: var(--text3); margin: -10px 0 12px; line-height: 1.4; word-break: break-all; }
+.q-image-credit a { color: var(--text3); }
 .q-image { width: 100%; max-height: 300px; object-fit: contain; border-radius: 12px; margin: 4px 0 14px; background: #fff; box-shadow: inset 2px 2px 6px var(--sd); }
 .q-demo { width: 100%; height: 280px; border: none; border-radius: 12px; margin-bottom: 14px; background: #f5f5f7; box-shadow: inset 2px 2px 6px var(--sd), inset -2px -2px 4px var(--sl); }
 .q-demo-hint { font-size: 10px; color: var(--text3); font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; margin-bottom: 6px; }
@@ -553,6 +555,7 @@ body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); 
     <div class="card">
       <span class="q-category" id="qCategory"></span>
       <img id="qImage" class="q-image" style="display:none;" alt="">
+      <div id="qImageCredit" class="q-image-credit" style="display:none;"></div>
       <div class="q-text" id="qText"></div>
       <div id="qDemoWrap" style="display:none;">
         <div class="q-demo-hint">↓ 実際に触ってみて</div>
@@ -1313,9 +1316,20 @@ function renderCurrentQuestion() {
   if (q.image_url) {
     $("qImage").src = q.image_url;
     $("qImage").style.display = "";
+    const cr = $("qImageCredit");
+    if (cr) {
+      if (q.image_credit) {
+        const t = escapeHtml(q.image_credit);
+        cr.innerHTML = q.image_page_url ? `出典: <a href="${escapeHtml(q.image_page_url)}" target="_blank" rel="noopener">${t}</a>` : `出典: ${t}`;
+        cr.style.display = "";
+      } else {
+        cr.style.display = "none";
+      }
+    }
     $("qDemoWrap").style.display = "none";
   } else {
     $("qImage").style.display = "none";
+    if ($("qImageCredit")) $("qImageCredit").style.display = "none";
     $("qDemoWrap").style.display = "none";
   }
   $("resultArea").style.display = "none";

@@ -2178,6 +2178,27 @@ app.all("/api/photos/mcp/:token", (req, res) => {
 // POST { cases: [{ id, question, answer, keywords, user_answer }], rubric?: string, model?: string }
 // → { results: [{ id, score, feedback, ms }] }。rubric を渡すと採点基準を差し替えて A/B できる。
 const SEKO_DEBUG_TOKEN = (process.env.SEKO_DEBUG_TOKEN || "kx9m2seko7vqt4wp8zh").trim();
+// 参考写真の検索 + 審査の動作確認用。{ question, query } → 採用結果と候補一覧
+app.post("/api/seko/debug-photo/:token", async (req, res) => {
+  if (req.params.token !== SEKO_DEBUG_TOKEN) return res.status(403).json({ error: "forbidden" });
+  const b = req.body || {};
+  if (!b.query) return res.status(400).json({ error: "query が必要" });
+  const t0 = Date.now();
+  try {
+    const raw = await dramaSearchWebImages(
+      String(b.query).split(/[,、]/).map((x) => x.trim()).filter(Boolean).slice(0, 3), 8
+    );
+    const picked = await sekoFindPhoto({ question: String(b.question || "") }, b.query);
+    res.json({
+      ok: !!picked, ms: Date.now() - t0,
+      picked,
+      candidates: raw.map((c) => ({ title: c.title, source: c.source, imageUrl: c.imageUrl })),
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // 図解の動作確認用。{ question, options?, answer?, spec } → { svg, dataUri, ok }
 app.post("/api/seko/debug-diagram/:token", async (req, res) => {
   if (req.params.token !== SEKO_DEBUG_TOKEN) return res.status(403).json({ error: "forbidden" });
@@ -3157,6 +3178,9 @@ async function ensureSchema() {
     await p.query(`ALTER TABLE seko_users ADD COLUMN IF NOT EXISTS shubetsu TEXT`);
     // XP (絶対に減らない累積値)。level はここから算出する
     await p.query(`ALTER TABLE seko_users ADD COLUMN IF NOT EXISTS xp BIGINT NOT NULL DEFAULT 0`);
+    // 問題画像の出典 (Web から拾った実写の場合。SVG 生成図のときは NULL)
+    await p.query(`ALTER TABLE seko_questions ADD COLUMN IF NOT EXISTS image_credit TEXT`);
+    await p.query(`ALTER TABLE seko_questions ADD COLUMN IF NOT EXISTS image_page_url TEXT`);
     // XP 導入前のユーザーは過去の正解数から引き継ぐ (1 正解 = 10 XP)。level が 1 に戻らないように。
     await p.query(`UPDATE seko_users SET xp = total_correct * 10 WHERE xp = 0 AND total_correct > 0`);
     // seko_questions に image_url カラム追加 (図解が要る問題で AI 生成 SVG を data URI で保存)
@@ -8084,16 +8108,29 @@ async function prewarmSekoPool(p, user) {
     }
     const gen = await generateSekoQuestionsBatch(p, items, shubetsu);
     console.log(`[seko] prewarm: +${gen.length} for ${lock}`);
-    // 図が要る問題に SVG を後付けする (プリウォームは非同期なので待ってよい)。コスト上限として 3 問/回
-    let diagrams = 0;
+    // 画像を後付けする (プリウォームは非同期なので待ってよい)。
+    // 1) 部材・工法の見た目は Web の実写 → 2) 無ければ SVG 生成図。上限 6 問/回。
+    let photos = 0, diagrams = 0;
     for (const row of gen) {
-      if (diagrams >= 6 || !row._diagram) continue;
+      if (photos + diagrams >= 6) break;
+      if (row._photoQuery) {
+        const ph = await sekoFindPhoto(row, row._photoQuery);
+        if (ph) {
+          await p.query(
+            `UPDATE seko_questions SET image_url=$1, image_credit=$2, image_page_url=$3 WHERE id=$4`,
+            [ph.imageUrl, ph.credit, ph.pageUrl, row.id]
+          );
+          photos++;
+          continue;
+        }
+      }
+      if (!row._diagram) continue;
       const uri = await sekoBuildDiagram(row, row._diagram);
       if (!uri) continue;
       await p.query(`UPDATE seko_questions SET image_url=$1 WHERE id=$2`, [uri, row.id]);
       diagrams++;
     }
-    if (diagrams) console.log(`[seko] prewarm: +${diagrams} diagrams`);
+    if (photos || diagrams) console.log(`[seko] prewarm: +${photos} photos, +${diagrams} diagrams`);
   } finally {
     _sekoPrewarmRunning.delete(lock);
   }
@@ -8164,6 +8201,8 @@ ${spec}
   ・タイトフレームは下地材 (梁) の上に溶接され、折板の谷部を受ける形。折板と隙間なく接する
   ・棟包み・軒先・けらばは端部の納まりとして、屋根面の該当する端に描く (中央に浮かせない)
   ・軽量鉄骨天井下地は上から スラブ → インサート → 吊りボルト → ハンガー → 野縁受け → 野縁 → ボード の順
+- 凡例・タイトル・見出しを図に入れない (「クリティカルパス」「出来高累計」など問題文の用語を書くと答えになる)
+- 同じ語のラベルを 2 回以上書かない
 - 「〜を示す寸法はどれか」「〜はどれか」と部位を選ばせる問題では、**その用語名を図に書かない**
   (例: かぶり厚さを問う図には「かぶり厚さ」と書かず、寸法記号 a/b/c/d だけを書く)
 - 外部ファイル参照・script・foreignObject・image・use は禁止。図形とテキストだけで描く
@@ -8186,6 +8225,55 @@ ${spec}
     return "data:image/svg+xml;utf8," + encodeURIComponent(svg);
   } catch (e) {
     console.warn("[seko] diagram failed:", e.message);
+    return null;
+  }
+}
+
+// ───── 参考写真 (Web から実写を拾う) ─────
+// 用語・部材の「見た目」は AI が描く SVG より実写が正確で速い。
+// Wikimedia Commons / Openverse (どちらもライセンス明示・キー不要) だけを使う。
+// 字面一致で無関係な画像が返るので、必ず flash-lite の審査を通してから採用する。
+async function sekoFindPhoto(q, queries) {
+  const qs = (Array.isArray(queries) ? queries : String(queries || "").split(/[,、]/))
+    .map((x) => String(x || "").trim()).filter(Boolean).slice(0, 3);
+  if (!qs.length) return null;
+  let candidates = [];
+  try {
+    candidates = await dramaSearchWebImages(qs, 8);
+  } catch (e) {
+    console.warn("[seko] photo search failed:", e.message);
+    return null;
+  }
+  if (!candidates.length) return null;
+  if (!genAI) return null;
+  try {
+    const { result } = await callGeminiWithFallback(
+      `2級建築施工管理技士検定の問題の参考写真を選びます。\n` +
+      `問題: ${String(q.question || "").slice(0, 200)}\n` +
+      `探している対象: ${qs.join(" / ")}\n\n` +
+      `候補 (タイトル — 出典):\n` +
+      candidates.map((c, i) => `${i + 1}. ${c.title} — ${c.source}`).join("\n") +
+      `\n\nこの問題で問われている部材・工法そのものが写っていると**確信できる**ものの番号だけを、` +
+      `良い順に JSON の数値配列で返してください。建築と無関係なもの、別の工法、人物・ロゴ・地図、` +
+      `抽象的な風景は含めない。確信が持てなければ [] を返す。`,
+      { primaryModel: "gemini-2.5-flash-lite", maxOutputTokens: 300, jsonMode: true, thinkingBudget: 0 }
+    );
+    const t = (result.response.text() || "").trim();
+    const arr = JSON.parse(t.slice(t.indexOf("["), t.lastIndexOf("]") + 1));
+    const idx = (Array.isArray(arr) ? arr : []).map(Number)
+      .filter((n) => Number.isInteger(n) && n >= 1 && n <= candidates.length);
+    if (!idx.length) return null;
+    const pick = candidates[idx[0] - 1];
+    if (!pick?.imageUrl || !/^https:\/\//.test(pick.imageUrl)) return null;
+    return {
+      imageUrl: pick.imageUrl,
+      credit: `${pick.title || "無題"} — ${pick.source}`.slice(0, 200),
+      pageUrl: pick.pageUrl || null,
+      candidates: candidates.length,
+      picked: pick.title,
+    };
+  } catch (e) {
+    console.warn("[seko] photo vet failed:", e.message);
     return null;
   }
 }
@@ -8235,6 +8323,9 @@ ${lines}
   ・四肢択一: 「四つのうち最も不適当なものはどれか」「次のうち正しいものはどれか」型。options 4 つ、answer は正解の選択肢の文字列そのまま (A/B/C/D の記号不要)。type は "choice"。
   ・記述式: 本試験二次の形式。設問は短答記述 (例「鉄筋工事における配筋検査の留意事項を 2 つ簡潔に述べよ」「コンクリート打設時の留意点を 80 字程度で述べよ」)。options は null。answer には模範解答の要点 (50-150 字) を入れる。keywords に採点キーワード 3-5 個を入れる (これが含まれれば部分正解扱い)。type は "free"。
 - 解説は 3-5 文。なぜ正解か、誤答はなぜ違うか (択一)、模範解答のポイント (記述)、現場の留意点を 1 文。
+- "photo_query": その部材・工法の**実物写真**を Web で探すための英語検索語を 1〜2 個 (カンマ区切り)。
+  用語や工法の「見た目」を覚えるのに写真が効く問題だけ書く (例: 折板屋根 → "standing seam metal roof, corrugated metal roofing")。
+  工程表・応力・寸法など「その問題専用の図」が必要なものは空文字にする
 - "diagram": 問われている部材・部位・納まりが図で示せるなら**必ず**書く (図と一緒に覚えるのが目的)。
   ・工程表・応力・断面寸法など「図がないと解けない」問題 → その設問図の内容
   ・用語や施工方法の問題 (例: 重ね形折板葺、軽量鉄骨天井下地、シーリングの目地) →
@@ -8253,6 +8344,7 @@ JSON 配列でだけ返す (前置きや説明禁止)。配列の長さは ${ite
     "answer": "...",
     "keywords": ["..."],
     "explanation": "3-5 文",
+    "photo_query": "実物写真の英語検索語 (不要なら空文字)",
     "diagram": "図が必須なら描画内容、不要なら空文字",
     "claude_example": ""
   },
@@ -8300,7 +8392,11 @@ JSON 配列でだけ返す (前置きや説明禁止)。配列の長さは ${ite
           imageUrl,
         ]
       );
-      out.push({ ...ins.rows[0], _diagram: String(parsed.diagram || "").trim().slice(0, 300) });
+      out.push({
+        ...ins.rows[0],
+        _diagram: String(parsed.diagram || "").trim().slice(0, 300),
+        _photoQuery: String(parsed.photo_query || "").trim().slice(0, 120),
+      });
     } catch (e) {
       console.warn("[seko] insert failed for item", i, e.message);
     }
@@ -8844,6 +8940,8 @@ app.post("/api/seko/sessions/start", async (req, res) => {
         group_id: q.group_id,
         exam_level: q.exam_level,
         image_url: q.image_url || null,
+        image_credit: q.image_credit || null,
+        image_page_url: q.image_page_url || null,
       })),
     });
   } catch (err) {
