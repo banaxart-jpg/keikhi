@@ -2178,6 +2178,37 @@ app.all("/api/photos/mcp/:token", (req, res) => {
 // POST { cases: [{ id, question, answer, keywords, user_answer }], rubric?: string, model?: string }
 // → { results: [{ id, score, feedback, ms }] }。rubric を渡すと採点基準を差し替えて A/B できる。
 const SEKO_DEBUG_TOKEN = (process.env.SEKO_DEBUG_TOKEN || "kx9m2seko7vqt4wp8zh").trim();
+// 出題生成の確認用。{ genre, qtype?, count? } → 生成した問題 (DB には入るが出題プールと同じ扱い)
+// 数値の正しさを目で見て確認するため。プロンプトに入った数値表も返す。
+app.post("/api/seko/debug-generate/:token", async (req, res) => {
+  if (req.params.token !== SEKO_DEBUG_TOKEN) return res.status(403).json({ error: "forbidden" });
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  const b = req.body || {};
+  const genres = Array.isArray(b.genres) ? b.genres.slice(0, 5) : [String(b.genre || "")].filter(Boolean);
+  if (!genres.length) return res.status(400).json({ error: "genre か genres が必要" });
+  try {
+    await ensureSchema();
+    const items = genres.map((g) => {
+      const groupId = SEKO_GENRE_TO_GROUP.get(g) || null;
+      const groupRow = groupId ? SEKO_GROUP_BY_ID.get(groupId) : null;
+      return { genre: g, groupId, examLevel: groupRow?.exam_level || "1ji", qtype: b.qtype === "free" ? "free" : "choice" };
+    });
+    const t0 = Date.now();
+    const gen = await generateSekoQuestionsBatch(p, items, b.shubetsu || null);
+    res.json({
+      ms: Date.now() - t0,
+      facts_injected: sekoFactsBlock(genres),
+      questions: gen.map((q) => ({
+        id: q.id, genre: q.genre, type: q.type, question: q.question, options: q.options,
+        answer: q.answer, explanation: q.explanation, photo_query: q._photoQuery || null, diagram: q._diagram || null,
+      })),
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // 参考写真の検索 + 審査の動作確認用。{ question, query } → 採用結果と候補一覧
 app.post("/api/seko/debug-photo/:token", async (req, res) => {
   if (req.params.token !== SEKO_DEBUG_TOKEN) return res.status(403).json({ error: "forbidden" });
@@ -7935,6 +7966,30 @@ app.put("/api/kotonoha/me/visibility", async (req, res) => {
 // ユーザーは exam_target ('first_full' | 'second_only') を選んで出題範囲をフィルタ。
 // ============================================================
 
+// 頻出数値の正解表 (seko-facts.json)。AI 生成の数値がブレるので出題プロンプトに注入する。
+let SEKO_FACTS = null;
+try {
+  SEKO_FACTS = JSON.parse(fs.readFileSync(path.join(__dirname, "seko-facts.json"), "utf8"));
+} catch (e) {
+  console.warn("[seko] seko-facts.json 読み込み失敗:", e.message);
+}
+// 出題対象のジャンル名に関係する数値だけを抜き出してプロンプトに入れる (全部入れると長い)
+function sekoFactsBlock(genreNames) {
+  if (!SEKO_FACTS) return "";
+  const hay = (Array.isArray(genreNames) ? genreNames : [genreNames]).join(" ");
+  const parts = [];
+  for (const [name, g] of Object.entries(SEKO_FACTS.groups || {})) {
+    // match キーワードのどれかがジャンル名に含まれれば、その分野の数値表を入れる
+    const keys = Array.isArray(g.match) ? g.match : [name];
+    if (!keys.some((k) => k && hay.includes(k))) continue;
+    parts.push(`【${name}】(${g.source})\n` + (g.facts || []).map((f) => "・" + f).join("\n")
+      + (g.confusable ? `\n※ ${g.confusable}` : ""));
+  }
+  const policy = (SEKO_FACTS._number_policy || []).map((p) => "・" + p).join("\n");
+  if (!parts.length) return policy ? `\n■ 数値の扱い\n${policy}\n` : "";
+  return `\n■ 数値の扱い\n${policy}\n\n■ この分野の数値 (必ずこの値・この語尾を使う)\n${parts.join("\n\n")}\n`;
+}
+
 let SEKO_GENRES_DATA = null;
 let SEKO_GENRE_TO_GROUP = new Map();
 let SEKO_GENRE_TARGET = new Map();
@@ -8362,8 +8417,9 @@ async function generateSekoQuestionsBatch(p, items, shubetsu) {
   指定が「建築学 (一般) / 採光・照明」なら採光・照明の問題を作る。「法規 / 建築基準法」なら建築基準法の問題を作る。
 - 受検種別の情報は「現場での運用注意」と「解説末尾の一言コメント」だけに使う (= 出題論点を種別寄りに歪めない)。
 - 解説の最後に「【${shubetsuLabel} の現場で】」と添えて、当該種別の現場での運用注意を 1 文加える。` : "";
+  const factsBlock = sekoFactsBlock(items.map((it) => it.genre));
   const prompt = `あなたは ${subject} の出題者。
-${shubetsuBlock}
+${shubetsuBlock}${factsBlock}
 次の ${items.length} 件、それぞれ別の問題を作って:
 ${lines}
 
