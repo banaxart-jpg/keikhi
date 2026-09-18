@@ -31,12 +31,33 @@ Cloud SQL (drama_projects / drama_characters / drama_videos) + GCS (動画・画
 | ツール | 何をする |
 |---|---|
 | `drama_list_projects` / `drama_create_project` / `drama_update_project` / `drama_get_project` | プロジェクト CRUD (絵柄 styleGuide・世界観 worldSetting・メモ) |
-| `drama_upsert_character` | キャラ登録 (identityTokens で同一人物性を担保) |
-| `drama_generate_image` | 静止画生成 ≈¥6。saveAs で作画基準/キャラ参照に登録。チャットに縮小プレビューを返す |
+| `drama_upsert_character` | キャラ登録 (appearance + identityTokens は毎回の生成プロンプトにサーバーが自動注入) |
+| `drama_generate_image` | 静止画生成 ≈¥6。scene / composition / lighting / mustInclude / mustAvoid の slot をサーバーが styleGuide + キャラ設定と合成 (finalPrompt を返す)。review / autoFix で Gemini 審査 + 自動修正。width で保存サイズ可変 (下書き 600 / 本番 1200)。saveAs で作画基準/キャラ参照に登録。1024px プレビューを返す |
+| `drama_edit_image` | 既存画像の部分修正 ≈¥6。baseImageUrl + instruction。キャラ・絵柄・構図を保って指示だけ反映 (細部直しは generate より安定) |
 | `drama_generate_video` | 9:16 動画生成 (Seedance、8秒≈¥150)。非同期 |
 | `drama_check_videos` | 生成進捗の確認 + 完了時 GCS 保存 |
 | `drama_delete_video` | ギャラリーから削除 |
 | `drama_get_costs` | API 費用の集計 (drama_api_usage) |
+
+### 画像精度のハンドシェイク (v1.1)
+
+```
+Claude: scene / composition / lighting / mustInclude / mustAvoid + characterNames
+   │
+   ▼ サーバーが合成
+finalPrompt = シーン + 構図 + 光 + 登場人物 (appearance / identityTokens) + 絵柄 (styleGuide) + 必ず入れる / 入れない
+参照画像   = 追加 URL → キャラ参照 (1人なら2枚) → 作画基準 (残り枠)   ※役割を Gemini に明示
+   │
+   ▼ Gemini 2.5 flash image (≈¥6)
+review: true なら flash で審査 → {ok, problems, fixInstruction}
+autoFix: 1〜2 なら NG のとき編集モードで自動修正 (+¥6/回)
+   │
+   ▼ 結果: 1024px プレビュー + imageUrl + finalPrompt + review + refImages
+細部直し → drama_edit_image(baseImageUrl, instruction)   ← 作り直しより絵柄が保たれる
+```
+
+- 作画基準 (`saveAs: 'style_ref'`) は `{url, gcsUrl}` で保存し、読む側で署名を貼り直す (以前は署名 URL 文字列だけで 7 日で切れていた)
+- `width` は保存サイズ。Gemini の出力は長辺 ~1024px 固定なので 1200 は lanczos の拡大 (縮小はトークン・転送量が減る)
 
 ## 使い方 (アプリ側)
 
@@ -58,4 +79,5 @@ Cloud SQL (drama_projects / drama_characters / drama_videos) + GCS (動画・画
 
 - [ ] カット連結・BGM・ナレーション付きの「1話まるごと書き出し」
 - [ ] チャットからの画像添付を MCP 経由で参照に登録する導線 (今は URL 渡しのみ)
+- [ ] 本番用の高解像度: 2K 出力対応モデルへの切替 (今は 1024 からの拡大)
 - [ ] ギャラリーの並べ替え・話数まとめ表示

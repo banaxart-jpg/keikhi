@@ -487,28 +487,205 @@ async function dramaRefUrlOf(entry) {
   return entry.url || null;
 }
 
-// MCP ツール共通: 参照画像 URL リストを組み立てる (明示 URL → 作画基準 → キャラ参照)
-async function dramaMcpRefUrls(p, projectId, { characterNames = [], imageUrls = [], useStyleRefs = true, max = 4 }) {
-  const urls = [...(imageUrls || [])];
+// MCP ツール共通: 参照画像を役割付きで組み立てる。
+// 優先順: 明示 URL → 登場キャラの参照 (1人なら2枚まで、複数なら各1枚) → 作画基準 (残り枠)。
+// 以前は作画基準 2 枚が先に枠を食ってキャラ参照が落ちることがあった。
+// 返り値: [{ url, role }] (role は Gemini への説明文と結果表示に使う)
+async function dramaMcpRefEntries(p, projectId, { characterNames = [], imageUrls = [], useStyleRefs = true, max = 4 }) {
+  const out = [];
+  for (const u of (imageUrls || [])) if (u) out.push({ url: u, role: "追加参照 (構図・前の生成結果)" });
   if (projectId) {
-    if (useStyleRefs) {
+    const names = (characterNames || []).filter(Boolean);
+    if (names.length) {
+      const { rows: chars } = await p.query(
+        `SELECT name, reference_images AS r FROM drama_characters WHERE project_id=$1`, [projectId]);
+      const perChar = names.length >= 2 ? 1 : 2;
+      for (const nm of names) {
+        const c = chars.find((x) => x.name === nm);
+        for (const entry of (c?.r || []).slice(0, perChar)) {
+          const u = await dramaRefUrlOf(entry);
+          if (u) out.push({ url: u, role: `キャラ「${nm}」の参照 (同一人物として描く)` });
+        }
+      }
+    }
+    if (useStyleRefs && out.length < max) {
       const { rows } = await p.query(`SELECT style_ref_images AS s FROM drama_projects WHERE id=$1`, [projectId]);
       for (const entry of (rows[0]?.s || []).slice(0, 2)) {
         const u = await dramaRefUrlOf(entry);
-        if (u) urls.push(u);
-      }
-    }
-    if ((characterNames || []).length) {
-      const { rows: chars } = await p.query(
-        `SELECT name, reference_images AS r FROM drama_characters WHERE project_id=$1`, [projectId]);
-      for (const nm of characterNames) {
-        const c = chars.find((x) => x.name === nm);
-        const u = await dramaRefUrlOf((c?.r || [])[0]);
-        if (u) urls.push(u);
+        if (u) out.push({ url: u, role: "作画基準 (絵柄・タッチ・塗りの見本)" });
       }
     }
   }
-  return urls.slice(0, max);
+  return out.slice(0, max);
+}
+
+// 後方互換 (動画ツール用): URL だけの配列
+async function dramaMcpRefUrls(p, projectId, opts) {
+  return (await dramaMcpRefEntries(p, projectId, opts)).map((e) => e.url);
+}
+
+// 役割付き参照を inlineData に変換 (取得失敗は落として、役割と枚数の対応を保つ)
+async function dramaMcpFetchRefParts(entries) {
+  const parts = []; const roles = [];
+  for (const e of entries) {
+    try {
+      const got = await dramaFetchImageParts([e.url], 1);
+      if (got.length) { parts.push(got[0]); roles.push(e.role); }
+    } catch (err) { console.warn("[drama-mcp] ref image fetch skipped:", err.message); }
+  }
+  return { parts, roles };
+}
+
+// MCP 用: 生成プロンプトをサーバー側で合成する。
+// Claude は scene / composition / lighting / mustInclude / mustAvoid の slot を埋め、
+// サーバーが styleGuide + キャラの appearance + identityTokens を決まった順で足す。
+// (以前は Claude の自由文だけを Gemini に渡していて、DB に登録したキャラ設定が
+//  テキストとして一切使われていなかった → 参照画像 1 枚頼みで同一人物性がブレた)
+async function dramaMcpComposePrompt(p, projectId, a, { mode = "generate" } = {}) {
+  const { rows: proj } = await p.query(
+    `SELECT style_guide AS "styleGuide", world_setting AS "worldSetting" FROM drama_projects WHERE id=$1`, [projectId]);
+  if (!proj.length) throw new Error("project not found");
+  const styleGuide = proj[0].styleGuide || "";
+  const names = (a.characterNames || []).filter(Boolean);
+  let chars = [];
+  if (names.length) {
+    const { rows } = await p.query(
+      `SELECT name, appearance_prompt AS appearance, identity_tokens AS tokens FROM drama_characters WHERE project_id=$1`, [projectId]);
+    chars = names.map((nm) => rows.find((c) => c.name === nm) || { name: nm, appearance: null, tokens: [] });
+  }
+  const arr = (v) => (Array.isArray(v) ? v.filter(Boolean).map(String) : []);
+  const lines = [];
+  if (mode === "edit") {
+    lines.push(`添付の 1 枚目の画像を編集してください。キャラクター・絵柄・構図は保ったまま、次の指示だけ反映する: ${a.instruction}`);
+  } else {
+    const scene = a.scene || a.prompt || "";
+    lines.push(`シーン: ${scene}`);
+    if (a.scene && a.prompt && a.prompt !== a.scene) lines.push(`補足: ${a.prompt}`);
+    if (a.composition) lines.push(`構図・カメラ: ${a.composition}`);
+    if (a.lighting) lines.push(`光・色調: ${a.lighting}`);
+  }
+  if (chars.length) {
+    lines.push("登場人物 (毎回同一人物として描く。参照画像と以下の特徴を必ず一致させる):");
+    for (const c of chars) {
+      const tk = arr(c.tokens);
+      lines.push(`- ${c.name}${c.appearance ? `: ${c.appearance}` : ""}${tk.length ? ` / 識別特徴: ${tk.join("、")}` : ""}`);
+    }
+  }
+  if (styleGuide) lines.push(`絵柄: ${styleGuide}`);
+  if (proj[0].worldSetting && mode !== "edit") lines.push(`世界観: ${String(proj[0].worldSetting).slice(0, 300)}`);
+  const inc = arr(a.mustInclude); const avoid = arr(a.mustAvoid);
+  if (inc.length) lines.push(`必ず入れる: ${inc.join("、")}`);
+  if (avoid.length) lines.push(`入れない: ${avoid.join("、")}`);
+  lines.push("出力は指示された 1 枚の画のみ (キャラクターシート・複数コマ・注釈文字にしない)");
+  return { finalPrompt: lines.join("\n"), styleGuide, userRequest: (mode === "edit" ? a.instruction : (a.scene || a.prompt || "")).slice(0, 400) };
+}
+
+// 参照画像の役割を Gemini に説明する refNote を組む (何枚目が何かを明示)
+function dramaMcpRefNote(roles, { editBase = false } = {}) {
+  const parts = [];
+  let i = 1;
+  if (editBase) { parts.push(`${i}枚目: 修正対象の画像 (これを直す)`); i++; }
+  for (const r of roles) { parts.push(`${i}枚目: ${r}`); i++; }
+  return `添付画像の役割 → ${parts.join(" / ")}。作画基準・キャラ参照は絵柄・キャラデザインの基準として使い、新しい絵柄を発明しない。`
+    + `参照がキャラクターシートや資料でも、そのレイアウト・枠・注釈文字・指示に関係ない他のキャラクターを画面に入れない。`
+    + (editBase ? "修正対象のデザイン・構図は保ち、指示された変更だけ行う。" : "")
+    + "出力は指示された 1 シーンの画のみ";
+}
+
+// MCP 用: 生成 (or 編集) → 任意で自己レビュー → NG なら編集モードで自動修正 (最大 autoFix 回)。
+// v1 チャット版と同じ収束ロジック。返り値 { img, attempts, review }
+async function dramaMcpImageRun({ projectId, finalPrompt, refParts, refRoles, basePart = null, aspectRatio, review = false, autoFix = 0, styleGuide = "", userRequest = "" }) {
+  const genOpts = aspectRatio ? { aspectRatio } : {};
+  const styleRefParts = refParts.filter((_, i) => /作画基準/.test(refRoles[i] || ""));
+  let img = null; let attempts = 0; let lastReview = null; let editInstruction = null;
+  const maxFix = Math.max(0, Math.min(2, Math.round(autoFix || 0)));
+  while (true) {
+    if (editInstruction && img) {
+      img = await dramaGenerateImage(
+        `添付の 1 枚目の画像を修正してください。キャラクター・絵柄・構図は保ったまま、次の問題だけ直す: ${editInstruction}\n(元の意図: ${userRequest})`,
+        [{ inlineData: { data: img.data, mimeType: img.mimeType } }, ...refParts.slice(0, 3)],
+        { ...genOpts, refNote: dramaMcpRefNote(refRoles.slice(0, 3), { editBase: true }) }
+      );
+    } else if (basePart) {
+      img = await dramaGenerateImage(finalPrompt, [basePart, ...refParts.slice(0, 3)],
+        { ...genOpts, refNote: dramaMcpRefNote(refRoles.slice(0, 3), { editBase: true }) });
+    } else {
+      img = await dramaGenerateImage(finalPrompt, refParts, { ...genOpts, refNote: dramaMcpRefNote(refRoles) });
+    }
+    dramaRecordUsage({ projectId, provider: "gemini", kind: "mcp_image", model: DRAMA_GEMINI_IMAGE_MODEL, costYen: DRAMA_GEMINI_IMAGE_YEN });
+    attempts++;
+    if (!review && !maxFix) break;
+    try {
+      lastReview = await dramaReviewImage(dramaTrackedGemini(projectId, "mcp_image_review"), {
+        prompt: finalPrompt, userRequest, styleGuide,
+        imageBase64: img.data, mimeType: img.mimeType,
+        styleRefParts, baseImagePart: basePart,
+      });
+    } catch (e) {
+      console.warn("[drama-mcp] image review failed, keeping image:", e.message);
+      lastReview = { ok: true, problems: "", fixInstruction: "", reviewFailed: true };
+      break;
+    }
+    if (lastReview.ok) break;
+    if (attempts > maxFix) break;
+    editInstruction = lastReview.fixInstruction || lastReview.problems;
+    console.log(`[drama-mcp] image self-review NG (attempt ${attempts}): ${lastReview.problems}`);
+  }
+  return { img, attempts, review: lastReview };
+}
+
+// MCP 用: 生成画像を GCS 保存 → saveAs 登録 → チャット表示用プレビュー + JSON を返す
+async function dramaMcpFinishImage(p, projectId, img, { saveAs, finalPrompt, refRoles, attempts, review, width }) {
+  // width 指定で保存サイズを可変に (下書き 600px / 本番 1200px など)。
+  // Gemini 2.5 flash image の出力は長辺 ~1024px 固定なので、1024 超は lanczos の拡大
+  // (ディテールは増えない)。縮小は転送量とトークンが減る
+  let outW = null, outH = null;
+  if (width) {
+    const w = Math.max(256, Math.min(2048, Math.round(width)));
+    const buf = await sharp(Buffer.from(img.data, "base64"))
+      .resize({ width: w, kernel: sharp.kernel.lanczos3 })
+      .toFormat(img.mimeType.includes("jpeg") ? "jpeg" : "png", { quality: 92 }).toBuffer();
+    const meta = await sharp(buf).metadata();
+    outW = meta.width; outH = meta.height;
+    img = { data: buf.toString("base64"), mimeType: img.mimeType };
+  } else {
+    try { const meta = await sharp(Buffer.from(img.data, "base64")).metadata(); outW = meta.width; outH = meta.height; } catch (_) {}
+  }
+  const saved = await dramaSaveImageToGcs(img, `drama/mcp/${projectId}`);
+  let savedAs = null;
+  if (saveAs === "style_ref") {
+    // 署名 URL は 7 日で切れるので gcsUrl も持たせて読む側で再署名する
+    // (以前は署名 URL の文字列だけ保存していて、1 週間後に作画基準が黙って消えていた)
+    await p.query(
+      `UPDATE drama_projects SET style_ref_images = style_ref_images || $2::jsonb, updated_at=now() WHERE id=$1`,
+      [projectId, JSON.stringify([saved.gcsUrl ? { url: saved.url, gcsUrl: saved.gcsUrl } : saved.url])]);
+    savedAs = "style_ref";
+  } else if (typeof saveAs === "string" && saveAs.startsWith("character_ref:")) {
+    const nm = saveAs.slice("character_ref:".length).trim();
+    const r = await p.query(
+      `UPDATE drama_characters SET reference_images = reference_images || $3::jsonb, updated_at=now()
+        WHERE project_id=$1 AND name=$2`,
+      [projectId, nm, JSON.stringify([{ url: saved.url, gcsUrl: saved.gcsUrl }])]);
+    if (!r.rowCount) throw new Error(`キャラ「${nm}」が未登録です (画像は ${saved.url} に保存済み)`);
+    savedAs = `character_ref:${nm}`;
+  }
+  // チャット表示用プレビュー。512px/q72 だと顔・手・文字の破綻が判定できず、
+  // Claude が修正指示を出せなかったので 1024px/q85 に上げた (原寸は URL で渡す)
+  const preview = await sharp(Buffer.from(img.data, "base64")).resize({ width: Math.min(outW || 1024, 1024), withoutEnlargement: true }).jpeg({ quality: 85 }).toBuffer();
+  const costYen = DRAMA_GEMINI_IMAGE_YEN * (attempts || 1);
+  return {
+    content: [
+      { type: "image", data: preview.toString("base64"), mimeType: "image/jpeg" },
+      { type: "text", text: JSON.stringify({
+        ok: true, imageUrl: saved.url, savedAs, costYen, attempts: attempts || 1,
+        width: outW, height: outH,
+        refImages: refRoles,
+        review: review ? { ok: review.ok, problems: review.problems || "", fixInstruction: review.fixInstruction || "" } : undefined,
+        finalPrompt,
+        note: "細部を直すときは drama_edit_image に baseImageUrl=この imageUrl を渡す (作り直しより絵柄が保たれる)。動画の参照にするときは referenceImageUrls に渡す",
+      }, null, 1) },
+    ],
+  };
 }
 
 // 動画行のステータス更新 (Seedance ポーリング + 完了時 GCS 保存 + 署名 URL 更新)。
@@ -691,56 +868,90 @@ const DRAMA_MCP_TOOLS = [
   },
   {
     name: "drama_generate_image",
-    description: "静止画を生成する (≈¥6/枚)。キャラデザイン案・キービジュアル・シーン画・漫画のコマ等なんでも。characterNames を渡すとそのキャラの参照画像を自動で使い、プロジェクトの作画基準画像 (styleRef) も既定で参照する。saveAs で生成結果を参照画像として登録できる: 'style_ref' (作画基準に追加) / 'character_ref:キャラ名' (そのキャラの参照に追加)",
+    description: "静止画を生成する (≈¥6/枚)。キャラデザイン案・キービジュアル・シーン画・漫画のコマ等なんでも。"
+      + "scene (何が起きているか) を中心に composition / lighting / mustInclude / mustAvoid の slot を埋めると、サーバーがプロジェクトの絵柄 (styleGuide) と登録キャラの見た目・識別特徴を足して最終プロンプトを組む (使った finalPrompt は結果に返る)。"
+      + "characterNames を渡すとそのキャラの参照画像 + 見た目テキストを自動で使う。プロジェクトの作画基準画像 (styleRef) も既定で参照する。"
+      + "review: true で生成結果を Gemini に審査させ {ok, problems, fixInstruction} を返す (+数円)。autoFix: 1〜2 で NG のとき自動で編集修正まで回す (1 回ごと +¥6)。"
+      + "saveAs で生成結果を参照画像として登録できる: 'style_ref' (作画基準に追加) / 'character_ref:キャラ名' (そのキャラの参照に追加)。"
+      + "出来た画の細部を直したいときは作り直さず drama_edit_image を使う",
     inputSchema: {
       type: "object",
       properties: {
         projectId: { type: "number" },
-        prompt: { type: "string", description: "描いてほしい画の指示 (日本語OK)" },
+        scene: { type: "string", description: "何が起きている画か (被写体・動作・表情・場所)。日本語OK。prompt の代わりにこちらを推奨" },
+        prompt: { type: "string", description: "自由文の指示 (scene と併用時は補足扱い)。旧形式との互換" },
+        composition: { type: "string", description: "構図・カメラ (例: バストアップ、ローアングル、被写体は左三分の一)" },
+        lighting: { type: "string", description: "光・色調 (例: 夕方の逆光、寒色、コントラスト強め)" },
+        mustInclude: { type: "array", items: { type: "string" }, description: "必ず画面に入れる要素" },
+        mustAvoid: { type: "array", items: { type: "string" }, description: "入れてはいけない要素 (例: 文字、他のキャラ、複数コマ)" },
         aspectRatio: { type: "string", description: "既定 9:16 (縦型ショート)。1:1 / 16:9 等も可" },
-        characterNames: { type: "array", items: { type: "string" }, description: "登場させるキャラ名 (参照画像を自動添付)" },
+        width: { type: "number", description: "保存する画像の横幅 px (256〜2048)。下書きは 600、本番は 1200 が目安。省略時は生成そのまま (長辺 ~1024)。1024 超は拡大リサイズ" },
+        characterNames: { type: "array", items: { type: "string" }, description: "登場させるキャラ名 (参照画像 + 見た目テキストを自動添付)" },
         referenceImageUrls: { type: "array", items: { type: "string" }, description: "追加の参照画像 URL (過去の生成画像 URL 等)" },
         useStyleRefs: { type: "boolean", description: "作画基準画像を参照に含める (既定 true)" },
+        review: { type: "boolean", description: "生成後に Gemini で審査して結果に同梱 (既定 false)" },
+        autoFix: { type: "number", description: "審査 NG のとき編集モードで自動修正する最大回数 0〜2 (既定 0。指定すると review も有効)" },
         saveAs: { type: "string", description: "'style_ref' | 'character_ref:キャラ名' | 省略 (保存だけ)" },
       },
-      required: ["projectId", "prompt"],
+      required: ["projectId"],
     },
     handler: async (a) => {
+      if (!a.scene && !a.prompt) throw new Error("scene か prompt のどちらかは必須です");
       const p = dramaMcpPool();
-      const refUrls = await dramaMcpRefUrls(p, a.projectId, {
+      const { finalPrompt, styleGuide, userRequest } = await dramaMcpComposePrompt(p, a.projectId, a);
+      const refEntries = await dramaMcpRefEntries(p, a.projectId, {
         characterNames: a.characterNames, imageUrls: a.referenceImageUrls,
         useStyleRefs: a.useStyleRefs !== false, max: 4,
       });
-      const refParts = await dramaFetchImagePartsSafe(refUrls, 4);
-      const img = await dramaGenerateImage(a.prompt, refParts, { aspectRatio: a.aspectRatio || "9:16" });
-      dramaRecordUsage({ projectId: a.projectId, provider: "gemini", kind: "mcp_image", model: DRAMA_GEMINI_IMAGE_MODEL, costYen: DRAMA_GEMINI_IMAGE_YEN });
-      const saved = await dramaSaveImageToGcs(img, `drama/mcp/${a.projectId}`);
-
-      let savedAs = null;
-      if (a.saveAs === "style_ref") {
-        // style_ref_images は既存 UI との互換で文字列 URL の配列
-        await p.query(
-          `UPDATE drama_projects SET style_ref_images = style_ref_images || $2::jsonb, updated_at=now() WHERE id=$1`,
-          [a.projectId, JSON.stringify([saved.url])]);
-        savedAs = "style_ref";
-      } else if (typeof a.saveAs === "string" && a.saveAs.startsWith("character_ref:")) {
-        const nm = a.saveAs.slice("character_ref:".length).trim();
-        const r = await p.query(
-          `UPDATE drama_characters SET reference_images = reference_images || $3::jsonb, updated_at=now()
-            WHERE project_id=$1 AND name=$2`,
-          [a.projectId, nm, JSON.stringify([{ url: saved.url, gcsUrl: saved.gcsUrl }])]);
-        if (!r.rowCount) throw new Error(`キャラ「${nm}」が未登録です (画像は ${saved.url} に保存済み)`);
-        savedAs = `character_ref:${nm}`;
-      }
-
-      // チャット表示用に縮小プレビューを返す (原寸 base64 は重いので URL で渡す)
-      const preview = await sharp(Buffer.from(img.data, "base64")).resize({ width: 512, withoutEnlargement: true }).jpeg({ quality: 72 }).toBuffer();
-      return {
-        content: [
-          { type: "image", data: preview.toString("base64"), mimeType: "image/jpeg" },
-          { type: "text", text: JSON.stringify({ ok: true, imageUrl: saved.url, savedAs, costYen: DRAMA_GEMINI_IMAGE_YEN, note: "動画や次の画像の参照にするときは referenceImageUrls にこの imageUrl を渡す" }, null, 1) },
-        ],
-      };
+      const { parts: refParts, roles: refRoles } = await dramaMcpFetchRefParts(refEntries);
+      const autoFix = Number(a.autoFix) || 0;
+      const { img, attempts, review } = await dramaMcpImageRun({
+        projectId: a.projectId, finalPrompt, refParts, refRoles,
+        aspectRatio: a.aspectRatio || "9:16",
+        review: !!a.review || autoFix > 0, autoFix, styleGuide, userRequest,
+      });
+      return dramaMcpFinishImage(p, a.projectId, img, { saveAs: a.saveAs, finalPrompt, refRoles, attempts, review, width: a.width });
+    },
+  },
+  {
+    name: "drama_edit_image",
+    description: "既存の画像 (drama_generate_image の imageUrl 等) を編集する (≈¥6/回)。キャラ・絵柄・構図は保ったまま instruction の変更だけ反映するので、"
+      + "「髪型だけ直す」「小物を消す」「表情を変える」のような直しは作り直し (generate) よりこちらが安定する。"
+      + "characterNames を渡すとそのキャラの参照画像 + 見た目テキストも添える。review / autoFix / saveAs は drama_generate_image と同じ",
+    inputSchema: {
+      type: "object",
+      properties: {
+        projectId: { type: "number" },
+        baseImageUrl: { type: "string", description: "編集対象の画像 URL (imageUrl)" },
+        instruction: { type: "string", description: "直す内容だけを書く (例: 右手の指を5本にする / 背景の看板の文字を消す)" },
+        characterNames: { type: "array", items: { type: "string" } },
+        referenceImageUrls: { type: "array", items: { type: "string" }, description: "追加の参照画像 URL" },
+        useStyleRefs: { type: "boolean", description: "作画基準画像を参照に含める (既定 true)" },
+        aspectRatio: { type: "string", description: "省略時は元画像に合わせる" },
+        width: { type: "number", description: "保存する画像の横幅 px (256〜2048)。下書き 600 / 本番 1200 目安。省略時は生成そのまま" },
+        review: { type: "boolean" },
+        autoFix: { type: "number", description: "0〜2" },
+        saveAs: { type: "string", description: "'style_ref' | 'character_ref:キャラ名' | 省略" },
+      },
+      required: ["projectId", "baseImageUrl", "instruction"],
+    },
+    handler: async (a) => {
+      const p = dramaMcpPool();
+      const baseParts = await dramaFetchImageParts([a.baseImageUrl], 1);
+      if (!baseParts.length) throw new Error("編集対象の画像を取得できませんでした");
+      const { finalPrompt, styleGuide, userRequest } = await dramaMcpComposePrompt(p, a.projectId, a, { mode: "edit" });
+      const refEntries = await dramaMcpRefEntries(p, a.projectId, {
+        characterNames: a.characterNames, imageUrls: a.referenceImageUrls,
+        useStyleRefs: a.useStyleRefs !== false, max: 3,
+      });
+      const { parts: refParts, roles: refRoles } = await dramaMcpFetchRefParts(refEntries);
+      const autoFix = Number(a.autoFix) || 0;
+      const { img, attempts, review } = await dramaMcpImageRun({
+        projectId: a.projectId, finalPrompt, refParts, refRoles, basePart: baseParts[0],
+        aspectRatio: a.aspectRatio || null,
+        review: !!a.review || autoFix > 0, autoFix, styleGuide, userRequest,
+      });
+      return dramaMcpFinishImage(p, a.projectId, img, { saveAs: a.saveAs, finalPrompt, refRoles: ["修正対象 (baseImageUrl)", ...refRoles], attempts, review, width: a.width });
     },
   },
   {
@@ -835,14 +1046,19 @@ const DRAMA_MCP_TOOLS = [
 
 const dramaMcpHandler = dramaCreateMcpHandler({
   name: "auto-drama",
-  version: "1.0.0",
+  version: "1.1.0",
   instructions: [
     "ドラマ/アニメ/漫画をチャットから作る制作ツール。基本の流れ:",
     "1. drama_create_project でプロジェクト作成 (styleGuide に絵柄を書く)",
-    "2. drama_upsert_character でキャラ登録 → drama_generate_image でデザイン案 (≈¥6/枚) → 気に入ったら saveAs: 'character_ref:名前' で参照登録",
+    "2. drama_upsert_character でキャラ登録 (appearance と identityTokens を必ず埋める。毎回の生成プロンプトに自動で入る) → drama_generate_image でデザイン案 (≈¥6/枚) → 気に入ったら saveAs: 'character_ref:名前' で参照登録 (正面 + 別角度の 2 枚あると安定)",
     "3. シーンの静止画を drama_generate_image で確認 (¥6) してから drama_generate_video (8秒≈¥150) に進むと安い",
     "4. 動画は非同期。drama_check_videos で確認。完成したらギャラリー (置き場アプリ) に自動で並ぶ",
-    "画像同士の連続性は referenceImageUrls / characterNames の参照画像で保つ。",
+    "画像の精度を上げるコツ:",
+    "- generate では自由文 prompt より scene / composition / lighting / mustInclude / mustAvoid の slot を埋める。絵柄とキャラ設定はサーバーが足す (結果の finalPrompt で確認できる)",
+    "- 出来た画の細部を直すときは作り直さず drama_edit_image (baseImageUrl + instruction)。絵柄と構図が保たれる",
+    "- 目視で判断しにくい時は review: true で Gemini の審査結果 (problems / fixInstruction) を見る。autoFix: 1 で NG 時の修正まで自動",
+    "- 画像同士の連続性は characterNames と referenceImageUrls (前の生成画像) で保つ",
+    "- 下書き段階は width: 600、本番用は width: 1200 で保存サイズを切り替える (生成コストは同じ)",
   ].join("\n"),
   tools: DRAMA_MCP_TOOLS,
 });
@@ -11570,6 +11786,8 @@ app.get("/api/drama/projects/:id", async (req, res) => {
     const { rows: assets } = await p.query(
       `SELECT id, name, note, url FROM drama_assets WHERE project_id=$1 ORDER BY id`, [req.params.id]
     );
+    // 作画基準は {url, gcsUrl} 形式も混ざる (MCP 登録分)。旧 UI 向けに URL 文字列へ揃える
+    rows[0].styleRefImages = (await Promise.all((rows[0].styleRefImages || []).map(dramaRefUrlOf))).filter(Boolean);
     res.json({ ...rows[0], characters, locations, episodes, assets });
   } catch (err) {
     console.error("[drama] project detail", err);
@@ -13119,7 +13337,10 @@ const DRAMA_CHAT_MAX_IMAGES = 4;
 const DRAMA_CHAT_MAX_IMAGE_BYTES = 8 * 1024 * 1024;
 async function dramaFetchImageParts(imageUrls, max = DRAMA_CHAT_MAX_IMAGES) {
   const parts = [];
-  for (const url of (imageUrls || []).slice(0, max)) {
+  for (const entry of (imageUrls || []).slice(0, max)) {
+    // MCP 経由で登録した作画基準は {url, gcsUrl} 形式 (署名を貼り直すため)。文字列 URL と両対応
+    const url = typeof entry === "string" ? entry : await dramaRefUrlOf(entry);
+    if (!url) continue;
     if (url.startsWith("data:")) {
       // ローカル dev で生成した data URI もそのまま読めるように
       const m = url.match(/^data:([^;]+);base64,(.+)$/);
