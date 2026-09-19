@@ -8677,18 +8677,28 @@ JSON 配列でだけ返す (前置きや説明禁止)。配列の長さは ${ite
   },
   ... (合計 ${items.length} 件)
 ]`;
-  // 15 秒のハードタイムアウト + jsonMode で構造保証。
+  // jsonMode で構造保証。思考トークンは 0 にする —
+  // 2.5 系は既定で思考に出力枠を使うため、枠が足りず JSON が途中で切れて parse エラーになる
+  // (実測: 3 問生成で "Expected ',' or '}' at position 367")。採点側と同じ対策。
   const geminiP = callGeminiWithFallback(prompt, {
     primaryModel: "gemini-2.5-flash",
-    maxOutputTokens: Math.min(5000, 600 + items.length * 500),
+    maxOutputTokens: Math.min(8000, 1500 + items.length * 900),
     jsonMode: true,
+    temperature: 0.7,
+    thinkingBudget: 0,
   });
-  const timeoutP = new Promise((_, rej) => setTimeout(() => rej(new Error("Gemini タイムアウト (15s)")), 15000));
+  const timeoutP = new Promise((_, rej) => setTimeout(() => rej(new Error("Gemini タイムアウト (30s)")), 30000));
   const { result } = await Promise.race([geminiP, timeoutP]);
   const text = (result.response.text() || "").trim();
   const m = text.match(/\[[\s\S]*\]/);
-  if (!m) throw new Error("AI レスポンスから JSON 配列取れず: " + text.slice(0, 100));
-  const arr = JSON.parse(m[0]);
+  if (!m) throw new Error("AI レスポンスから JSON 配列取れず: " + text.slice(0, 200));
+  let arr;
+  try {
+    arr = JSON.parse(m[0]);
+  } catch (e) {
+    console.warn("[seko] 生成 JSON パース失敗 (末尾):", m[0].slice(-200));
+    throw new Error(`生成 JSON パース失敗 (${m[0].length} 文字): ${e.message}`);
+  }
   if (!Array.isArray(arr)) throw new Error("配列ではない");
   const out = [];
   for (let i = 0; i < arr.length && i < items.length; i++) {
