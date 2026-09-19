@@ -2411,10 +2411,12 @@ app.post("/api/seko/debug-generate/:token", async (req, res) => {
       return { genre: g, groupId, examLevel: groupRow?.exam_level || "1ji", qtype: b.qtype === "free" ? "free" : "choice" };
     });
     const t0 = Date.now();
-    const gen = await generateSekoQuestionsBatch(p, items, b.shubetsu || null);
+    const genOpts = {};
+    const gen = await generateSekoQuestionsBatch(p, items, b.shubetsu || null, genOpts);
     res.json({
       ms: Date.now() - t0,
       facts_injected: sekoFactsBlock(genres),
+      rejected: genOpts.rejected || [],
       questions: gen.map((q) => ({
         id: q.id, genre: q.genre, type: q.type, question: q.question, options: q.options,
         answer: q.answer, explanation: q.explanation, photo_query: q._photoQuery || null, diagram: q._diagram || null,
@@ -8602,15 +8604,89 @@ async function sekoVerifyPhoto(imageUrl, targets, question) {
 
 // AI で N 問まとめて生成して seko_questions に INSERT、行配列を返す。
 // 大きすぎる応答は Gemini が JSON 切ったり time out するので、N>5 は分割並列で呼ぶ。
-async function generateSekoQuestionsBatch(p, items, shubetsu) {
+// 生成直後の自己校閲。答えを見せずに別呼び出しで各選択肢を独立判定させ、
+// 「誤りの選択肢がちょうど 1 つ」かつ「それが answer と一致」でなければ捨てる。
+// 実測 (debug-generate 15 問) では数値の誤りは 0 だったが、
+// 「4 択すべて正しい記述 (不適当なものが無い)」「正しい記述を不適当と判定」が数問混ざっていた。
+// 出題ロジックが破綻した問題は解いた側が納得できないので、DB に入れる前に落とす。
+function sekoStemDirection(question) {
+  const q = String(question || "");
+  if (/不適当|誤って|適当でない|正しくない/.test(q)) return "wrong"; // 誤りを 1 つ選ぶ
+  if (/最も適当|正しいもの|適当なもの/.test(q)) return "right";      // 正しいものを 1 つ選ぶ
+  return null; // 問い方が読めないものは校閲しない (素通し)
+}
+
+async function sekoVerifyChoiceBatch(rows) {
+  const targets = rows
+    .map((r, i) => ({ i, r }))
+    .filter(({ r }) => r && r.type !== "free" && Array.isArray(r.options)
+      && r.options.length === 4 && sekoStemDirection(r.question));
+  if (!targets.length || !genAI) return new Map();
+  const block = targets.map(({ r }, n) => {
+    const opts = r.options.map((o, k) => "  " + (k + 1) + ". " + o).join("\n");
+    return "[" + (n + 1) + "] " + r.question + "\n" + opts;
+  }).join("\n\n");
+  const prompt = `あなたは 2級建築施工管理技術検定の問題校閲者です。
+次の各設問について、選択肢を 1 つずつ「建築施工の記述として正しいか、誤っているか」判定してください。
+根拠は公共建築工事標準仕様書・建築基準法施行令・JASS。
+設問文の問い方 (不適当なものを選ぶ / 正しいものを選ぶ) は無視し、選択肢そのものの正誤だけを見ます。
+迷う場合・出典を思い出せない場合は「正しい」とします (確実に誤りと言えるものだけ挙げる)。
+
+${block}
+
+JSON 配列でだけ返す (前置き禁止):
+[{"q": 1, "wrong": [誤っている選択肢の番号], "reason": "誤りと判断した根拠 (40字以内、無ければ空文字)"}]`;
+  try {
+    const { result } = await callGeminiWithFallback(prompt, {
+      primaryModel: "gemini-2.5-flash",
+      maxOutputTokens: Math.min(4000, 800 + targets.length * 400),
+      jsonMode: true,
+      temperature: 0,
+      thinkingBudget: 0,
+    });
+    const text = (result.response.text() || "").trim();
+    const m = text.match(/\[[\s\S]*\]/);
+    if (!m) return new Map();
+    const arr = JSON.parse(m[0]);
+    const norm = (x) => String(x || "").replace(/[\s、。,.]/g, "");
+    const out = new Map();
+    for (const v of Array.isArray(arr) ? arr : []) {
+      const t = targets[Number(v?.q) - 1];
+      if (!t) continue;
+      const wrong = [...new Set((Array.isArray(v.wrong) ? v.wrong : []).map(Number).filter((x) => x >= 1 && x <= 4))];
+      const answer = norm(t.r.answer);
+      let ok = false, why = "";
+      if (sekoStemDirection(t.r.question) === "wrong") {
+        if (wrong.length !== 1) why = "誤りの選択肢が " + wrong.length + " 個 (1 個であるべき)";
+        else if (norm(t.r.options[wrong[0] - 1]) !== answer) why = "校閲は " + wrong[0] + " 番を誤りと判定 (answer と不一致)";
+        else ok = true;
+      } else {
+        if (wrong.length !== 3) why = "正しい選択肢が " + (4 - wrong.length) + " 個 (1 個であるべき)";
+        else {
+          const right = [1, 2, 3, 4].find((k) => !wrong.includes(k));
+          if (norm(t.r.options[right - 1]) !== answer) why = "校閲は " + right + " 番を正しいと判定 (answer と不一致)";
+          else ok = true;
+        }
+      }
+      out.set(t.i, { ok, why, reason: String(v.reason || "").slice(0, 80) });
+    }
+    return out;
+  } catch (e) {
+    console.warn("[seko] 出題校閲に失敗 (素通しする):", e.message);
+    return new Map();
+  }
+}
+
+async function generateSekoQuestionsBatch(p, items, shubetsu, opts = {}) {
   if (!genAI) throw new Error("Gemini 未設定");
   if (!items.length) return [];
+  const rejected = opts.rejected || (opts.rejected = []); // 校閲で落ちた問題 (デバッグ API 用)
   // 5 問より多ければ 2 並列に分割
   if (items.length > 5) {
     const mid = Math.ceil(items.length / 2);
     const [a, b] = await Promise.allSettled([
-      generateSekoQuestionsBatch(p, items.slice(0, mid), shubetsu),
-      generateSekoQuestionsBatch(p, items.slice(mid), shubetsu),
+      generateSekoQuestionsBatch(p, items.slice(0, mid), shubetsu, opts),
+      generateSekoQuestionsBatch(p, items.slice(mid), shubetsu, opts),
     ]);
     const out = [];
     if (a.status === "fulfilled") out.push(...a.value);
@@ -8700,10 +8776,21 @@ JSON 配列でだけ返す (前置きや説明禁止)。配列の長さは ${ite
     throw new Error(`生成 JSON パース失敗 (${m[0].length} 文字): ${e.message}`);
   }
   if (!Array.isArray(arr)) throw new Error("配列ではない");
+  // 答えを伏せた別呼び出しで選択肢を再判定させ、食い違ったら DB に入れない
+  const verdicts = await sekoVerifyChoiceBatch(arr);
   const out = [];
   for (let i = 0; i < arr.length && i < items.length; i++) {
     const parsed = arr[i] || {};
     const it = items[i];
+    const verdict = verdicts.get(i);
+    if (verdict && !verdict.ok) {
+      console.warn("[seko] 校閲 NG で破棄:", verdict.why, "|", String(parsed.question || "").slice(0, 40));
+      rejected.push({
+        genre: it.genre, question: parsed.question, options: parsed.options,
+        answer: parsed.answer, why: verdict.why, reason: verdict.reason,
+      });
+      continue;
+    }
     // 図解は当面オフ (jsonMode で <svg> を string に詰めると Gemini が JSON 壊しがち)
     let imageUrl = null;
     try {
