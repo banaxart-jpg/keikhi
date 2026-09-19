@@ -8795,6 +8795,19 @@ JSON 配列でだけ返す (前置きや説明禁止)。配列の長さは ${ite
     throw new Error(`生成 JSON パース失敗 (${m[0].length} 文字): ${e.message}`);
   }
   if (!Array.isArray(arr)) throw new Error("配列ではない");
+  // 「A.」「B.」等の記号を剥がす。プロンプトで禁止していても付けてくることがあり、
+  // フロントが番号を振るので「1. A. …」と二重になる
+  const stripChoiceMark = (x) => String(x || "").replace(/^\s*[A-Da-dア-エ][.．、)）:：]\s*/, "").trim();
+  for (const q of arr) {
+    if (!q || !Array.isArray(q.options)) continue;
+    const stripped = q.options.map(stripChoiceMark);
+    if (stripped.some((o, i) => o !== String(q.options[i] || "").trim())) {
+      const at = q.options.findIndex((o) => String(o).trim() === String(q.answer || "").trim());
+      q.options = stripped;
+      if (at >= 0) q.answer = stripped[at];
+      else q.answer = stripChoiceMark(q.answer);
+    }
+  }
   // 答えを伏せた別呼び出しで選択肢を再判定させ、食い違ったら DB に入れない
   const verdicts = await sekoVerifyChoiceBatch(arr, items.map((it) => it.genre));
   const out = [];
