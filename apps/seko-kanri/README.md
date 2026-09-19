@@ -71,6 +71,21 @@ curl -X POST .../api/seko/debug-generate/<token> \
 ```
 `facts_injected` に注入された数値表、`rejected` に校閲で落ちた問題と理由が入る。
 
+```
+curl ".../api/seko/debug-me/<token>?email=<user>"   # 連続日数 / 日別正解数 / 覚えた問題 / 未見プール数
+```
+ホーム集計の SQL を本番 DB で確認する用 (認証外・書き込みなし)。
+
+### ハマったところ (2026-09 総点検で直したもの)
+- **pg は DATE 型を JS の `Date` で返す** (pg-types@2)。`::date` の結果を `String()` で Map のキーにすると
+  `"Sat Sep 19 2026 …"` になり `"2026-09-19"` と一致しない → 連続日数・今日の正解数が常に 0 だった。
+  日付をキーにするときは SQL 側で `to_char(..., 'YYYY-MM-DD')` に固定する
+- 連続日数は「今日未達なら昨日から数える」。今日起点だと朝イチは必ず 0 日に見える
+- second_only の復習 group は `sessions/start` のプール検索でも含める (prewarm と条件を揃える)。
+  片方だけ除外すると、プールにあるのに毎回同期生成になる
+- prewarm の要否は「このユーザーが未見の問題数」で判定する。作成日ベースだとプールが成長しない
+- inline `onclick="fn()"` から呼ぶ関数は `window.fn = fn` で module の外に出す
+
 ## 記述問題の採点 (ルーブリック方式)
 - 記述は Gemini が採点基準 (`SEKO_GRADE_RUBRIC` in server) で 0〜100 点を付け、**60 点以上で正解**
   (説明の正確さ / 留意点の具体性、一般論は低得点、誤記述は 0 点、模範解答と違う観点でも正しければ加点)
