@@ -986,6 +986,8 @@ function renderMe(me, peers) {
   }
   renderDailyRing(s);
   state.daily = { today_correct: s.today_correct || 0, daily_min: s.daily_min || 5, streak: s.streak || 0 };
+  // 今日すでに達成済なら、次のセッションの 1 問目で「日課クリア」をもう一度出さない
+  state.dailyHitShown = !!s.today_active;
 
   // owner だけ peer overlay (最初の1人と比較)
   const peer = (peers || [])[0] || null;
@@ -1494,8 +1496,9 @@ async function submitChoice(opt, btn) {
   try {
     const qId = state.currentQId;
     const r = await api("POST", "/api/seko/answer", { question_id: qId, user_answer: opt, combo: state.combo + 1 });
+    const ansText = String(r.answer || "").trim();
     document.querySelectorAll(".choice-btn").forEach((b) => {
-      if (b.textContent === r.answer) b.classList.add("correct");
+      if (b.textContent.trim() === ansText) b.classList.add("correct");
       else if (b === btn && !r.is_correct) b.classList.add("incorrect");
     });
     handleAnswerResult(qId, r);

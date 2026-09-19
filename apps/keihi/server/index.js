@@ -2427,6 +2427,53 @@ app.post("/api/seko/debug-generate/:token", async (req, res) => {
   }
 });
 
+// ホーム集計の確認用 (認証外・推測不能トークン)。?email= のユーザーの
+// 連続日数 / 覚えた問題 / 未見プール数を返す。DB には書かない。
+app.get("/api/seko/debug-me/:token", async (req, res) => {
+  if (req.params.token !== SEKO_DEBUG_TOKEN) return res.status(403).json({ error: "forbidden" });
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  const email = String(req.query.email || "").trim().toLowerCase();
+  if (!email) return res.status(400).json({ error: "email が必要" });
+  try {
+    await ensureSchema();
+    const { rows: urows } = await p.query(`SELECT * FROM seko_users WHERE user_email = $1`, [email]);
+    const user = urows[0] || null;
+    const streak = await computeSekoStreak(p, email);
+    const { rows: learned } = await p.query(
+      `SELECT q.id, q.genre, q.group_id,
+              CASE WHEN length(q.question) > 34 THEN left(q.question, 34) || '…' ELSE q.question END AS label,
+              MAX(pr.answered_at) AS answered_at
+         FROM seko_progress pr JOIN seko_questions q ON q.id = pr.question_id
+        WHERE pr.user_email = $1 AND pr.is_correct
+        GROUP BY q.id ORDER BY answered_at DESC LIMIT 5`,
+      [email]
+    );
+    let unseen = null;
+    if (user) {
+      const allowedGenres = sekoGenresForUser(user.exam_target || "first_full", user.shubetsu || null);
+      const { rows: cnt } = await p.query(
+        `SELECT COUNT(*)::int AS n FROM seko_questions q
+          WHERE q.genre = ANY($1::text[])
+            AND NOT EXISTS (SELECT 1 FROM seko_progress pr WHERE pr.user_email = $2 AND pr.question_id = q.id)`,
+        [allowedGenres, email]
+      );
+      unseen = cnt[0]?.n ?? null;
+    }
+    const { rows: days } = await p.query(
+      `SELECT to_char((answered_at AT TIME ZONE 'Asia/Tokyo')::date, 'YYYY-MM-DD') AS d,
+              COUNT(*) FILTER (WHERE is_correct)::int AS correct, COUNT(*)::int AS total
+         FROM seko_progress WHERE user_email = $1
+        GROUP BY d ORDER BY d DESC LIMIT 14`,
+      [email]
+    );
+    res.json({ user: user ? { level: user.level, xp: user.xp, exam_target: user.exam_target, shubetsu: user.shubetsu, total_correct: user.total_correct } : null,
+      streak, days, learned_sample: learned, unseen_pool: unseen });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // 参考写真の検索 + 審査の動作確認用。{ question, query } → 採用結果と候補一覧
 app.post("/api/seko/debug-photo/:token", async (req, res) => {
   if (req.params.token !== SEKO_DEBUG_TOKEN) return res.status(403).json({ error: "forbidden" });
@@ -8248,7 +8295,7 @@ async function syncSekoSeed() {
              genre = $5, group_id = $6, exam_level = $7, type = $8, difficulty = $9
            WHERE source = 'seed' AND question = $10`,
           [
-            JSON.stringify(q.options || []),
+            JSON.stringify((q.options || []).map((o) => String(o).trim())),
             String(q.answer || "").trim(),
             JSON.stringify(q.keywords || []),
             String(q.explanation || "").trim(),
@@ -8273,7 +8320,7 @@ async function syncSekoSeed() {
               Number(q.difficulty) || 3,
               q.type === "free" ? "free" : "choice",
               qText,
-              JSON.stringify(q.options || []),
+              JSON.stringify((q.options || []).map((o) => String(o).trim())),
               String(q.answer || "").trim(),
               JSON.stringify(q.keywords || []),
               String(q.explanation || "").trim(),
@@ -8353,15 +8400,19 @@ async function prewarmSekoPool(p, user) {
     }
     allowedGroupIds.push(g.id);
   }
+  // このユーザーがまだ解いていない問題が何問あるか。
+  // 以前は「7 日以内に作られた問題数」で見ていたため、解き進めて未見が尽きても
+  // 生成が止まり、同じ問題の繰り返しになっていた (プールは他ユーザーと共有なので未見で数える)
   const { rows: cnt } = await p.query(
-    `SELECT COUNT(*)::int AS n FROM seko_questions
-      WHERE genre = ANY($1::text[])
-        AND (group_id = ANY($2::text[]) OR group_id IS NULL)
-        AND created_at > now() - interval '7 days'`,
-    [allowedGenres, allowedGroupIds]
+    `SELECT COUNT(*)::int AS n FROM seko_questions q
+      WHERE q.genre = ANY($1::text[])
+        AND (q.group_id = ANY($2::text[]) OR q.group_id IS NULL)
+        AND NOT EXISTS (SELECT 1 FROM seko_progress pr
+                         WHERE pr.user_email = $3 AND pr.question_id = q.id)`,
+    [allowedGenres, allowedGroupIds, user.user_email]
   );
   const fresh = cnt[0]?.n || 0;
-  // セッションは 10 問。3 セッション分 + 予備を常に温めておく (足りないと開始時に同期生成 = ラグ)
+  // セッションは 10 問。未見を 3 セッション分 + 予備、常に温めておく (足りないと開始時に同期生成 = ラグ)
   const TARGET = 40;
   const need = Math.min(10, TARGET - fresh);
   if (need <= 0) return;
@@ -8647,13 +8698,17 @@ ${block}
 JSON 配列でだけ返す (前置き禁止):
 [{"q": 1, "wrong": [誤っている選択肢の番号], "reason": "誤りと判断した根拠と出典 (40字以内、無ければ空文字)"}]`;
   try {
-    const { result } = await callGeminiWithFallback(prompt, {
-      primaryModel: "gemini-2.5-flash",
-      maxOutputTokens: Math.min(4000, 800 + targets.length * 400),
-      jsonMode: true,
-      temperature: 0,
-      thinkingBudget: 0,
-    });
+    // 上限 20 秒。超えたら素通し (生成 30 秒 + 校閲で画面側の 45 秒タイムアウトを踏まないように)
+    const { result } = await Promise.race([
+      callGeminiWithFallback(prompt, {
+        primaryModel: "gemini-2.5-flash",
+        maxOutputTokens: Math.min(4000, 800 + targets.length * 400),
+        jsonMode: true,
+        temperature: 0,
+        thinkingBudget: 0,
+      }),
+      new Promise((_, rej) => setTimeout(() => rej(new Error("校閲タイムアウト (20s)")), 20000)),
+    ]);
     const text = (result.response.text() || "").trim();
     const m = text.match(/\[[\s\S]*\]/);
     if (!m) return new Map();
@@ -8801,12 +8856,10 @@ JSON 配列でだけ返す (前置きや説明禁止)。配列の長さは ${ite
   for (const q of arr) {
     if (!q || !Array.isArray(q.options)) continue;
     const stripped = q.options.map(stripChoiceMark);
-    if (stripped.some((o, i) => o !== String(q.options[i] || "").trim())) {
-      const at = q.options.findIndex((o) => String(o).trim() === String(q.answer || "").trim());
-      q.options = stripped;
-      if (at >= 0) q.answer = stripped[at];
-      else q.answer = stripChoiceMark(q.answer);
-    }
+    const at = q.options.findIndex((o) => String(o).trim() === String(q.answer || "").trim());
+    q.options = stripped; // 常に trim (末尾の空白が残ると画面側の正解ハイライトが一致しない)
+    if (at >= 0) q.answer = stripped[at];
+    else q.answer = stripChoiceMark(q.answer);
   }
   // 答えを伏せた別呼び出しで選択肢を再判定させ、食い違ったら DB に入れない
   const verdicts = await sekoVerifyChoiceBatch(arr, items.map((it) => it.genre));
@@ -9031,31 +9084,37 @@ function sekoAnswerXp({ isCorrect, type, score, combo, firstClear }) {
 
 async function computeSekoStreak(p, email) {
   const SEKO_STREAK_DAILY_MIN = 5;
-  // 直近 60 日で何日連続で 1 問以上正解しているか + 今日の活動状況
+  // pg は DATE 型を JS の Date オブジェクトで返す (pg-types@2)。
+  // 以前は ::date のまま String() で Map のキーにしていたため "Sat Sep 19 2026 …" になり
+  // "2026-09-19" と一致せず、連続日数・今日の正解数が常に 0 だった。to_char で文字列に固定する。
   const { rows } = await p.query(
-    `SELECT (answered_at AT TIME ZONE 'Asia/Tokyo')::date AS d,
+    `SELECT to_char((answered_at AT TIME ZONE 'Asia/Tokyo')::date, 'YYYY-MM-DD') AS d,
             COUNT(*) FILTER (WHERE is_correct)::int AS correct
-       FROM seko_progress WHERE user_email = $1
-      GROUP BY d ORDER BY d DESC LIMIT 60`,
+       FROM seko_progress
+      WHERE user_email = $1 AND answered_at > now() - interval '120 days'
+      GROUP BY d ORDER BY d DESC`,
     [email]
   );
-  const today = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Tokyo" }));
-  const ymd = (dt) => dt.toISOString().slice(0, 10);
-  const todayStr = ymd(today);
-  if (!rows.length) {
-    return { streak: 0, today_active: false, today_correct: 0, daily_min: SEKO_STREAK_DAILY_MIN };
-  }
-  const byDate = new Map(rows.map((r) => [String(r.d), r.correct]));
-  let streak = 0;
-  for (let i = 0; ; i++) {
-    const d = new Date(today.getTime() - i * 86400000);
-    if ((byDate.get(ymd(d)) || 0) >= SEKO_STREAK_DAILY_MIN) streak++;
-    else break;
-  }
+  const dayKey = (v) => (v instanceof Date ? v.toISOString().slice(0, 10) : String(v).slice(0, 10));
+  const byDate = new Map(rows.map((r) => [dayKey(r.d), Number(r.correct) || 0]));
+  const fmt = (ms) => new Date(ms).toISOString().slice(0, 10);
+  // JST の今日 (UTC+9 固定、DST なし)
+  const nowJst = Date.now() + 9 * 3600 * 1000;
+  const todayStr = fmt(nowJst);
   const todayCorrect = byDate.get(todayStr) || 0;
+  const todayActive = todayCorrect >= SEKO_STREAK_DAILY_MIN;
+  // 今日まだ日課未達なら昨日から数える (朝イチで「連続 0 日」に見えないように)。
+  // 今日達成済なら今日を含めて数える。
+  let walk = todayActive ? nowJst : nowJst - 86400000;
+  let streak = 0;
+  for (let i = 0; i < 120; i++) {
+    if ((byDate.get(fmt(walk)) || 0) >= SEKO_STREAK_DAILY_MIN) streak++;
+    else break;
+    walk -= 86400000;
+  }
   return {
     streak,
-    today_active: todayCorrect >= SEKO_STREAK_DAILY_MIN,
+    today_active: todayActive,
     today_correct: todayCorrect,
     daily_min: SEKO_STREAK_DAILY_MIN,
   };
@@ -9091,12 +9150,17 @@ app.get("/api/seko/me", async (req, res) => {
       [req.user.email]
     );
     const pace = paceRows[0] || { last7_answers: 0, last7_correct: 0 };
+    // 正解した問題を新しい順に (kotonoha の「覚えた語」の枠を流用)。
+    // 以前は label = ジャンル名で explanation ごとに GROUP BY していたため、
+    // 同じジャンル名のチップが解説の数だけ並んでいた。1 問 1 行、ラベルは問題文の頭にする
     const { rows: learned } = await p.query(
-      `SELECT q.genre AS label, MAX(pr.answered_at) AS answered_at, q.group_id, q.explanation
+      `SELECT q.id, q.genre, q.group_id, q.explanation,
+              CASE WHEN length(q.question) > 34 THEN left(q.question, 34) || '…' ELSE q.question END AS label,
+              MAX(pr.answered_at) AS answered_at
          FROM seko_progress pr
          JOIN seko_questions q ON q.id = pr.question_id
-        WHERE pr.user_email = $1 AND pr.is_correct AND q.genre IS NOT NULL
-        GROUP BY q.genre, q.group_id, q.explanation
+        WHERE pr.user_email = $1 AND pr.is_correct
+        GROUP BY q.id
         ORDER BY answered_at DESC
         LIMIT 60`,
       [req.user.email]
@@ -9307,9 +9371,12 @@ app.post("/api/seko/sessions/start", async (req, res) => {
     const recentIds = new Set(recentRows.map((r) => r.question_id));
 
     // プールから候補を取る (古い種別違いを混ぜないよう、group_id でも shubetsu フィルタ)
+    // second_only でも復習 group (SEKO_REVIEW_GROUPS_FOR_2JI) は含める。
+    // 以前ここで除外していたため、復習ジャンルはプールに何問あっても引けず、
+    // 毎セッション同期生成 (= 待ち時間 + Gemini 代) になっていた
     const allowedGroupIds = [];
     for (const g of SEKO_GENRES_DATA?.groups || []) {
-      if (examTarget === "second_only" && g.exam_level !== "2ji") continue;
+      if (examTarget === "second_only" && g.exam_level !== "2ji" && !SEKO_REVIEW_GROUPS_FOR_2JI.has(g.id)) continue;
       if (shubetsu) {
         const rel = Array.isArray(g.shubetsu_relevance) ? g.shubetsu_relevance : null;
         if (rel && !rel.includes(shubetsu)) continue;
