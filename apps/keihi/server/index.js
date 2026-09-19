@@ -8616,7 +8616,7 @@ function sekoStemDirection(question) {
   return null; // 問い方が読めないものは校閲しない (素通し)
 }
 
-async function sekoVerifyChoiceBatch(rows) {
+async function sekoVerifyChoiceBatch(rows, genreNames) {
   const targets = rows
     .map((r, i) => ({ i, r }))
     .filter(({ r }) => r && r.type !== "free" && Array.isArray(r.options)
@@ -8626,16 +8626,23 @@ async function sekoVerifyChoiceBatch(rows) {
     const opts = r.options.map((o, k) => "  " + (k + 1) + ". " + o).join("\n");
     return "[" + (n + 1) + "] " + r.question + "\n" + opts;
   }).join("\n\n");
+  // 出題側と同じ数値表を校閲側にも渡す。渡さないと校閲が記憶で間違った値を持ち出し、
+  // 正しい問題を落としてしまう (実測: 破棄 8 件中 6 件が校閲側の誤りだった)
+  const factsBlock = sekoFactsBlock(genreNames || []);
   const prompt = `あなたは 2級建築施工管理技術検定の問題校閲者です。
 次の各設問について、選択肢を 1 つずつ「建築施工の記述として正しいか、誤っているか」判定してください。
-根拠は公共建築工事標準仕様書・建築基準法施行令・JASS。
 設問文の問い方 (不適当なものを選ぶ / 正しいものを選ぶ) は無視し、選択肢そのものの正誤だけを見ます。
-迷う場合・出典を思い出せない場合は「正しい」とします (確実に誤りと言えるものだけ挙げる)。
+${factsBlock}
+判定の約束:
+・上の数値表に載っている値と一致する記述は「正しい」。表と違う値を自分の記憶から持ち出さない
+・表に無い論点は、公共建築工事標準仕様書・建築基準法施行令・JASS を根拠に判定する
+・出典を具体的に言えないものは「正しい」とする (確実に誤りと言えるものだけ挙げる)
+・語尾 (程度・以上・以内) の違いだけでは誤りにしない
 
 ${block}
 
 JSON 配列でだけ返す (前置き禁止):
-[{"q": 1, "wrong": [誤っている選択肢の番号], "reason": "誤りと判断した根拠 (40字以内、無ければ空文字)"}]`;
+[{"q": 1, "wrong": [誤っている選択肢の番号], "reason": "誤りと判断した根拠と出典 (40字以内、無ければ空文字)"}]`;
   try {
     const { result } = await callGeminiWithFallback(prompt, {
       primaryModel: "gemini-2.5-flash",
@@ -8655,18 +8662,21 @@ JSON 配列でだけ返す (前置き禁止):
       if (!t) continue;
       const wrong = [...new Set((Array.isArray(v.wrong) ? v.wrong : []).map(Number).filter((x) => x >= 1 && x <= 4))];
       const answer = norm(t.r.answer);
+      const answerIdx = t.r.options.findIndex((o) => norm(o) === answer) + 1; // 0 なら answer が選択肢に無い
+      // 落とすのは「出題として成立していない」2 パターンだけに絞る。
+      // 校閲が余分に誤りを挙げてきた場合 (= 紛らわしい誤答肢) は通す —
+      // 校閲側の記憶違いで良問を落とす方が損失が大きい (実測で false positive が多かった)
       let ok = false, why = "";
-      if (sekoStemDirection(t.r.question) === "wrong") {
-        if (wrong.length !== 1) why = "誤りの選択肢が " + wrong.length + " 個 (1 個であるべき)";
-        else if (norm(t.r.options[wrong[0] - 1]) !== answer) why = "校閲は " + wrong[0] + " 番を誤りと判定 (answer と不一致)";
+      if (!answerIdx) {
+        why = "answer が選択肢のどれとも一致しない";
+      } else if (sekoStemDirection(t.r.question) === "wrong") {
+        if (!wrong.length) why = "誤っている選択肢が無い (不適当なものを選べない)";
+        else if (!wrong.includes(answerIdx)) why = "answer (" + answerIdx + " 番) を校閲は正しい記述と判定";
         else ok = true;
       } else {
-        if (wrong.length !== 3) why = "正しい選択肢が " + (4 - wrong.length) + " 個 (1 個であるべき)";
-        else {
-          const right = [1, 2, 3, 4].find((k) => !wrong.includes(k));
-          if (norm(t.r.options[right - 1]) !== answer) why = "校閲は " + right + " 番を正しいと判定 (answer と不一致)";
-          else ok = true;
-        }
+        if (wrong.length >= 4) why = "正しい選択肢が無い";
+        else if (wrong.includes(answerIdx)) why = "answer (" + answerIdx + " 番) を校閲は誤った記述と判定";
+        else ok = true;
       }
       out.set(t.i, { ok, why, reason: String(v.reason || "").slice(0, 80) });
     }
@@ -8777,7 +8787,7 @@ JSON 配列でだけ返す (前置きや説明禁止)。配列の長さは ${ite
   }
   if (!Array.isArray(arr)) throw new Error("配列ではない");
   // 答えを伏せた別呼び出しで選択肢を再判定させ、食い違ったら DB に入れない
-  const verdicts = await sekoVerifyChoiceBatch(arr);
+  const verdicts = await sekoVerifyChoiceBatch(arr, items.map((it) => it.genre));
   const out = [];
   for (let i = 0; i < arr.length && i < items.length; i++) {
     const parsed = arr[i] || {};
