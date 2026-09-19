@@ -9310,52 +9310,55 @@ app.post("/api/seko/sessions/start", async (req, res) => {
       const corMap = new Map();
       for (const r of corRows) corMap.set(`${r.group_id}::${r.genre}`, r.n);
 
-      const allGroups = examTarget === "second_only"
-        ? [...primaryGroups, ...reviewGroups]
-        : primaryGroups;
-
-      // 各 group の達成度を計算
-      const groupStats = allGroups.map((g) => {
-        const genres = (g.genres || []).map((x) => ({
-          name: x.name,
-          target: x.target_count || 10,
-          got: corMap.get(`${g.id}::${x.name}`) || 0,
-        }));
-        const totT = genres.reduce((s, x) => s + x.target, 0);
-        const totG = genres.reduce((s, x) => s + x.got, 0);
-        const ratio = totT > 0 ? totG / totT : 1; // 全完了済は 1、未達は 0
-        return { id: g.id, ratio, genres };
-      });
-
-      // 達成度昇順ソート (= 未達 group 優先)、tie ブレークは random
-      groupStats.sort((a, b) => {
-        if (a.ratio !== b.ratio) return a.ratio - b.ratio;
-        return Math.random() - 0.5;
-      });
-
-      // 完全達成済 (ratio >= 1.0) は除外 → 残ったセッション枠を未達 group で使う
-      // 全 group 達成済の場合のみフォールバックとして全 group を残す (= 復習モード)
-      let activeStats = groupStats.filter((g) => g.ratio < 1.0);
-      if (!activeStats.length) activeStats = groupStats;
-
-      // quota 計算
-      const N = activeStats.length;
-      const baseQuota = Math.floor(SESSION_SIZE / N);
-      const extra = SESSION_SIZE - baseQuota * N;
-
-      // 各 group から quota 数だけジャンル取得 (group 内では target 未達順、tie は random)
-      const pool = [];
-      activeStats.forEach((g, idx) => {
-        const quota = baseQuota + (idx < extra ? 1 : 0);
-        if (quota <= 0) return;
-        const sorted = g.genres.slice().sort((a, b) => {
-          const ra = a.target > 0 ? a.got / a.target : 1;
-          const rb = b.target > 0 ? b.got / b.target : 1;
-          if (ra !== rb) return ra - rb;
+      // group の集合に size 問を quota 方式で振り分けてジャンル名を返す
+      const allocateGenres = (groups, size) => {
+        if (!groups.length || size <= 0) return [];
+        // 各 group の達成度を計算
+        const groupStats = groups.map((g) => {
+          const genres = (g.genres || []).map((x) => ({
+            name: x.name,
+            target: x.target_count || 10,
+            got: corMap.get(`${g.id}::${x.name}`) || 0,
+          }));
+          const totT = genres.reduce((s, x) => s + x.target, 0);
+          const totG = genres.reduce((s, x) => s + x.got, 0);
+          const ratio = totT > 0 ? totG / totT : 1; // 全完了済は 1、未達は 0
+          return { id: g.id, ratio, genres };
+        });
+        // 達成度昇順ソート (= 未達 group 優先)、tie ブレークは random
+        groupStats.sort((a, b) => {
+          if (a.ratio !== b.ratio) return a.ratio - b.ratio;
           return Math.random() - 0.5;
         });
-        for (const x of sorted.slice(0, quota)) pool.push(x.name);
-      });
+        // 完全達成済 (ratio >= 1.0) は除外 → 残った枠を未達 group で使う
+        // 全 group 達成済の場合のみフォールバックとして全 group を残す (= 復習モード)
+        let activeStats = groupStats.filter((g) => g.ratio < 1.0);
+        if (!activeStats.length) activeStats = groupStats;
+        const N = activeStats.length;
+        const baseQuota = Math.floor(size / N);
+        const extra = size - baseQuota * N;
+        const out = [];
+        activeStats.forEach((g, idx) => {
+          const quota = baseQuota + (idx < extra ? 1 : 0);
+          if (quota <= 0) return;
+          // group 内では target 未達順、tie は random
+          const sorted = g.genres.slice().sort((a, b) => {
+            const ra = a.target > 0 ? a.got / a.target : 1;
+            const rb = b.target > 0 ? b.got / b.target : 1;
+            if (ra !== rb) return ra - rb;
+            return Math.random() - 0.5;
+          });
+          for (const x of sorted.slice(0, quota)) out.push(x.name);
+        });
+        return out;
+      };
+
+      // second_only は二次 group 7 問 + 一次の復習 group 3 問 (= 復習 30%)。
+      // 以前は両方を同じ集合に入れて均等配分していたため、復習 group (5 個) の方が
+      // 二次 group (種別絞り後 4 個) より多く、「二次のみ」なのに半分以上が一次問題だった
+      const pool = examTarget === "second_only"
+        ? [...allocateGenres(primaryGroups, 7), ...allocateGenres(reviewGroups, 3)]
+        : allocateGenres(primaryGroups, SESSION_SIZE);
 
       // 順番もシャッフル (group 順だと体感「ブロックごとに出る」になるので)
       targetGenres = shuffle(pool);

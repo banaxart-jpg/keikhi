@@ -912,6 +912,9 @@ async function loadHome() {
   renderPeers(peers);
 }
 
+// エラー時の「再読込」ボタン (inline onclick) から呼べるように module 外へ出す
+window.loadHome = loadHome;
+
 // XP バー: レベル内の進捗 % + 次レベルまでの残り
 function renderXpBar(lvId, barId, restId, xp) {
   const lv = $(lvId), bar = $(barId), rest = $(restId);
