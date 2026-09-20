@@ -1,0 +1,24 @@
+{
+  "_comment": "Seedance (BytePlus ModelArk) の動画コスト計算設定。tokens = 幅×高さ×fps×秒 / 1024、cost = tokens/1000 × usdPer1kTokens × usdJpy。単価は小西指定 (2026-09)。ModelArk の掲示 (fast 720p ≈ USD 0.09/秒・25% off、mini 720p ≈ USD 0.03/秒・60% off) と合わなくなったらここを直す。画素数表は docs.byteplus.com/en/docs/ModelArk/1520757 の ratio 欄 (Seedance 2.0 series 列) から転記。",
+  "usdJpy": 155,
+  "fps": 24,
+  "defaultModel": "dreamina-seedance-2-0-fast-260128",
+  "aliases": {
+    "fast": "dreamina-seedance-2-0-fast-260128",
+    "mini": "dreamina-seedance-2-0-mini-260615",
+    "2.0": "dreamina-seedance-2-0-260128",
+    "full": "dreamina-seedance-2-0-260128",
+    "pro": "dreamina-seedance-2-0-260128"
+  },
+  "models": {
+    "dreamina-seedance-2-0-fast-260128": { "label": "Seedance 2.0 fast", "usdPer1kTokens": 0.0033, "resolutions": ["480p", "720p"] },
+    "dreamina-seedance-2-0-mini-260615": { "label": "Seedance 2.0 mini", "usdPer1kTokens": 0.0021, "resolutions": ["480p", "720p"] },
+    "dreamina-seedance-2-0-260128": { "label": "Seedance 2.0", "usdPer1kTokens": null, "resolutions": ["480p", "720p", "1080p", "4k"], "_note": "単価未確認のため null (コストは記録しない)" }
+  },
+  "pixels": {
+    "480p":  { "16:9": [864, 496],   "4:3": [752, 560],   "1:1": [640, 640],   "3:4": [560, 752],   "9:16": [496, 864],   "21:9": [992, 432] },
+    "720p":  { "16:9": [1280, 720],  "4:3": [1112, 834],  "1:1": [960, 960],   "3:4": [834, 1112],  "9:16": [720, 1280],  "21:9": [1470, 630] },
+    "1080p": { "16:9": [1920, 1080], "4:3": [1664, 1248], "1:1": [1440, 1440], "3:4": [1248, 1664], "9:16": [1080, 1920], "21:9": [2206, 946] },
+    "4k":    { "16:9": [3840, 2160], "4:3": [3326, 2494], "1:1": [2880, 2880], "3:4": [2494, 3326], "9:16": [2160, 3840], "21:9": [4398, 1886] }
+  }
+}

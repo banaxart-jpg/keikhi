@@ -11,7 +11,7 @@ Claude チャット (claude.ai カスタムコネクタ)
    │  MCP (Streamable HTTP)
    ▼
 keihi-api の /api/drama/mcp/<token>
-   │  キャラ登録 / 画像生成 (Gemini ≈¥6) / 動画生成 (Seedance ≈¥19/秒)
+   │  キャラ登録 / 画像生成 (Gemini ≈¥6) / 動画生成 (Seedance 2.0、720p 8 秒 fast ≈¥88)
    ▼
 Cloud SQL (drama_projects / drama_characters / drama_videos) + GCS (動画・画像)
    ▲
@@ -34,10 +34,53 @@ Cloud SQL (drama_projects / drama_characters / drama_videos) + GCS (動画・画
 | `drama_upsert_character` | キャラ登録 (appearance + identityTokens は毎回の生成プロンプトにサーバーが自動注入) |
 | `drama_generate_image` | 静止画生成 ≈¥6。scene / composition / lighting / mustInclude / mustAvoid の slot をサーバーが styleGuide + キャラ設定と合成 (finalPrompt を返す)。review / autoFix で Gemini 審査 + 自動修正。width で保存サイズ可変 (下書き 600 / 本番 1200)。saveAs で作画基準/キャラ参照に登録。1024px プレビューを返す |
 | `drama_edit_image` | 既存画像の部分修正 ≈¥6。baseImageUrl + instruction。キャラ・絵柄・構図を保って指示だけ反映 (細部直しは generate より安定) |
-| `drama_generate_video` | 9:16 動画生成 (Seedance、8秒≈¥150)。非同期 |
-| `drama_check_videos` | 生成進捗の確認 + 完了時 GCS 保存 |
+| `drama_generate_video` | 動画生成 (Seedance 2.0 系、非同期)。aspectRatio / resolution / durationSec / model (fast・mini・2.0) / draft / 参照画像 9 枚・動画 3 本・音声 3 本 / returnLastFrame。参照 URL はサーバーが GCS に置き直してから渡す。コストは出力仕様から実計算、完成時に実測トークンで確定 |
+| `drama_check_videos` | 生成進捗の確認 + 完了時 GCS 保存。videoUrl (署名 30 日) / fileUrl (期限なし) / width・height・fps / tokens・costYen / lastFrameUrl |
 | `drama_delete_video` | ギャラリーから削除 |
 | `drama_get_costs` | API 費用の集計 (drama_api_usage) |
+
+## 動画生成 (Seedance 2.0) の仕様
+
+リクエストの項目名は ModelArk のドキュメントに合わせている
+([Create a video generation task](https://docs.byteplus.com/en/docs/ModelArk/1520757) /
+[Seedance 2.0 series tutorial](https://docs.byteplus.com/en/docs/ModelArk/2291680))。実装は `server/drama-lib/videoGen.js`。
+
+| 引数 | 既定 | 上限・注意 |
+|---|---|---|
+| `aspectRatio` | 9:16 | 16:9 / 4:3 / 1:1 / 3:4 / 9:16 / 21:9 / adaptive |
+| `resolution` | 720p | fast・mini は 480p / 720p のみ。1080p / 4k は model `2.0` |
+| `durationSec` | 8 | 4〜15 (整数秒) |
+| `model` | fast | `fast` / `mini` / `2.0` の別名か正式 ID (fast = dreamina-seedance-2-0-fast-260128、mini = dreamina-seedance-2-0-mini-260615) |
+| `draft` | false | true で 480p + mini を既定に (下書き用) |
+| `referenceImageUrls` | — | 最大 9 枚 (キャラ参照と合算)。jpeg/png/webp/bmp/tiff/gif、30MB 未満 |
+| `referenceVideoUrls` | — | 最大 3 本、各 2〜15 秒・合計 15 秒以内。mp4/mov、200MB 以内 |
+| `referenceAudioUrls` | — | 最大 3 本、各 2〜15 秒・合計 15 秒以内。wav/mp3、15MB 以内。音声だけは不可 |
+| `generateAudio` | false (参照音声あり → true) | Seedance の `generate_audio` |
+| `returnLastFrame` | false | `return_last_frame`。完成後 `lastFrameUrl` / `lastFrameFileUrl` |
+
+- プロンプトからは入力順に「image 1」「video 1」「audio 1」で参照を指す (Seedance の流儀。`[Image 1]` の角括弧も可)
+- **参照 URL はサーバーが一度ダウンロードして `drama/refs/` に置き直し、署名付き直リンクを Seedance に渡す。**
+  Adobe の短縮 URL (at.adobe.com) をそのまま渡すと Seedance 側で "resource download failed" になっていたため。
+  data: URL / 生 base64 も同じ経路。失敗時は「どの URL が HTTP 何で」落ちたかをエラーに含める
+- 実写の人物の顔が写った参照は Seedance 2.0 系が拒否する (ドキュメント明記)
+- seed / camera_fixed / frames は 1.x 系専用なので送らない
+
+### コスト
+`tokens = 幅 × 高さ × 24fps × 秒 / 1024`、`円 = tokens / 1000 × モデル単価 (USD/1K) × 為替`。
+単価・為替・比率ごとの画素数は `server/drama-video-pricing.json` (fast 0.0033 / mini 0.0021 USD/1K、155 円)。
+作成時は見積り (`tokensEstimated` / `costYenEstimated`)、完成時に取得 API の `usage.completion_tokens` で確定して
+`drama_videos.tokens / cost_yen` と `drama_api_usage` (video_id で紐付け) を上書きする。
+
+| 例 | tokens | 円 |
+|---|---|---|
+| 720p 9:16 8 秒 fast | 172,800 | ≈ 88 |
+| 480p 16:9 4 秒 fast | 40,176 | ≈ 21 |
+| 480p 16:9 4 秒 mini | 40,176 | ≈ 13 |
+
+### URL
+- `videoUrl`: GCS の署名 URL (v2、30 日)。残り 1 日を切ると check / gallery 呼び出し時に貼り直す
+- `fileUrl`: `https://<keihi-api>/api/drama/videos/<id>/file` — 期限なし。呼ぶたびに署名し直して 302 (認証なし、ギャラリーと同じ扱い)
+- `lastFrameUrl` / `lastFrameFileUrl`: 同様 (returnLastFrame 指定時)
 
 ### 画像精度のハンドシェイク (v1.1)
 

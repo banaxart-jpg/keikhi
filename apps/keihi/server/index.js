@@ -19,7 +19,9 @@ import { buildSystemPrompt as dramaBuildSystemPrompt, chatOnce as dramaChatOnce,
 import {
   createCutVideoTask as dramaCreateVideoTask, getVideoTask as dramaGetVideoTask,
   generateCutVideoMock as dramaGenerateMock, seedanceConfigured as dramaSeedanceConfigured,
-  SEEDANCE_MODEL as DRAMA_SEEDANCE_MODEL,
+  SEEDANCE_MODEL as DRAMA_SEEDANCE_MODEL, SEEDANCE_FPS as DRAMA_SEEDANCE_FPS, SEEDANCE_LIMITS as DRAMA_SEEDANCE_LIMITS,
+  resolveSeedanceModel as dramaResolveSeedanceModel, seedanceDims as dramaSeedanceDims,
+  seedanceEstimateTokens as dramaSeedanceEstimateTokens, seedanceCost as dramaSeedanceCost,
 } from "./drama-lib/videoGen.js";
 import { fetchAozoraText as dramaFetchAozora, splitChapters as dramaSplitChapters, searchAozoraCatalog as dramaSearchCatalog } from "./drama-lib/aozora.js";
 import { analyzeWorkSetup as dramaAnalyzeWorkSetup, searchAozora as dramaSearchAozora } from "./drama-lib/gemini.js";
@@ -459,9 +461,104 @@ function dramaMcpPool() {
 
 async function dramaSignGs(gsUrl, days = 7) {
   const [, , bucket, ...rest] = gsUrl.split("/");
+  // v2 署名 (v4 は 7 日が上限で、完成動画の 30 日署名が作れない)
   const [url] = await storage.bucket(bucket).file(rest.join("/"))
-    .getSignedUrl({ action: "read", expires: Date.now() + days * 24 * 60 * 60 * 1000 });
+    .getSignedUrl({ version: "v2", action: "read", expires: Date.now() + days * 24 * 60 * 60 * 1000 });
   return url;
+}
+
+// 期限のない公開 URL の土台 (Cloud Run の自 URL)。/api/drama/videos/:id/file が毎回署名し直して 302 する
+const DRAMA_API_BASE = (process.env.SERVICE_URL || "https://keihi-api-734350696397.asia-northeast1.run.app").replace(/\/$/, "");
+const DRAMA_VIDEO_SIGN_DAYS = 30;
+
+// ───── 参照素材の取り込み (Seedance に渡す前に自分の GCS へ置き直す) ─────
+// Adobe の短縮 URL (https://at.adobe.com/…) 等をそのまま渡すと Seedance 側で
+// "resource download failed" になる (リダイレクト・期限付き CDN)。渡された URL / data: URL /
+// 生 base64 をサーバーで一度取得 (リダイレクト追従) して drama/refs/ に保存し、署名付き直リンクを渡す。
+// 失敗は「どの URL が」「HTTP 何で」落ちたかをエラー文に含める。
+const DRAMA_REF_KINDS = {
+  image: { maxBytes: 30 * 1024 * 1024, ok: /^image\/(jpeg|png|webp|bmp|tiff|gif)$/, label: "画像" },
+  video: { maxBytes: 200 * 1024 * 1024, ok: /^video\/(mp4|quicktime)$/, label: "動画" },
+  audio: { maxBytes: 15 * 1024 * 1024, ok: /^audio\/(wav|mpeg)$/, label: "音声" },
+};
+// 先頭バイトで形式を判定 (content-type が octet-stream や誤りのことがある)
+function dramaSniffMime(buf) {
+  if (!buf || buf.length < 12) return null;
+  const h = buf.subarray(0, 12);
+  const ascii = (a, b) => h.subarray(a, b).toString("latin1");
+  if (h[0] === 0x89 && ascii(1, 4) === "PNG") return "image/png";
+  if (h[0] === 0xff && h[1] === 0xd8 && h[2] === 0xff) return "image/jpeg";
+  if (ascii(0, 4) === "GIF8") return "image/gif";
+  if (ascii(0, 4) === "RIFF" && ascii(8, 12) === "WEBP") return "image/webp";
+  if (ascii(0, 4) === "RIFF" && ascii(8, 12) === "WAVE") return "audio/wav";
+  if (ascii(0, 2) === "BM") return "image/bmp";
+  if (ascii(0, 4) === "II*\0" || ascii(0, 4) === "MM\0*") return "image/tiff";
+  if (ascii(4, 8) === "ftyp") return ascii(8, 11) === "qt " ? "video/quicktime" : "video/mp4";
+  if (ascii(0, 3) === "ID3" || (h[0] === 0xff && (h[1] & 0xe0) === 0xe0)) return "audio/mpeg";
+  return null;
+}
+const DRAMA_MIME_ALIAS = { "image/jpg": "image/jpeg", "video/mov": "video/quicktime", "audio/x-wav": "audio/wav", "audio/wave": "audio/wav", "audio/mp3": "audio/mpeg", "audio/x-mpeg": "audio/mpeg" };
+const DRAMA_MIME_EXT = { "image/jpeg": "jpg", "image/png": "png", "image/webp": "webp", "image/bmp": "bmp", "image/tiff": "tif", "image/gif": "gif", "video/mp4": "mp4", "video/quicktime": "mov", "audio/wav": "wav", "audio/mpeg": "mp3" };
+
+async function dramaIngestRef(input, kind, idx) {
+  const spec = DRAMA_REF_KINDS[kind];
+  const raw = String(input || "").trim();
+  if (!raw) throw new Error(`${spec.label} ${idx + 1}: 空の指定`);
+  let buf, mime, source;
+  const dataM = raw.match(/^data:([^;,]+);base64,(.+)$/s);
+  if (dataM) {
+    buf = Buffer.from(dataM[2].replace(/\s+/g, ""), "base64"); mime = dataM[1].toLowerCase(); source = `data:${mime} (${buf.length} bytes)`;
+  } else if (/^[A-Za-z0-9+/=\r\n]+$/.test(raw) && raw.length > 200) {
+    buf = Buffer.from(raw.replace(/\s+/g, ""), "base64"); mime = null; source = `base64 (${buf.length} bytes)`;
+  } else {
+    let u;
+    try { u = new URL(raw); } catch { throw new Error(`${spec.label} ${idx + 1}: URL として読めない: ${raw.slice(0, 80)}`); }
+    if (!/^https?:$/.test(u.protocol)) throw new Error(`${spec.label} ${idx + 1}: http(s) の URL / data: URL / base64 のみ: ${raw.slice(0, 80)}`);
+    // すでに自分のバケットの署名 URL ならそのまま使う (キャラ参照など)
+    if (storage && RECEIPTS_BUCKET && u.hostname === "storage.googleapis.com" && u.pathname.startsWith(`/${RECEIPTS_BUCKET}/`)) {
+      return { url: raw, gcsUrl: `gs://${RECEIPTS_BUCKET}/${decodeURIComponent(u.pathname.slice(RECEIPTS_BUCKET.length + 2))}`, bytes: null, mime: null, source: "gcs (そのまま)" };
+    }
+    const ac = new AbortController();
+    const tid = setTimeout(() => ac.abort(), 120000);
+    let r;
+    try {
+      r = await fetch(raw, { redirect: "follow", signal: ac.signal, headers: { "user-agent": "Mozilla/5.0 (keihi-drama/1.0)", accept: "*/*" } });
+      if (!r.ok) throw new Error(`${spec.label} ${idx + 1}: ダウンロード失敗 HTTP ${r.status} ${r.statusText || ""} — ${raw.slice(0, 120)}${r.url && r.url !== raw ? ` (→ ${r.url.slice(0, 120)})` : ""}`);
+      const len = Number(r.headers.get("content-length") || 0);
+      if (len > spec.maxBytes) throw new Error(`${spec.label} ${idx + 1}: ${Math.round(len / 1048576)}MB は上限 ${Math.round(spec.maxBytes / 1048576)}MB 超え — ${raw.slice(0, 120)}`);
+      buf = Buffer.from(await r.arrayBuffer());
+      mime = (r.headers.get("content-type") || "").split(";")[0].trim().toLowerCase() || null;
+      source = `${raw.slice(0, 160)}${r.url && r.url !== raw ? ` → ${r.url.slice(0, 160)}` : ""}`;
+    } catch (e) {
+      if (e.name === "AbortError") throw new Error(`${spec.label} ${idx + 1}: ダウンロードが 120 秒で打ち切り — ${raw.slice(0, 120)}`);
+      if (/ダウンロード失敗|上限/.test(e.message)) throw e;
+      throw new Error(`${spec.label} ${idx + 1}: ダウンロード失敗 (${e.message}) — ${raw.slice(0, 120)}`);
+    } finally { clearTimeout(tid); }
+  }
+  if (!buf.length) throw new Error(`${spec.label} ${idx + 1}: 中身が空 — ${source}`);
+  if (buf.length > spec.maxBytes) throw new Error(`${spec.label} ${idx + 1}: ${Math.round(buf.length / 1048576)}MB は上限 ${Math.round(spec.maxBytes / 1048576)}MB 超え — ${source}`);
+  const sniffed = dramaSniffMime(buf);
+  mime = DRAMA_MIME_ALIAS[mime] || mime;
+  // 実体の判定を優先。ヘッダが octet-stream / text/html (= エラーページ) でも実体で救う
+  const finalMime = sniffed || (spec.ok.test(mime || "") ? mime : null);
+  if (!finalMime || !spec.ok.test(finalMime)) {
+    throw new Error(`${spec.label} ${idx + 1}: 形式が対応外 (content-type: ${mime || "不明"}, 実体: ${sniffed || "判定不能"}) — ${source}`);
+  }
+  if (!storage || !RECEIPTS_BUCKET) {
+    // dev: バケットが無いので置き直せない。URL はそのまま、data は data URL で返す
+    return { url: dataM ? raw : (buf && !raw.startsWith("http") ? `data:${finalMime};base64,${buf.toString("base64")}` : raw), gcsUrl: null, bytes: buf.length, mime: finalMime, source };
+  }
+  const key = `drama/refs/${Date.now()}-${idx}-${Math.random().toString(36).slice(2, 8)}.${DRAMA_MIME_EXT[finalMime] || "bin"}`;
+  await storage.bucket(RECEIPTS_BUCKET).file(key).save(buf, { contentType: finalMime, resumable: false });
+  const gcsUrl = `gs://${RECEIPTS_BUCKET}/${key}`;
+  return { url: await dramaSignGs(gcsUrl, 7), gcsUrl, bytes: buf.length, mime: finalMime, source };
+}
+
+async function dramaIngestRefs(inputs, kind) {
+  const list = (Array.isArray(inputs) ? inputs : [inputs]).filter((x) => x != null && String(x).trim());
+  const out = [];
+  for (let i = 0; i < list.length; i++) out.push(await dramaIngestRef(list[i], kind, i));
+  return out;
 }
 
 // 生成画像を GCS に保存して { gcsUrl, url } を返す (dev フォールバックは data URL)
@@ -692,13 +789,28 @@ async function dramaMcpFinishImage(p, projectId, img, { saveAs, finalPrompt, ref
 // MCP の check ツールとギャラリー API の両方から使う
 async function dramaMcpVideoRefresh(p, row) {
   const patch = {};
+  const signMs = DRAMA_VIDEO_SIGN_DAYS * 24 * 60 * 60 * 1000;
   if (["queued", "running"].includes(row.status) && row.provider_task_id) {
     try {
       const t = await dramaGetVideoTask(row.provider_task_id);
       if (t.status === "succeeded" && t.videoUrl) {
         patch.status = "done";
         patch.video_url = t.videoUrl;
+        // 実測トークン (usage.completion_tokens) でコストを確定。無ければ作成時の見積りのまま
+        const tokens = t.usage?.completionTokens ?? (row.tokens != null ? Number(row.tokens) : null);
+        if (tokens != null) {
+          patch.tokens = tokens;
+          const cost = dramaSeedanceCost(row.model, tokens);
+          if (cost.yen != null) patch.cost_yen = cost.yen;
+          p.query(`UPDATE drama_api_usage SET output_tokens=$1, cost_yen=COALESCE($2, cost_yen) WHERE video_id=$3`,
+            [tokens, cost.yen, row.id]).catch((e) => console.warn("[drama-mcp] usage finalize failed:", e.message));
+        }
+        if (t.fps) patch.fps = t.fps;
+        if (t.duration) patch.duration_sec = t.duration;
+        if (t.resolution) patch.resolution = t.resolution;
+        if (t.ratio && t.ratio !== "adaptive") patch.ratio = t.ratio;
         if (storage && RECEIPTS_BUCKET) {
+          // 提供元 URL は 24 時間で切れるので自分の GCS へミラー (署名は 30 日)
           try {
             const vr = await fetch(t.videoUrl);
             if (vr.ok) {
@@ -706,12 +818,25 @@ async function dramaMcpVideoRefresh(p, row) {
               const key = `drama/videos/${row.id}.mp4`;
               await storage.bucket(RECEIPTS_BUCKET).file(key).save(buf, { contentType: "video/mp4", resumable: false });
               patch.gcs_url = `gs://${RECEIPTS_BUCKET}/${key}`;
-              patch.video_url = await dramaSignGs(patch.gcs_url);
-              patch.url_expires_at = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+              patch.video_url = await dramaSignGs(patch.gcs_url, DRAMA_VIDEO_SIGN_DAYS);
+              patch.url_expires_at = new Date(Date.now() + signMs);
             }
           } catch (e) { console.warn("[drama-mcp] video GCS mirror failed:", e.message); }
+          if (t.lastFrameUrl) {
+            try {
+              const fr = await fetch(t.lastFrameUrl);
+              if (fr.ok) {
+                const key = `drama/videos/${row.id}-last.png`;
+                await storage.bucket(RECEIPTS_BUCKET).file(key).save(Buffer.from(await fr.arrayBuffer()), { contentType: "image/png", resumable: false });
+                patch.last_frame_gcs_url = `gs://${RECEIPTS_BUCKET}/${key}`;
+                patch.last_frame_url = await dramaSignGs(patch.last_frame_gcs_url, DRAMA_VIDEO_SIGN_DAYS);
+              }
+            } catch (e) { console.warn("[drama-mcp] last frame mirror failed:", e.message); }
+          }
+        } else if (t.lastFrameUrl) {
+          patch.last_frame_url = t.lastFrameUrl;
         }
-      } else if (t.status === "failed") {
+      } else if (["failed", "expired", "cancelled"].includes(t.status)) {
         patch.status = "failed";
         patch.note = t.error || "生成に失敗しました";
       } else if (t.status !== "unknown") {
@@ -723,8 +848,9 @@ async function dramaMcpVideoRefresh(p, row) {
     const exp = row.url_expires_at ? new Date(row.url_expires_at).getTime() : 0;
     if (exp - Date.now() < 24 * 60 * 60 * 1000) {
       try {
-        patch.video_url = await dramaSignGs(row.gcs_url);
-        patch.url_expires_at = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+        patch.video_url = await dramaSignGs(row.gcs_url, DRAMA_VIDEO_SIGN_DAYS);
+        if (row.last_frame_gcs_url) patch.last_frame_url = await dramaSignGs(row.last_frame_gcs_url, DRAMA_VIDEO_SIGN_DAYS);
+        patch.url_expires_at = new Date(Date.now() + signMs);
       } catch (e) { console.warn("[drama-mcp] re-sign failed:", e.message); }
     }
   }
@@ -736,12 +862,24 @@ async function dramaMcpVideoRefresh(p, row) {
   return row;
 }
 
-const dramaVideoRowPublic = (r) => ({
-  videoId: Number(r.id), projectId: r.project_id ? Number(r.project_id) : null,
-  title: r.title, status: r.status, durationSec: r.duration_sec,
-  videoUrl: r.status === "done" ? r.video_url : null, note: r.note || undefined,
-  createdAt: r.created_at,
-});
+const dramaVideoRowPublic = (r) => {
+  const done = r.status === "done";
+  return {
+    videoId: Number(r.id), projectId: r.project_id ? Number(r.project_id) : null,
+    title: r.title, status: r.status, model: r.model || undefined,
+    ratio: r.ratio || undefined, resolution: r.resolution || undefined,
+    width: r.width || undefined, height: r.height || undefined, fps: r.fps || undefined,
+    durationSec: r.duration_sec,
+    tokens: r.tokens != null ? Number(r.tokens) : undefined,
+    costYen: r.cost_yen != null ? Number(r.cost_yen) : undefined,
+    videoUrl: done ? r.video_url : null,                       // 署名 URL (30 日)
+    fileUrl: done && r.gcs_url ? `${DRAMA_API_BASE}/api/drama/videos/${r.id}/file` : null, // 期限なし (毎回署名し直して 302)
+    lastFrameUrl: done ? (r.last_frame_url || null) : null,
+    lastFrameFileUrl: done && r.last_frame_gcs_url ? `${DRAMA_API_BASE}/api/drama/videos/${r.id}/last-frame` : null,
+    note: r.note || undefined,
+    createdAt: r.created_at,
+  };
+};
 
 const DRAMA_MCP_TOOLS = [
   {
@@ -956,50 +1094,96 @@ const DRAMA_MCP_TOOLS = [
   },
   {
     name: "drama_generate_video",
-    description: "縦型 (9:16) 動画カットを生成する (Seedance、≈¥19/秒・8秒で≈¥150)。非同期なので投げたら 1〜2 分後に drama_check_videos で確認。referenceImageUrls に確認済みの静止画 (drama_generate_image の imageUrl) を渡すと構図・絵柄が安定する。完成するとギャラリー (置き場アプリ) に自動で並ぶ",
+    description: "動画カットを生成する (BytePlus ModelArk の Seedance 2.0 系、非同期)。投げたら 1〜3 分後に drama_check_videos で確認。完成するとギャラリー (置き場アプリ) に自動で並ぶ。"
+      + "既定は aspectRatio 9:16・resolution 720p・durationSec 8・model fast (projectId + prompt だけでも動く)。"
+      + "参照: referenceImageUrls (最大 9 枚)・referenceVideoUrls (最大 3 本、各 2〜15 秒)・referenceAudioUrls (最大 3 本、各 2〜15 秒)。動画・音声はそれぞれ合計 15 秒以内。音声だけの参照は不可 (画像か動画を 1 つ以上)。"
+      + "参照 URL はサーバーが一度ダウンロードして自分の GCS に置き直してから渡すので、短縮 URL (at.adobe.com 等)・リダイレクト付き URL・data: URL・生 base64 のどれでも可。取得できなかった URL は HTTP ステータス付きでエラーになる。"
+      + "prompt はそのまま Seedance に渡す。参照は入力順に「image 1」「image 2」「video 1」「audio 1」で指せる (例: \"[Image 1] の店内を [Video 1] のカメラワークで、[Audio 1] を BGM に\")。実写の人物の顔が写った参照は Seedance 側で拒否される。"
+      + "model は \"fast\" (既定) / \"mini\" (最安) / \"2.0\" (高品質・1080p/4k 可) の別名か ModelArk の正式 ID。draft: true で resolution 480p + model mini を既定にする (下書き用)。"
+      + "コスト = 幅×高さ×24fps×秒 / 1024 トークン × モデル単価 (fast 0.0033 USD/1K, mini 0.0021 USD/1K、設定ファイルで変更可)。返り値に見積り (tokensEstimated / costYenEstimated)、完成時は実測トークンで確定 (drama_check_videos の tokens / costYen)。目安: 720p 9:16 8 秒 fast ≈ ¥88、480p 4 秒 mini ≈ ¥13。"
+      + "完成後は videoUrl (署名付き 30 日) と fileUrl (期限なし、毎回署名し直して 302) が取れる。returnLastFrame: true で最終フレーム PNG も返る (lastFrameUrl / lastFrameFileUrl。続きのカットの参照画像に使える)",
     inputSchema: {
       type: "object",
       properties: {
         projectId: { type: "number" },
-        prompt: { type: "string", description: "動きまで含めたカットの指示" },
+        prompt: { type: "string", description: "動きまで含めたカットの指示。参照は image 1 / video 1 / audio 1 で指す" },
         title: { type: "string", description: "ギャラリーに出す題名 (例: 第1話 カット3)" },
+        aspectRatio: { type: "string", enum: ["9:16", "16:9", "1:1", "4:3", "3:4", "21:9", "adaptive"], description: "既定 9:16" },
+        resolution: { type: "string", enum: ["480p", "720p", "1080p", "4k"], description: "既定 720p。fast / mini は 480p・720p のみ (1080p / 4k は model \"2.0\")" },
         durationSec: { type: "number", description: "4〜15 秒、既定 8" },
-        characterNames: { type: "array", items: { type: "string" } },
-        referenceImageUrls: { type: "array", items: { type: "string" } },
-        model: { type: "string", description: "Seedance モデル ID の上書き (既定はサーバー設定。未開通エラーが出た時に開通済み ID を渡す)" },
+        model: { type: "string", description: "\"fast\" / \"mini\" / \"2.0\" の別名か ModelArk の正式 ID。既定 fast (dreamina-seedance-2-0-fast-260128)" },
+        draft: { type: "boolean", description: "true で resolution 480p + model mini を既定にする (明示指定があればそちら優先)" },
+        characterNames: { type: "array", items: { type: "string" }, description: "登録キャラの参照画像を先頭に付ける" },
+        referenceImageUrls: { type: "array", items: { type: "string" }, description: "最大 9 枚 (キャラ参照と合わせて 9 枚まで)。URL / data: URL / base64" },
+        referenceVideoUrls: { type: "array", items: { type: "string" }, description: "最大 3 本、各 2〜15 秒・合計 15 秒以内。mp4 / mov、200MB 以内" },
+        referenceAudioUrls: { type: "array", items: { type: "string" }, description: "最大 3 本、各 2〜15 秒・合計 15 秒以内。wav / mp3、15MB 以内" },
+        generateAudio: { type: "boolean", description: "生成動画に音声を付ける。既定は false (参照音声があるときは true)" },
+        returnLastFrame: { type: "boolean", description: "最終フレーム画像 (PNG) も返す。既定 false" },
       },
       required: ["projectId", "prompt"],
     },
     handler: async (a) => {
       const p = dramaMcpPool();
+      const draft = !!a.draft;
+      const model = dramaResolveSeedanceModel((typeof a.model === "string" && a.model.trim()) ? a.model.trim() : (draft ? "mini" : ""));
+      const resolution = String(a.resolution || (draft ? "480p" : "720p")).toLowerCase();
+      const ratio = String(a.aspectRatio || "9:16");
       const durationSec = Math.max(4, Math.min(15, Math.round(a.durationSec || 8)));
-      const refUrls = await dramaMcpRefUrls(p, a.projectId, {
-        characterNames: a.characterNames, imageUrls: a.referenceImageUrls, useStyleRefs: false, max: 4,
+      const fps = DRAMA_SEEDANCE_FPS;
+      // 参照素材: キャラ参照 + 明示 URL → 自分の GCS に置き直す (Seedance がダウンロードできる直リンクにする)
+      const imageInputs = await dramaMcpRefUrls(p, a.projectId, {
+        characterNames: a.characterNames, imageUrls: a.referenceImageUrls, useStyleRefs: false, max: DRAMA_SEEDANCE_LIMITS.images,
       });
+      const images = await dramaIngestRefs(imageInputs, "image");
+      const videos = await dramaIngestRefs(a.referenceVideoUrls, "video");
+      const audios = await dramaIngestRefs(a.referenceAudioUrls, "audio");
+      const generateAudio = typeof a.generateAudio === "boolean" ? a.generateAudio : audios.length > 0;
+      const returnLastFrame = !!a.returnLastFrame;
+      const refSummary = {
+        images: images.map((x) => ({ source: x.source, bytes: x.bytes, mime: x.mime })),
+        videos: videos.map((x) => ({ source: x.source, bytes: x.bytes, mime: x.mime })),
+        audios: audios.map((x) => ({ source: x.source, bytes: x.bytes, mime: x.mime })),
+      };
+      const dims = ratio === "adaptive" ? null : dramaSeedanceDims(ratio, resolution);
       if (!dramaSeedanceConfigured()) {
         const mock = await dramaGenerateMock({ prompt: a.prompt, durationSec });
         const { rows } = await p.query(
-          `INSERT INTO drama_videos (project_id, title, prompt, status, model, duration_sec, video_url, note)
-           VALUES ($1,$2,$3,'done',$4,$5,$6,$7) RETURNING id`,
-          [a.projectId, a.title || "", a.prompt, mock.model, durationSec, mock.videoUrl, mock.note]);
+          `INSERT INTO drama_videos (project_id, title, prompt, status, model, duration_sec, video_url, note, ratio, resolution, width, height, fps, ref_summary)
+           VALUES ($1,$2,$3,'done',$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING id`,
+          [a.projectId, a.title || "", a.prompt, mock.model, durationSec, mock.videoUrl, mock.note,
+           ratio, resolution, dims?.width || null, dims?.height || null, fps, JSON.stringify(refSummary)]);
         return { ok: true, videoId: Number(rows[0].id), status: "done", mock: true, galleryUrl: DRAMA_GALLERY_URL };
       }
-      const { taskId, model } = await dramaCreateVideoTask({
-        prompt: a.prompt, referenceImageUrls: refUrls, durationSec,
-        ...(typeof a.model === "string" && a.model.trim() ? { model: a.model.trim() } : {}),
+      const { taskId } = await dramaCreateVideoTask({
+        prompt: a.prompt,
+        referenceImageUrls: images.map((x) => x.url),
+        referenceVideoUrls: videos.map((x) => x.url),
+        referenceAudioUrls: audios.map((x) => x.url),
+        durationSec, model, ratio, resolution, generateAudio, returnLastFrame,
       });
+      const tokensEstimated = dramaSeedanceEstimateTokens({ width: dims?.width, height: dims?.height, fps, durationSec });
+      const costEst = dramaSeedanceCost(model, tokensEstimated);
       const { rows } = await p.query(
-        `INSERT INTO drama_videos (project_id, title, prompt, status, provider_task_id, model, duration_sec)
-         VALUES ($1,$2,$3,'queued',$4,$5,$6) RETURNING id`,
-        [a.projectId, a.title || "", a.prompt, taskId, model, durationSec]);
-      dramaRecordSeedanceUsage(a.projectId, durationSec, model, "mcp_");
-      const costYen = Math.round(DRAMA_SEEDANCE_TOKENS_PER_SEC * durationSec * DRAMA_SEEDANCE_USD_PER_1M / 1e6 * DRAMA_USD_JPY);
-      return { ok: true, videoId: Number(rows[0].id), status: "queued", costYen, note: "1〜2分後に drama_check_videos で確認" };
+        `INSERT INTO drama_videos (project_id, title, prompt, status, provider_task_id, model, duration_sec,
+                                   ratio, resolution, width, height, fps, tokens, cost_yen, ref_summary)
+         VALUES ($1,$2,$3,'queued',$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING id`,
+        [a.projectId, a.title || "", a.prompt, taskId, model, durationSec,
+         ratio, resolution, dims?.width || null, dims?.height || null, fps, tokensEstimated, costEst.yen, JSON.stringify(refSummary)]);
+      const videoId = Number(rows[0].id);
+      dramaRecordSeedanceUsage(a.projectId, durationSec, model, "mcp_", { videoId, tokens: tokensEstimated, costYen: costEst.yen });
+      return {
+        ok: true, videoId, status: "queued", model, ratio, resolution,
+        width: dims?.width || null, height: dims?.height || null, fps, durationSec, generateAudio, returnLastFrame,
+        refs: { images: images.length, videos: videos.length, audios: audios.length },
+        tokensEstimated, costYenEstimated: costEst.yen, usdPer1kTokens: costEst.usdPer1kTokens, usdJpy: costEst.usdJpy,
+        fileUrl: `${DRAMA_API_BASE}/api/drama/videos/${videoId}/file`,
+        note: "1〜3 分後に drama_check_videos で確認 (完成時に実測トークンでコスト確定)",
+      };
     },
   },
   {
     name: "drama_check_videos",
-    description: "生成中の動画の進捗確認と、完成動画一覧の取得。完成した動画はギャラリーに並ぶ",
+    description: "生成中の動画の進捗確認と、完成動画一覧の取得。完成した動画はギャラリーに並ぶ。各動画に videoUrl (署名 30 日)・fileUrl (期限なし)・width/height/fps/durationSec・tokens/costYen (実測で確定)・lastFrameUrl (returnLastFrame 指定時) が入る",
     inputSchema: { type: "object", properties: { projectId: { type: "number", description: "省略で全プロジェクト" } } },
     handler: async (a) => {
       const p = dramaMcpPool();
@@ -1051,7 +1235,7 @@ const dramaMcpHandler = dramaCreateMcpHandler({
     "ドラマ/アニメ/漫画をチャットから作る制作ツール。基本の流れ:",
     "1. drama_create_project でプロジェクト作成 (styleGuide に絵柄を書く)",
     "2. drama_upsert_character でキャラ登録 (appearance と identityTokens を必ず埋める。毎回の生成プロンプトに自動で入る) → drama_generate_image でデザイン案 (≈¥6/枚) → 気に入ったら saveAs: 'character_ref:名前' で参照登録 (正面 + 別角度の 2 枚あると安定)",
-    "3. シーンの静止画を drama_generate_image で確認 (¥6) してから drama_generate_video (8秒≈¥150) に進むと安い",
+    "3. シーンの静止画を drama_generate_image で確認 (¥6) してから drama_generate_video に進むと安い (720p 8 秒 fast ≈ ¥88、draft: true なら 480p mini で ≈ ¥13〜)",
     "4. 動画は非同期。drama_check_videos で確認。完成したらギャラリー (置き場アプリ) に自動で並ぶ",
     "画像の精度を上げるコツ:",
     "- generate では自由文 prompt より scene / composition / lighting / mustInclude / mustAvoid の slot を埋める。絵柄とキャラ設定はサーバーが足す (結果の finalPrompt で確認できる)",
@@ -2547,6 +2731,27 @@ app.post("/api/seko/debug-grade/:token", async (req, res) => {
   res.json({ results, rubric_used: (rubric && String(rubric).trim()) || SEKO_GRADE_RUBRIC, model: model || "gemini-2.5-flash" });
 });
 
+// 期限のない動画 URL。呼ばれるたびに GCS の署名 URL (7 日) を作って 302 する (共有・埋め込み用、認証なし)。
+// 署名 URL は最長でも 30 日で切れるので、長期の共有はこちらを渡す
+async function dramaVideoFileRedirect(req, res, column) {
+  const p = getPool();
+  if (!p) return res.status(503).json({ error: "DB not configured" });
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: "bad id" });
+  try {
+    const { rows } = await p.query(`SELECT ${column} AS gs FROM drama_videos WHERE id=$1 AND status='done'`, [id]);
+    if (!rows.length || !rows[0].gs) return res.status(404).json({ error: "not found" });
+    if (!storage) return res.status(503).json({ error: "storage not configured" });
+    res.set("cache-control", "private, max-age=3600");
+    res.redirect(302, await dramaSignGs(rows[0].gs, 7));
+  } catch (err) {
+    console.error("[drama] video file redirect", err);
+    res.status(500).json({ error: err.message });
+  }
+}
+app.get("/api/drama/videos/:id/file", (req, res) => dramaVideoFileRedirect(req, res, "gcs_url"));
+app.get("/api/drama/videos/:id/last-frame", (req, res) => dramaVideoFileRedirect(req, res, "last_frame_gcs_url"));
+
 // ギャラリー (置き場アプリ /auto-drama/) 用の一覧 API。inspect と同じ read-only・認証なし。
 // pending がある時はここで Seedance をポーリングするので、アプリを開くだけで進捗が進む
 app.get("/api/drama/gallery", async (req, res) => {
@@ -3806,6 +4011,13 @@ async function ensureSchema() {
       )
     `);
     await p.query("CREATE INDEX IF NOT EXISTS drama_videos_project_idx ON drama_videos (project_id, created_at DESC)");
+    // Seedance 2.0 対応で増えた列: 出力仕様・実測トークン・確定コスト・最終フレーム・参照素材の要約
+    for (const col of [
+      "ratio TEXT", "resolution TEXT", "width INTEGER", "height INTEGER", "fps INTEGER",
+      "tokens BIGINT", "cost_yen NUMERIC", "last_frame_gcs_url TEXT", "last_frame_url TEXT", "ref_summary JSONB",
+    ]) await p.query(`ALTER TABLE drama_videos ADD COLUMN IF NOT EXISTS ${col}`);
+    // 動画 1 本ごとに usage 行を後から確定させる (完成時に実測トークンで上書き) ための紐付け
+    await p.query("ALTER TABLE drama_api_usage ADD COLUMN IF NOT EXISTS video_id BIGINT");
 
     schemaMigrated = true;
     console.log("[schema] migration ok: records.drive_url + tasks + yado_bookings + seko_* + fx_* + drama_* ensured");
@@ -11796,10 +12008,10 @@ function dramaRecordUsage(row) {
   const p = getPool();
   if (!p) return;
   p.query(
-    `INSERT INTO drama_api_usage (project_id, provider, kind, model, input_tokens, output_tokens, video_seconds, cost_yen)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+    `INSERT INTO drama_api_usage (project_id, provider, kind, model, input_tokens, output_tokens, video_seconds, cost_yen, video_id)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
     [row.projectId || null, row.provider, row.kind, row.model || null,
-     row.inputTokens ?? null, row.outputTokens ?? null, row.videoSeconds ?? null, row.costYen || 0]
+     row.inputTokens ?? null, row.outputTokens ?? null, row.videoSeconds ?? null, row.costYen || 0, row.videoId ?? null]
   ).catch((e) => console.warn("[drama] usage record failed:", e.message));
 }
 
@@ -11821,10 +12033,17 @@ function dramaTrackedGemini(projectId, kind) {
   };
 }
 
-function dramaRecordSeedanceUsage(projectId, seconds, model, kindPrefix = "") {
-  const tokens = DRAMA_SEEDANCE_TOKENS_PER_SEC * seconds;
-  const costYen = (tokens * DRAMA_SEEDANCE_USD_PER_1M / 1e6) * DRAMA_USD_JPY;
-  dramaRecordUsage({ projectId, provider: "seedance", kind: kindPrefix + "video", model, videoSeconds: seconds, costYen });
+// extra.tokens / extra.costYen があればそれを記録 (MCP 経路: 出力仕様から実計算)。
+// 無い旧経路 (絵コンテ→カット生成) は 9:16 720p 前提で drama-video-pricing.json の単価から計算し、
+// 単価未設定のモデルだけ従来の固定概算 (¥19/秒) に落とす
+function dramaRecordSeedanceUsage(projectId, seconds, model, kindPrefix = "", extra = {}) {
+  let tokens = extra.tokens ?? dramaSeedanceEstimateTokens({ width: 720, height: 1280, fps: DRAMA_SEEDANCE_FPS, durationSec: seconds });
+  let costYen = extra.costYen;
+  if (costYen == null) {
+    const c = dramaSeedanceCost(dramaResolveSeedanceModel(model), tokens);
+    costYen = c.yen != null ? c.yen : (DRAMA_SEEDANCE_TOKENS_PER_SEC * seconds * DRAMA_SEEDANCE_USD_PER_1M / 1e6) * DRAMA_USD_JPY;
+  }
+  dramaRecordUsage({ projectId, provider: "seedance", kind: kindPrefix + "video", model, videoSeconds: seconds, outputTokens: tokens, costYen, videoId: extra.videoId ?? null });
 }
 
 // 絵コンテ用の静止画生成 (Gemini image)。動画 ¥150 を撃つ前に ¥6 で構図確認する用。
