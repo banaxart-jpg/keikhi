@@ -1097,6 +1097,7 @@ const DRAMA_MCP_TOOLS = [
     description: "動画カットを生成する (BytePlus ModelArk の Seedance 2.0 系、非同期)。投げたら 1〜3 分後に drama_check_videos で確認。完成するとギャラリー (置き場アプリ) に自動で並ぶ。"
       + "既定は aspectRatio 9:16・resolution 720p・durationSec 8・model fast (projectId + prompt だけでも動く)。"
       + "参照: referenceImageUrls (最大 9 枚)・referenceVideoUrls (最大 3 本、各 2〜15 秒)・referenceAudioUrls (最大 3 本、各 2〜15 秒)。動画・音声はそれぞれ合計 15 秒以内。音声だけの参照は不可 (画像か動画を 1 つ以上)。"
+      + "参照動画はカメラの動き・動きのタイミングを写す (被写体の見た目は参照画像で指定する)。3〜8 秒・単一ショット・H.264 の mp4 を推奨。content には画像の後ろに並ぶので、番号は video 1, video 2 … で指す。"
       + "参照 URL はサーバーが一度ダウンロードして自分の GCS に置き直してから渡すので、短縮 URL (at.adobe.com 等)・リダイレクト付き URL・data: URL・生 base64 のどれでも可。取得できなかった URL は HTTP ステータス付きでエラーになる。"
       + "prompt はそのまま Seedance に渡す。参照は入力順に「image 1」「image 2」「video 1」「audio 1」で指せる (例: \"[Image 1] の店内を [Video 1] のカメラワークで、[Audio 1] を BGM に\")。実写の人物の顔が写った参照は Seedance 側で拒否される。"
       + "model は \"fast\" (既定) / \"mini\" (最安) / \"2.0\" (高品質・1080p/4k 可) の別名か ModelArk の正式 ID。draft: true で resolution 480p + model mini を既定にする (下書き用)。"
@@ -1115,7 +1116,7 @@ const DRAMA_MCP_TOOLS = [
         draft: { type: "boolean", description: "true で resolution 480p + model mini を既定にする (明示指定があればそちら優先)" },
         characterNames: { type: "array", items: { type: "string" }, description: "登録キャラの参照画像を先頭に付ける" },
         referenceImageUrls: { type: "array", items: { type: "string" }, description: "最大 9 枚 (キャラ参照と合わせて 9 枚まで)。URL / data: URL / base64" },
-        referenceVideoUrls: { type: "array", items: { type: "string" }, description: "最大 3 本、各 2〜15 秒・合計 15 秒以内。mp4 / mov、200MB 以内" },
+        referenceVideoUrls: { type: "array", items: { type: "string" }, description: "最大 3 本。カメラの動き・動きのタイミングを写す用途 (3〜8 秒・単一ショット・H.264 推奨。API 上限は各 2〜15 秒・合計 15 秒以内、mp4 / mov、200MB 以内)。画像と同じくサーバーが GCS に取り直してから渡す" },
         referenceAudioUrls: { type: "array", items: { type: "string" }, description: "最大 3 本、各 2〜15 秒・合計 15 秒以内。wav / mp3、15MB 以内" },
         generateAudio: { type: "boolean", description: "生成動画に音声を付ける。既定は false (参照音声があるときは true)" },
         returnLastFrame: { type: "boolean", description: "最終フレーム画像 (PNG) も返す。既定 false" },

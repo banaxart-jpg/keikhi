@@ -53,7 +53,7 @@ Cloud SQL (drama_projects / drama_characters / drama_videos) + GCS (動画・画
 | `model` | fast | `fast` / `mini` / `2.0` の別名か正式 ID (fast = dreamina-seedance-2-0-fast-260128、mini = dreamina-seedance-2-0-mini-260615) |
 | `draft` | false | true で 480p + mini を既定に (下書き用) |
 | `referenceImageUrls` | — | 最大 9 枚 (キャラ参照と合算)。jpeg/png/webp/bmp/tiff/gif、30MB 未満 |
-| `referenceVideoUrls` | — | 最大 3 本、各 2〜15 秒・合計 15 秒以内。mp4/mov、200MB 以内 |
+| `referenceVideoUrls` | — | 最大 3 本。カメラの動き・動きのタイミングを写す (3〜8 秒・単一ショット・H.264 推奨)。API 上限は各 2〜15 秒・合計 15 秒以内、mp4/mov、200MB 以内。画像の後ろに `video_url` として並ぶ |
 | `referenceAudioUrls` | — | 最大 3 本、各 2〜15 秒・合計 15 秒以内。wav/mp3、15MB 以内。音声だけは不可 |
 | `generateAudio` | false (参照音声あり → true) | Seedance の `generate_audio` |
 | `returnLastFrame` | false | `return_last_frame`。完成後 `lastFrameUrl` / `lastFrameFileUrl` |
