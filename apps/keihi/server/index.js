@@ -30,6 +30,7 @@ import { reviewGeneratedImage as dramaReviewImage } from "./drama-lib/gemini.js"
 import { searchWebImages as dramaSearchWebImages } from "./drama-lib/websearch.js";
 import { splitGridImage as dramaSplitGridImage } from "./drama-lib/gridsplit.js";
 import { createMcpHandler as dramaCreateMcpHandler } from "./drama-lib/mcp.js";
+import { createSns } from "./sns-lib/index.js";
 import sharp from "sharp";
 import { fileURLToPath } from "node:url";
 
@@ -2568,6 +2569,12 @@ app.all("/api/sheets/mcp/:token", (req, res) => {
   if (req.params.token !== SHEETS_MCP_TOKEN) return res.status(403).json({ error: "forbidden" });
   return sheetsMcpHandler(req, res);
 });
+// ═══════════════════ SNS 発信 MCP (claude.ai カスタムコネクタ) ═══════════════════
+// X / note の投稿と過去投稿・数字の記録だけを持つ薄い層。詳細は sns-lib/index.js。
+// トークン・API キーは Secret Manager の sns-config (JSON) にだけ置く (リポは public)。
+const sns = createSns({ getPool, createMcpHandler: dramaCreateMcpHandler });
+app.all("/api/sns/mcp/:token", sns.mcpRoute());
+
 // 旧 現場写真コネクタの URL も同じ統合ハンドラで生かしておく (登録済みでも壊れない)
 app.all("/api/photos/mcp/:token", (req, res) => {
   if (req.params.token !== PHOTOS_MCP_TOKEN) return res.status(403).json({ error: "forbidden" });
@@ -14288,6 +14295,16 @@ app.post("/api/drama/projects/:id/chat", async (req, res) => {
   } catch (err) {
     console.error("[drama] chat", err);
     res.status(err.status || 500).json({ error: err.message });
+  }
+});
+
+// Cloud Scheduler から毎朝: X のフォロワー数・投稿の数字を記録し、note の公開記事を取り込む
+app.post("/api/internal/sns/snapshot", async (_req, res) => {
+  try {
+    res.json({ ok: true, results: await sns.snapshotAll() });
+  } catch (err) {
+    console.error("[sns] snapshot", err);
+    res.status(500).json({ error: err.message });
   }
 });
 
