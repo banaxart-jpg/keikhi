@@ -406,5 +406,14 @@ export function createSns({ getPool, createMcpHandler }) {
     };
   }
 
-  return { mcpRoute, snapshotAll };
+  // 統合コネクタ用: 設定済みの全アカウントを触れる ctx でツールを返す
+  async function toolsForAll() {
+    const cfg = await getSnsConfig();
+    const allowed = Object.keys(cfg?.accounts || {});
+    if (!allowed.length) return [];
+    const ctx = { allowed };
+    return tools.map((t) => ({ ...t, handler: (a) => t.handler(a, ctx) }));
+  }
+
+  return { mcpRoute, snapshotAll, toolsForAll, instructions: INSTRUCTIONS };
 }

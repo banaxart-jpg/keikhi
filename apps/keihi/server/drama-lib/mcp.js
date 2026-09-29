@@ -62,7 +62,7 @@ export function createMcpHandler({ name, version = "1.0.0", instructions = "", t
     }
   }
 
-  return async function mcpHandler(req, res) {
+  const mcpHandler = async function mcpHandler(req, res) {
     if (req.method === "DELETE") return res.status(200).end(); // stateless: 終了処理なし
     if (req.method !== "POST") return res.status(405).json({ error: "POST only (stateless MCP)" });
     const body = req.body;
@@ -71,4 +71,7 @@ export function createMcpHandler({ name, version = "1.0.0", instructions = "", t
     if (!results.length) return res.status(202).end(); // notification のみ
     res.json(Array.isArray(body) ? results : results[0]);
   };
+  // 統合コネクタ (/api/mcp/<token>) が各 MCP のツールと説明を束ねるのに使う
+  mcpHandler.meta = { name, instructions, tools };
+  return mcpHandler;
 }

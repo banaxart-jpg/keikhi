@@ -1,0 +1,596 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="文字起こし">
+<link rel="apple-touch-icon" href="/icon.png">
+<title>会議の文字起こし</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@24,400,0,0">
+<style>
+[hidden] { display: none !important; }
+* { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+:root {
+  --bg: #e4e6ee; --sl: rgba(255,255,255,1); --sd: rgba(168,172,192,0.75);
+  --text: #42455e; --text2: rgba(66,69,94,0.55); --text3: rgba(66,69,94,0.3);
+  --accent: #0f766e; --rec: #dc2626;
+}
+body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; }
+.icon { font-family: 'Material Symbols Outlined'; font-weight: normal; font-size: 1.15em; display: inline-block; line-height: 1; vertical-align: -0.2em; }
+.bar { display: flex; justify-content: space-between; align-items: center; padding: 40px 16px 0; gap: 8px; }
+.pill { display: inline-flex; align-items: center; gap: 5px; padding: 8px 14px; border-radius: 24px; font-size: 12px; font-weight: 700; border: none; color: var(--text2); background: var(--bg); box-shadow: 4px 4px 10px var(--sd), -4px -4px 10px var(--sl); cursor: pointer; font-family: inherit; text-decoration: none; white-space: nowrap; }
+.pill:active { box-shadow: inset 3px 3px 8px var(--sd), inset -3px -3px 8px var(--sl); }
+.pill.primary { background: var(--accent); color: #fff; }
+.pill.rec { background: var(--rec); color: #fff; }
+.pill:disabled { opacity: 0.45; }
+.pill.on { color: var(--accent); box-shadow: inset 3px 3px 8px var(--sd), inset -3px -3px 8px var(--sl); }
+.wrap { padding: 14px 16px 60px; max-width: 760px; margin: 0 auto; }
+.title { font-size: 22px; font-weight: 800; }
+.subtitle { font-size: 12px; color: var(--text2); font-weight: 600; margin: 3px 0 18px; line-height: 1.6; }
+
+.newrow { display: flex; gap: 10px; margin-bottom: 20px; }
+input.inp, textarea.inp { width: 100%; padding: 11px 13px; border-radius: 12px; border: none; font-size: 15px; font-family: inherit; color: var(--text); background: var(--bg); box-shadow: inset 3px 3px 8px var(--sd), inset -3px -3px 8px var(--sl); outline: none; min-width: 0; }
+
+.mtg { padding: 14px 15px; border-radius: 16px; background: var(--bg); box-shadow: 5px 5px 12px var(--sd), -4px -4px 10px var(--sl); margin-bottom: 10px; cursor: pointer; display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+.mtg .mt { font-size: 15px; font-weight: 800; }
+.mtg .mm { font-size: 11px; color: var(--text2); font-weight: 600; margin-top: 3px; font-variant-numeric: tabular-nums; }
+.empty { text-align: center; color: var(--text2); font-weight: 600; font-size: 13px; padding: 30px 20px; line-height: 1.8; }
+
+/* 会議画面 */
+.head { display: flex; align-items: center; gap: 10px; }
+.head .tin { font-size: 18px; font-weight: 800; background: transparent; box-shadow: none; padding: 4px 0; }
+.meta { font-size: 11px; color: var(--text2); font-weight: 600; margin-top: 2px; font-variant-numeric: tabular-nums; }
+.controls { position: sticky; top: 0; z-index: 5; background: var(--bg); padding: 12px 0 10px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.clock { font-size: 22px; font-weight: 800; font-variant-numeric: tabular-nums; margin-left: auto; color: var(--text3); }
+.clock.live { color: var(--rec); }
+.dot { width: 9px; height: 9px; border-radius: 50%; background: var(--rec); display: inline-block; margin-right: 6px; animation: blink 1.2s ease-in-out infinite; vertical-align: 2px; }
+@keyframes blink { 50% { opacity: 0.25; } }
+.status { font-size: 11px; font-weight: 700; color: var(--text2); min-height: 16px; margin-bottom: 6px; }
+.status .err { color: #b04040; cursor: pointer; text-decoration: underline; }
+
+.tl { display: flex; flex-direction: column; gap: 2px; }
+.seg { display: grid; grid-template-columns: 52px 1fr; gap: 8px; padding: 6px 0; }
+.seg .t { font-size: 11px; font-weight: 700; color: var(--text3); font-variant-numeric: tabular-nums; padding-top: 3px; }
+.seg .x { font-size: 14.5px; line-height: 1.75; white-space: pre-wrap; min-width: 0; overflow-wrap: anywhere; }
+.seg.pending .x { color: var(--text3); font-style: italic; font-size: 12px; }
+.seg.frame img { max-width: 100%; width: 320px; border-radius: 10px; box-shadow: 3px 3px 8px var(--sd); cursor: zoom-in; display: block; background: rgba(0,0,0,0.05); aspect-ratio: 16/9; object-fit: contain; }
+.live-cap { margin-top: 10px; padding: 10px 12px; border-radius: 12px; font-size: 13px; color: var(--text2); box-shadow: inset 2px 2px 6px var(--sd), inset -2px -2px 6px var(--sl); line-height: 1.6; }
+.live-cap .lbl { font-size: 10px; font-weight: 800; letter-spacing: 0.08em; color: var(--text3); margin-right: 6px; }
+
+.more { margin-top: 26px; }
+.more-tog { font-size: 12px; font-weight: 800; color: var(--text2); cursor: pointer; display: inline-flex; align-items: center; gap: 4px; }
+.more-body { margin-top: 10px; display: flex; flex-direction: column; gap: 10px; }
+.field-label { font-size: 11px; font-weight: 800; letter-spacing: 0.06em; color: var(--text2); margin: 4px 2px 0; }
+.row { display: flex; gap: 8px; flex-wrap: wrap; }
+.danger { color: #b04040; }
+
+.zoom { position: fixed; inset: 0; z-index: 600; background: rgba(15,15,25,0.9); display: flex; align-items: center; justify-content: center; padding: 16px; }
+.zoom img { max-width: 100%; max-height: 100%; border-radius: 8px; }
+
+.modal { position: fixed; inset: 0; z-index: 300; display: flex; align-items: flex-end; justify-content: center; background: rgba(180,184,205,0); visibility: hidden; opacity: 0; transition: background .2s, opacity .2s, visibility 0s linear .2s; }
+.modal.open { background: rgba(180,184,205,0.42); visibility: visible; opacity: 1; transition: background .2s, opacity .2s; }
+.sheet { background: var(--bg); border-radius: 28px 28px 0 0; width: 100%; max-width: 680px; max-height: 90vh; overflow-y: auto; padding: 6px 18px calc(24px + env(safe-area-inset-bottom)); transform: translateY(100%); transition: transform .2s cubic-bezier(.2,.8,.2,1); }
+.modal.open .sheet { transform: translateY(0); }
+.grab { padding: 14px 18px 6px; margin: 0 -18px 4px; touch-action: none; }
+.grab .handle { width: 46px; height: 5px; border-radius: 3px; background: rgba(168,172,192,0.45); margin: 0 auto; }
+.sheet h3 { font-size: 16px; font-weight: 800; margin: 6px 0 8px; }
+.sheet p { font-size: 13px; line-height: 1.75; color: var(--text2); margin-bottom: 10px; }
+.code { font-family: ui-monospace, Menlo, monospace; font-size: 12px; padding: 10px 12px; border-radius: 10px; box-shadow: inset 2px 2px 6px var(--sd), inset -2px -2px 6px var(--sl); word-break: break-all; user-select: all; margin-bottom: 10px; }
+
+.toast { position: fixed; left: 50%; bottom: 30px; transform: translateX(-50%); background: var(--text); color: #fff; padding: 11px 18px; border-radius: 20px; font-size: 13px; font-weight: 700; z-index: 700; display: none; max-width: calc(100% - 32px); }
+.toast.err { background: #b04040; }
+#signinOverlay { display: none; position: fixed; inset: 0; z-index: 400; background: var(--bg); flex-direction: column; align-items: center; justify-content: center; padding: 32px; text-align: center; gap: 18px; }
+</style>
+</head>
+<body>
+<div id="signinOverlay">
+  <div style="font-size:24px;font-weight:800;">会議の文字起こし</div>
+  <a class="pill" href="/">トップに戻る</a>
+  <div id="signinErr" style="font-size:11px;color:#b04040;font-family:monospace;"></div>
+</div>
+
+<div id="app" style="display:none;">
+  <div class="bar">
+    <a class="pill" id="backBtn" href="/"><span class="icon">arrow_back</span> 戻る</a>
+    <button class="pill" id="claudeBtn" type="button"><span class="icon">link</span> Claude につなぐ</button>
+  </div>
+
+  <!-- 一覧 -->
+  <div class="wrap" id="listView">
+    <div class="title">会議の文字起こし</div>
+    <div class="subtitle">録音しながら 15 秒ごとに文字にしていきます。PC なら画面共有も一緒に残せて、あとで Claude のチャットからそのまま読めます。</div>
+    <div class="newrow">
+      <input class="inp" id="newTitle" placeholder="会議名（空でも OK）">
+      <button class="pill rec" id="newBtn" type="button"><span class="icon">mic</span> 始める</button>
+    </div>
+    <div id="list"></div>
+  </div>
+
+  <!-- 会議 -->
+  <div class="wrap" id="mtgView" hidden>
+    <div class="head"><input class="inp tin" id="mTitle" aria-label="会議名"></div>
+    <div class="meta" id="mMeta"></div>
+    <div class="controls">
+      <button class="pill rec" id="recBtn" type="button"><span class="icon">mic</span> 録音</button>
+      <button class="pill" id="screenBtn" type="button" hidden><span class="icon">screen_share</span> 画面も</button>
+      <button class="pill" id="copyBtn" type="button"><span class="icon">content_copy</span> Claude 用</button>
+      <span class="clock" id="clock">0:00</span>
+    </div>
+    <div class="status" id="status"></div>
+    <div class="tl" id="tl"></div>
+    <div class="live-cap" id="liveCap" hidden><span class="lbl">いま</span><span id="liveTxt"></span></div>
+
+    <div class="more">
+      <span class="more-tog" id="moreTog"><span class="icon">expand_more</span> 参加者・メモ・削除</span>
+      <div class="more-body" id="moreBody" hidden>
+        <div class="field-label">参加者（書いておくと話者名が付きやすい）</div>
+        <input class="inp" id="mPeople" placeholder="例: 小林, 施主の山田さん">
+        <div class="field-label">メモ</div>
+        <textarea class="inp" id="mMemo" rows="3"></textarea>
+        <div class="field-label">他のツールの文字起こしを足す</div>
+        <textarea class="inp" id="mPaste" rows="3" placeholder="貼り付けて「追加」"></textarea>
+        <div class="row">
+          <button class="pill" id="pasteBtn" type="button"><span class="icon">add</span> 追加</button>
+          <button class="pill danger" id="delBtn" type="button"><span class="icon">delete</span> この会議を削除</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="modal" id="cModal">
+  <div class="sheet" id="cSheet">
+    <div class="grab" id="cGrab"><div class="handle"></div></div>
+    <div id="cBody"></div>
+  </div>
+</div>
+<div class="toast" id="toast"></div>
+
+<script src="/config.js"></script>
+<script type="module">
+import { initAuthBoot, api, idToken } from "/api-auth.js";
+const $ = (id) => document.getElementById(id);
+const API_BASE = (window.API_BASE || "").replace(/\/$/, "");
+const SEG_MS = 15000;            // 何秒ごとに文字起こしに回すか
+const FRAME_CHECK_MS = 2000;     // 画面の変化チェック間隔
+const isIOS = /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+
+let _tt = null;
+function toast(m, e = false) { const t = $("toast"); t.textContent = m; t.classList.toggle("err", !!e); t.style.display = "block"; clearTimeout(_tt); _tt = setTimeout(() => t.style.display = "none", e ? 4500 : 1800); }
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+function fmtT(s) { s = Math.max(0, Math.round(s || 0)); const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), ss = s % 60; return (h ? h + ":" + String(m).padStart(2, "0") : m) + ":" + String(ss).padStart(2, "0"); }
+function fmtDate(iso) { if (!iso) return ""; const d = new Date(iso); return `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`; }
+async function copyText(t) {
+  try { await navigator.clipboard.writeText(t); toast("コピーしました"); }
+  catch { toast("コピーできませんでした。長押しで選んでください", true); }
+}
+
+// ───────── 一覧 ─────────
+let meetings = [];
+async function loadList() {
+  try { meetings = await api("GET", "/api/meeting"); } catch (e) { toast("読み込み失敗: " + e.message, true); meetings = []; }
+  if (!meetings.length) { $("list").innerHTML = `<div class="empty">まだ会議はありません。<br>上の「始める」で録音スタート。</div>`; return; }
+  $("list").innerHTML = meetings.map(m => `
+    <div class="mtg" data-id="${esc(m.id)}">
+      <div style="min-width:0;">
+        <div class="mt">${esc(m.title || "無題の会議")}</div>
+        <div class="mm">${fmtDate(m.heldAt)}${m.segments ? " ・ 約" + Math.max(1, Math.ceil((m.lastSec + 15) / 60)) + "分" : ""}${m.frames ? " ・ 画面 " + m.frames + "枚" : ""}</div>
+      </div>
+      <span class="icon" style="color:var(--text3)">chevron_right</span>
+    </div>`).join("");
+  document.querySelectorAll(".mtg").forEach(el => el.addEventListener("click", () => openMeeting(el.dataset.id)));
+}
+async function createMeeting() {
+  const d = new Date();
+  const title = $("newTitle").value.trim() || `${d.getMonth() + 1}/${d.getDate()} の会議`;
+  $("newBtn").disabled = true;
+  try {
+    const { id } = await api("POST", "/api/meeting", { title });
+    $("newTitle").value = "";
+    await openMeeting(id, { autoStart: true });
+  } catch (e) { toast("作れませんでした: " + e.message, true); }
+  finally { $("newBtn").disabled = false; }
+}
+
+// ───────── 会議画面 ─────────
+let cur = null;            // { id, title, participants, memo, segments:[{startSec,text,source,part}], frames:[{id,atSec,src?}] }
+let pollTimer = null;
+async function openMeeting(id, { autoStart = false } = {}) {
+  try { cur = await api("GET", `/api/meeting/${id}`); } catch (e) { toast("開けませんでした: " + e.message, true); return; }
+  cur.pending = new Map();  // startSec → "送信中" 表示
+  $("listView").hidden = true; $("mtgView").hidden = false;
+  $("backBtn").innerHTML = `<span class="icon">arrow_back</span> 一覧`;
+  $("backBtn").href = "#";
+  $("mTitle").value = cur.title || "";
+  $("mPeople").value = cur.participants || "";
+  $("mMemo").value = cur.memo || "";
+  $("screenBtn").hidden = !navigator.mediaDevices?.getDisplayMedia;
+  renderMeta(); renderTl(); setStatus();
+  clearInterval(pollTimer);
+  pollTimer = setInterval(() => { if (!rec.on) refreshFromServer(); }, 10000); // 他の端末で録音中でも追える
+  if (autoStart) startRec();
+}
+async function refreshFromServer() {
+  if (!cur) return;
+  try {
+    const d = await api("GET", `/api/meeting/${cur.id}`);
+    if (!cur || d.id !== cur.id) return;
+    const srcs = new Map(cur.frames.map(f => [f.id, f.src]));
+    cur.segments = d.segments;
+    cur.frames = d.frames.map(f => ({ ...f, src: srcs.get(f.id) }));
+    renderMeta(); renderTl();
+  } catch {}
+}
+function lastEndSec() {
+  const a = cur.segments.filter(s => s.source === "audio").map(s => s.startSec);
+  return a.length ? Math.max(...a) + SEG_MS / 1000 : 0;
+}
+function renderMeta() {
+  const min = Math.ceil(lastEndSec() / 60);
+  $("mMeta").textContent = `${fmtDate(cur.heldAt)}${min ? " ・ 約" + min + "分" : ""}${cur.frames.length ? " ・ 画面 " + cur.frames.length + "枚" : ""}`;
+}
+function renderTl() {
+  const items = [];
+  const texts = cur.segments.filter(s => s.source === "audio" && s.text.trim());
+  for (const s of texts) items.push({ k: "seg", at: s.startSec, html: `<div class="seg"><div class="t">${fmtT(s.startSec)}</div><div class="x">${esc(s.text)}</div></div>` });
+  for (const [at, label] of cur.pending) items.push({ k: "pend", at, html: `<div class="seg pending"><div class="t">${fmtT(at)}</div><div class="x">${esc(label)}</div></div>` });
+  for (const f of cur.frames) items.push({ k: "frame", at: f.atSec, html: `<div class="seg frame"><div class="t">${fmtT(f.atSec)}</div><div class="x"><img data-fid="${f.id}" alt="${fmtT(f.atSec)} の画面" ${f.src ? `src="${f.src}"` : ""}></div></div>` });
+  items.sort((a, b) => a.at - b.at || (a.k === "frame" ? -1 : 1));
+  const texted = cur.segments.filter(s => s.source === "text");
+  const html = items.map(i => i.html).join("") + texted.map(s => `<div class="seg"><div class="t">貼付</div><div class="x">${esc(s.text)}</div></div>`).join("");
+  const nearBottom = window.innerHeight + window.scrollY > document.body.scrollHeight - 160;
+  $("tl").innerHTML = html || `<div class="empty">「録音」を押すと、ここに 15 秒ごとに文字が出てきます。</div>`;
+  $("tl").querySelectorAll("img[data-fid]").forEach(img => {
+    if (!img.getAttribute("src")) loadFrame(img);
+    img.addEventListener("click", () => zoom(img.src));
+  });
+  if (rec.on && nearBottom) window.scrollTo(0, document.body.scrollHeight);
+}
+async function loadFrame(img) {
+  const fid = Number(img.dataset.fid);
+  const f = cur.frames.find(x => x.id === fid);
+  if (!f || f.loading) return;
+  f.loading = true;
+  try {
+    const r = await fetch(`${API_BASE}/api/meeting/${cur.id}/frame/${fid}`, { headers: { Authorization: "Bearer " + await idToken() } });
+    if (!r.ok) throw new Error(r.status);
+    f.src = URL.createObjectURL(await r.blob());
+    img.src = f.src;
+  } catch {} finally { f.loading = false; }
+}
+function zoom(src) {
+  if (!src) return;
+  const z = document.createElement("div"); z.className = "zoom"; z.innerHTML = `<img src="${src}" alt="">`;
+  z.addEventListener("click", () => z.remove()); document.body.appendChild(z);
+}
+function backToList() {
+  if (rec.on) { toast("録音を止めてから戻ってください", true); return; }
+  clearInterval(pollTimer); cur = null;
+  $("mtgView").hidden = true; $("listView").hidden = false;
+  $("backBtn").innerHTML = `<span class="icon">arrow_back</span> 戻る`; $("backBtn").href = "/";
+  loadList();
+}
+
+// ───────── 送信キュー（音声・画面）─────────
+const queue = []; let inflight = 0; const failed = [];
+function enqueue(job) { queue.push(job); pump(); setStatus(); }
+async function pump() {
+  while (inflight < 2 && queue.length) {
+    const job = queue.shift(); inflight++;
+    runJob(job).finally(() => { inflight--; setStatus(); pump(); });
+  }
+}
+async function runJob(job) {
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try { await job.run(); return; }
+    catch (e) {
+      job.lastErr = e.message;
+      if (attempt < 3) await new Promise(r => setTimeout(r, 1500 * attempt));
+    }
+  }
+  failed.push(job);
+  job.onFail?.();
+}
+function retryFailed() {
+  const jobs = failed.splice(0);
+  jobs.forEach(j => { j.onRetry?.(); enqueue(j); });
+}
+function setStatus() {
+  const n = queue.length + inflight;
+  const parts = [];
+  if (rec.on) parts.push(rec.paused ? "一時停止中" : `<span class="dot"></span>録音中${rec.screen ? "（画面も）" : ""}`);
+  if (n) parts.push(`送信待ち ${n}`);
+  if (failed.length) parts.push(`<span class="err" id="retryLink">送れなかった ${failed.length} 件を再送</span>`);
+  $("status").innerHTML = parts.join(" ・ ");
+  $("retryLink")?.addEventListener("click", retryFailed);
+}
+const blobToB64 = (blob) => new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(String(r.result).split(",")[1] || ""); r.onerror = rej; r.readAsDataURL(blob); });
+
+function sendAudio(meetingId, blob, startSec) {
+  if (blob.size < 1500) return; // 無音・極短は送らない
+  const m = cur; m.pending.set(startSec, "文字起こし中…"); renderTl();
+  enqueue({
+    onRetry: () => { if (cur?.id === meetingId) { cur.pending.set(startSec, "文字起こし中…"); renderTl(); } },
+    onFail: () => { if (cur?.id === meetingId) { cur.pending.set(startSec, "送れませんでした（上の「再送」で送り直せます）"); renderTl(); } },
+    run: async () => {
+      const r = await api("POST", `/api/meeting/${meetingId}/audio`, { audio: await blobToB64(blob), mimeType: blob.type || "audio/webm", startSec, part: 1 });
+      if (cur && cur.id === meetingId) {
+        cur.pending.delete(startSec);
+        cur.segments = cur.segments.filter(s => !(s.source === "audio" && s.startSec === startSec)).concat([{ part: 1, startSec, text: r.text || "", source: "audio" }]);
+        renderMeta(); renderTl();
+      }
+    },
+  });
+}
+function sendFrame(meetingId, dataUrl, atSec, w, h) {
+  const tmpId = -Date.now();
+  if (cur && cur.id === meetingId) { cur.frames.push({ id: tmpId, atSec, src: dataUrl }); renderMeta(); renderTl(); }
+  enqueue({
+    run: async () => {
+      const r = await api("POST", `/api/meeting/${meetingId}/frame`, { image: dataUrl.split(",")[1], atSec, width: w, height: h });
+      const f = cur?.frames.find(x => x.id === tmpId); if (f) f.id = r.id;
+    },
+  });
+}
+
+// ───────── 録音 ─────────
+const rec = { on: false, paused: false, mic: null, display: null, ctx: null, dest: null, recorder: null, segTimer: null, clockTimer: null,
+  base: 0, startedAt: 0, pausedMs: 0, pauseAt: 0, segStart: 0, screen: false, wake: null, meetingId: null, speech: null };
+
+function pickMime() {
+  for (const c of ["audio/mp4", "audio/webm;codecs=opus", "audio/webm", "audio/aac"]) { // 録音メモ (/rec/) と同じ順 = Gemini で実績あり
+    try { if (MediaRecorder.isTypeSupported?.(c)) return c; } catch {}
+  }
+  return "";
+}
+function elapsedSec() {
+  if (!rec.on) return 0;
+  const now = rec.paused ? rec.pauseAt : Date.now();
+  return (now - rec.startedAt - rec.pausedMs) / 1000;
+}
+function nowSec() { return rec.base + elapsedSec(); }
+// 画面共有の音 (相手の声) があれば、マイクと混ぜたストリームで録る
+function recStream() {
+  if (rec.display?.getAudioTracks().length && rec.dest) return rec.dest.stream;
+  return rec.mic;
+}
+function startSegment() {
+  if (!rec.on || rec.paused) return;
+  const mt = pickMime();
+  let r;
+  try { r = mt ? new MediaRecorder(recStream(), { mimeType: mt }) : new MediaRecorder(recStream()); }
+  catch { r = new MediaRecorder(recStream()); }
+  const chunks = []; const startSec = Math.round(nowSec()); const meetingId = rec.meetingId;
+  r.ondataavailable = (e) => { if (e.data?.size) chunks.push(e.data); };
+  r.onstop = () => { if (chunks.length) sendAudio(meetingId, new Blob(chunks, { type: (r.mimeType || chunks[0].type || "audio/mp4") }), startSec); };
+  r.start();
+  const prev = rec.recorder; rec.recorder = r;
+  if (prev && prev.state !== "inactive") prev.stop(); // 次を始めてから前を止める (つなぎ目の取りこぼし防止)
+  clearTimeout(rec.segTimer);
+  rec.segTimer = setTimeout(startSegment, SEG_MS);
+}
+function stopSegment() {
+  clearTimeout(rec.segTimer);
+  if (rec.recorder && rec.recorder.state !== "inactive") rec.recorder.stop();
+  rec.recorder = null;
+}
+async function startRec() {
+  if (!cur) return;
+  if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) { toast("このブラウザは録音に対応していません", true); return; }
+  try { rec.mic = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } }); }
+  catch { toast("マイクが使えません。ブラウザの設定で許可してください", true); return; }
+  rec.on = true; rec.paused = false; rec.meetingId = cur.id;
+  rec.base = Math.round(lastEndSec()); rec.startedAt = Date.now(); rec.pausedMs = 0;
+  try { rec.wake = await navigator.wakeLock?.request("screen"); } catch {}
+  startSegment(); startSpeech();
+  rec.clockTimer = setInterval(tick, 500); tick();
+  updateButtons(); setStatus();
+}
+function pauseRec() {
+  if (!rec.on) return;
+  if (!rec.paused) { rec.paused = true; rec.pauseAt = Date.now(); stopSegment(); stopSpeech(); }
+  else { rec.pausedMs += Date.now() - rec.pauseAt; rec.paused = false; startSegment(); startSpeech(); }
+  updateButtons(); setStatus();
+}
+function stopRec() {
+  if (!rec.on) return;
+  rec.on = false; // 先に落とす (stopScreen が次のチャンクを始めないように)
+  stopSegment(); stopSpeech(); stopScreen();
+  rec.mic?.getTracks().forEach(t => t.stop()); rec.mic = null;
+  try { rec.ctx?.close(); } catch {} rec.ctx = null; rec.dest = null;
+  try { rec.wake?.release(); } catch {} rec.wake = null;
+  clearInterval(rec.clockTimer);
+  rec.on = false; rec.paused = false;
+  updateButtons(); setStatus(); tick();
+}
+function tick() {
+  $("clock").textContent = fmtT(rec.on ? nowSec() : lastEndSec());
+  $("clock").classList.toggle("live", rec.on && !rec.paused);
+}
+function updateButtons() {
+  if (!rec.on) {
+    $("recBtn").className = "pill rec"; $("recBtn").innerHTML = `<span class="icon">mic</span> ${cur && lastEndSec() ? "続きを録音" : "録音"}`;
+  } else {
+    $("recBtn").className = "pill"; $("recBtn").innerHTML = `<span class="icon">stop</span> 終了`;
+  }
+  let p = $("pauseBtn");
+  if (rec.on && !p) {
+    p = document.createElement("button"); p.id = "pauseBtn"; p.type = "button"; p.className = "pill";
+    p.addEventListener("click", pauseRec); $("recBtn").after(p);
+  }
+  if (p) {
+    if (!rec.on) p.remove();
+    else p.innerHTML = rec.paused ? `<span class="icon">play_arrow</span> 再開` : `<span class="icon">pause</span> 一時停止`;
+  }
+  $("screenBtn").classList.toggle("on", rec.screen);
+  $("screenBtn").innerHTML = rec.screen ? `<span class="icon">stop_screen_share</span> 画面を止める` : `<span class="icon">screen_share</span> 画面も`;
+}
+
+// ───────── 画面共有（変化したときだけ静止画を撮る）─────────
+const fr = { video: null, small: null, last: null, prev: null, lastAt: 0, timer: null };
+async function toggleScreen() {
+  if (rec.screen) { stopScreen(); updateButtons(); setStatus(); return; }
+  if (!rec.on) await startRec();
+  if (!rec.on) return;
+  let ds;
+  try { ds = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: 5 }, audio: true }); }
+  catch { toast("画面共有をやめました"); return; }
+  rec.display = ds; rec.screen = true;
+  // 相手の声 (タブ / システム音声) があればマイクと混ぜる
+  if (ds.getAudioTracks().length) {
+    try {
+      rec.ctx = rec.ctx || new AudioContext();
+      rec.dest = rec.ctx.createMediaStreamDestination();
+      rec.ctx.createMediaStreamSource(rec.mic).connect(rec.dest);
+      rec.ctx.createMediaStreamSource(new MediaStream(ds.getAudioTracks())).connect(rec.dest);
+      if (!rec.paused) startSegment(); // 次のチャンクから混ぜた音で録る
+    } catch { toast("相手側の音は取り込めませんでした（マイクだけで続けます）", true); }
+  } else {
+    toast("画面だけ共有中。相手の声も残すならタブ共有で「音声も共有」をオン");
+  }
+  ds.getVideoTracks()[0].addEventListener("ended", () => { stopScreen(); updateButtons(); setStatus(); });
+  fr.video = document.createElement("video"); fr.video.muted = true; fr.video.playsInline = true; fr.video.srcObject = ds;
+  await fr.video.play().catch(() => {});
+  fr.small = document.createElement("canvas"); fr.small.width = 48; fr.small.height = 27;
+  fr.last = null; fr.prev = null; fr.lastAt = 0;
+  fr.timer = setInterval(checkFrame, FRAME_CHECK_MS);
+  updateButtons(); setStatus();
+}
+function stopScreen() {
+  clearInterval(fr.timer); fr.timer = null;
+  if (rec.display) { rec.display.getTracks().forEach(t => t.stop()); rec.display = null; }
+  if (rec.screen && rec.on && !rec.paused && rec.dest) { rec.dest = null; startSegment(); } // マイクだけに戻す
+  rec.dest = null; rec.screen = false;
+  if (fr.video) { fr.video.srcObject = null; fr.video = null; }
+}
+function thumb() {
+  const v = fr.video; if (!v || !v.videoWidth) return null;
+  const g = fr.small.getContext("2d", { willReadFrequently: true });
+  g.drawImage(v, 0, 0, fr.small.width, fr.small.height);
+  const d = g.getImageData(0, 0, fr.small.width, fr.small.height).data;
+  const out = new Uint8Array(d.length / 4);
+  for (let i = 0; i < out.length; i++) out[i] = (d[i * 4] * 3 + d[i * 4 + 1] * 6 + d[i * 4 + 2]) / 10;
+  return out;
+}
+const diff = (a, b) => { if (!a || !b) return 1; let s = 0; for (let i = 0; i < a.length; i++) s += Math.abs(a[i] - b[i]); return s / a.length / 255; };
+function checkFrame() {
+  if (!rec.on || rec.paused) return;
+  const t = thumb(); if (!t) return;
+  const stable = diff(t, fr.prev) < 0.01;   // スクロール中などは待つ
+  fr.prev = t;
+  const changed = diff(t, fr.last) > 0.035;
+  if (!changed) return;
+  const since = Date.now() - fr.lastAt;
+  if (since < 3000) return;
+  if (!stable && since < 30000) return; // 動画など動き続ける画面は 30 秒に 1 枚
+
+  fr.last = t; fr.lastAt = Date.now();
+  const v = fr.video, scale = Math.min(1, 1600 / v.videoWidth);
+  const c = document.createElement("canvas"); c.width = Math.round(v.videoWidth * scale); c.height = Math.round(v.videoHeight * scale);
+  c.getContext("2d").drawImage(v, 0, 0, c.width, c.height);
+  sendFrame(rec.meetingId, c.toDataURL("image/jpeg", 0.72), Math.round(nowSec()), c.width, c.height);
+}
+
+// ───────── いま話している言葉（ブラウザ内の簡易字幕。保存はしない）─────────
+function startSpeech() {
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SR || isIOS) return; // iPhone は録音とマイクを取り合うので使わない
+  try {
+    const s = new SR(); s.lang = "ja-JP"; s.continuous = true; s.interimResults = true;
+    s.onresult = (e) => {
+      let t = "";
+      for (let i = e.resultIndex; i < e.results.length; i++) t += e.results[i][0].transcript;
+      if (t.trim()) { $("liveTxt").textContent = t.slice(-120); $("liveCap").hidden = false; }
+    };
+    s.onend = () => { if (rec.speech === s && rec.on && !rec.paused) { try { s.start(); } catch {} } };
+    s.onerror = (e) => { if (e.error === "not-allowed" || e.error === "service-not-allowed") { rec.speech = null; $("liveCap").hidden = true; } };
+    rec.speech = s; s.start();
+  } catch { rec.speech = null; }
+}
+function stopSpeech() {
+  const s = rec.speech; rec.speech = null;
+  try { s?.stop(); } catch {}
+  $("liveCap").hidden = true; $("liveTxt").textContent = "";
+}
+
+// ───────── 編集まわり ─────────
+let saveT = null;
+function saveMeta() {
+  clearTimeout(saveT);
+  saveT = setTimeout(async () => {
+    if (!cur) return;
+    try { await api("PUT", `/api/meeting/${cur.id}`, { title: $("mTitle").value.trim() || "無題の会議", participants: $("mPeople").value, memo: $("mMemo").value }); }
+    catch (e) { toast("保存失敗: " + e.message, true); }
+  }, 700);
+}
+async function addPaste() {
+  const text = $("mPaste").value.trim(); if (!text || !cur) return;
+  try {
+    await api("POST", `/api/meeting/${cur.id}/text`, { text });
+    $("mPaste").value = ""; toast("追加しました"); refreshFromServer();
+  } catch (e) { toast("追加失敗: " + e.message, true); }
+}
+let delArmed = false;
+async function delMeeting() {
+  if (!cur) return;
+  if (rec.on) { toast("録音を止めてから削除してください", true); return; }
+  if (!delArmed) { delArmed = true; $("delBtn").innerHTML = `<span class="icon">delete_forever</span> もう一度押すと削除`; setTimeout(() => { delArmed = false; if ($("delBtn")) $("delBtn").innerHTML = `<span class="icon">delete</span> この会議を削除`; }, 4000); return; }
+  delArmed = false;
+  try { await api("DELETE", `/api/meeting/${cur.id}`); toast("削除しました"); backToList(); }
+  catch (e) { toast("削除失敗: " + e.message, true); }
+}
+function claudePrompt() {
+  return `会議「${$("mTitle").value.trim() || "無題の会議"}」(id: ${cur.id}) を keihi コネクタの meeting_get で読んで。画面共有の話が出てきたら meeting_frames で該当時刻の画面も見て。`;
+}
+
+// Claude につなぐ（統合コネクタ URL）
+async function openClaude() {
+  $("cBody").innerHTML = `<h3>Claude につなぐ</h3><p>読み込み中…</p>`;
+  $("cModal").classList.add("open");
+  let url = "";
+  try { url = (await api("GET", "/api/mcp-connector")).url; } catch (e) { $("cBody").innerHTML = `<h3>Claude につなぐ</h3><p>${esc(e.message)}</p>`; return; }
+  $("cBody").innerHTML = `
+    <h3>Claude につなぐ</h3>
+    <p>claude.ai の「設定 → コネクタ → カスタムコネクタを追加」にこの URL を 1 回入れるだけ。会議・スプレッドシート・現場写真・ドラマ・SNS のツールが全部この 1 本に入っています。</p>
+    <div class="code">${esc(url)}</div>
+    <div class="row"><button class="pill primary" id="cCopy" type="button"><span class="icon">content_copy</span> URL をコピー</button></div>
+    <p style="margin-top:14px;">この URL は合言葉入り。人に渡さないでください。</p>`;
+  $("cCopy").addEventListener("click", () => copyText(url));
+}
+$("cModal").addEventListener("click", e => { if (e.target === $("cModal")) $("cModal").classList.remove("open"); });
+(() => {
+  const grab = $("cGrab"), sheet = $("cSheet"); let sy = null, dy = 0;
+  grab.addEventListener("pointerdown", e => { sy = e.clientY; dy = 0; sheet.style.transition = "none"; });
+  grab.addEventListener("pointermove", e => { if (sy === null) return; dy = e.clientY - sy; if (dy > 0) sheet.style.transform = `translateY(${dy}px)`; });
+  const end = () => { if (sy === null) return; sy = null; sheet.style.transition = ""; if (dy > 90) $("cModal").classList.remove("open"); sheet.style.transform = ""; dy = 0; };
+  grab.addEventListener("pointerup", end); grab.addEventListener("pointercancel", end);
+})();
+
+$("newBtn").addEventListener("click", createMeeting);
+$("newTitle").addEventListener("keydown", e => { if (e.key === "Enter" && !e.isComposing) createMeeting(); });
+$("backBtn").addEventListener("click", e => { if (!$("mtgView").hidden) { e.preventDefault(); backToList(); } });
+$("recBtn").addEventListener("click", () => rec.on ? stopRec() : startRec());
+$("screenBtn").addEventListener("click", toggleScreen);
+$("copyBtn").addEventListener("click", () => copyText(claudePrompt()));
+$("claudeBtn").addEventListener("click", openClaude);
+$("moreTog").addEventListener("click", () => { $("moreBody").hidden = !$("moreBody").hidden; });
+["mTitle", "mPeople", "mMemo"].forEach(id => $(id).addEventListener("input", saveMeta));
+$("pasteBtn").addEventListener("click", addPaste);
+$("delBtn").addEventListener("click", delMeeting);
+window.addEventListener("beforeunload", e => { if (rec.on || queue.length || inflight) { e.preventDefault(); e.returnValue = ""; } });
+document.addEventListener("visibilitychange", async () => {
+  if (document.visibilityState === "visible" && rec.on && !rec.wake) { try { rec.wake = await navigator.wakeLock?.request("screen"); } catch {} }
+});
+
+initAuthBoot({ returnPath: "/gijiroku/", onReady: async () => {
+  $("app").style.display = "";
+  $("list").innerHTML = '<div class="empty">読み込み中…</div>';
+  await loadList();
+} });
+</script>
+</body>
+</html>

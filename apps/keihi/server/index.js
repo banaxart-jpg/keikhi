@@ -31,6 +31,7 @@ import { searchWebImages as dramaSearchWebImages } from "./drama-lib/websearch.j
 import { splitGridImage as dramaSplitGridImage } from "./drama-lib/gridsplit.js";
 import { createMcpHandler as dramaCreateMcpHandler } from "./drama-lib/mcp.js";
 import { createSns } from "./sns-lib/index.js";
+import { createMeeting } from "./meeting-lib/index.js";
 import sharp from "sharp";
 import { fileURLToPath } from "node:url";
 
@@ -2574,6 +2575,53 @@ app.all("/api/sheets/mcp/:token", (req, res) => {
 // トークン・API キーは Secret Manager の sns-config (JSON) にだけ置く (リポは public)。
 const sns = createSns({ getPool, createMcpHandler: dramaCreateMcpHandler });
 app.all("/api/sns/mcp/:token", sns.mcpRoute());
+
+// ═══════════════════ 会議の文字起こし (/gijiroku/ + MCP) ═══════════════════
+// アプリが 15 秒ごとの音声と画面の静止画を送り、Claude は MCP でそのまま読む。詳細は meeting-lib/index.js。
+// 単体 URL (/api/meeting/mcp/<token>) は Secret Manager の meeting-config がある時だけ有効。普段は下の統合コネクタで使う。
+const meeting = createMeeting({
+  getPool, createMcpHandler: dramaCreateMcpHandler, bucket: RECEIPTS_BUCKET,
+  getStorage: () => storage, // storage は下の方で定義 (TDZ を避けて遅延参照)
+  callGemini: (content, opts) => {
+    if (!genAI) throw new Error("GEMINI_API_KEY not configured");
+    return callGeminiWithFallback(content, opts);
+  },
+});
+app.all("/api/meeting/mcp/:token", meeting.mcpRoute());
+
+// ═══════════════════ 統合コネクタ (claude.ai に登録する URL を 1 本にする) ═══════════════════
+// 接続 URL: https://<keihi-api の Cloud Run URL>/api/mcp/<token>
+// sheets / 現場写真 / drama / SNS / 会議 のツールを全部束ねる。新しい MCP を足しても URL を登録し直さなくていい。
+// token は URL に使う秘密。リポは public なので直書きせず、Cloud Run に既にある INTERNAL_TICK_SECRET から
+// HMAC で導出する (新しい secret を作らなくていい)。KEIHI_MCP_TOKEN があればそちらを優先。
+// 自分の URL はログインした状態で GET /api/mcp-connector で確認できる (/gijiroku/ の「Claude につなぐ」)。
+// 旧 URL (/api/sheets|drama|photos|sns|meeting/mcp/...) はそのまま生かしてある。
+const KEIHI_MCP_TOKEN = (process.env.KEIHI_MCP_TOKEN || "").trim()
+  || ((process.env.INTERNAL_TICK_SECRET || "").trim()
+    ? crypto.createHmac("sha256", (process.env.INTERNAL_TICK_SECRET || "").trim()).update("keihi-mcp-v1").digest("hex").slice(0, 40)
+    : "");
+const KEIHI_API_PUBLIC_URL = (process.env.KEIHI_API_PUBLIC_URL || "https://keihi-api-734350696397.asia-northeast1.run.app").replace(/\/$/, "");
+const UNIFIED_MCP_INSTRUCTIONS = [
+  "BANAX 社内ツールの統合コネクタ。ツール名の頭で種類が分かる:",
+  "- meeting_*: 会議の文字起こしと画面共有の静止画 (/gijiroku/)",
+  "- drama_*: ドラマ/アニメ制作",
+  "- x_* / note_* / sns_*: SNS 発信 (投稿は課金あり・取り消し不可に近いので、必ず本文を見せて OK をもらってから)",
+  "- それ以外: Google スプレッドシート / Drive / 現場写真",
+  "",
+  "## 会議", meeting.instructions,
+  "", "## スプレッドシート / 現場写真", sheetsMcpHandler.meta.instructions,
+  "", "## ドラマ制作", dramaMcpHandler.meta.instructions,
+  "", "## SNS", sns.instructions,
+].join("\n");
+app.all("/api/mcp/:token", async (req, res) => {
+  if (!KEIHI_MCP_TOKEN || req.params.token !== KEIHI_MCP_TOKEN) return res.status(403).json({ error: "forbidden" });
+  let snsTools = [];
+  try { snsTools = await sns.toolsForAll(); } catch { snsTools = []; } // sns-config 未作成なら SNS ツールだけ出さない
+  const seen = new Set();
+  const tools = [...meeting.tools, ...sheetsMcpHandler.meta.tools, ...dramaMcpHandler.meta.tools, ...snsTools]
+    .filter((t) => (seen.has(t.name) ? (console.warn(`[mcp] ツール名の重複を無視: ${t.name}`), false) : seen.add(t.name)));
+  return dramaCreateMcpHandler({ name: "keihi", instructions: UNIFIED_MCP_INSTRUCTIONS, tools })(req, res);
+});
 
 // 旧 現場写真コネクタの URL も同じ統合ハンドラで生かしておく (登録済みでも壊れない)
 app.all("/api/photos/mcp/:token", (req, res) => {
@@ -11675,6 +11723,16 @@ app.delete("/api/kounyu/:id", async (req, res) => {
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
+});
+
+// ─────────────────────────────
+// 会議の文字起こし (gijiroku): 中身は meeting-lib/index.js
+// ─────────────────────────────
+meeting.registerRoutes(app);
+// 統合コネクタの URL (ログイン済みの社内ユーザーだけ見られる)
+app.get("/api/mcp-connector", (req, res) => {
+  if (!KEIHI_MCP_TOKEN) return res.status(503).json({ error: "INTERNAL_TICK_SECRET が未設定のため統合コネクタは無効です" });
+  res.json({ url: `${KEIHI_API_PUBLIC_URL}/api/mcp/${KEIHI_MCP_TOKEN}` });
 });
 
 // ─────────────────────────────
