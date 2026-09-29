@@ -13,6 +13,7 @@
 // トークンは Secret Manager の meeting-config にだけ置く (リポは public)。未作成なら 403 のみ。
 
 import { google } from "googleapis";
+import { sttTranscribe, lastSttError } from "./stt.js";
 
 const SECRET_NAME = (process.env.MEETING_CONFIG_SECRET || "meeting-config").trim();
 const CACHE_MS = 5 * 60 * 1000;
@@ -143,26 +144,34 @@ export function createMeeting({ getPool, createMcpHandler, callGemini, getStorag
     if (audio.length > MAX_AUDIO_B64) throw new Error("音声チャンクが大きすぎます");
     part = Math.max(1, Number(part) || 1);
     startSec = Math.max(0, Math.round(Number(startSec) || 0));
-    const prompt = [
-      "次の日本語の会議音声 (リアルタイム録音の 15 秒ほどの断片) を文字起こししてください。",
-      m.participants ? `参加者: ${m.participants}（声や呼びかけで分かるときだけ名前を使う）` : "",
-      "話者が替わるところで改行する。話者名は確実に分かるときだけ行頭に「名前: 」を付ける。",
-      "言いよどみ (えー、あのー) は省いてよいが、内容は要約せず話した通りに残す。",
-      "断片なので文頭・文末が途中で切れていてもそのまま書く。聞き取れない箇所は（聞き取れず）とし、創作しない。",
-      "無音・雑音だけなら何も出力しない。文字起こしテキストのみを出力 (前置き・見出し・記号・JSON 不要)。",
-    ].filter(Boolean).join("\n");
-    const { result } = await callGemini([
-      { text: prompt },
-      { inlineData: { data: audio, mimeType: String(mimeType || "audio/webm").split(";")[0] } },
-    ], { primaryModel: "gemini-2.5-flash", maxOutputTokens: 4096, thinkingBudget: 0 });
-    let text = String(result?.response?.text?.() || "").trim();
+    // Google Speech-to-Text (Chirp) を優先。使えない (API 未有効化・権限など) ときだけ Gemini に戻す
+    let text = "", engine = "", sttError = "";
+    const stt = await sttTranscribe(audio);
+    if (stt) { text = stt.text; engine = stt.engine; }
+    else {
+      sttError = lastSttError;
+      const prompt = [
+        "次の日本語の会議音声 (リアルタイム録音の 15 秒ほどの断片) を文字起こししてください。",
+        m.participants ? `参加者: ${m.participants}（声や呼びかけで分かるときだけ名前を使う）` : "",
+        "話者が替わるところで改行する。話者名は確実に分かるときだけ行頭に「名前: 」を付ける。",
+        "言いよどみ (えー、あのー) は省いてよいが、内容は要約せず話した通りに残す。",
+        "断片なので文頭・文末が途中で切れていてもそのまま書く。聞き取れない箇所は（聞き取れず）とし、創作しない。",
+        "無音・雑音だけなら何も出力しない。文字起こしテキストのみを出力 (前置き・見出し・記号・JSON 不要)。",
+      ].filter(Boolean).join("\n");
+      const { result } = await callGemini([
+        { text: prompt },
+        { inlineData: { data: audio, mimeType: String(mimeType || "audio/webm").split(";")[0] } },
+      ], { primaryModel: "gemini-2.5-flash", maxOutputTokens: 4096, thinkingBudget: 0 });
+      text = String(result?.response?.text?.() || "").trim();
+      engine = "gemini";
+    }
     if (/^(（?無音）?|（?聞き取れず）?)$/.test(text)) text = "";
     await pool().query(
       `INSERT INTO meeting_segments (meeting_id, part, start_sec, text, source) VALUES ($1,$2,$3,$4,'audio')
        ON CONFLICT (meeting_id, part, start_sec) DO UPDATE SET text = EXCLUDED.text, created_at = now()`,
       [m.id, part, startSec, text]);
     await pool().query(`UPDATE meetings SET updated_at = now() WHERE id=$1`, [m.id]);
-    return { part, start_sec: startSec, text };
+    return { part, start_sec: startSec, text, engine, ...(sttError ? { stt_error: sttError } : {}) };
   }
 
   async function saveFrame(m, { image, atSec, width, height }) {

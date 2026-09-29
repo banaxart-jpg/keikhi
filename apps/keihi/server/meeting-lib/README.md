@@ -25,3 +25,10 @@
 - URL の確認: ログインして `GET /api/mcp-connector`（アプリの「Claude につなぐ」）
 - `INTERNAL_TICK_SECRET` を入れ替えると URL も変わる → コネクタを登録し直す
 - 旧 URL（`/api/sheets|drama|photos|sns/mcp/...`）はそのまま動く
+
+## 文字起こしエンジン（stt.js）
+- Google Cloud Speech-to-Text v2。`chirp_3@us` → `chirp_3@asia-northeast1` → `chirp_2@us-central1` → `long@…` の順に試し、通った組み合わせを覚える
+- 全滅（API 未有効化・権限など）なら Gemini 2.5 flash に戻る。アプリに「Gemini で文字起こし中」と出るのが目印
+- 前提: プロジェクトで `speech.googleapis.com` が有効、Cloud Run のサービスアカウントに Speech の権限
+- env: `MEETING_STT=chirp_3@us` で先頭候補を固定、`MEETING_STT=off` で STT を使わない
+- 料金の目安: Chirp 3 は 1 分 約 $0.016（1 時間の会議で約 $1）

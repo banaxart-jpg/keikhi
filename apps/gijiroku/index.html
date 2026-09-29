@@ -277,6 +277,7 @@ function backToList() {
 
 // ───────── 送信キュー（音声・画面）─────────
 const queue = []; let inflight = 0; const failed = [];
+let engine = { name: "", err: "" };
 function enqueue(job) { queue.push(job); pump(); setStatus(); }
 async function pump() {
   while (inflight < 2 && queue.length) {
@@ -305,6 +306,8 @@ function setStatus() {
   if (rec.on) parts.push(rec.paused ? "一時停止中" : `<span class="dot"></span>録音中${rec.screen ? "（画面も）" : ""}`);
   if (n) parts.push(`送信待ち ${n}`);
   if (failed.length) parts.push(`<span class="err" id="retryLink">送れなかった ${failed.length} 件を再送</span>`);
+  // どのエンジンで文字にしているか (Google STT が使えないと Gemini に戻る)
+  if (engine.name === "gemini") parts.push(`<span class="err" title="${esc(engine.err)}">Google STT が使えないので Gemini で文字起こし中</span>`);
   $("status").innerHTML = parts.join(" ・ ");
   $("retryLink")?.addEventListener("click", retryFailed);
 }
@@ -318,6 +321,7 @@ function sendAudio(meetingId, blob, startSec) {
     onFail: () => { if (cur?.id === meetingId) { cur.pending.set(startSec, "送れませんでした（上の「再送」で送り直せます）"); renderTl(); } },
     run: async () => {
       const r = await api("POST", `/api/meeting/${meetingId}/audio`, { audio: await blobToB64(blob), mimeType: blob.type || "audio/webm", startSec, part: 1 });
+      engine = { name: r.engine || "", err: r.stt_error || "" }; setStatus();
       if (cur && cur.id === meetingId) {
         cur.pending.delete(startSec);
         cur.segments = cur.segments.filter(s => !(s.source === "audio" && s.startSec === startSec)).concat([{ part: 1, startSec, text: r.text || "", source: "audio" }]);
@@ -342,7 +346,8 @@ const rec = { on: false, paused: false, mic: null, display: null, ctx: null, des
   base: 0, startedAt: 0, pausedMs: 0, pauseAt: 0, segStart: 0, screen: false, wake: null, meetingId: null, speech: null };
 
 function pickMime() {
-  for (const c of ["audio/mp4", "audio/webm;codecs=opus", "audio/webm", "audio/aac"]) { // 録音メモ (/rec/) と同じ順 = Gemini で実績あり
+  // Chrome は webm/opus (Google STT がそのまま読める)、Safari は mp4/aac
+  for (const c of ["audio/webm;codecs=opus", "audio/webm", "audio/mp4", "audio/aac"]) {
     try { if (MediaRecorder.isTypeSupported?.(c)) return c; } catch {}
   }
   return "";

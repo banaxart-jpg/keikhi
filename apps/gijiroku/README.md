@@ -12,7 +12,8 @@
   会議画面の「Claude 用」でコピーした文をチャットに貼る（「〇〇の会議まとめて」だけでも探してくれる）
 
 ## 仕組み
-- 録音: MediaRecorder を 15 秒ごとに切り替え、チャンクを `POST /api/meeting/:id/audio` → Gemini 2.5 flash で文字起こし → 画面に追記
+- 録音: MediaRecorder を 15 秒ごとに切り替え、チャンクを `POST /api/meeting/:id/audio` → Google Speech-to-Text v2 (Chirp 3) で文字起こし → 画面に追記
+  - STT が使えない (API 未有効化・権限) ときは Gemini 2.5 flash に自動で戻り、画面上に「Gemini で文字起こし中」と出る
 - 画面: getDisplayMedia の映像を 2 秒ごとに縮小比較し、変化して落ち着いたら JPEG（最大 1600px）を `POST /api/meeting/:id/frame` → GCS
 - 「いま」の行はブラウザ内蔵の音声認識による簡易字幕（保存しない。iPhone では出ない）
 - 音声そのものは保存しない。残るのは文字と静止画だけ
