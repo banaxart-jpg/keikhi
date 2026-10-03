@@ -34,10 +34,39 @@ Cloud SQL (drama_projects / drama_characters / drama_videos) + GCS (動画・画
 | `drama_upsert_character` | キャラ登録 (appearance + identityTokens は毎回の生成プロンプトにサーバーが自動注入) |
 | `drama_generate_image` | 静止画生成 ≈¥6。scene / composition / lighting / mustInclude / mustAvoid の slot をサーバーが styleGuide + キャラ設定と合成 (finalPrompt を返す)。review / autoFix で Gemini 審査 + 自動修正。width で保存サイズ可変 (下書き 600 / 本番 1200)。saveAs で作画基準/キャラ参照に登録。1024px プレビューを返す |
 | `drama_edit_image` | 既存画像の部分修正 ≈¥6。baseImageUrl + instruction。キャラ・絵柄・構図を保って指示だけ反映 (細部直しは generate より安定) |
-| `drama_generate_video` | 動画生成 (Seedance 2.0 系、非同期)。aspectRatio / resolution / durationSec / model (fast・mini・2.0) / draft / 参照画像 9 枚・動画 3 本・音声 3 本 / returnLastFrame。参照 URL はサーバーが GCS に置き直してから渡す。コストは出力仕様から実計算、完成時に実測トークンで確定 |
-| `drama_check_videos` | 生成進捗の確認 + 完了時 GCS 保存。videoUrl (署名 30 日) / fileUrl (期限なし) / width・height・fps / tokens・costYen / lastFrameUrl |
+| `drama_generate_video` | 動画生成 (非同期)。engine auto / seedance / veo。Seedance 2.0 系 (fast・mini・2.0) か Veo 3.1 (veo・veo-fast・veo-lite)。aspectRatio / resolution / durationSec / draft / 参照画像・動画・音声 / returnLastFrame / replaceAudioUrl (音声差し替え版)。参照 URL はサーバーが GCS に置き直してから渡す。auto は Seedance が実在人物の顔で拒否したら Veo に自動フォールバック |
+| `drama_check_videos` | 生成進捗の確認 + 完了時 GCS 保存 (Seedance のポーリングと Veo の operation 両方)。engine / fallbackReason / warnings / videoUrl (署名 30 日) / fileUrl (期限なし) / width・height・fps / tokens・costYen / lastFrameUrl / audioReplacedUrl |
 | `drama_delete_video` | ギャラリーから削除 |
 | `drama_get_costs` | API 費用の集計 (drama_api_usage) |
+
+## 動画エンジン (Seedance / Veo) と engine 引数
+
+| engine | 何が動く | 向き |
+|---|---|---|
+| `seedance` | BytePlus ModelArk の Seedance 2.0 系 | 安い。参照動画・参照音声が使える。**実在人物の顔が写った参照は入力の段階で拒否** (`InputImageSensitiveContentDetected.PrivacyInformation` / `InputVideoSensitiveContentDetected`) |
+| `veo` | Google Veo 3.1 (Gemini API、`GEMINI_API_KEY` を流用) | 本人写真から本人の実写動画。音声は常にネイティブ生成。参照動画・音声は不可。尺 4/6/8 秒、比率 16:9 / 9:16 |
+| `auto` (既定) | まず Seedance → 上の 2 種の拒否が返ったら同じ内容で Veo に投げ直す | 返り値の `engineUsed` / `fallbackReason` で分かる。作成時に拒否されれば即、投げた後にモデレーションで落ちた場合は `drama_check_videos` のタイミングで投げ直す (status が queued に戻る) |
+
+Veo の項目名は [Veo guide](https://ai.google.dev/gemini-api/docs/veo) の parameters 表から転記 (`server/drama-lib/veoGen.js`):
+`POST models/{model}:predictLongRunning`、`instances[0].prompt` / `image: {inlineData}` / `referenceImages: [{image, referenceType: "asset"}]` (3.1 / 3.1 Fast のみ、最大 3)、
+`parameters.aspectRatio` / `durationSeconds` ("4" | "6" | "8" の文字列) / `resolution` / `personGeneration` (image-to-video は `allow_adult`)。
+`GET {operation.name}` を `drama_check_videos` でポーリングし、`response.generateVideoResponse.generatedSamples[0].video.uri` を `x-goog-api-key` 付きでダウンロードして GCS に保存 (Veo 側は 2 日で消える)。
+
+Seedance 向けの指定を Veo に回すときの寄せ方 (返り値 `adjustments`):
+- 480p → 720p、1:1 / 4:3 / 21:9 → 16:9、3:4 → 9:16、adaptive → 開始画像の向き
+- 尺は 4 / 6 / 8 に最近傍で丸め。参照画像あり・1080p・4k は 8 秒固定
+- `referenceImageUrls` の 1 枚目が開始画像 (image-to-video)、2〜4 枚目が `referenceImages`。veo-lite は参照画像非対応 (無視して warnings)
+- `referenceVideoUrls` / `referenceAudioUrls` / `generateAudio: false` は効かない (warnings に出す)
+
+### 音声差し替え (`replaceAudioUrl`、両エンジン共通)
+完成動画の音声を指定の wav / mp3 に差し替えた版を ffmpeg で作り `drama/videos/<id>-dub.mp4` に保存する
+(`audioReplacedUrl` / `audioReplacedFileUrl` = `/api/drama/videos/<id>/dub`)。映像は再エンコードしない。
+音声が尺より短ければ末尾を無音で埋め、長ければ動画の尺で切る。`audioOffsetSec` 正 = 遅らせて開始、負 = 音声の頭を切る。
+用途: Veo は参照音声を受け付けないので、本人の声を後から乗せる。ffmpeg は Cloud Run イメージに apt で入れている (`server/Dockerfile`)。
+
+### Veo のコスト
+秒単価 × 秒 (音声込み、[pricing](https://ai.google.dev/gemini-api/docs/pricing) 2026-10): veo 0.40 USD/秒 (720p/1080p)・0.60 (4k)、veo-fast 0.10 / 0.12 / 0.30、veo-lite 0.05 / 0.08。
+`drama-video-pricing.json` の `veo.models` で変更。8 秒 720p = veo ≈ ¥496 / veo-fast ≈ ¥124 / veo-lite ≈ ¥62。`drama_get_costs` には provider `veo` として並ぶ。
 
 ## 動画生成 (Seedance 2.0) の仕様
 
