@@ -1,5 +1,5 @@
 {
-  "_comment": "Seedance (BytePlus ModelArk) の動画コスト計算設定。tokens = 幅×高さ×fps×秒 / 1024、cost = tokens/1000 × usdPer1kTokens × usdJpy。単価は小西指定 (2026-09)。ModelArk の掲示 (fast 720p ≈ USD 0.09/秒・25% off、mini 720p ≈ USD 0.03/秒・60% off) と合わなくなったらここを直す。画素数表は docs.byteplus.com/en/docs/ModelArk/1520757 の ratio 欄 (Seedance 2.0 series 列) から転記。",
+  "_comment": "動画生成のコスト計算設定。Seedance (BytePlus ModelArk): tokens = 幅×高さ×fps×秒 / 1024、cost = tokens/1000 × usdPer1kTokens × usdJpy。単価は小西指定 (2026-09)。ModelArk の掲示 (fast 720p ≈ USD 0.09/秒・25% off、mini 720p ≈ USD 0.03/秒・60% off) と合わなくなったらここを直す。画素数表は docs.byteplus.com/en/docs/ModelArk/1520757 の ratio 欄 (Seedance 2.0 series 列) から転記。Veo (Gemini API): 秒単価 × 秒数。単価は ai.google.dev/gemini-api/docs/pricing (2026-10 時点、音声込みの価格)、対応値は ai.google.dev/gemini-api/docs/veo の parameters 表から転記。",
   "usdJpy": 155,
   "fps": 24,
   "defaultModel": "dreamina-seedance-2-0-fast-260128",
@@ -8,7 +8,10 @@
     "mini": "dreamina-seedance-2-0-mini-260615",
     "2.0": "dreamina-seedance-2-0-260128",
     "full": "dreamina-seedance-2-0-260128",
-    "pro": "dreamina-seedance-2-0-260128"
+    "pro": "dreamina-seedance-2-0-260128",
+    "veo": "veo-3.1-generate-preview",
+    "veo-fast": "veo-3.1-fast-generate-preview",
+    "veo-lite": "veo-3.1-lite-generate-preview"
   },
   "models": {
     "dreamina-seedance-2-0-fast-260128": { "label": "Seedance 2.0 fast", "usdPer1kTokens": 0.0033, "resolutions": ["480p", "720p"] },
@@ -20,5 +23,23 @@
     "720p":  { "16:9": [1280, 720],  "4:3": [1112, 834],  "1:1": [960, 960],   "3:4": [834, 1112],  "9:16": [720, 1280],  "21:9": [1470, 630] },
     "1080p": { "16:9": [1920, 1080], "4:3": [1664, 1248], "1:1": [1440, 1440], "3:4": [1248, 1664], "9:16": [1080, 1920], "21:9": [2206, 946] },
     "4k":    { "16:9": [3840, 2160], "4:3": [3326, 2494], "1:1": [2880, 2880], "3:4": [2494, 3326], "9:16": [2160, 3840], "21:9": [4398, 1886] }
+  },
+  "veo": {
+    "defaultModel": "veo-3.1-generate-preview",
+    "durations": [4, 6, 8],
+    "aspectRatios": ["16:9", "9:16"],
+    "personGenerationImageToVideo": "allow_adult",
+    "maxReferenceImages": 3,
+    "fps": 24,
+    "pixels": {
+      "720p":  { "16:9": [1280, 720],  "9:16": [720, 1280] },
+      "1080p": { "16:9": [1920, 1080], "9:16": [1080, 1920] },
+      "4k":    { "16:9": [3840, 2160], "9:16": [2160, 3840] }
+    },
+    "models": {
+      "veo-3.1-generate-preview":      { "label": "Veo 3.1",      "usdPerSec": { "720p": 0.40, "1080p": 0.40, "4k": 0.60 }, "resolutions": ["720p", "1080p", "4k"], "referenceImages": true },
+      "veo-3.1-fast-generate-preview": { "label": "Veo 3.1 Fast", "usdPerSec": { "720p": 0.10, "1080p": 0.12, "4k": 0.30 }, "resolutions": ["720p", "1080p", "4k"], "referenceImages": true },
+      "veo-3.1-lite-generate-preview": { "label": "Veo 3.1 Lite", "usdPerSec": { "720p": 0.05, "1080p": 0.08 },             "resolutions": ["720p", "1080p"],       "referenceImages": false }
+    }
   }
 }

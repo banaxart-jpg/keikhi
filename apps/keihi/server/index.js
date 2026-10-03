@@ -23,6 +23,13 @@ import {
   resolveSeedanceModel as dramaResolveSeedanceModel, seedanceDims as dramaSeedanceDims,
   seedanceEstimateTokens as dramaSeedanceEstimateTokens, seedanceCost as dramaSeedanceCost,
 } from "./drama-lib/videoGen.js";
+import {
+  veoConfigured as dramaVeoConfigured, isVeoModel as dramaIsVeoModel, resolveVeoModel as dramaResolveVeoModel,
+  veoModelInfo as dramaVeoModelInfo, veoDims as dramaVeoDims, normalizeVeoRequest as dramaNormalizeVeoRequest,
+  veoCost as dramaVeoCost, createVeoTask as dramaCreateVeoTask, getVeoOperation as dramaGetVeoOperation,
+  downloadVeoVideo as dramaDownloadVeoVideo, VEO_FPS as DRAMA_VEO_FPS,
+} from "./drama-lib/veoGen.js";
+import { ffmpegAvailable as dramaFfmpegAvailable, extractLastFrame as dramaExtractLastFrame, replaceAudio as dramaReplaceAudio } from "./drama-lib/ffmpeg.js";
 import { fetchAozoraText as dramaFetchAozora, splitChapters as dramaSplitChapters, searchAozoraCatalog as dramaSearchCatalog } from "./drama-lib/aozora.js";
 import { analyzeWorkSetup as dramaAnalyzeWorkSetup, searchAozora as dramaSearchAozora } from "./drama-lib/gemini.js";
 import { composeSeries as dramaComposeSeries, writeScript as dramaWriteScript, composeCuts as dramaComposeCuts } from "./drama-lib/gemini.js";
@@ -517,9 +524,17 @@ async function dramaIngestRef(input, kind, idx) {
     let u;
     try { u = new URL(raw); } catch { throw new Error(`${spec.label} ${idx + 1}: URL として読めない: ${raw.slice(0, 80)}`); }
     if (!/^https?:$/.test(u.protocol)) throw new Error(`${spec.label} ${idx + 1}: http(s) の URL / data: URL / base64 のみ: ${raw.slice(0, 80)}`);
-    // すでに自分のバケットの署名 URL ならそのまま使う (キャラ参照など)
+    // すでに自分のバケットの署名 URL ならアップロードし直さない (キャラ参照など)。
+    // 中身は読む (Veo に渡すときは inlineData が要るため)
     if (storage && RECEIPTS_BUCKET && u.hostname === "storage.googleapis.com" && u.pathname.startsWith(`/${RECEIPTS_BUCKET}/`)) {
-      return { url: raw, gcsUrl: `gs://${RECEIPTS_BUCKET}/${decodeURIComponent(u.pathname.slice(RECEIPTS_BUCKET.length + 2))}`, bytes: null, mime: null, source: "gcs (そのまま)" };
+      const gcsUrl = `gs://${RECEIPTS_BUCKET}/${decodeURIComponent(u.pathname.slice(RECEIPTS_BUCKET.length + 2))}`;
+      let gbuf = null, gmime = null;
+      try {
+        const [, , b, ...rest] = gcsUrl.split("/");
+        const [d] = await storage.bucket(b).file(rest.join("/")).download();
+        gbuf = d; gmime = dramaSniffMime(d);
+      } catch (e) { console.warn("[drama-mcp] gcs ref read failed:", e.message); }
+      return { url: raw, gcsUrl, bytes: gbuf ? gbuf.length : null, mime: gmime, source: "gcs (そのまま)", buffer: gbuf };
     }
     const ac = new AbortController();
     const tid = setTimeout(() => ac.abort(), 120000);
@@ -549,12 +564,12 @@ async function dramaIngestRef(input, kind, idx) {
   }
   if (!storage || !RECEIPTS_BUCKET) {
     // dev: バケットが無いので置き直せない。URL はそのまま、data は data URL で返す
-    return { url: dataM ? raw : (buf && !raw.startsWith("http") ? `data:${finalMime};base64,${buf.toString("base64")}` : raw), gcsUrl: null, bytes: buf.length, mime: finalMime, source };
+    return { url: dataM ? raw : (buf && !raw.startsWith("http") ? `data:${finalMime};base64,${buf.toString("base64")}` : raw), gcsUrl: null, bytes: buf.length, mime: finalMime, source, buffer: buf };
   }
   const key = `drama/refs/${Date.now()}-${idx}-${Math.random().toString(36).slice(2, 8)}.${DRAMA_MIME_EXT[finalMime] || "bin"}`;
   await storage.bucket(RECEIPTS_BUCKET).file(key).save(buf, { contentType: finalMime, resumable: false });
   const gcsUrl = `gs://${RECEIPTS_BUCKET}/${key}`;
-  return { url: await dramaSignGs(gcsUrl, 7), gcsUrl, bytes: buf.length, mime: finalMime, source };
+  return { url: await dramaSignGs(gcsUrl, 7), gcsUrl, bytes: buf.length, mime: finalMime, source, buffer: buf };
 }
 
 async function dramaIngestRefs(inputs, kind) {
@@ -562,6 +577,107 @@ async function dramaIngestRefs(inputs, kind) {
   const out = [];
   for (let i = 0; i < list.length; i++) out.push(await dramaIngestRef(list[i], kind, i));
   return out;
+}
+
+// Seedance が入力の段階で「実在人物の顔」を拒否したときのエラー (ModelArk の入力モデレーション)。
+// 参照画像: InputImageSensitiveContentDetected.PrivacyInformation ("may contain real person")
+// 参照動画: InputVideoSensitiveContentDetected。engine:"auto" のときはこれを見て Veo に回す
+const DRAMA_SEEDANCE_SENSITIVE_RE = /Input(Image|Video)SensitiveContentDetected|PrivacyInformation|real person/i;
+
+// gs:// の中身を読む
+async function dramaReadGcs(gsUrl) {
+  const [, , b, ...rest] = gsUrl.split("/");
+  const [d] = await storage.bucket(b).file(rest.join("/")).download();
+  return d;
+}
+
+// Veo に投げる (engine:"veo" / 同期フォールバック / 非同期フォールバック 共通)。
+// refs: [{ buffer?, gcsUrl?, url?, mime? }] — 1 枚目を開始画像 (image-to-video)、2〜4 枚目を referenceImages (3.1 / 3.1 Fast のみ)。
+// Seedance 向けの比率・解像度・尺は Veo の対応値に寄せ、寄せた内容を adjustments で返す。
+async function dramaStartVeoTask({ prompt, refs = [], aspectRatio, resolution, durationSec, model, generateAudio }) {
+  const warnings = [];
+  const loaded = [];
+  for (const r of (refs || []).slice(0, 4)) {
+    try {
+      let buf = r.buffer || null;
+      if (!buf && r.gcsUrl && storage) buf = await dramaReadGcs(r.gcsUrl);
+      if (!buf && r.url) {
+        const rr = await fetch(r.url);
+        if (rr.ok) buf = Buffer.from(await rr.arrayBuffer());
+      }
+      if (buf) loaded.push({ data: buf.toString("base64"), mimeType: dramaSniffMime(buf) || r.mime || "image/png", buffer: buf });
+    } catch (e) { warnings.push(`参照画像を読めなかったので Veo には渡さない: ${String(e.message).slice(0, 80)}`); }
+  }
+  const veoModel = dramaResolveVeoModel(dramaIsVeoModel(dramaResolveVeoModel(model || "")) ? model : "");
+  const info = dramaVeoModelInfo(veoModel);
+  const startImage = loaded[0] || null;
+  let refImages = loaded.slice(1, 4);
+  if (refImages.length && !info?.referenceImages) {
+    console.log(`[drama-mcp] ${veoModel} は referenceImages 非対応: ${refImages.length} 枚を無視`);
+    warnings.push(`${info?.label || veoModel} は参照画像 (referenceImages) 非対応のため 2 枚目以降 ${refImages.length} 枚は無視した`);
+    refImages = [];
+  }
+  let portrait = null;
+  if (startImage) { try { const m = await sharp(startImage.buffer).metadata(); portrait = (m.height || 0) > (m.width || 0); } catch (_) {} }
+  const norm = dramaNormalizeVeoRequest({
+    aspectRatio, resolution, durationSec, model: veoModel,
+    hasReferenceImages: refImages.length > 0, firstImagePortrait: portrait,
+  });
+  if (generateAudio === false) warnings.push("Veo は音声を常に生成する (generateAudio: false は効かない)");
+  const { operationName, request } = await dramaCreateVeoTask({
+    prompt, startImage, referenceImages: refImages,
+    aspectRatio: norm.aspectRatio, resolution: norm.resolution, durationSec: norm.durationSec, model: veoModel,
+  });
+  const dims = dramaVeoDims(norm.aspectRatio, norm.resolution);
+  const cost = dramaVeoCost(veoModel, norm.resolution, norm.durationSec);
+  return {
+    operationName, model: veoModel,
+    aspectRatio: norm.aspectRatio, resolution: norm.resolution, durationSec: norm.durationSec,
+    width: dims?.width || null, height: dims?.height || null, fps: DRAMA_VEO_FPS,
+    adjustments: norm.adjustments, warnings,
+    costYen: cost.yen, costUsd: cost.usd, usdPerSec: cost.usdPerSec,
+    personGeneration: request.personGeneration, startImage: !!startImage, referenceImagesUsed: refImages.length,
+  };
+}
+
+// 完成した動画 (buf) を GCS に保存して署名 URL を作り、最終フレーム・音声差し替え版も作る。patch に書き込む
+async function dramaFinalizeVideo(row, patch, buf, { lastFrameBuf = null } = {}) {
+  if (!storage || !RECEIPTS_BUCKET) return;
+  const key = `drama/videos/${row.id}.mp4`;
+  await storage.bucket(RECEIPTS_BUCKET).file(key).save(buf, { contentType: "video/mp4", resumable: false });
+  patch.gcs_url = `gs://${RECEIPTS_BUCKET}/${key}`;
+  patch.video_url = await dramaSignGs(patch.gcs_url, DRAMA_VIDEO_SIGN_DAYS);
+  patch.url_expires_at = new Date(Date.now() + DRAMA_VIDEO_SIGN_DAYS * 24 * 60 * 60 * 1000);
+  // 最終フレーム: Seedance は API が返す PNG、Veo は ffmpeg で抜く
+  const wantLast = !!(row.request_json?.returnLastFrame);
+  try {
+    let lf = lastFrameBuf;
+    if (!lf && wantLast && await dramaFfmpegAvailable()) lf = await dramaExtractLastFrame(buf);
+    if (lf) {
+      const lkey = `drama/videos/${row.id}-last.png`;
+      await storage.bucket(RECEIPTS_BUCKET).file(lkey).save(lf, { contentType: "image/png", resumable: false });
+      patch.last_frame_gcs_url = `gs://${RECEIPTS_BUCKET}/${lkey}`;
+      patch.last_frame_url = await dramaSignGs(patch.last_frame_gcs_url, DRAMA_VIDEO_SIGN_DAYS);
+    }
+  } catch (e) { console.warn("[drama-mcp] last frame failed:", e.message); }
+  // 音声差し替え版 (replaceAudioUrl)。映像はコピー、音声は尺に合わせて無音で埋める / 切る
+  if (row.replace_audio_gcs_url) {
+    const warn = Array.isArray(row.warnings) ? row.warnings.slice() : [];
+    try {
+      if (!(await dramaFfmpegAvailable())) throw new Error("ffmpeg がサーバーに無い");
+      const audioBuf = await dramaReadGcs(row.replace_audio_gcs_url);
+      const ext = /\.mp3$/i.test(row.replace_audio_gcs_url) ? "mp3" : "wav";
+      const { buffer: dubbed } = await dramaReplaceAudio(buf, audioBuf, { offsetSec: Number(row.audio_offset_sec) || 0, audioExt: ext });
+      const dkey = `drama/videos/${row.id}-dub.mp4`;
+      await storage.bucket(RECEIPTS_BUCKET).file(dkey).save(dubbed, { contentType: "video/mp4", resumable: false });
+      patch.dub_gcs_url = `gs://${RECEIPTS_BUCKET}/${dkey}`;
+      patch.dub_url = await dramaSignGs(patch.dub_gcs_url, DRAMA_VIDEO_SIGN_DAYS);
+    } catch (e) {
+      console.warn("[drama-mcp] audio replace failed:", e.message);
+      warn.push(`音声差し替えに失敗: ${String(e.message).slice(0, 120)}`);
+      patch.warnings = JSON.stringify(warn);
+    }
+  }
 }
 
 // 生成画像を GCS に保存して { gcsUrl, url } を返す (dev フォールバックは data URL)
@@ -795,55 +911,82 @@ async function dramaMcpVideoRefresh(p, row) {
   const signMs = DRAMA_VIDEO_SIGN_DAYS * 24 * 60 * 60 * 1000;
   if (["queued", "running"].includes(row.status) && row.provider_task_id) {
     try {
-      const t = await dramaGetVideoTask(row.provider_task_id);
-      if (t.status === "succeeded" && t.videoUrl) {
-        patch.status = "done";
-        patch.video_url = t.videoUrl;
-        // 実測トークン (usage.completion_tokens) でコストを確定。無ければ作成時の見積りのまま
-        const tokens = t.usage?.completionTokens ?? (row.tokens != null ? Number(row.tokens) : null);
-        if (tokens != null) {
-          patch.tokens = tokens;
-          const cost = dramaSeedanceCost(row.model, tokens);
-          if (cost.yen != null) patch.cost_yen = cost.yen;
-          p.query(`UPDATE drama_api_usage SET output_tokens=$1, cost_yen=COALESCE($2, cost_yen) WHERE video_id=$3`,
-            [tokens, cost.yen, row.id]).catch((e) => console.warn("[drama-mcp] usage finalize failed:", e.message));
+      if (row.engine === "veo") {
+        // ── Veo: 長時間オペレーションをポーリング → 完成したらダウンロードして GCS へ ──
+        const t = await dramaGetVeoOperation(row.provider_task_id);
+        if (t.status === "succeeded" && t.videoUri) {
+          patch.status = "done";
+          patch.video_url = t.videoUri; // 保存に失敗したときの最後の手 (2 日で消える)
+          const buf = await dramaDownloadVeoVideo(t.videoUri);
+          await dramaFinalizeVideo(row, patch, buf);
+        } else if (t.status === "failed") {
+          patch.status = "failed";
+          patch.note = t.error || "生成に失敗しました";
         }
-        if (t.fps) patch.fps = t.fps;
-        if (t.duration) patch.duration_sec = t.duration;
-        if (t.resolution) patch.resolution = t.resolution;
-        if (t.ratio && t.ratio !== "adaptive") patch.ratio = t.ratio;
-        if (storage && RECEIPTS_BUCKET) {
+      } else {
+        // ── Seedance ──
+        const t = await dramaGetVideoTask(row.provider_task_id);
+        if (t.status === "succeeded" && t.videoUrl) {
+          patch.status = "done";
+          patch.video_url = t.videoUrl;
+          // 実測トークン (usage.completion_tokens) でコストを確定。無ければ作成時の見積りのまま
+          const tokens = t.usage?.completionTokens ?? (row.tokens != null ? Number(row.tokens) : null);
+          if (tokens != null) {
+            patch.tokens = tokens;
+            const cost = dramaSeedanceCost(row.model, tokens);
+            if (cost.yen != null) patch.cost_yen = cost.yen;
+            p.query(`UPDATE drama_api_usage SET output_tokens=$1, cost_yen=COALESCE($2, cost_yen) WHERE video_id=$3`,
+              [tokens, cost.yen, row.id]).catch((e) => console.warn("[drama-mcp] usage finalize failed:", e.message));
+          }
+          if (t.fps) patch.fps = t.fps;
+          if (t.duration) patch.duration_sec = t.duration;
+          if (t.resolution) patch.resolution = t.resolution;
+          if (t.ratio && t.ratio !== "adaptive") patch.ratio = t.ratio;
           // 提供元 URL は 24 時間で切れるので自分の GCS へミラー (署名は 30 日)
           try {
             const vr = await fetch(t.videoUrl);
-            if (vr.ok) {
-              const buf = Buffer.from(await vr.arrayBuffer());
-              const key = `drama/videos/${row.id}.mp4`;
-              await storage.bucket(RECEIPTS_BUCKET).file(key).save(buf, { contentType: "video/mp4", resumable: false });
-              patch.gcs_url = `gs://${RECEIPTS_BUCKET}/${key}`;
-              patch.video_url = await dramaSignGs(patch.gcs_url, DRAMA_VIDEO_SIGN_DAYS);
-              patch.url_expires_at = new Date(Date.now() + signMs);
+            if (!vr.ok) throw new Error(`HTTP ${vr.status}`);
+            const buf = Buffer.from(await vr.arrayBuffer());
+            let lastFrameBuf = null;
+            if (t.lastFrameUrl) {
+              try { const fr = await fetch(t.lastFrameUrl); if (fr.ok) lastFrameBuf = Buffer.from(await fr.arrayBuffer()); }
+              catch (e) { console.warn("[drama-mcp] last frame fetch failed:", e.message); }
             }
+            await dramaFinalizeVideo(row, patch, buf, { lastFrameBuf });
           } catch (e) { console.warn("[drama-mcp] video GCS mirror failed:", e.message); }
-          if (t.lastFrameUrl) {
+        } else if (["failed", "expired", "cancelled"].includes(t.status)) {
+          const sensitive = DRAMA_SEEDANCE_SENSITIVE_RE.test(t.error || "");
+          if (sensitive && row.engine_requested === "auto" && dramaVeoConfigured() && row.request_json?.prompt) {
+            // ── 非同期フォールバック: 投げた後にモデレーションで落ちた → 同じ内容で Veo に ──
+            const rj = row.request_json;
             try {
-              const fr = await fetch(t.lastFrameUrl);
-              if (fr.ok) {
-                const key = `drama/videos/${row.id}-last.png`;
-                await storage.bucket(RECEIPTS_BUCKET).file(key).save(Buffer.from(await fr.arrayBuffer()), { contentType: "image/png", resumable: false });
-                patch.last_frame_gcs_url = `gs://${RECEIPTS_BUCKET}/${key}`;
-                patch.last_frame_url = await dramaSignGs(patch.last_frame_gcs_url, DRAMA_VIDEO_SIGN_DAYS);
-              }
-            } catch (e) { console.warn("[drama-mcp] last frame mirror failed:", e.message); }
+              const v = await dramaStartVeoTask({
+                prompt: rj.prompt, refs: rj.images || [], aspectRatio: rj.ratio, resolution: rj.resolution,
+                durationSec: rj.durationSec, model: rj.veoModel, generateAudio: rj.generateAudio,
+              });
+              const warn = [...(Array.isArray(row.warnings) ? row.warnings : []), ...v.warnings, ...v.adjustments.map((x) => "Veo: " + x)];
+              if (rj.videos) warn.push(`Veo は参照動画を受け付けないため ${rj.videos} 本は無視`);
+              if (rj.audios) warn.push(`Veo は参照音声を受け付けないため ${rj.audios} 本は無視`);
+              Object.assign(patch, {
+                engine: "veo", fallback_reason: `Seedance が入力を拒否: ${String(t.error).slice(0, 160)}`,
+                provider_task_id: v.operationName, model: v.model, status: "queued", note: null,
+                ratio: v.aspectRatio, resolution: v.resolution, width: v.width, height: v.height, fps: v.fps,
+                duration_sec: v.durationSec, tokens: null, cost_yen: v.costYen, warnings: JSON.stringify(warn),
+              });
+              p.query(`UPDATE drama_api_usage SET provider='veo', model=$1, output_tokens=NULL, video_seconds=$2, cost_yen=$3 WHERE video_id=$4`,
+                [v.model, v.durationSec, v.costYen || 0, row.id]).catch((e) => console.warn("[drama-mcp] usage switch failed:", e.message));
+              console.log(`[drama-mcp] video ${row.id}: Seedance rejected → Veo fallback (${v.operationName})`);
+            } catch (e) {
+              patch.status = "failed";
+              patch.note = `Seedance が入力を拒否 (${String(t.error).slice(0, 120)}) → Veo へのフォールバックも失敗: ${String(e.message).slice(0, 160)}`;
+            }
+          } else {
+            patch.status = "failed";
+            patch.note = t.error || "生成に失敗しました";
           }
-        } else if (t.lastFrameUrl) {
-          patch.last_frame_url = t.lastFrameUrl;
+        } else if (t.status !== "unknown") {
+          patch.status = t.status; // queued/running
         }
-      } else if (["failed", "expired", "cancelled"].includes(t.status)) {
-        patch.status = "failed";
-        patch.note = t.error || "生成に失敗しました";
-      } else if (t.status !== "unknown") {
-        patch.status = t.status; // queued/running
       }
     } catch (e) { console.warn("[drama-mcp] video poll failed:", e.message); }
   } else if (row.status === "done" && row.gcs_url && storage) {
@@ -853,6 +996,7 @@ async function dramaMcpVideoRefresh(p, row) {
       try {
         patch.video_url = await dramaSignGs(row.gcs_url, DRAMA_VIDEO_SIGN_DAYS);
         if (row.last_frame_gcs_url) patch.last_frame_url = await dramaSignGs(row.last_frame_gcs_url, DRAMA_VIDEO_SIGN_DAYS);
+        if (row.dub_gcs_url) patch.dub_url = await dramaSignGs(row.dub_gcs_url, DRAMA_VIDEO_SIGN_DAYS);
         patch.url_expires_at = new Date(Date.now() + signMs);
       } catch (e) { console.warn("[drama-mcp] re-sign failed:", e.message); }
     }
@@ -861,6 +1005,7 @@ async function dramaMcpVideoRefresh(p, row) {
     const sets = Object.keys(patch).map((k, i) => `${k}=$${i + 2}`).join(", ");
     await p.query(`UPDATE drama_videos SET ${sets}, updated_at=now() WHERE id=$1`, [row.id, ...Object.values(patch)]);
     Object.assign(row, patch);
+    if (typeof row.warnings === "string") { try { row.warnings = JSON.parse(row.warnings); } catch (_) {} }
   }
   return row;
 }
@@ -879,6 +1024,11 @@ const dramaVideoRowPublic = (r) => {
     fileUrl: done && r.gcs_url ? `${DRAMA_API_BASE}/api/drama/videos/${r.id}/file` : null, // 期限なし (毎回署名し直して 302)
     lastFrameUrl: done ? (r.last_frame_url || null) : null,
     lastFrameFileUrl: done && r.last_frame_gcs_url ? `${DRAMA_API_BASE}/api/drama/videos/${r.id}/last-frame` : null,
+    engine: r.engine || "seedance", engineRequested: r.engine_requested || undefined,
+    fallbackReason: r.fallback_reason || undefined,
+    warnings: Array.isArray(r.warnings) && r.warnings.length ? r.warnings : undefined,
+    audioReplacedUrl: done ? (r.dub_url || null) : null,                       // replaceAudioUrl 指定時の差し替え版 (署名 30 日)
+    audioReplacedFileUrl: done && r.dub_gcs_url ? `${DRAMA_API_BASE}/api/drama/videos/${r.id}/dub` : null,
     note: r.note || undefined,
     createdAt: r.created_at,
   };
@@ -1097,50 +1247,75 @@ const DRAMA_MCP_TOOLS = [
   },
   {
     name: "drama_generate_video",
-    description: "動画カットを生成する (BytePlus ModelArk の Seedance 2.0 系、非同期)。投げたら 1〜3 分後に drama_check_videos で確認。完成するとギャラリー (置き場アプリ) に自動で並ぶ。"
+    description: "動画カットを生成する (非同期)。投げたら 1〜3 分後に drama_check_videos で確認。完成するとギャラリー (置き場アプリ) に自動で並ぶ。"
+      + "engine: \"auto\" (既定) / \"seedance\" / \"veo\"。seedance = BytePlus ModelArk の Seedance 2.0 系 (安い・参照動画/音声が使える・実在人物の顔が写った参照は入力の段階で拒否される)。"
+      + "veo = Google の Veo 3.1 (Gemini API。本人写真から本人の実写動画を作れる・音声は常にネイティブ生成・参照動画/音声は使えない・尺は 4/6/8 秒・比率は 16:9 か 9:16)。"
+      + "auto はまず Seedance に投げ、実在人物の顔で拒否 (InputImage/VideoSensitiveContentDetected・PrivacyInformation) されたときだけ同じ内容で Veo に自動で回す。返り値の engineUsed / fallbackReason で分かる。"
       + "既定は aspectRatio 9:16・resolution 720p・durationSec 8・model fast (projectId + prompt だけでも動く)。"
-      + "参照: referenceImageUrls (最大 9 枚)・referenceVideoUrls (最大 3 本、各 2〜15 秒)・referenceAudioUrls (最大 3 本、各 2〜15 秒)。動画・音声はそれぞれ合計 15 秒以内。音声だけの参照は不可 (画像か動画を 1 つ以上)。"
+      + "参照: referenceImageUrls (Seedance 最大 9 枚 / Veo は 1 枚目を開始画像、2〜4 枚目を referenceImages)・referenceVideoUrls (Seedance のみ、最大 3 本、各 2〜15 秒)・referenceAudioUrls (Seedance のみ、最大 3 本、各 2〜15 秒)。動画・音声はそれぞれ合計 15 秒以内。音声だけの参照は不可 (画像か動画を 1 つ以上)。Veo に回ったときは参照動画・音声は無視して warnings に出す。"
       + "参照動画はカメラの動き・動きのタイミングを写す (被写体の見た目は参照画像で指定する)。3〜8 秒・単一ショット・H.264 の mp4 を推奨。content には画像の後ろに並ぶので、番号は video 1, video 2 … で指す。"
       + "参照 URL はサーバーが一度ダウンロードして自分の GCS に置き直してから渡すので、短縮 URL (at.adobe.com 等)・リダイレクト付き URL・data: URL・生 base64 のどれでも可。取得できなかった URL は HTTP ステータス付きでエラーになる。"
-      + "prompt はそのまま Seedance に渡す。参照は入力順に「image 1」「image 2」「video 1」「audio 1」で指せる (例: \"[Image 1] の店内を [Video 1] のカメラワークで、[Audio 1] を BGM に\")。実写の人物の顔が写った参照は Seedance 側で拒否される。"
-      + "model は \"fast\" (既定) / \"mini\" (最安) / \"2.0\" (高品質・1080p/4k 可) の別名か ModelArk の正式 ID。draft: true で resolution 480p + model mini を既定にする (下書き用)。"
-      + "コスト = 幅×高さ×24fps×秒 / 1024 トークン × モデル単価 (fast 0.0033 USD/1K, mini 0.0021 USD/1K、設定ファイルで変更可)。返り値に見積り (tokensEstimated / costYenEstimated)、完成時は実測トークンで確定 (drama_check_videos の tokens / costYen)。目安: 720p 9:16 8 秒 fast ≈ ¥88、480p 4 秒 mini ≈ ¥13。"
-      + "完成後は videoUrl (署名付き 30 日) と fileUrl (期限なし、毎回署名し直して 302) が取れる。returnLastFrame: true で最終フレーム PNG も返る (lastFrameUrl / lastFrameFileUrl。続きのカットの参照画像に使える)",
+      + "prompt はそのまま渡す。Seedance では参照を入力順に「image 1」「image 2」「video 1」「audio 1」で指せる (例: \"[Image 1] の店内を [Video 1] のカメラワークで\")。"
+      + "model は Seedance が \"fast\" (既定) / \"mini\" (最安) / \"2.0\" (高品質・1080p/4k 可)、Veo が \"veo\" (veo-3.1-generate-preview) / \"veo-fast\" (veo-3.1-fast-generate-preview) / \"veo-lite\" (参照画像不可) の別名か正式 ID。veo 系の model を指定したら engine は veo になる。draft: true で Seedance は 480p + mini、Veo は veo-fast を既定にする。"
+      + "Veo の制約で寄せた値 (480p→720p、1:1 等→16:9/9:16、尺を 4/6/8 に丸め、参照画像あり・1080p は 8 秒固定) は返り値 adjustments に書く。"
+      + "replaceAudioUrl: 完成動画の音声をこの音声 (wav/mp3) に差し替えた版も作る (ffmpeg)。尺に合わせて末尾は無音で埋める / 切る。audioOffsetSec で開始位置をずらす (正 = 遅らせる、負 = 音声の頭を切る)。本人の声を乗せたいが Veo は参照音声を受け付けない、という用途。drama_check_videos の audioReplacedUrl / audioReplacedFileUrl で取れる。"
+      + "コスト: Seedance = 幅×高さ×24fps×秒 / 1024 トークン × モデル単価 (fast 0.0033 USD/1K, mini 0.0021 USD/1K)。Veo = 秒単価 × 秒 (veo 0.40 USD/秒 (720p/1080p)・veo-fast 0.10 USD/秒 (720p)・veo-lite 0.05 USD/秒 (720p)、音声込み)。返り値に見積り (tokensEstimated / costYenEstimated)、Seedance は完成時に実測トークンで確定。目安: 720p 9:16 8 秒 = Seedance fast ≈ ¥88 / Veo ≈ ¥496 / Veo fast ≈ ¥124。"
+      + "完成後は videoUrl (署名付き 30 日) と fileUrl (期限なし) が取れる。returnLastFrame: true で最終フレーム PNG も返る (Veo は ffmpeg で抽出)。実在人物の顔が写った参照を Seedance に渡したいときは engine: \"veo\" か \"auto\"",
     inputSchema: {
       type: "object",
       properties: {
         projectId: { type: "number" },
-        prompt: { type: "string", description: "動きまで含めたカットの指示。参照は image 1 / video 1 / audio 1 で指す" },
+        prompt: { type: "string", description: "動きまで含めたカットの指示。Seedance では参照を image 1 / video 1 / audio 1 で指す" },
         title: { type: "string", description: "ギャラリーに出す題名 (例: 第1話 カット3)" },
-        aspectRatio: { type: "string", enum: ["9:16", "16:9", "1:1", "4:3", "3:4", "21:9", "adaptive"], description: "既定 9:16" },
-        resolution: { type: "string", enum: ["480p", "720p", "1080p", "4k"], description: "既定 720p。fast / mini は 480p・720p のみ (1080p / 4k は model \"2.0\")" },
-        durationSec: { type: "number", description: "4〜15 秒、既定 8" },
-        model: { type: "string", description: "\"fast\" / \"mini\" / \"2.0\" の別名か ModelArk の正式 ID。既定 fast (dreamina-seedance-2-0-fast-260128)" },
-        draft: { type: "boolean", description: "true で resolution 480p + model mini を既定にする (明示指定があればそちら優先)" },
+        engine: { type: "string", enum: ["auto", "seedance", "veo"], description: "既定 auto (Seedance → 実在人物の顔で拒否されたら Veo)。seedance / veo で固定" },
+        aspectRatio: { type: "string", enum: ["9:16", "16:9", "1:1", "4:3", "3:4", "21:9", "adaptive"], description: "既定 9:16。Veo は 16:9 / 9:16 のみ (他は近い方に寄せる)" },
+        resolution: { type: "string", enum: ["480p", "720p", "1080p", "4k"], description: "既定 720p。Seedance fast / mini は 480p・720p のみ (1080p / 4k は model \"2.0\")。Veo は 720p / 1080p / 4k (480p は 720p に、1080p / 4k は 8 秒固定)" },
+        durationSec: { type: "number", description: "Seedance 4〜15 秒 / Veo 4・6・8 秒 (丸める)。既定 8" },
+        model: { type: "string", description: "Seedance: \"fast\" / \"mini\" / \"2.0\"。Veo: \"veo\" / \"veo-fast\" / \"veo-lite\"。または正式 ID。既定は engine ごと (fast / veo)" },
+        draft: { type: "boolean", description: "true で Seedance は resolution 480p + model mini、Veo は veo-fast を既定にする (明示指定があればそちら優先)" },
         characterNames: { type: "array", items: { type: "string" }, description: "登録キャラの参照画像を先頭に付ける" },
-        referenceImageUrls: { type: "array", items: { type: "string" }, description: "最大 9 枚 (キャラ参照と合わせて 9 枚まで)。URL / data: URL / base64" },
-        referenceVideoUrls: { type: "array", items: { type: "string" }, description: "最大 3 本。カメラの動き・動きのタイミングを写す用途 (3〜8 秒・単一ショット・H.264 推奨。API 上限は各 2〜15 秒・合計 15 秒以内、mp4 / mov、200MB 以内)。画像と同じくサーバーが GCS に取り直してから渡す" },
-        referenceAudioUrls: { type: "array", items: { type: "string" }, description: "最大 3 本、各 2〜15 秒・合計 15 秒以内。wav / mp3、15MB 以内" },
-        generateAudio: { type: "boolean", description: "生成動画に音声を付ける。既定は false (参照音声があるときは true)" },
+        referenceImageUrls: { type: "array", items: { type: "string" }, description: "Seedance 最大 9 枚 (キャラ参照と合わせて 9 枚まで)。Veo は 1 枚目 = 開始画像 (image-to-video, personGeneration allow_adult)、2〜4 枚目 = referenceImages (veo / veo-fast のみ)。URL / data: URL / base64" },
+        referenceVideoUrls: { type: "array", items: { type: "string" }, description: "Seedance のみ。最大 3 本。カメラの動き・動きのタイミングを写す用途 (3〜8 秒・単一ショット・H.264 推奨。API 上限は各 2〜15 秒・合計 15 秒以内、mp4 / mov、200MB 以内)。Veo に回ったら無視して warnings に出す" },
+        referenceAudioUrls: { type: "array", items: { type: "string" }, description: "Seedance のみ。最大 3 本、各 2〜15 秒・合計 15 秒以内。wav / mp3、15MB 以内。Veo に回ったら無視して warnings に出す" },
+        generateAudio: { type: "boolean", description: "Seedance: 生成動画に音声を付ける (既定 false、参照音声があるときは true)。Veo は常に音声あり (false は効かない)" },
         returnLastFrame: { type: "boolean", description: "最終フレーム画像 (PNG) も返す。既定 false" },
+        replaceAudioUrl: { type: "string", description: "完成動画の音声をこの音声に差し替えた版も作る (wav / mp3、15MB 以内。URL / data: URL / base64)。両エンジン共通" },
+        audioOffsetSec: { type: "number", description: "replaceAudioUrl の開始位置 (秒)。正 = その秒数だけ遅らせて開始 (頭は無音)、負 = 音声の頭をその秒数だけ切る。既定 0" },
       },
       required: ["projectId", "prompt"],
     },
     handler: async (a) => {
       const p = dramaMcpPool();
+      const engineReq = String(a.engine || "auto").toLowerCase();
+      if (!["auto", "seedance", "veo"].includes(engineReq)) throw new Error('engine は "auto" / "seedance" / "veo"');
+      const modelArg = (typeof a.model === "string" && a.model.trim()) ? a.model.trim() : "";
+      const modelIsVeo = !!modelArg && dramaIsVeoModel(dramaResolveVeoModel(modelArg));
+      let engine = engineReq;
+      if (modelIsVeo && engine === "seedance") throw new Error(`model "${modelArg}" は Veo のモデル。engine を "veo" か "auto" にする`);
+      if (modelIsVeo && engine === "auto") engine = "veo"; // Veo のモデルを名指ししたら Seedance を経由しない
+      if (engine === "veo" && !dramaVeoConfigured()) throw new Error("Veo が使えない (GEMINI_API_KEY 未設定)");
       const draft = !!a.draft;
-      const model = dramaResolveSeedanceModel((typeof a.model === "string" && a.model.trim()) ? a.model.trim() : (draft ? "mini" : ""));
+      const seedanceModel = dramaResolveSeedanceModel(modelArg && !modelIsVeo ? modelArg : (draft ? "mini" : ""));
+      const veoModelPref = modelIsVeo ? modelArg : (draft ? "veo-fast" : "veo");
       const resolution = String(a.resolution || (draft ? "480p" : "720p")).toLowerCase();
       const ratio = String(a.aspectRatio || "9:16");
       const durationSec = Math.max(4, Math.min(15, Math.round(a.durationSec || 8)));
-      const fps = DRAMA_SEEDANCE_FPS;
-      // 参照素材: キャラ参照 + 明示 URL → 自分の GCS に置き直す (Seedance がダウンロードできる直リンクにする)
+      const warnings = [];
+      // 参照素材: キャラ参照 + 明示 URL → 自分の GCS に置き直す (Seedance がダウンロードできる直リンクにする。Veo には中身を inlineData で渡す)
       const imageInputs = await dramaMcpRefUrls(p, a.projectId, {
         characterNames: a.characterNames, imageUrls: a.referenceImageUrls, useStyleRefs: false, max: DRAMA_SEEDANCE_LIMITS.images,
       });
       const images = await dramaIngestRefs(imageInputs, "image");
       const videos = await dramaIngestRefs(a.referenceVideoUrls, "video");
       const audios = await dramaIngestRefs(a.referenceAudioUrls, "audio");
+      // 音声差し替え (両エンジン共通)。完成時に ffmpeg で合成する
+      let dub = null;
+      if (a.replaceAudioUrl) {
+        const [d] = await dramaIngestRefs([a.replaceAudioUrl], "audio");
+        if (!d.gcsUrl) throw new Error("replaceAudioUrl は GCS が使える環境でのみ対応");
+        dub = { gcsUrl: d.gcsUrl, offsetSec: Number(a.audioOffsetSec) || 0 };
+        if (!(await dramaFfmpegAvailable())) warnings.push("サーバーに ffmpeg が無いため音声差し替え版は作れない (このまま生成は続ける)");
+      }
       const generateAudio = typeof a.generateAudio === "boolean" ? a.generateAudio : audios.length > 0;
       const returnLastFrame = !!a.returnLastFrame;
       const refSummary = {
@@ -1148,46 +1323,113 @@ const DRAMA_MCP_TOOLS = [
         videos: videos.map((x) => ({ source: x.source, bytes: x.bytes, mime: x.mime })),
         audios: audios.map((x) => ({ source: x.source, bytes: x.bytes, mime: x.mime })),
       };
-      const dims = ratio === "adaptive" ? null : dramaSeedanceDims(ratio, resolution);
-      if (!dramaSeedanceConfigured()) {
+      // 非同期フォールバック (Seedance が投げた後にモデレーションで落ちた) 用に、同じ内容で Veo に投げ直せる情報を行に残す
+      const requestJson = {
+        prompt: a.prompt, ratio, resolution, durationSec, generateAudio, returnLastFrame,
+        images: images.map((x) => ({ gcsUrl: x.gcsUrl, url: x.gcsUrl ? null : x.url, mime: x.mime })),
+        videos: videos.length, audios: audios.length, veoModel: veoModelPref, seedanceModel,
+      };
+      if (engine !== "veo" && !dramaSeedanceConfigured()) {
         const mock = await dramaGenerateMock({ prompt: a.prompt, durationSec });
+        const dims = ratio === "adaptive" ? null : dramaSeedanceDims(ratio, resolution);
         const { rows } = await p.query(
-          `INSERT INTO drama_videos (project_id, title, prompt, status, model, duration_sec, video_url, note, ratio, resolution, width, height, fps, ref_summary)
-           VALUES ($1,$2,$3,'done',$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING id`,
+          `INSERT INTO drama_videos (project_id, title, prompt, status, model, duration_sec, video_url, note, ratio, resolution, width, height, fps, ref_summary, engine, engine_requested)
+           VALUES ($1,$2,$3,'done',$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'seedance',$14) RETURNING id`,
           [a.projectId, a.title || "", a.prompt, mock.model, durationSec, mock.videoUrl, mock.note,
-           ratio, resolution, dims?.width || null, dims?.height || null, fps, JSON.stringify(refSummary)]);
-        return { ok: true, videoId: Number(rows[0].id), status: "done", mock: true, galleryUrl: DRAMA_GALLERY_URL };
+           ratio, resolution, dims?.width || null, dims?.height || null, DRAMA_SEEDANCE_FPS, JSON.stringify(refSummary), engineReq]);
+        return { ok: true, videoId: Number(rows[0].id), status: "done", mock: true, engineUsed: "seedance", galleryUrl: DRAMA_GALLERY_URL };
       }
-      const { taskId } = await dramaCreateVideoTask({
-        prompt: a.prompt,
-        referenceImageUrls: images.map((x) => x.url),
-        referenceVideoUrls: videos.map((x) => x.url),
-        referenceAudioUrls: audios.map((x) => x.url),
-        durationSec, model, ratio, resolution, generateAudio, returnLastFrame,
-      });
-      const tokensEstimated = dramaSeedanceEstimateTokens({ width: dims?.width, height: dims?.height, fps, durationSec });
-      const costEst = dramaSeedanceCost(model, tokensEstimated);
+
+      // ── エンジン起動 ──
+      const startSeedance = async () => {
+        const { taskId } = await dramaCreateVideoTask({
+          prompt: a.prompt,
+          referenceImageUrls: images.map((x) => x.url),
+          referenceVideoUrls: videos.map((x) => x.url),
+          referenceAudioUrls: audios.map((x) => x.url),
+          durationSec, model: seedanceModel, ratio, resolution, generateAudio, returnLastFrame,
+        });
+        const dims = ratio === "adaptive" ? null : dramaSeedanceDims(ratio, resolution);
+        const tokens = dramaSeedanceEstimateTokens({ width: dims?.width, height: dims?.height, fps: DRAMA_SEEDANCE_FPS, durationSec });
+        const cost = dramaSeedanceCost(seedanceModel, tokens);
+        return {
+          providerTaskId: taskId, model: seedanceModel, ratio, resolution, durationSec,
+          width: dims?.width || null, height: dims?.height || null, fps: DRAMA_SEEDANCE_FPS,
+          tokens, costYen: cost.yen, adjustments: [],
+          pricing: { usdPer1kTokens: cost.usdPer1kTokens, usdJpy: cost.usdJpy },
+        };
+      };
+      const startVeo = async () => {
+        if (videos.length) warnings.push(`Veo は参照動画を受け付けないため ${videos.length} 本は無視した`);
+        if (audios.length) warnings.push(`Veo は参照音声を受け付けないため ${audios.length} 本は無視した`);
+        const v = await dramaStartVeoTask({
+          prompt: a.prompt, refs: images, aspectRatio: ratio, resolution, durationSec, model: veoModelPref, generateAudio,
+        });
+        warnings.push(...v.warnings);
+        return {
+          providerTaskId: v.operationName, model: v.model, ratio: v.aspectRatio, resolution: v.resolution, durationSec: v.durationSec,
+          width: v.width, height: v.height, fps: v.fps, tokens: null, costYen: v.costYen, adjustments: v.adjustments,
+          pricing: { usdPerSec: v.usdPerSec, usdJpy: DRAMA_USD_JPY },
+          veo: { personGeneration: v.personGeneration, startImage: v.startImage, referenceImagesUsed: v.referenceImagesUsed },
+        };
+      };
+      let engineUsed = engine, fallbackReason = null, task;
+      if (engine === "veo") {
+        task = await startVeo();
+      } else {
+        try {
+          task = await startSeedance();
+          engineUsed = "seedance";
+        } catch (e) {
+          const sensitive = DRAMA_SEEDANCE_SENSITIVE_RE.test(String(e.message));
+          if (engine === "auto" && sensitive && dramaVeoConfigured()) {
+            fallbackReason = `Seedance が入力を拒否: ${String(e.message).slice(0, 160)}`;
+            console.log(`[drama-mcp] Seedance rejected (sensitive) → Veo fallback: ${String(e.message).slice(0, 120)}`);
+            task = await startVeo();
+            engineUsed = "veo";
+          } else if (engine === "auto" && sensitive) {
+            throw new Error(`${e.message} — Veo (GEMINI_API_KEY) が未設定のためフォールバックできない`);
+          } else {
+            throw e;
+          }
+        }
+      }
       const { rows } = await p.query(
         `INSERT INTO drama_videos (project_id, title, prompt, status, provider_task_id, model, duration_sec,
-                                   ratio, resolution, width, height, fps, tokens, cost_yen, ref_summary)
-         VALUES ($1,$2,$3,'queued',$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING id`,
-        [a.projectId, a.title || "", a.prompt, taskId, model, durationSec,
-         ratio, resolution, dims?.width || null, dims?.height || null, fps, tokensEstimated, costEst.yen, JSON.stringify(refSummary)]);
+                                   ratio, resolution, width, height, fps, tokens, cost_yen, ref_summary,
+                                   engine, engine_requested, fallback_reason, request_json, warnings, replace_audio_gcs_url, audio_offset_sec)
+         VALUES ($1,$2,$3,'queued',$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21) RETURNING id`,
+        [a.projectId, a.title || "", a.prompt, task.providerTaskId, task.model, task.durationSec,
+         task.ratio, task.resolution, task.width, task.height, task.fps, task.tokens, task.costYen, JSON.stringify(refSummary),
+         engineUsed, engineReq, fallbackReason, JSON.stringify(requestJson), JSON.stringify(warnings),
+         dub?.gcsUrl || null, dub ? dub.offsetSec : null]);
       const videoId = Number(rows[0].id);
-      dramaRecordSeedanceUsage(a.projectId, durationSec, model, "mcp_", { videoId, tokens: tokensEstimated, costYen: costEst.yen });
+      if (engineUsed === "veo") {
+        dramaRecordUsage({ projectId: a.projectId, provider: "veo", kind: "mcp_video", model: task.model, videoSeconds: task.durationSec, costYen: task.costYen || 0, videoId });
+      } else {
+        dramaRecordSeedanceUsage(a.projectId, task.durationSec, task.model, "mcp_", { videoId, tokens: task.tokens, costYen: task.costYen });
+      }
       return {
-        ok: true, videoId, status: "queued", model, ratio, resolution,
-        width: dims?.width || null, height: dims?.height || null, fps, durationSec, generateAudio, returnLastFrame,
+        ok: true, videoId, status: "queued",
+        engineUsed, engineRequested: engineReq, fallbackReason,
+        model: task.model, ratio: task.ratio, resolution: task.resolution,
+        width: task.width, height: task.height, fps: task.fps, durationSec: task.durationSec,
+        durationRequested: durationSec, generateAudio: engineUsed === "veo" ? true : generateAudio, returnLastFrame,
         refs: { images: images.length, videos: videos.length, audios: audios.length },
-        tokensEstimated, costYenEstimated: costEst.yen, usdPer1kTokens: costEst.usdPer1kTokens, usdJpy: costEst.usdJpy,
+        ...(task.veo ? { veo: task.veo } : {}),
+        adjustments: task.adjustments, warnings,
+        tokensEstimated: task.tokens, costYenEstimated: task.costYen, pricing: task.pricing,
+        replaceAudio: dub ? { offsetSec: dub.offsetSec } : undefined,
         fileUrl: `${DRAMA_API_BASE}/api/drama/videos/${videoId}/file`,
-        note: "1〜3 分後に drama_check_videos で確認 (完成時に実測トークンでコスト確定)",
+        note: engineUsed === "veo"
+          ? "Veo は 1〜6 分 (混雑時)。drama_check_videos で確認 (完成時にコスト確定)"
+          : "1〜3 分後に drama_check_videos で確認 (完成時に実測トークンでコスト確定)",
       };
     },
   },
   {
     name: "drama_check_videos",
-    description: "生成中の動画の進捗確認と、完成動画一覧の取得。完成した動画はギャラリーに並ぶ。各動画に videoUrl (署名 30 日)・fileUrl (期限なし)・width/height/fps/durationSec・tokens/costYen (実測で確定)・lastFrameUrl (returnLastFrame 指定時) が入る",
+    description: "生成中の動画の進捗確認と、完成動画一覧の取得。完成した動画はギャラリーに並ぶ。各動画に engine (seedance / veo)・fallbackReason・warnings・videoUrl (署名 30 日)・fileUrl (期限なし)・width/height/fps/durationSec・tokens/costYen (Seedance は実測で確定)・lastFrameUrl (returnLastFrame 指定時)・audioReplacedUrl / audioReplacedFileUrl (replaceAudioUrl 指定時) が入る。auto で投げた後に Seedance が拒否した場合、ここで Veo に投げ直すので status が queued に戻ることがある",
     inputSchema: { type: "object", properties: { projectId: { type: "number", description: "省略で全プロジェクト" } } },
     handler: async (a) => {
       const p = dramaMcpPool();
@@ -1239,7 +1481,7 @@ const dramaMcpHandler = dramaCreateMcpHandler({
     "ドラマ/アニメ/漫画をチャットから作る制作ツール。基本の流れ:",
     "1. drama_create_project でプロジェクト作成 (styleGuide に絵柄を書く)",
     "2. drama_upsert_character でキャラ登録 (appearance と identityTokens を必ず埋める。毎回の生成プロンプトに自動で入る) → drama_generate_image でデザイン案 (≈¥6/枚) → 気に入ったら saveAs: 'character_ref:名前' で参照登録 (正面 + 別角度の 2 枚あると安定)",
-    "3. シーンの静止画を drama_generate_image で確認 (¥6) してから drama_generate_video に進むと安い (720p 8 秒 fast ≈ ¥88、draft: true なら 480p mini で ≈ ¥13〜)",
+    "3. シーンの静止画を drama_generate_image で確認 (¥6) してから drama_generate_video に進むと安い (Seedance 720p 8 秒 fast ≈ ¥88、draft: true なら 480p mini で ≈ ¥13〜)。実在人物の写真から本人の実写動画を作るときは engine: \"veo\" (Veo 3.1、8 秒 ≈ ¥496 / veo-fast ≈ ¥124)。engine 未指定 (auto) なら Seedance が顔で拒否したとき自動で Veo に回る",
     "4. 動画は非同期。drama_check_videos で確認。完成したらギャラリー (置き場アプリ) に自動で並ぶ",
     "画像の精度を上げるコツ:",
     "- generate では自由文 prompt より scene / composition / lighting / mustInclude / mustAvoid の slot を埋める。絵柄とキャラ設定はサーバーが足す (結果の finalPrompt で確認できる)",
@@ -2820,6 +3062,7 @@ async function dramaVideoFileRedirect(req, res, column) {
 }
 app.get("/api/drama/videos/:id/file", (req, res) => dramaVideoFileRedirect(req, res, "gcs_url"));
 app.get("/api/drama/videos/:id/last-frame", (req, res) => dramaVideoFileRedirect(req, res, "last_frame_gcs_url"));
+app.get("/api/drama/videos/:id/dub", (req, res) => dramaVideoFileRedirect(req, res, "dub_gcs_url"));
 
 // ギャラリー (置き場アプリ /auto-drama/) 用の一覧 API。inspect と同じ read-only・認証なし。
 // pending がある時はここで Seedance をポーリングするので、アプリを開くだけで進捗が進む
@@ -4084,6 +4327,9 @@ async function ensureSchema() {
     for (const col of [
       "ratio TEXT", "resolution TEXT", "width INTEGER", "height INTEGER", "fps INTEGER",
       "tokens BIGINT", "cost_yen NUMERIC", "last_frame_gcs_url TEXT", "last_frame_url TEXT", "ref_summary JSONB",
+      // エンジン切替 (seedance / veo) と auto フォールバック、音声差し替え版
+      "engine TEXT", "engine_requested TEXT", "fallback_reason TEXT", "request_json JSONB", "warnings JSONB",
+      "replace_audio_gcs_url TEXT", "audio_offset_sec NUMERIC", "dub_gcs_url TEXT", "dub_url TEXT",
     ]) await p.query(`ALTER TABLE drama_videos ADD COLUMN IF NOT EXISTS ${col}`);
     // 動画 1 本ごとに usage 行を後から確定させる (完成時に実測トークンで上書き) ための紐付け
     await p.query("ALTER TABLE drama_api_usage ADD COLUMN IF NOT EXISTS video_id BIGINT");
