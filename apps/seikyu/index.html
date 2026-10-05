@@ -20,10 +20,10 @@
   --glass: #f4ecdb; --glass2: #ebe0ca;
   --gb: rgba(255,255,255,0.65);
   /* ぷっくり感: 外側ドロップ + 内側トップのハイライト + 内側ボトムの影 */
-  --gsh: 7px 9px 18px rgba(150,120,75,0.22), -6px -7px 15px rgba(255,255,255,0.80);
-  --gloss: inset 0 7px 9px rgba(255,255,255,0.75), inset 0 -8px 12px rgba(150,120,75,0.20);
+  --gsh: 6px 8px 16px rgba(150,118,72,0.28), -6px -7px 14px rgba(255,255,255,0.92);
+  --gloss: inset 3px 4px 7px rgba(255,255,255,0.90), inset -4px -5px 9px rgba(150,118,72,0.22);
   --prism: 0 0 0 0 rgba(0,0,0,0);
-  --press: inset 5px 5px 11px rgba(150,120,75,0.30), inset -5px -5px 10px rgba(255,255,255,0.70);
+  --press: inset 5px 5px 11px rgba(150,118,72,0.32), inset -5px -5px 10px rgba(255,255,255,0.75);
   --text: #534833; --text2: rgba(83,72,51,0.64); --text3: rgba(83,72,51,0.40);
   --bulb: #ec8a4a; --bulb2: #d96f30;
   --bulb-glow: rgba(236,138,74,0.5); --bulb-glow2: rgba(217,111,48,0.3);
@@ -60,7 +60,14 @@ body { font-family: 'Outfit', -apple-system, sans-serif; font-weight: 400; color
 .dir-btn::before, .src-btn::before { content: ""; position: absolute; top: 0; left: 6%; right: 6%; height: 46%; background: linear-gradient(180deg, rgba(255,255,255,0.7) 0%, rgba(255,255,255,0) 100%); border-radius: 22px 22px 50% 50%; pointer-events: none; }
 .dir-btn.selected, .src-btn:active { transform: scale(0.97); color: var(--bulb2); box-shadow: inset 0 2px 8px rgba(120,130,160,0.3), var(--gloss); }
 .dir-btn .lab { font-size: 11px; color: var(--text2); margin-top: 6px; font-weight: 600; display: block; }
-.dir-btn.selected .lab { color: var(--bulb2); }
+.dir-btn.selected .lab { color: #fff; }
+/* メインの大きいタイルもコントロールセンター風にミュートカラー */
+.dir-row .dir-btn:nth-child(1) { background: var(--c-terra); color: rgba(60,40,28,0.82); }
+.dir-row .dir-btn:nth-child(2) { background: var(--c-sage); color: rgba(45,55,32,0.82); }
+.src-row .src-btn:nth-child(1) { background: var(--c-sky); color: rgba(32,48,66,0.82); }
+.src-row .src-btn:nth-child(2) { background: var(--c-mustard); color: rgba(66,52,22,0.82); }
+.dir-btn.selected, .src-btn.selected { color: #fff; box-shadow: var(--press); }
+.dir-btn.selected .lab { color: rgba(255,255,255,0.88); }
 
 /* スキャン中 */
 #scanScreen { position: fixed; inset: 0; display: none; flex-direction: column; align-items: center; justify-content: center; gap: 28px; }
