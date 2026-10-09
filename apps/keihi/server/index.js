@@ -1316,7 +1316,10 @@ const DRAMA_MCP_TOOLS = [
         dub = { gcsUrl: d.gcsUrl, offsetSec: Number(a.audioOffsetSec) || 0 };
         if (!(await dramaFfmpegAvailable())) warnings.push("サーバーに ffmpeg が無いため音声差し替え版は作れない (このまま生成は続ける)");
       }
-      const generateAudio = typeof a.generateAudio === "boolean" ? a.generateAudio : audios.length > 0;
+      // Seedance 向けの既定 (false、参照音声があれば true)。Veo には「明示指定があるときだけ」渡す
+      // (未指定の false を渡すと「false は効かない」の警告が毎回出てしまう)
+      const generateAudioExplicit = typeof a.generateAudio === "boolean" ? a.generateAudio : undefined;
+      const generateAudio = generateAudioExplicit ?? (audios.length > 0);
       const returnLastFrame = !!a.returnLastFrame;
       const refSummary = {
         images: images.map((x) => ({ source: x.source, bytes: x.bytes, mime: x.mime })),
@@ -1325,7 +1328,7 @@ const DRAMA_MCP_TOOLS = [
       };
       // 非同期フォールバック (Seedance が投げた後にモデレーションで落ちた) 用に、同じ内容で Veo に投げ直せる情報を行に残す
       const requestJson = {
-        prompt: a.prompt, ratio, resolution, durationSec, generateAudio, returnLastFrame,
+        prompt: a.prompt, ratio, resolution, durationSec, generateAudio: generateAudioExplicit ?? null, returnLastFrame,
         images: images.map((x) => ({ gcsUrl: x.gcsUrl, url: x.gcsUrl ? null : x.url, mime: x.mime })),
         videos: videos.length, audios: audios.length, veoModel: veoModelPref, seedanceModel,
       };
@@ -1363,7 +1366,7 @@ const DRAMA_MCP_TOOLS = [
         if (videos.length) warnings.push(`Veo は参照動画を受け付けないため ${videos.length} 本は無視した`);
         if (audios.length) warnings.push(`Veo は参照音声を受け付けないため ${audios.length} 本は無視した`);
         const v = await dramaStartVeoTask({
-          prompt: a.prompt, refs: images, aspectRatio: ratio, resolution, durationSec, model: veoModelPref, generateAudio,
+          prompt: a.prompt, refs: images, aspectRatio: ratio, resolution, durationSec, model: veoModelPref, generateAudio: generateAudioExplicit,
         });
         warnings.push(...v.warnings);
         return {
