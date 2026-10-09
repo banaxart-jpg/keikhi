@@ -13,7 +13,8 @@
 //     SDK (google-genai) は imageBytes を bytesBase64Encoded に変換して送る実装なので、
 //     こちらは {bytesBase64Encoded, mimeType} を第一候補にし、INVALID_ARGUMENT で画像の形を
 //     指摘されたら別の形で投げ直す (通った形はプロセス内で記憶)。env VEO_IMAGE_SHAPE で固定もできる
-//   parameters: aspectRatio "16:9"|"9:16" / durationSeconds "4"|"6"|"8" (文字列。参照画像・1080p・4k は "8" 固定)
+//   parameters: aspectRatio "16:9"|"9:16" / durationSeconds 4|6|8 (ドキュメントの表は "4" と引用符付きだが、
+//               実 API は数値でないと「needs to be a number [INVALID_ARGUMENT]」になる。本番実測 2026-10。参照画像・1080p・4k は 8 固定)
 //               / resolution "720p"|"1080p"|"4k" (Lite は 4k なし) / personGeneration (image-to-video は "allow_adult" のみ) / seed
 //   GET {BASE}/{operation.name} → done:true で response.generateVideoResponse.generatedSamples[0].video.uri
 //   動画のダウンロードも x-goog-api-key ヘッダ。サーバー保持は 2 日。音声は常にネイティブ生成 (オフ不可)。24fps
@@ -164,7 +165,7 @@ export async function createVeoTask({
   const hasImages = !!startImage?.data || refs.length > 0;
   const parameters = {
     aspectRatio,
-    durationSeconds: String(durationSec),
+    durationSeconds: Number(durationSec),
     resolution,
     numberOfVideos: 1,
   };
