@@ -24,6 +24,9 @@ function driveFolderIdOf(input) {
   return null;
 }
 const folderUrl = (id) => `https://drive.google.com/drive/folders/${id}`;
+// pg は DATE を JS の Date (サーバーの TZ の 0 時) で返す。String() すると "Mon Oct 12" になって比較が壊れるので
+// 必ず YYYY-MM-DD に揃える (サーバーは UTC なので toISOString でよい)
+const ymd = (v) => (v == null ? null : v instanceof Date ? v.toISOString().slice(0, 10) : String(v).slice(0, 10));
 const todayJst = () => new Date(Date.now() + 9 * 3600 * 1000).toISOString().slice(0, 10);
 
 export function createGenba({ getPool, createMcpHandler, getDriveApi }) {
@@ -138,7 +141,7 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi }) {
 
   const logRow = (r) => ({
     id: Number(r.id), kind: r.kind, body: r.body, by: r.written_by,
-    due_on: r.due_on ? String(r.due_on).slice(0, 10) : null,
+    due_on: ymd(r.due_on),
     resolves_id: r.resolves_id ? Number(r.resolves_id) : null,
     photo_ids: Array.isArray(r.photo_ids) && r.photo_ids.length ? r.photo_ids : undefined,
     source_ref: r.source_ref || undefined,
