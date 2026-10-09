@@ -52,6 +52,14 @@ Veo の項目名は [Veo guide](https://ai.google.dev/gemini-api/docs/veo) の p
 `parameters.aspectRatio` / `durationSeconds` ("4" | "6" | "8" の文字列) / `resolution` / `personGeneration` (image-to-video は `allow_adult`)。
 `GET {operation.name}` を `drama_check_videos` でポーリングし、`response.generateVideoResponse.generatedSamples[0].video.uri` を `x-goog-api-key` 付きでダウンロードして GCS に保存 (Veo 側は 2 日で消える)。
 
+**ドキュメントと実 API のずれ (2026-10 本番実測、`veoGen.js` で吸収済み)**
+- 画像オブジェクト: ドキュメントの curl 例は `{inlineData:{mimeType,data}}` だが predictLongRunning は「`inlineData` isn't supported」で拒否。
+  `{bytesBase64Encoded, mimeType}` を第一候補にし、画像の形が原因の INVALID_ARGUMENT なら別の形で投げ直す (通った形を記憶)
+- `durationSeconds`: 表は `"4"` と引用符付きだが、数値でないと「needs to be a number」
+- `numberOfVideos`: 「isn't supported by this model」→ 送らない。他にも「`X` isn't supported」が返ったらそのパラメータを外して投げ直し、`droppedParams` で返す
+- Seedance の実在人物拒否は作成リクエストの時点で同期的に返る (「The request failed because the input image 'content[1]' may contain real person」)。
+  サングラス・横顔・ステージ写真では拒否されず、正面の顔アップで拒否された
+
 Seedance 向けの指定を Veo に回すときの寄せ方 (返り値 `adjustments`):
 - 480p → 720p、1:1 / 4:3 / 21:9 → 16:9、3:4 → 9:16、adaptive → 開始画像の向き
 - 尺は 4 / 6 / 8 に最近傍で丸め。参照画像あり・1080p・4k は 8 秒固定
