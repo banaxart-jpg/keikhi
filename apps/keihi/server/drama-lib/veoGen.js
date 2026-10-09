@@ -5,8 +5,14 @@
 //   ai.google.dev/gemini-api/docs/veo (parameters 表・REST 例)、ai.google.dev/gemini-api/docs/pricing
 // 2026-10 時点の仕様:
 //   POST {BASE}/models/{model}:predictLongRunning  (ヘッダ x-goog-api-key)
-//   instances[0]: prompt / image: {inlineData:{mimeType,data}} / referenceImages: [{image:{inlineData}, referenceType:"asset"}] (3.1 と 3.1 Fast のみ、最大 3)
+//   instances[0]: prompt / image / referenceImages: [{image, referenceType:"asset"}] (3.1 と 3.1 Fast のみ、最大 3)
 //                 / lastFrame / video (拡張用)
+//   画像オブジェクトの形はドキュメントと実 API で食い違う (2026-10 実測):
+//     ドキュメントの curl 例は {inlineData:{mimeType,data}} だが、predictLongRunning に送ると
+//     「`inlineData` isn't supported by this model [INVALID_ARGUMENT]」で弾かれる。
+//     SDK (google-genai) は imageBytes を bytesBase64Encoded に変換して送る実装なので、
+//     こちらは {bytesBase64Encoded, mimeType} を第一候補にし、INVALID_ARGUMENT で画像の形を
+//     指摘されたら別の形で投げ直す (通った形はプロセス内で記憶)。env VEO_IMAGE_SHAPE で固定もできる
 //   parameters: aspectRatio "16:9"|"9:16" / durationSeconds "4"|"6"|"8" (文字列。参照画像・1080p・4k は "8" 固定)
 //               / resolution "720p"|"1080p"|"4k" (Lite は 4k なし) / personGeneration (image-to-video は "allow_adult" のみ) / seed
 //   GET {BASE}/{operation.name} → done:true で response.generateVideoResponse.generatedSamples[0].video.uri
@@ -27,6 +33,18 @@ try {
 
 const API_KEY = (process.env.GEMINI_API_KEY || "").trim(); // 画像生成・審査と同じキー (Secret Manager → env)
 const BASE_URL = "https://generativelanguage.googleapis.com/v1beta";
+
+// 画像オブジェクトの形 (上のコメント参照)。順に試す
+const IMAGE_SHAPES = {
+  bytes: (img) => ({ bytesBase64Encoded: img.data, mimeType: img.mimeType || "image/png" }),
+  inline: (img) => ({ inlineData: { mimeType: img.mimeType || "image/png", data: img.data } }),
+  imageBytes: (img) => ({ imageBytes: img.data, mimeType: img.mimeType || "image/png" }),
+};
+let preferredShape = (process.env.VEO_IMAGE_SHAPE || "bytes").trim();
+if (!IMAGE_SHAPES[preferredShape]) preferredShape = "bytes";
+const shapeOrder = () => [preferredShape, ...Object.keys(IMAGE_SHAPES).filter((k) => k !== preferredShape)];
+// 画像の形が原因のエラーか (それ以外のエラーで投げ直してはいけない)
+const isImageShapeError = (msg) => /INVALID_ARGUMENT/.test(msg) && /(inlineData|bytesBase64Encoded|imageBytes|Unknown name "image"|image)/i.test(msg);
 
 export const VEO_FPS = Number(CFG.veo.fps) || 24;
 export const VEO_DEFAULT_MODEL = CFG.veo.defaultModel;
@@ -135,12 +153,15 @@ export async function createVeoTask({
   if (!CFG.veo.durations.includes(Number(durationSec))) throw new Error(`Veo の durationSec は ${CFG.veo.durations.join(" / ")} (指定: ${durationSec})`);
   if (info?.resolutions && !info.resolutions.includes(resolution)) throw new Error(`${info.label || model} の resolution は ${info.resolutions.join(" / ")} (指定: ${resolution})`);
 
-  const instance = { prompt: String(prompt) };
-  if (startImage?.data) instance.image = { inlineData: { mimeType: startImage.mimeType || "image/png", data: startImage.data } };
   const refs = (referenceImages || []).filter((r) => r?.data).slice(0, CFG.veo.maxReferenceImages);
-  if (refs.length) {
-    instance.referenceImages = refs.map((r) => ({ image: { inlineData: { mimeType: r.mimeType || "image/png", data: r.data } }, referenceType: "asset" }));
-  }
+  const buildInstance = (shape) => {
+    const mk = IMAGE_SHAPES[shape];
+    const instance = { prompt: String(prompt) };
+    if (startImage?.data) instance.image = mk(startImage);
+    if (refs.length) instance.referenceImages = refs.map((r) => ({ image: mk(r), referenceType: "asset" }));
+    return instance;
+  };
+  const hasImages = !!startImage?.data || refs.length > 0;
   const parameters = {
     aspectRatio,
     durationSeconds: String(durationSec),
@@ -148,16 +169,31 @@ export async function createVeoTask({
     numberOfVideos: 1,
   };
   // image-to-video / 参照画像ありは allow_adult のみ (text-to-video は allow_all のみ)
-  parameters.personGeneration = personGeneration || ((instance.image || refs.length) ? CFG.veo.personGenerationImageToVideo : "allow_all");
+  parameters.personGeneration = personGeneration || (hasImages ? CFG.veo.personGenerationImageToVideo : "allow_all");
   if (negativePrompt) parameters.negativePrompt = String(negativePrompt);
   if (Number.isInteger(seed)) parameters.seed = seed;
 
-  const body = JSON.stringify({ instances: [instance], parameters });
-  const r = await veoFetch(`${BASE_URL}/models/${encodeURIComponent(model)}:predictLongRunning`, { method: "POST", body });
+  // 画像が無ければ形は関係ない。あれば通る形を順に試す
+  const shapes = hasImages ? shapeOrder() : [preferredShape];
+  let r, usedShape = shapes[0], lastErr;
+  for (const shape of shapes) {
+    const body = JSON.stringify({ instances: [buildInstance(shape)], parameters });
+    try {
+      r = await veoFetch(`${BASE_URL}/models/${encodeURIComponent(model)}:predictLongRunning`, { method: "POST", body });
+      usedShape = shape;
+      break;
+    } catch (e) {
+      lastErr = e;
+      if (!hasImages || !isImageShapeError(e.message) || shape === shapes[shapes.length - 1]) throw e;
+      console.warn(`[veoGen] image shape "${shape}" rejected (${e.message.slice(0, 90)}) → trying next`);
+    }
+  }
+  if (!r) throw lastErr || new Error("Veo API: 失敗");
+  if (hasImages && usedShape !== preferredShape) { console.log(`[veoGen] image shape "${usedShape}" accepted; using it from now on`); preferredShape = usedShape; }
   if (!r.name) throw new Error("Veo API: operation name が返りませんでした");
   return {
-    operationName: r.name, model,
-    request: { aspectRatio, resolution, durationSec: Number(durationSec), personGeneration: parameters.personGeneration, startImage: !!instance.image, referenceImages: refs.length },
+    operationName: r.name, model, imageShape: hasImages ? usedShape : null,
+    request: { aspectRatio, resolution, durationSec: Number(durationSec), personGeneration: parameters.personGeneration, startImage: !!startImage?.data, referenceImages: refs.length },
   };
 }
 
