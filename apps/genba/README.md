@@ -29,10 +29,18 @@
 | `genba_status(site)` | 最終更新・直近の進捗・未解決の課題・次やること・最近の決定 |
 | `genba_rule_get(topic?)` / `genba_rule_set(topic, body)` | 運用ルール (版を積む。消えない) |
 | `genba_log_add_many(site?, items[])` | まとめて追記 (監視ジョブ・会話から一度に抽出したとき)。各行に `duplicate` |
-| `genba_source_add / list / mark / remove` | 監視対象ルーム (LINE グループ等) のホワイトリストと「ここまで読んだ」cursor。載っていないルームは監視ジョブが読まない |
+| `genba_room_sync(rooms)` | 監視ジョブが自分の Beeper / LINE のルーム一覧 (ID と名前だけ) を同期。返り値 `watching` が読む対象 |
+| `genba_source_add / list / mark / remove` | 監視 ON のルーム (自分の持ち分) と「ここまで読んだ」cursor。載っていないルームは監視ジョブが読まない |
+| `genba_owner_set(email, label)` | 画面のログイン (メール) をトークンの名前 (小西 / 名取) に結びつける。小西のトークンからだけ |
+
+### ウォッチ画面 `/genba/watch.html`
+ログインした人のルームだけが並ぶ (小西 → 小西の Beeper、名取 → 名取の)。行ごとに現場の選択とトグル。
+ON = 監視ジョブが読んで現場の進捗に記録、OFF = 読まない (デフォルト OFF、ホワイトリスト)。
+ルームは監視ジョブの `genba_room_sync` で入ってくる (本文は送らない、ID と名前だけ)。
+API: `GET /api/genba/me` / `GET /api/genba/rooms` / `PUT /api/genba/rooms/:id {enabled, siteId, label}` / `DELETE /api/genba/rooms/:id` (Firebase 認証)。
 
 ### 監視ジョブ (Cowork 等で 5 分ごとに LINE を読んで自動記録)
-1. `genba_source_list` → 対象ルームと cursor
+1. `genba_room_sync` にルーム一覧 (ID と名前) を渡す → 返り値 `watching` が読む対象 (ON/OFF は画面)
 2. cursor より後のメッセージだけ読む (Beeper 等の MCP)
 3. 決定・課題・次やることを抽出して `genba_log_add_many`。各 item に `source_ref = "<channel>:<room>:<message id>"` (同じメッセージは 2 回入らない) と `source = {channel, room, sender, at, quote}`
 4. `genba_source_mark(channel, room, {last_id, last_at})` で cursor を進める

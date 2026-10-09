@@ -4367,6 +4367,9 @@ app.get("/health", (req, res) => {
 // ─────────────────────────────
 // sites の CRUD はランチャー「現場」アプリ (/genba/) からのみ利用される想定。
 // 他ミニアプリ (keihi/keihi2/seikyu/kaimono/task) は GET のみ。
+// 現場ウォッチ画面 (/genba/watch.html) の API。Firebase 認証済み (上の app.use("/api") の後ろ)
+genba.registerRoutes(app);
+
 app.get("/api/sites", async (req, res) => {
   const p = getPool();
   if (!p) return res.status(503).json({ error: "DB not configured" });

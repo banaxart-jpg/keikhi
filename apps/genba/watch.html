@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="ウォッチ">
+<title>ウォッチ</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@24,400,0,0">
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+:root {
+  --bg: #e4e6ee; --bg2: #d8dae4; --bg3: #ededf3;
+  --sl: rgba(255,255,255,1); --sd: rgba(168,172,192,0.75);
+  --text: #42455e; --text2: rgba(66,69,94,0.52); --text3: rgba(66,69,94,0.28);
+  --accent: #0891b2; --accent2: #06b6d4;
+  --danger: #b04040;
+}
+body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; overflow-x: hidden; }
+.icon { font-family: 'Material Symbols Outlined'; font-size: 1.1em; display: inline-block; vertical-align: -0.18em; font-variation-settings: 'FILL' 0, 'wght' 500, 'GRAD' 0, 'opsz' 20; }
+#signinOverlay { position: fixed; inset: 0; z-index: 400; background: var(--bg); display: none; flex-direction: column; align-items: center; justify-content: center; padding: 32px; text-align: center; gap: 18px; }
+#signinOverlay.show { display: flex; }
+.pill { padding: 14px 28px; border-radius: 30px; background: var(--bg); box-shadow: 6px 6px 16px var(--sd), -6px -6px 16px var(--sl); font-weight: 700; border: none; cursor: pointer; font-family: 'Outfit', sans-serif; color: var(--text); text-decoration: none; }
+.signin-err { font-size: 11px; color: var(--danger); max-width: 340px; white-space: pre-wrap; font-family: monospace; word-break: break-word; }
+.top { padding: 54px 18px 12px; display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.back { font-size: 13px; font-weight: 800; color: var(--text2); background: var(--bg); border: none; cursor: pointer; font-family: 'Outfit', sans-serif; padding: 9px 14px; border-radius: 24px; box-shadow: 4px 4px 10px var(--sd), -4px -4px 10px var(--sl); text-decoration: none; display: inline-flex; align-items: center; gap: 4px; }
+.back:active { box-shadow: inset 3px 3px 8px var(--sd), inset -3px -3px 8px var(--sl); transform: scale(0.96); }
+.title { font-size: 20px; font-weight: 800; letter-spacing: -0.5px; }
+.owner { font-size: 11px; font-weight: 700; color: var(--text2); padding: 6px 12px; border-radius: 18px; box-shadow: inset 3px 3px 7px var(--sd), inset -3px -3px 7px var(--sl); }
+.hint { margin: 0 18px 6px; font-size: 11px; color: var(--text2); line-height: 1.6; }
+.list { padding: 10px 16px 120px; display: flex; flex-direction: column; gap: 10px; }
+.group { font-size: 11px; font-weight: 800; letter-spacing: 0.08em; color: var(--text3); text-transform: uppercase; padding: 10px 6px 0; }
+.row { background: var(--bg); border-radius: 16px; padding: 12px 14px; box-shadow: 6px 6px 14px var(--sd), -5px -5px 12px var(--sl); display: flex; align-items: center; gap: 10px; }
+.row.off { opacity: 0.82; }
+.row .main { flex: 1; min-width: 0; }
+.row .name { font-size: 14px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.row .sub { font-size: 11px; color: var(--text2); margin-top: 3px; display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.row select { font-family: 'Outfit', sans-serif; font-size: 12px; font-weight: 600; color: var(--text); background: var(--bg); border: none; border-radius: 10px; padding: 5px 8px; box-shadow: inset 2px 2px 5px var(--sd), inset -2px -2px 5px var(--sl); max-width: 180px; }
+.row select.missing { color: var(--danger); }
+.toggle { position: relative; width: 50px; height: 28px; border-radius: 14px; background: var(--bg2); box-shadow: inset 3px 3px 6px var(--sd), inset -3px -3px 6px var(--sl); border: none; cursor: pointer; flex-shrink: 0; transition: background 0.18s; }
+.toggle::after { content: ""; position: absolute; top: 3px; left: 3px; width: 22px; height: 22px; border-radius: 50%; background: var(--bg); box-shadow: 2px 2px 5px var(--sd), -1px -1px 3px var(--sl); transition: transform 0.18s; }
+.toggle.on { background: var(--accent); }
+.toggle.on::after { transform: translateX(22px); }
+.toggle:disabled { opacity: 0.5; cursor: wait; }
+.empty { text-align: center; padding: 48px 20px; color: var(--text3); font-size: 13px; font-weight: 600; line-height: 1.7; }
+.err { margin: 0 18px; font-size: 12px; color: var(--danger); font-weight: 700; }
+.mini { background: none; border: none; color: var(--text3); cursor: pointer; padding: 4px; }
+.mini .icon { font-size: 18px; }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+</head>
+<body>
+
+<div id="signinOverlay">
+  <div class="pill">サインインしてください</div>
+  <a class="pill" href="/">ランチャーへ戻る</a>
+  <div class="signin-err" id="signinErr"></div>
+</div>
+
+<div id="app" style="display:none;">
+  <div class="top">
+    <a class="back" href="/genba/"><span class="icon">arrow_back</span> 現場</a>
+    <div class="title">ウォッチ</div>
+    <div class="owner" id="owner">…</div>
+  </div>
+  <div class="hint">LINE などのルームを現場に紐付けて ON にすると、監視ジョブがそのルームの「決まったこと・課題・次やること」だけを現場の進捗に記録する。OFF のルームは読まない。</div>
+  <div class="err" id="err"></div>
+  <div class="list" id="list"><div class="empty">読み込み中…</div></div>
+</div>
+
+<script src="/config.js"></script>
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js";
+import { getAuth, setPersistence, browserLocalPersistence, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
+import { gateInternal } from "/internal-gate.js";
+
+const API_BASE = (window.API_BASE || "").replace(/\/$/, "");
+const $ = (id) => document.getElementById(id);
+let fbAuth = null;
+let rooms = [], sites = [], owner = null;
+
+async function api(method, path, body) {
+  const headers = { "content-type": "application/json" };
+  if (fbAuth?.currentUser) headers.authorization = "Bearer " + (await fbAuth.currentUser.getIdToken());
+  const r = await fetch(API_BASE + path, { method, headers, body: body ? JSON.stringify(body) : undefined });
+  if (!r.ok) { let msg = r.status + " " + r.statusText; try { const j = await r.json(); if (j.error) msg = j.error; } catch (_) {} throw new Error(msg); }
+  if (r.status === 204) return null;
+  return r.json();
+}
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const ago = (iso) => { if (!iso) return ""; const m = Math.round((Date.now() - new Date(iso).getTime()) / 60000); return m < 1 ? "たった今" : m < 60 ? `${m} 分前` : m < 1440 ? `${Math.round(m / 60)} 時間前` : `${Math.round(m / 1440)} 日前`; };
+
+async function load() {
+  $("err").textContent = "";
+  try {
+    const [r, s] = await Promise.all([api("GET", "/api/genba/rooms"), api("GET", "/api/sites")]);
+    owner = r.owner; rooms = r.rooms || []; sites = s || [];
+    $("owner").textContent = owner ? `${owner} のルーム` : "持ち主 未登録";
+    render();
+  } catch (e) {
+    $("list").innerHTML = `<div class="empty">読み込み失敗: ${esc(e.message)}</div>`;
+  }
+}
+
+function siteOptions(cur) {
+  const live = sites.filter((x) => !x.doneAt), done = sites.filter((x) => x.doneAt);
+  const opt = (x) => `<option value="${x.id}" ${Number(cur) === x.id ? "selected" : ""}>${esc(x.name)}</option>`;
+  return `<option value="">現場を選ぶ</option>` + live.map(opt).join("") + (done.length ? `<optgroup label="完了済み">${done.map(opt).join("")}</optgroup>` : "");
+}
+
+function render() {
+  const list = $("list");
+  if (!owner) {
+    list.innerHTML = `<div class="empty">このログインはまだ持ち主に結び付いていない。<br>小西のチャットで「genba_owner_set で このメール → 名前」を登録してもらう。</div>`;
+    return;
+  }
+  if (!rooms.length) {
+    list.innerHTML = `<div class="empty">まだルームが同期されていない。<br>監視ジョブ (genba_room_sync) が 1 回動くと、${esc(owner)} の Beeper / LINE のルームがここに並ぶ。</div>`;
+    return;
+  }
+  let html = "", lastCh = null;
+  for (const r of rooms) {
+    if (r.channel !== lastCh) { html += `<div class="group">${esc(r.channel)}</div>`; lastCh = r.channel; }
+    html += `
+      <div class="row ${r.enabled ? "" : "off"}" data-id="${r.id}">
+        <div class="main">
+          <div class="name">${esc(r.name || r.label || r.room)}</div>
+          <div class="sub">
+            <select data-act="site" class="${r.enabled && !r.siteId ? "missing" : ""}">${siteOptions(r.siteId)}</select>
+            ${r.lastSeenAt ? `<span>同期 ${ago(r.lastSeenAt)}</span>` : ""}
+            ${r.cursor?.last_at ? `<span>読了 ${ago(r.cursor.last_at)}</span>` : ""}
+          </div>
+        </div>
+        <button class="toggle ${r.enabled ? "on" : ""}" data-act="toggle" aria-label="${r.enabled ? "監視中" : "停止中"}"></button>
+      </div>`;
+  }
+  list.innerHTML = html;
+}
+
+$("list").addEventListener("click", async (e) => {
+  const btn = e.target.closest("button[data-act=toggle]"); if (!btn) return;
+  const row = btn.closest(".row"); const id = Number(row.dataset.id);
+  const r = rooms.find((x) => x.id === id); if (!r) return;
+  const siteId = Number(row.querySelector("select").value) || null;
+  if (!r.enabled && !siteId) { $("err").textContent = "先に現場を選ぶ"; row.querySelector("select").classList.add("missing"); row.querySelector("select").focus(); return; }
+  btn.disabled = true;
+  try {
+    const res = await api("PUT", "/api/genba/rooms/" + id, { enabled: !r.enabled, siteId });
+    r.enabled = res.enabled; r.siteId = res.siteId; $("err").textContent = "";
+    btn.classList.toggle("on", r.enabled); row.classList.toggle("off", !r.enabled);
+  } catch (err) { $("err").textContent = err.message; }
+  finally { btn.disabled = false; }
+});
+$("list").addEventListener("change", async (e) => {
+  const sel = e.target.closest("select[data-act=site]"); if (!sel) return;
+  const row = sel.closest(".row"); const id = Number(row.dataset.id);
+  const r = rooms.find((x) => x.id === id); if (!r) return;
+  const siteId = Number(sel.value) || null;
+  try {
+    const res = await api("PUT", "/api/genba/rooms/" + id, { siteId, ...(r.enabled && !siteId ? { enabled: false } : {}) });
+    r.siteId = res.siteId; r.enabled = res.enabled; $("err").textContent = "";
+    sel.classList.toggle("missing", r.enabled && !r.siteId);
+    row.querySelector(".toggle").classList.toggle("on", r.enabled); row.classList.toggle("off", !r.enabled);
+  } catch (err) { $("err").textContent = err.message; }
+});
+
+async function boot() {
+  try {
+    const cfg = await fetch("/__/firebase/init.json").then((r) => r.json());
+    cfg.authDomain = location.hostname;
+    const app = initializeApp(cfg);
+    fbAuth = getAuth(app);
+    await setPersistence(fbAuth, browserLocalPersistence);
+    gateInternal(fbAuth);
+    onAuthStateChanged(fbAuth, async (user) => {
+      if (user) { $("signinOverlay").classList.remove("show"); $("app").style.display = "block"; await load(); }
+      else {
+        if (sessionStorage.getItem("authBounce")) { $("signinOverlay").classList.add("show"); return; }
+        sessionStorage.setItem("authBounce", "1");
+        location.replace("/?next=" + encodeURIComponent("/genba/watch.html"));
+      }
+    });
+  } catch (e) {
+    $("signinOverlay").classList.add("show");
+    $("signinErr").textContent = "init失敗: " + (e.message || e);
+  }
+}
+boot();
+</script>
+</body>
+</html>
