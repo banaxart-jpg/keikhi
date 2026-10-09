@@ -30,6 +30,7 @@ import { reviewGeneratedImage as dramaReviewImage } from "./drama-lib/gemini.js"
 import { searchWebImages as dramaSearchWebImages } from "./drama-lib/websearch.js";
 import { splitGridImage as dramaSplitGridImage } from "./drama-lib/gridsplit.js";
 import { createMcpHandler as dramaCreateMcpHandler } from "./drama-lib/mcp.js";
+import { createGenba } from "./genba-lib/index.js";
 import { createSns } from "./sns-lib/index.js";
 import { createMeeting } from "./meeting-lib/index.js";
 import sharp from "sharp";
@@ -2589,6 +2590,16 @@ const meeting = createMeeting({
 });
 app.all("/api/meeting/mcp/:token", meeting.mcpRoute());
 
+// ═══════════════════ 現場 (案件・進捗ログ・ルール) MCP ═══════════════════
+// 1 現場 1 チャットで AI が使う。正本は Postgres、写真は Drive の案件フォルダ (URL を返すだけ)。詳細は genba-lib/index.js。
+// 人ごとの URL: GENBA_MCP_TOKENS="token:名前,token:名前" (書いた人をトークンで決める)。統合コネクタ経由は小西扱い。
+const GENBA_MCP_TOKENS = Object.fromEntries(
+  ((process.env.GENBA_MCP_TOKENS || "").trim() || "kx9m2genba7vqt4wp8zh:小西")
+    .split(",").map((kv) => kv.split(":").map((x) => x.trim())).filter(([t, n]) => t && n)
+);
+const genba = createGenba({ getPool, createMcpHandler: dramaCreateMcpHandler, getDriveApi: () => getDriveApi() });
+app.all("/api/genba/mcp/:token", genba.mcpRoute(GENBA_MCP_TOKENS));
+
 // ═══════════════════ 統合コネクタ (claude.ai に登録する URL を 1 本にする) ═══════════════════
 // 接続 URL: https://<keihi-api の Cloud Run URL>/api/mcp/<token>
 // sheets / 現場写真 / drama / SNS / 会議 のツールを全部束ねる。新しい MCP を足しても URL を登録し直さなくていい。
@@ -2606,9 +2617,11 @@ const UNIFIED_MCP_INSTRUCTIONS = [
   "- meeting_*: 会議の文字起こしと画面共有の静止画 (/gijiroku/)",
   "- drama_*: ドラマ/アニメ制作",
   "- x_* / note_* / sns_*: SNS 発信 (投稿は課金あり・取り消し不可に近いので、必ず本文を見せて OK をもらってから)",
+  "- genba_*: 現場の案件・進捗ログ・運用ルール (写真の置き場 URL もここ)",
   "- それ以外: Google スプレッドシート / Drive / 現場写真",
   "",
-  "## 会議", meeting.instructions,
+  "## 現場", genba.instructions,
+  "", "## 会議", meeting.instructions,
   "", "## スプレッドシート / 現場写真", sheetsMcpHandler.meta.instructions,
   "", "## ドラマ制作", dramaMcpHandler.meta.instructions,
   "", "## SNS", sns.instructions,
@@ -2618,7 +2631,7 @@ app.all("/api/mcp/:token", async (req, res) => {
   let snsTools = [];
   try { snsTools = await sns.toolsForAll(); } catch { snsTools = []; } // sns-config 未作成なら SNS ツールだけ出さない
   const seen = new Set();
-  const tools = [...meeting.tools, ...sheetsMcpHandler.meta.tools, ...dramaMcpHandler.meta.tools, ...snsTools]
+  const tools = [...genba.tools("小西"), ...meeting.tools, ...sheetsMcpHandler.meta.tools, ...dramaMcpHandler.meta.tools, ...snsTools]
     .filter((t) => (seen.has(t.name) ? (console.warn(`[mcp] ツール名の重複を無視: ${t.name}`), false) : seen.add(t.name)));
   return dramaCreateMcpHandler({ name: "keihi", instructions: UNIFIED_MCP_INSTRUCTIONS, tools })(req, res);
 });

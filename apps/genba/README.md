@@ -14,6 +14,24 @@
 - 右上 `+ 追加` で新規作成
 - 他アプリ (例: 経費) の「現場アプリで追加」リンクから来た場合、保存後に元アプリに戻る (`?return=/keihi/&newSite=true`)
 
+## AI から使う (MCP `genba_*`)
+
+現場チャット (1 現場 1 チャット) から AI が案件・進捗・ルールを扱う口。サーバー側は `apps/keihi/server/genba-lib/index.js`。
+統合コネクタ (`/api/mcp/<token>`) に入っている。人ごとの URL は `/api/genba/mcp/<token>` (`GENBA_MCP_TOKENS="token:名前,…"` で書いた人が決まる)。
+
+| ツール | 何をする |
+|---|---|
+| `genba_find(query)` | 案件 ID・名前・名前の一部で現場を探す (表記ゆれ吸収) |
+| `genba_register(name, code?, drive_folder_url?, client?)` | 現場に案件 ID / Drive の案件フォルダ / 客先を紐付け (無ければ作る) |
+| `genba_folder(site, kind)` | 写真 / 図面 / 見積 / 資料 / 参考 を上げる Drive フォルダの URL (無ければ案件フォルダ下に `03_写真` 等を作る) |
+| `genba_log_add(site, kind, body, due_on?, resolves_id?)` | 進捗ログに追記。種類 = 進捗 / 課題 / 決定 / 次やること / 解決 |
+| `genba_log_list(site, days?, kind?)` | ログ一覧 |
+| `genba_status(site)` | 最終更新・直近の進捗・未解決の課題・次やること・最近の決定 |
+| `genba_rule_get(topic?)` / `genba_rule_set(topic, body)` | 運用ルール (版を積む。消えない) |
+
+データ: `sites` に `site_code` / `drive_folder_id` / `client` 列を追加 (このアプリの画面は変えていない)、`genba_log` (追記のみ)、`genba_rules`。
+写真そのものは Drive の案件フォルダに人が直接上げる。Keihi は URL を返すだけ。
+
 ## ファイル構成
 - `index.html` — UI + ロジック (vanilla HTML/JS、Firebase Auth + /api/sites を直叩き)
 - `README.md` — これ
