@@ -517,12 +517,17 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi }) {
       },
       {
         name: "genba_source_remove",
-        description: "監視を OFF にする (自分の持ち分)。ルームは一覧に残り、過去に記録したログも残る",
-        inputSchema: { type: "object", properties: { channel: { type: "string" }, room: { type: "string" } }, required: ["channel", "room"] },
+        description: "監視を OFF にする (自分の持ち分)。ルームは一覧に残り、過去に記録したログも残る。forget: true で一覧からも消す (次の同期でまた出てくる)",
+        inputSchema: { type: "object", properties: { channel: { type: "string" }, room: { type: "string" }, forget: { type: "boolean", description: "true で行ごと削除 (既定 false = OFF にするだけ)" } }, required: ["channel", "room"] },
         handler: async (a) => {
           await ensureSchema();
           const p = getPool();
-          const { rowCount } = await p.query(`UPDATE genba_sources SET enabled=false, updated_at=now() WHERE owner=$1 AND channel=$2 AND room=$3`, [by, String(a.channel).trim(), String(a.room).trim()]);
+          const args = [by, String(a.channel).trim(), String(a.room).trim()];
+          if (a.forget) {
+            const { rowCount } = await p.query(`DELETE FROM genba_sources WHERE owner=$1 AND channel=$2 AND room=$3`, args);
+            return { removed: rowCount > 0 };
+          }
+          const { rowCount } = await p.query(`UPDATE genba_sources SET enabled=false, updated_at=now() WHERE owner=$1 AND channel=$2 AND room=$3`, args);
           return { disabled: rowCount > 0 };
         },
       },
