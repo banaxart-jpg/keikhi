@@ -163,38 +163,53 @@ export async function createVeoTask({
     return instance;
   };
   const hasImages = !!startImage?.data || refs.length > 0;
+  // numberOfVideos は SDK の config にはあるが REST では「isn't supported by this model」になる (本番実測) ので送らない
   const parameters = {
     aspectRatio,
     durationSeconds: Number(durationSec),
     resolution,
-    numberOfVideos: 1,
   };
   // image-to-video / 参照画像ありは allow_adult のみ (text-to-video は allow_all のみ)
   parameters.personGeneration = personGeneration || (hasImages ? CFG.veo.personGenerationImageToVideo : "allow_all");
   if (negativePrompt) parameters.negativePrompt = String(negativePrompt);
   if (Number.isInteger(seed)) parameters.seed = seed;
 
-  // 画像が無ければ形は関係ない。あれば通る形を順に試す
+  // 画像が無ければ形は関係ない。あれば通る形を順に試す。
+  // さらに「`X` isn't supported by this model」はそのパラメータを落として投げ直す (ドキュメントと実 API の差分吸収。
+  // 落としたものは droppedParams で返すので黙って消えない)
   const shapes = hasImages ? shapeOrder() : [preferredShape];
+  const dropped = [];
   let r, usedShape = shapes[0], lastErr;
-  for (const shape of shapes) {
-    const body = JSON.stringify({ instances: [buildInstance(shape)], parameters });
-    try {
-      r = await veoFetch(`${BASE_URL}/models/${encodeURIComponent(model)}:predictLongRunning`, { method: "POST", body });
-      usedShape = shape;
-      break;
-    } catch (e) {
-      lastErr = e;
-      if (!hasImages || !isImageShapeError(e.message) || shape === shapes[shapes.length - 1]) throw e;
-      console.warn(`[veoGen] image shape "${shape}" rejected (${e.message.slice(0, 90)}) → trying next`);
+  outer: for (const shape of shapes) {
+    for (let attempt = 0; attempt < 4; attempt++) {
+      const body = JSON.stringify({ instances: [buildInstance(shape)], parameters });
+      try {
+        r = await veoFetch(`${BASE_URL}/models/${encodeURIComponent(model)}:predictLongRunning`, { method: "POST", body });
+        usedShape = shape;
+        break outer;
+      } catch (e) {
+        lastErr = e;
+        const unsupported = e.message.match(/`(\w+)` isn't supported/);
+        if (unsupported && Object.prototype.hasOwnProperty.call(parameters, unsupported[1])) {
+          console.warn(`[veoGen] parameter "${unsupported[1]}" not supported → dropping and retrying`);
+          dropped.push(unsupported[1]);
+          delete parameters[unsupported[1]];
+          continue;
+        }
+        if (hasImages && isImageShapeError(e.message) && shape !== shapes[shapes.length - 1]) {
+          console.warn(`[veoGen] image shape "${shape}" rejected (${e.message.slice(0, 90)}) → trying next`);
+          continue outer;
+        }
+        throw e;
+      }
     }
   }
   if (!r) throw lastErr || new Error("Veo API: 失敗");
   if (hasImages && usedShape !== preferredShape) { console.log(`[veoGen] image shape "${usedShape}" accepted; using it from now on`); preferredShape = usedShape; }
   if (!r.name) throw new Error("Veo API: operation name が返りませんでした");
   return {
-    operationName: r.name, model, imageShape: hasImages ? usedShape : null,
-    request: { aspectRatio, resolution, durationSec: Number(durationSec), personGeneration: parameters.personGeneration, startImage: !!startImage?.data, referenceImages: refs.length },
+    operationName: r.name, model, imageShape: hasImages ? usedShape : null, droppedParams: dropped,
+    request: { aspectRatio, resolution, durationSec: Number(durationSec), personGeneration: parameters.personGeneration || null, startImage: !!startImage?.data, referenceImages: refs.length },
   };
 }
 
