@@ -28,6 +28,16 @@
 | `genba_log_list(site, days?, kind?)` | ログ一覧 |
 | `genba_status(site)` | 最終更新・直近の進捗・未解決の課題・次やること・最近の決定 |
 | `genba_rule_get(topic?)` / `genba_rule_set(topic, body)` | 運用ルール (版を積む。消えない) |
+| `genba_log_add_many(site?, items[])` | まとめて追記 (監視ジョブ・会話から一度に抽出したとき)。各行に `duplicate` |
+| `genba_source_add / list / mark / remove` | 監視対象ルーム (LINE グループ等) のホワイトリストと「ここまで読んだ」cursor。載っていないルームは監視ジョブが読まない |
+
+### 監視ジョブ (Cowork 等で 5 分ごとに LINE を読んで自動記録)
+1. `genba_source_list` → 対象ルームと cursor
+2. cursor より後のメッセージだけ読む (Beeper 等の MCP)
+3. 決定・課題・次やることを抽出して `genba_log_add_many`。各 item に `source_ref = "<channel>:<room>:<message id>"` (同じメッセージは 2 回入らない) と `source = {channel, room, sender, at, quote}`
+4. `genba_source_mark(channel, room, {last_id, last_at})` で cursor を進める
+
+書いた人は人ごとの URL で決まる: `GET /api/mcp-connector` (ログイン済み) が `genba.名取` / `genba.LINE監視` の URL を返す (INTERNAL_TICK_SECRET から導出、リポには無い)。
 
 データ: `sites` に `site_code` / `drive_folder_id` / `client` 列を追加 (このアプリの画面は変えていない)、`genba_log` (追記のみ)、`genba_rules`。
 写真そのものは Drive の案件フォルダに人が直接上げる。Keihi は URL を返すだけ。

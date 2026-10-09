@@ -51,6 +51,25 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi }) {
         created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
       )`);
     await p.query(`CREATE INDEX IF NOT EXISTS genba_log_site_idx ON genba_log (site_id, created_at DESC)`);
+    // 監視ジョブ (5 分ごとに LINE 等を読む) が同じメッセージを 2 回記録しないための鍵と、出どころ
+    await p.query(`ALTER TABLE genba_log ADD COLUMN IF NOT EXISTS source_ref TEXT`);
+    await p.query(`ALTER TABLE genba_log ADD COLUMN IF NOT EXISTS source JSONB`);
+    await p.query(`CREATE UNIQUE INDEX IF NOT EXISTS genba_log_source_ref_uq ON genba_log (source_ref) WHERE source_ref IS NOT NULL`);
+    // 監視対象 (ホワイトリスト): channel + room → 現場。載っていないルームは読まない (デフォルト拒否)
+    await p.query(`
+      CREATE TABLE IF NOT EXISTS genba_sources (
+        id          BIGSERIAL PRIMARY KEY,
+        channel     TEXT NOT NULL,              -- LINE / Beeper / Slack など
+        room        TEXT NOT NULL,              -- ルーム ID かグループ名 (監視側が一意に引けるもの)
+        label       TEXT,
+        site_id     BIGINT NOT NULL REFERENCES sites(id) ON DELETE CASCADE,
+        enabled     BOOLEAN NOT NULL DEFAULT true,
+        cursor      JSONB,                      -- 監視側が「ここまで読んだ」を置く (last_id / last_at など自由)
+        added_by    TEXT NOT NULL,
+        added_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+        updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+        UNIQUE (channel, room)
+      )`);
     // 運用ルール: topic ごとに版を積む。上書きしない
     await p.query(`
       CREATE TABLE IF NOT EXISTS genba_rules (
@@ -122,8 +141,42 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi }) {
     due_on: r.due_on ? String(r.due_on).slice(0, 10) : null,
     resolves_id: r.resolves_id ? Number(r.resolves_id) : null,
     photo_ids: Array.isArray(r.photo_ids) && r.photo_ids.length ? r.photo_ids : undefined,
+    source_ref: r.source_ref || undefined,
+    source: r.source || undefined,
     at: r.created_at,
   });
+
+  // 1 行追記 (genba_log_add / genba_log_add_many 共通)。source_ref があれば重複は 2 回入らない
+  async function addLog(p, by, a, siteRowCache) {
+    const site = siteRowCache || await resolveSite(p, a.site);
+    if (!LOG_KINDS.includes(a.kind)) throw new Error(`kind は ${LOG_KINDS.join(" / ")}`);
+    const body = String(a.body || "").trim();
+    if (!body) throw new Error("body が空");
+    let resolvesId = null;
+    if (a.kind === "解決") {
+      resolvesId = Number(a.resolves_id);
+      if (!Number.isInteger(resolvesId)) throw new Error("kind=解決 には resolves_id (元の課題/次やることの行 ID) が必要");
+      const { rows: orig } = await p.query(`SELECT id, kind, site_id FROM genba_log WHERE id=$1`, [resolvesId]);
+      if (!orig.length || Number(orig[0].site_id) !== Number(site.id)) throw new Error(`行 ${resolvesId} はこの現場のログに無い`);
+      if (!["課題", "次やること"].includes(orig[0].kind)) throw new Error(`行 ${resolvesId} は ${orig[0].kind} なので解決の対象ではない`);
+    }
+    const due = a.due_on && /^\d{4}-\d{2}-\d{2}$/.test(a.due_on) ? a.due_on : null;
+    if (a.due_on && !due) throw new Error("due_on は YYYY-MM-DD");
+    const photos = Array.isArray(a.photo_ids) ? a.photo_ids.filter(Boolean).map(String).slice(0, 50) : null;
+    const sourceRef = a.source_ref ? String(a.source_ref).trim().slice(0, 300) : null;
+    const source = a.source && typeof a.source === "object" ? a.source : null;
+    const { rows } = await p.query(
+      `INSERT INTO genba_log (site_id, kind, body, written_by, due_on, resolves_id, photo_ids, source_ref, source)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+       ON CONFLICT (source_ref) WHERE source_ref IS NOT NULL DO NOTHING
+       RETURNING *`,
+      [site.id, a.kind, body, by, due, resolvesId, photos ? JSON.stringify(photos) : null, sourceRef, source ? JSON.stringify(source) : null]
+    );
+    if (rows.length) return { site: { id: Number(site.id), code: site.site_code || null, name: site.name }, log: logRow(rows[0]), duplicate: false };
+    // source_ref が既にある = 同じメッセージを前に記録済み
+    const { rows: ex } = await p.query(`SELECT * FROM genba_log WHERE source_ref=$1`, [sourceRef]);
+    return { site: { id: Number(site.id), code: site.site_code || null, name: site.name }, log: ex[0] ? logRow(ex[0]) : null, duplicate: true };
+  }
 
   // by = 書いた人 (トークンから決まる)
   function tools(by = "小西") {
@@ -200,43 +253,55 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi }) {
       },
       {
         name: "genba_log_add",
-        description: "進捗ログに 1 行足す (追記のみ、消えない)。種類: 進捗 / 課題 / 決定 / 次やること / 解決。人の報告は種類ごとに分けて複数回呼ぶ (例「ボード貼り完了、明日パテ。床レベル 3mm 狂い要相談」→ 進捗 + 次やること(due_on 明日) + 課題)。課題や次やることが片付いたら kind=解決 で resolves_id に元の行 ID。書いた人はトークンから自動で入る",
+        description: "進捗ログに 1 行足す (追記のみ、消えない)。種類: 進捗 / 課題 / 決定 / 次やること / 解決。人の報告は種類ごとに分けて複数回呼ぶ (例「ボード貼り完了、明日パテ。床レベル 3mm 狂い要相談」→ 進捗 + 次やること(due_on 明日) + 課題)。課題や次やることが片付いたら kind=解決 で resolves_id に元の行 ID。LINE 等のメッセージから記録するときは source_ref (メッセージ ID) を必ず付ける (同じものは 2 回入らない、duplicate: true が返る) と source に出どころ。書いた人はトークンから自動で入る",
         inputSchema: {
           type: "object",
           properties: {
             site: { type: "string", description: "案件 ID・現場名・ID" },
             kind: { type: "string", enum: LOG_KINDS },
-            body: { type: "string", description: "本文 (短く。1 行 1 件)" },
+            body: { type: "string", description: "本文 (短く。1 行 1 件。決定は型番・数量・金額を省略しない)" },
             due_on: { type: "string", description: "期限 YYYY-MM-DD (次やること・課題)" },
             resolves_id: { type: "number", description: "kind=解決 のとき、解決した元の行 ID" },
             photo_ids: { type: "array", items: { type: "string" }, description: "関連する Drive の写真ファイル ID (list_site_photos の file_id)" },
+            source_ref: { type: "string", description: "出どころの一意キー (例 LINE:<room>:<message id>)。同じ source_ref は 2 回記録されない" },
+            source: { type: "object", description: "出どころ { channel, room, sender, at, quote } など自由" },
           },
           required: ["site", "kind", "body"],
         },
         handler: async (a) => {
           await ensureSchema();
+          return addLog(getPool(), by, a);
+        },
+      },
+      {
+        name: "genba_log_add_many",
+        description: "進捗ログを複数行まとめて足す (監視ジョブや、会話を貼られて一度に抽出したとき用)。items の各要素は genba_log_add と同じ引数 (site を省略したら共通の site)。1 件ずつ入るので途中で失敗しても前の行は残る。結果に各行の duplicate が付く",
+        inputSchema: {
+          type: "object",
+          properties: {
+            site: { type: "string", description: "共通の現場 (各 item に site があればそちら優先)" },
+            items: { type: "array", items: { type: "object" }, description: "最大 50 件" },
+          },
+          required: ["items"],
+        },
+        handler: async (a) => {
+          await ensureSchema();
           const p = getPool();
-          const site = await resolveSite(p, a.site);
-          if (!LOG_KINDS.includes(a.kind)) throw new Error(`kind は ${LOG_KINDS.join(" / ")}`);
-          const body = String(a.body || "").trim();
-          if (!body) throw new Error("body が空");
-          let resolvesId = null;
-          if (a.kind === "解決") {
-            resolvesId = Number(a.resolves_id);
-            if (!Number.isInteger(resolvesId)) throw new Error("kind=解決 には resolves_id (元の課題/次やることの行 ID) が必要");
-            const { rows: orig } = await p.query(`SELECT id, kind, site_id FROM genba_log WHERE id=$1`, [resolvesId]);
-            if (!orig.length || Number(orig[0].site_id) !== Number(site.id)) throw new Error(`行 ${resolvesId} はこの現場のログに無い`);
-            if (!["課題", "次やること"].includes(orig[0].kind)) throw new Error(`行 ${resolvesId} は ${orig[0].kind} なので解決の対象ではない`);
+          const items = Array.isArray(a.items) ? a.items.slice(0, 50) : [];
+          if (!items.length) throw new Error("items が空");
+          const results = [];
+          let added = 0, dup = 0, failed = 0;
+          for (const it of items) {
+            try {
+              const r = await addLog(p, by, { ...it, site: it.site || a.site });
+              results.push({ ok: true, duplicate: r.duplicate, log: r.log, site: r.site });
+              if (r.duplicate) dup++; else added++;
+            } catch (e) {
+              failed++;
+              results.push({ ok: false, error: e.message, item: { kind: it.kind, body: String(it.body || "").slice(0, 80) } });
+            }
           }
-          const due = a.due_on && /^\d{4}-\d{2}-\d{2}$/.test(a.due_on) ? a.due_on : null;
-          if (a.due_on && !due) throw new Error("due_on は YYYY-MM-DD");
-          const photos = Array.isArray(a.photo_ids) ? a.photo_ids.filter(Boolean).map(String).slice(0, 50) : null;
-          const { rows } = await p.query(
-            `INSERT INTO genba_log (site_id, kind, body, written_by, due_on, resolves_id, photo_ids)
-             VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
-            [site.id, a.kind, body, by, due, resolvesId, photos ? JSON.stringify(photos) : null]
-          );
-          return { site: { id: Number(site.id), code: site.site_code || null, name: site.name }, log: logRow(rows[0]) };
+          return { added, duplicate: dup, failed, results };
         },
       },
       {
@@ -336,6 +401,75 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi }) {
           return { ...rows[0], note: `版 ${rows[0].version} として保存。次の会話から全 AI に効く` };
         },
       },
+      {
+        name: "genba_source_add",
+        description: "監視対象のルーム (LINE グループ等) を現場に紐付けて登録する (ホワイトリスト)。登録されていないルームは監視ジョブが読まない。同じ channel+room があれば現場・ラベルを更新して有効化",
+        inputSchema: {
+          type: "object",
+          properties: {
+            channel: { type: "string", description: "LINE / Beeper / Slack など" },
+            room: { type: "string", description: "ルーム ID かグループ名 (監視側が一意に引ける文字列)" },
+            site: { type: "string", description: "案件 ID・現場名・ID" },
+            label: { type: "string", description: "人が見て分かる名前 (例: 田中様 LINE)" },
+          },
+          required: ["channel", "room", "site"],
+        },
+        handler: async (a) => {
+          await ensureSchema();
+          const p = getPool();
+          const site = await resolveSite(p, a.site);
+          const { rows } = await p.query(
+            `INSERT INTO genba_sources (channel, room, label, site_id, added_by)
+             VALUES ($1, $2, $3, $4, $5)
+             ON CONFLICT (channel, room) DO UPDATE SET site_id = EXCLUDED.site_id, label = COALESCE(EXCLUDED.label, genba_sources.label), enabled = true, updated_at = now()
+             RETURNING *`,
+            [String(a.channel).trim(), String(a.room).trim(), a.label ? String(a.label).trim() : null, site.id, by]);
+          return { channel: rows[0].channel, room: rows[0].room, label: rows[0].label, site: siteRow(site), enabled: rows[0].enabled };
+        },
+      },
+      {
+        name: "genba_source_list",
+        description: "監視対象のルーム一覧 (有効なものだけ) と、各ルームの cursor (どこまで読んだか)。監視ジョブは最初にこれを呼び、ここに無いルームは読まない",
+        inputSchema: { type: "object", properties: { channel: { type: "string", description: "絞り込み (省略で全部)" } } },
+        handler: async (a) => {
+          await ensureSchema();
+          const p = getPool();
+          const { rows } = await p.query(
+            `SELECT g.*, s.name AS site_name, s.site_code FROM genba_sources g JOIN sites s ON s.id = g.site_id
+              WHERE g.enabled ${a.channel ? "AND g.channel=$1" : ""} ORDER BY g.channel, g.label NULLS LAST, g.room`,
+            a.channel ? [String(a.channel)] : []);
+          return { sources: rows.map((r) => ({ channel: r.channel, room: r.room, label: r.label, site: { id: Number(r.site_id), code: r.site_code || null, name: r.site_name }, cursor: r.cursor || null, updated_at: r.updated_at })) };
+        },
+      },
+      {
+        name: "genba_source_mark",
+        description: "監視ジョブが「このルームはここまで読んだ」を記録する。cursor は自由な JSON (例 { last_id: \"...\", last_at: \"2026-10-09T15:00:00+09:00\" })。次回はこれより後だけ読む",
+        inputSchema: {
+          type: "object",
+          properties: { channel: { type: "string" }, room: { type: "string" }, cursor: { type: "object" } },
+          required: ["channel", "room", "cursor"],
+        },
+        handler: async (a) => {
+          await ensureSchema();
+          const p = getPool();
+          const { rows } = await p.query(
+            `UPDATE genba_sources SET cursor=$3, updated_at=now() WHERE channel=$1 AND room=$2 RETURNING channel, room, cursor, updated_at`,
+            [String(a.channel).trim(), String(a.room).trim(), JSON.stringify(a.cursor || {})]);
+          if (!rows.length) throw new Error(`監視対象に無い: ${a.channel} / ${a.room} (genba_source_add で登録)`);
+          return rows[0];
+        },
+      },
+      {
+        name: "genba_source_remove",
+        description: "監視対象から外す (以降そのルームは読まない。過去に記録したログは残る)",
+        inputSchema: { type: "object", properties: { channel: { type: "string" }, room: { type: "string" } }, required: ["channel", "room"] },
+        handler: async (a) => {
+          await ensureSchema();
+          const p = getPool();
+          const { rowCount } = await p.query(`DELETE FROM genba_sources WHERE channel=$1 AND room=$2`, [String(a.channel).trim(), String(a.room).trim()]);
+          return { removed: rowCount > 0 };
+        },
+      },
     ];
   }
 
@@ -349,6 +483,12 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi }) {
     "- 「今どうなってる？」→ genba_status を読んで要約 (全文が要るときだけ genba_log_list)",
     "- ルールの変更は genba_rule_set (版が増えるだけ。消えない)。書く前に現行を見せて OK をもらう",
     "- 書いた人はトークンから自動で入る。AI が名前を書かない",
+    "■ 監視ジョブ (Cowork 等で 5 分ごとに LINE などを読んで自動記録するとき)",
+    "1. genba_source_list で対象ルーム (ホワイトリスト) と cursor を取る。ここに無いルームは読まない",
+    "2. 各ルームについて cursor より後のメッセージだけ読む (Beeper 等の MCP)",
+    "3. 決定・課題・次やること を抽出して genba_log_add_many で記録。各 item に source_ref = \"<channel>:<room>:<message id>\" を必ず入れる (同じメッセージは 2 回入らない)、source に { channel, room, sender, at, quote }",
+    "4. 最後に genba_source_mark(channel, room, { last_id, last_at }) で cursor を進める",
+    "5. 新着が無ければ何もしない。雑談・曖昧なものは記録しない。記録したら件数と中身を短く報告",
   ].join("\n");
 
   // 人ごとのトークン: { token: 名前 }。URL の token で書いた人を決める

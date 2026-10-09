@@ -2838,10 +2838,17 @@ app.all("/api/meeting/mcp/:token", meeting.mcpRoute());
 // ═══════════════════ 現場 (案件・進捗ログ・ルール) MCP ═══════════════════
 // 1 現場 1 チャットで AI が使う。正本は Postgres、写真は Drive の案件フォルダ (URL を返すだけ)。詳細は genba-lib/index.js。
 // 人ごとの URL: GENBA_MCP_TOKENS="token:名前,token:名前" (書いた人をトークンで決める)。統合コネクタ経由は小西扱い。
-const GENBA_MCP_TOKENS = Object.fromEntries(
-  ((process.env.GENBA_MCP_TOKENS || "").trim() || "kx9m2genba7vqt4wp8zh:小西")
-    .split(",").map((kv) => kv.split(":").map((x) => x.trim())).filter(([t, n]) => t && n)
-);
+// 名取用と監視ジョブ用は INTERNAL_TICK_SECRET から HMAC で導出 (統合コネクタのトークンと同じ流儀。リポに書かない)。
+// URL はログイン済みで GET /api/mcp-connector を見れば分かる
+const genbaDerivedToken = (label) => ((process.env.INTERNAL_TICK_SECRET || "").trim()
+  ? crypto.createHmac("sha256", (process.env.INTERNAL_TICK_SECRET || "").trim()).update(label).digest("hex").slice(0, 40)
+  : null);
+const GENBA_MCP_TOKENS = Object.fromEntries([
+  ...((process.env.GENBA_MCP_TOKENS || "").trim() || "kx9m2genba7vqt4wp8zh:小西")
+    .split(",").map((kv) => kv.split(":").map((x) => x.trim())).filter(([t, n]) => t && n),
+  ...(genbaDerivedToken("genba-natori") ? [[genbaDerivedToken("genba-natori"), "名取"]] : []),
+  ...(genbaDerivedToken("genba-monitor") ? [[genbaDerivedToken("genba-monitor"), "LINE監視"]] : []),
+]);
 const genba = createGenba({ getPool, createMcpHandler: dramaCreateMcpHandler, getDriveApi: () => getDriveApi() });
 app.all("/api/genba/mcp/:token", genba.mcpRoute(GENBA_MCP_TOKENS));
 
@@ -11994,7 +12001,13 @@ meeting.registerRoutes(app);
 // 統合コネクタの URL (ログイン済みの社内ユーザーだけ見られる)
 app.get("/api/mcp-connector", (req, res) => {
   if (!KEIHI_MCP_TOKEN) return res.status(503).json({ error: "INTERNAL_TICK_SECRET が未設定のため統合コネクタは無効です" });
-  res.json({ url: `${KEIHI_API_PUBLIC_URL}/api/mcp/${KEIHI_MCP_TOKEN}` });
+  const genbaUrls = Object.fromEntries(Object.entries(GENBA_MCP_TOKENS)
+    .filter(([tok]) => tok !== "kx9m2genba7vqt4wp8zh")
+    .map(([tok, name]) => [name, `${KEIHI_API_PUBLIC_URL}/api/genba/mcp/${tok}`]));
+  res.json({
+    url: `${KEIHI_API_PUBLIC_URL}/api/mcp/${KEIHI_MCP_TOKEN}`,
+    genba: { note: "現場 (genba_*) だけの人ごとの URL。書いた人がこの名前で入る", ...genbaUrls },
+  });
 });
 
 // ─────────────────────────────
