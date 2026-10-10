@@ -24,7 +24,8 @@
 | `genba_find(query)` | 案件 ID・名前・名前の一部で現場を探す (表記ゆれ吸収) |
 | `genba_register(name, code?, drive_folder_url?, client?)` | 現場に案件 ID / Drive の案件フォルダ / 客先を紐付け (無ければ作る) |
 | `genba_folder(site, kind)` | 写真 / 図面 / 見積 / 資料 / 参考 を上げる Drive フォルダの URL (無ければ案件フォルダ下に `03_写真` 等を作る) |
-| `genba_log_add(site, kind, body, due_on?, resolves_id?)` | 進捗ログに追記。種類 = 進捗 / 課題 / 決定 / 次やること / 解決 |
+| `genba_log_add(site?, kind, body, who?, estimate_min?, due_on?, resolves_id?)` | 進捗ログに追記。種類 = 進捗 (やったこと) / 課題 / 決定 / 次やること (タスク) / 解決。site 省略 = 現場に紐づかない雑務。who = やった人/担当、estimate_min = 所要時間 (分) |
+| `genba_tasks(max_minutes?, who?, site?, kind?)` | 未解決タスクを全現場横断で (所要時間が短い順)。「5 分で終わるタスクある？」用 |
 | `genba_log_list(site, days?, kind?)` | ログ一覧 |
 | `genba_status(site)` | 最終更新・直近の進捗・未解決の課題・次やること・最近の決定 |
 | `genba_rule_get(topic?)` / `genba_rule_set(topic, body)` | 運用ルール (版を積む。消えない) |

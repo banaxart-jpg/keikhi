@@ -58,6 +58,11 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi }) {
     await p.query(`ALTER TABLE genba_log ADD COLUMN IF NOT EXISTS source_ref TEXT`);
     await p.query(`ALTER TABLE genba_log ADD COLUMN IF NOT EXISTS source JSONB`);
     await p.query(`CREATE UNIQUE INDEX IF NOT EXISTS genba_log_source_ref_uq ON genba_log (source_ref) WHERE source_ref IS NOT NULL`);
+    // 現場に紐づかない項目 (会社の雑務・Google マップのピン等) は site_id NULL。所要時間 (分) と担当/やった人
+    await p.query(`ALTER TABLE genba_log ALTER COLUMN site_id DROP NOT NULL`);
+    await p.query(`ALTER TABLE genba_log ADD COLUMN IF NOT EXISTS estimate_min INTEGER`);
+    await p.query(`ALTER TABLE genba_log ADD COLUMN IF NOT EXISTS who TEXT`);
+    await p.query(`CREATE INDEX IF NOT EXISTS genba_log_open_idx ON genba_log (kind, estimate_min) WHERE kind IN ('課題','次やること')`);
     // 監視対象 (ホワイトリスト): owner (誰の Beeper/LINE か) × channel × room → 現場。
     // 監視ジョブがルーム一覧 (ID と名前だけ) を genba_room_sync で入れ、画面 (/genba/watch.html) でトグル。
     // enabled=true かつ site_id ありのルームだけ読む (デフォルト拒否)
@@ -127,6 +132,12 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi }) {
     const partial = rows.filter((r) => norm(r.name).includes(nq) || (nq.length >= 2 && nq.includes(norm(r.name))));
     return partial.slice(0, limit);
   }
+  // site 省略 / 「会社」「全般」= 現場に紐づかない項目
+  const NO_SITE_WORDS = new Set(["", "会社", "全般", "共通", "なし", "none", "company", "-"]);
+  async function resolveSiteOrNull(p, query) {
+    if (query == null || NO_SITE_WORDS.has(String(query).trim().toLowerCase())) return null;
+    return resolveSite(p, query);
+  }
   async function resolveSite(p, query) {
     const hits = await findSites(p, query);
     if (!hits.length) throw new Error(`現場が見つからない: ${query}。genba_find で探すか genba_register で登録する`);
@@ -165,12 +176,16 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi }) {
     photo_ids: Array.isArray(r.photo_ids) && r.photo_ids.length ? r.photo_ids : undefined,
     source_ref: r.source_ref || undefined,
     source: r.source || undefined,
+    estimate_min: r.estimate_min != null ? Number(r.estimate_min) : undefined,
+    who: r.who || undefined,
+    site: r.site_name !== undefined ? (r.site_id ? { id: Number(r.site_id), code: r.site_code || null, name: r.site_name } : null) : undefined,
     at: r.created_at,
   });
 
   // 1 行追記 (genba_log_add / genba_log_add_many 共通)。source_ref があれば重複は 2 回入らない
   async function addLog(p, by, a, siteRowCache) {
-    const site = siteRowCache || await resolveSite(p, a.site);
+    const site = siteRowCache || await resolveSiteOrNull(p, a.site);
+    const siteId = site ? site.id : null;
     if (!LOG_KINDS.includes(a.kind)) throw new Error(`kind は ${LOG_KINDS.join(" / ")}`);
     const body = String(a.body || "").trim();
     if (!body) throw new Error("body が空");
@@ -179,7 +194,10 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi }) {
       resolvesId = Number(a.resolves_id);
       if (!Number.isInteger(resolvesId)) throw new Error("kind=解決 には resolves_id (元の課題/次やることの行 ID) が必要");
       const { rows: orig } = await p.query(`SELECT id, kind, site_id FROM genba_log WHERE id=$1`, [resolvesId]);
-      if (!orig.length || Number(orig[0].site_id) !== Number(site.id)) throw new Error(`行 ${resolvesId} はこの現場のログに無い`);
+      if (!orig.length) throw new Error(`行 ${resolvesId} が無い`);
+      // 解決行は元の行と同じ現場に入れる (site を省略して ID だけで解決できるように)
+      if (siteRowCache == null && a.site == null) { /* 現場未指定 → 元の行の現場を引き継ぐ */ }
+      if (site && orig[0].site_id != null && Number(orig[0].site_id) !== Number(site.id)) throw new Error(`行 ${resolvesId} はこの現場のログに無い`);
       if (!["課題", "次やること"].includes(orig[0].kind)) throw new Error(`行 ${resolvesId} は ${orig[0].kind} なので解決の対象ではない`);
     }
     const due = a.due_on && /^\d{4}-\d{2}-\d{2}$/.test(a.due_on) ? a.due_on : null;
@@ -187,17 +205,27 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi }) {
     const photos = Array.isArray(a.photo_ids) ? a.photo_ids.filter(Boolean).map(String).slice(0, 50) : null;
     const sourceRef = a.source_ref ? String(a.source_ref).trim().slice(0, 300) : null;
     const source = a.source && typeof a.source === "object" ? a.source : null;
+    const est = a.estimate_min != null && a.estimate_min !== "" ? Math.max(1, Math.min(100000, Math.round(Number(a.estimate_min)))) : null;
+    if (a.estimate_min != null && a.estimate_min !== "" && !Number.isFinite(Number(a.estimate_min))) throw new Error("estimate_min は分 (数値)");
+    const who = a.who ? String(a.who).trim().slice(0, 60) : null;
+    // 解決行で現場未指定なら元の行の現場を使う
+    let useSiteId = siteId;
+    if (resolvesId && useSiteId == null) {
+      const { rows: o } = await p.query(`SELECT site_id FROM genba_log WHERE id=$1`, [resolvesId]);
+      useSiteId = o[0]?.site_id ?? null;
+    }
+    const siteOut = site ? { id: Number(site.id), code: site.site_code || null, name: site.name } : null;
     const { rows } = await p.query(
-      `INSERT INTO genba_log (site_id, kind, body, written_by, due_on, resolves_id, photo_ids, source_ref, source)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+      `INSERT INTO genba_log (site_id, kind, body, written_by, due_on, resolves_id, photo_ids, source_ref, source, estimate_min, who)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
        ON CONFLICT (source_ref) WHERE source_ref IS NOT NULL DO NOTHING
        RETURNING *`,
-      [site.id, a.kind, body, by, due, resolvesId, photos ? JSON.stringify(photos) : null, sourceRef, source ? JSON.stringify(source) : null]
+      [useSiteId, a.kind, body, by, due, resolvesId, photos ? JSON.stringify(photos) : null, sourceRef, source ? JSON.stringify(source) : null, est, who]
     );
-    if (rows.length) return { site: { id: Number(site.id), code: site.site_code || null, name: site.name }, log: logRow(rows[0]), duplicate: false };
+    if (rows.length) return { site: siteOut, log: logRow(rows[0]), duplicate: false };
     // source_ref が既にある = 同じメッセージを前に記録済み
     const { rows: ex } = await p.query(`SELECT * FROM genba_log WHERE source_ref=$1`, [sourceRef]);
-    return { site: { id: Number(site.id), code: site.site_code || null, name: site.name }, log: ex[0] ? logRow(ex[0]) : null, duplicate: true };
+    return { site: siteOut, log: ex[0] ? logRow(ex[0]) : null, duplicate: true };
   }
 
   // by = 書いた人 (トークンから決まる)
@@ -275,11 +303,13 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi }) {
       },
       {
         name: "genba_log_add",
-        description: "進捗ログに 1 行足す (追記のみ、消えない)。種類: 進捗 / 課題 / 決定 / 次やること / 解決。人の報告は種類ごとに分けて複数回呼ぶ (例「ボード貼り完了、明日パテ。床レベル 3mm 狂い要相談」→ 進捗 + 次やること(due_on 明日) + 課題)。課題や次やることが片付いたら kind=解決 で resolves_id に元の行 ID。LINE 等のメッセージから記録するときは source_ref (メッセージ ID) を必ず付ける (同じものは 2 回入らない、duplicate: true が返る) と source に出どころ。書いた人はトークンから自動で入る",
+        description: "進捗ログに 1 行足す (追記のみ、消えない)。種類: 進捗 (やったこと・完了したこと) / 課題 / 決定 / 次やること (タスク) / 解決。人の報告は種類ごとに分けて複数回呼ぶ (例「ボード貼り完了、明日パテ。床レベル 3mm 狂い要相談」→ 進捗 + 次やること(due_on 明日) + 課題)。現場に紐づかない項目 (会社の雑務・Google マップのピン等) は site を省略する。やった人・担当は who、タスクは所要時間の目安を estimate_min (分) に入れる (「5 分で終わるタスクある？」は genba_tasks で引く)。課題や次やることが片付いたら kind=解決 で resolves_id に元の行 ID (site 省略可)。LINE 等のメッセージから記録するときは source_ref (メッセージ ID) を必ず付ける (同じものは 2 回入らない、duplicate: true が返る) と source に出どころ。書いた人はトークンから自動で入る",
         inputSchema: {
           type: "object",
           properties: {
-            site: { type: "string", description: "案件 ID・現場名・ID" },
+            site: { type: "string", description: "案件 ID・現場名・ID。省略 (または「会社」) = 現場に紐づかない項目" },
+            who: { type: "string", description: "やった人 / 担当 (例: 名取)。省略可" },
+            estimate_min: { type: "number", description: "所要時間の目安 (分)。タスク (次やること・課題) に付ける" },
             kind: { type: "string", enum: LOG_KINDS },
             body: { type: "string", description: "本文 (短く。1 行 1 件。決定は型番・数量・金額を省略しない)" },
             due_on: { type: "string", description: "期限 YYYY-MM-DD (次やること・課題)" },
@@ -288,7 +318,7 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi }) {
             source_ref: { type: "string", description: "出どころの一意キー (例 LINE:<room>:<message id>)。同じ source_ref は 2 回記録されない" },
             source: { type: "object", description: "出どころ { channel, room, sender, at, quote } など自由" },
           },
-          required: ["site", "kind", "body"],
+          required: ["kind", "body"],
         },
         handler: async (a) => {
           await ensureSchema();
@@ -328,30 +358,70 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi }) {
       },
       {
         name: "genba_log_list",
-        description: "進捗ログの一覧 (新しい順)。days で期間、kind で種類を絞る。普段は genba_status で足りる",
+        description: "進捗ログの一覧 (新しい順)。site 省略 = 現場に紐づかない項目、site \"*\" = 全現場横断。days で期間、kind で種類、who で人を絞る (例: 名取が今週やったこと = who=名取, kind=進捗, days=7)。普段は genba_status で足りる",
         inputSchema: {
           type: "object",
           properties: {
-            site: { type: "string" },
+            site: { type: "string", description: "案件 ID・現場名・ID。省略 = 会社全般、\"*\" = 全部" },
+            who: { type: "string", description: "人で絞る" },
             days: { type: "number", description: "既定 30" },
             kind: { type: "string", enum: LOG_KINDS },
             limit: { type: "number", description: "既定 50、最大 200" },
           },
-          required: ["site"],
         },
         handler: async (a) => {
           await ensureSchema();
           const p = getPool();
-          const site = await resolveSite(p, a.site);
+          const all = a.site === "*" || a.site === "全部";
+          const site = all ? null : await resolveSiteOrNull(p, a.site);
           const days = Math.max(1, Math.min(3650, Number(a.days) || 30));
           const limit = Math.max(1, Math.min(200, Number(a.limit) || 50));
+          const where = [`l.created_at > now() - ($1 || ' days')::interval`];
+          const vals = [String(days)];
+          if (!all) { if (site) { vals.push(site.id); where.push(`l.site_id=$${vals.length}`); } else where.push(`l.site_id IS NULL`); }
+          if (a.kind) { vals.push(a.kind); where.push(`l.kind=$${vals.length}`); }
+          if (a.who) { vals.push(String(a.who)); where.push(`l.who=$${vals.length}`); }
+          vals.push(limit);
           const { rows } = await p.query(
-            `SELECT * FROM genba_log WHERE site_id=$1 AND created_at > now() - ($2 || ' days')::interval
-               ${a.kind ? "AND kind=$4" : ""}
-              ORDER BY created_at DESC LIMIT $3`,
-            a.kind ? [site.id, String(days), limit, a.kind] : [site.id, String(days), limit]
-          );
-          return { site: siteRow(site), days, logs: rows.map(logRow) };
+            `SELECT l.*, s.name AS site_name, s.site_code FROM genba_log l LEFT JOIN sites s ON s.id = l.site_id
+              WHERE ${where.join(" AND ")} ORDER BY l.created_at DESC LIMIT $${vals.length}`, vals);
+          return { site: all ? "*" : (site ? siteRow(site) : null), days, logs: rows.map(logRow) };
+        },
+      },
+      {
+        name: "genba_tasks",
+        description: "未解決のタスク (次やること・課題) を全現場横断で引く。「5 分で終わるタスクある？」→ max_minutes=5、「名取の分」→ who=名取。所要時間が短い順 → 期限順。現場なしの雑務も含む。返ってきた候補から 1〜3 件を提案し、やったら kind=解決 で閉じる",
+        inputSchema: {
+          type: "object",
+          properties: {
+            max_minutes: { type: "number", description: "所要時間の上限 (分)。省略で全部 (所要時間未設定も含む)" },
+            who: { type: "string", description: "担当で絞る (未割当も含めたいときは省略)" },
+            site: { type: "string", description: "現場で絞る (省略で全現場 + 会社全般)" },
+            kind: { type: "string", enum: ["次やること", "課題"], description: "省略で両方" },
+            limit: { type: "number", description: "既定 20" },
+          },
+        },
+        handler: async (a) => {
+          await ensureSchema();
+          const p = getPool();
+          const where = [`l.kind IN ('次やること','課題')`, `NOT EXISTS (SELECT 1 FROM genba_log r WHERE r.resolves_id = l.id)`];
+          const vals = [];
+          if (a.kind) { vals.push(a.kind); where.push(`l.kind=$${vals.length}`); }
+          if (a.max_minutes != null) { vals.push(Math.max(1, Math.round(Number(a.max_minutes) || 0))); where.push(`l.estimate_min IS NOT NULL AND l.estimate_min <= $${vals.length}`); }
+          if (a.who) { vals.push(String(a.who)); where.push(`(l.who=$${vals.length} OR l.who IS NULL)`); }
+          if (a.site) { const site = await resolveSite(p, a.site); vals.push(site.id); where.push(`l.site_id=$${vals.length}`); }
+          vals.push(Math.max(1, Math.min(100, Number(a.limit) || 20)));
+          const { rows } = await p.query(
+            `SELECT l.*, s.name AS site_name, s.site_code FROM genba_log l LEFT JOIN sites s ON s.id = l.site_id
+              WHERE ${where.join(" AND ")}
+              ORDER BY (l.estimate_min IS NULL), l.estimate_min, l.due_on NULLS LAST, l.created_at
+              LIMIT $${vals.length}`, vals);
+          const today = todayJst();
+          return {
+            today,
+            tasks: rows.map(logRow).map((r) => ({ ...r, overdue: !!(r.due_on && r.due_on < today) })),
+            hint: rows.length ? "候補を 1〜3 件に絞って提案。やったら genba_log_add(kind=解決, resolves_id=その id)" : "条件に合う未解決タスクは無い",
+          };
         },
       },
       {
@@ -556,6 +626,8 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi }) {
     "- 進捗の報告は genba_log_add に種類ごとに分けて積む: 進捗 / 課題 / 決定 / 次やること (期限があれば due_on)。1 行 1 件、短く",
     "- 課題・次やることが片付いたら kind=解決 で resolves_id に元の行 ID (状態の上書きはしない)",
     "- 「今どうなってる？」→ genba_status を読んで要約 (全文が要るときだけ genba_log_list)",
+    "- やったこと・完了したこと (細かいものも) は kind=進捗 で who 付きで積む (例「名取が満竹華庵のシャンプーを買った」→ site=満竹華庵, kind=進捗, who=名取)。現場に紐づかない雑務は site を省略",
+    "- タスクには estimate_min (分) を付ける。「5 分で終わるタスクある？」「手が空いた」→ genba_tasks(max_minutes) から 1〜3 件を提案し、やったら kind=解決 で閉じる",
     "- ルールの変更は genba_rule_set (版が増えるだけ。消えない)。書く前に現行を見せて OK をもらう",
     "- 書いた人はトークンから自動で入る。AI が名前を書かない",
     "■ 監視ジョブ (Cowork 等で 5 分ごとに LINE などを読んで自動記録するとき)",
