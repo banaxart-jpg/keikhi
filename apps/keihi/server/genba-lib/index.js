@@ -15,6 +15,17 @@ const LOG_KINDS = ["進捗", "課題", "決定", "次やること", "解決"];
 function norm(s) {
   return String(s || "").normalize("NFKC").toLowerCase().replace(/[\s　\-_・/()（）「」『』、。.,]/g, "");
 }
+// 人名の表記ゆれ吸収: norm に加えて末尾の敬称 (さん/様/くん/ちゃん/氏…) を落とし、ひらがなはカタカナに寄せる
+// (「バカボンさん」「ばかぼん」「菊池　さん」→ 同じ鍵)。両側を同じ関数に通すので、鍵同士の比較だけに使う
+const HONORIFIC_RE = /(さん|サン|様|さま|くん|君|ちゃん|氏|殿|先生|社長|部長|課長|専務|常務|会長)$/;
+function normName(s) {
+  const t = String(s || "").normalize("NFKC").trim().replace(HONORIFIC_RE, "");
+  return norm(t).replace(/[\u3041-\u3096]/g, (ch) => String.fromCharCode(ch.charCodeAt(0) + 0x60));
+}
+// 会社名: 株式会社 / (株) / ㈱ 等の法人格を落とす (NFKC で ㈱ → (株) になる)
+function normCompany(s) {
+  return norm(String(s || "").normalize("NFKC").replace(/株式会社|有限会社|合同会社|合資会社|\(株\)|\(有\)|\(同\)|㈱|㈲/g, ""));
+}
 function driveFolderIdOf(input) {
   const s = String(input || "").trim();
   if (!s) return null;
@@ -108,6 +119,29 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi }) {
         created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
         UNIQUE (topic, version)
       )`);
+    // 連絡先・呼び名: 人をあだ名や下の名前で呼ぶので「誰か / どのルームに送るか / どんな言葉遣いか」を全 AI で同じ答えにする。
+    // 同一人物の判定は name + company (正規化した鍵)。aliases / channels / site_ids は JSONB の配列
+    await p.query(`
+      CREATE TABLE IF NOT EXISTS genba_contacts (
+        id          BIGSERIAL PRIMARY KEY,
+        name        TEXT NOT NULL,                 -- 正式な名前 (例: 菊池)
+        name_key    TEXT NOT NULL,                 -- normName(name)
+        company     TEXT,                          -- 会社名 (例: ㈱大丁工業)
+        company_key TEXT NOT NULL DEFAULT '',      -- normCompany(company)。無ければ ''
+        aliases     JSONB NOT NULL DEFAULT '[]',   -- 呼び名・あだ名・表記ゆれ
+        role        TEXT,                          -- 職人 / 業者 / 元請け / 設計 / 客先 / 社内
+        trade       TEXT,                          -- 職種 (防水, 解体, 大工, 空調, 電気…)
+        channels    JSONB NOT NULL DEFAULT '[]',   -- [{ channel, room_id, room_name, kind, chat_id }]。room_id = Beeper の変わらない ID が正本
+        tone        TEXT,                          -- 言葉遣い (丁寧語・「！」なし / 軽め・「！」可)
+        site_ids    JSONB NOT NULL DEFAULT '[]',   -- 関わっている現場 (sites.id)
+        phone       TEXT,
+        email       TEXT,
+        notes       TEXT,
+        updated_by  TEXT NOT NULL,
+        created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+        updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+      )`);
+    await p.query(`CREATE UNIQUE INDEX IF NOT EXISTS genba_contacts_key_uq ON genba_contacts (name_key, company_key)`);
     schemaOk = true;
   }
 
@@ -183,7 +217,7 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi }) {
   });
 
   // 1 行追記 (genba_log_add / genba_log_add_many 共通)。source_ref があれば重複は 2 回入らない
-  async function addLog(p, by, a, siteRowCache) {
+  async function addLog(p, by, a, siteRowCache, ctx = {}) {
     const site = siteRowCache || await resolveSiteOrNull(p, a.site);
     const siteId = site ? site.id : null;
     if (!LOG_KINDS.includes(a.kind)) throw new Error(`kind は ${LOG_KINDS.join(" / ")}`);
@@ -204,7 +238,12 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi }) {
     if (a.due_on && !due) throw new Error("due_on は YYYY-MM-DD");
     const photos = Array.isArray(a.photo_ids) ? a.photo_ids.filter(Boolean).map(String).slice(0, 50) : null;
     const sourceRef = a.source_ref ? String(a.source_ref).trim().slice(0, 300) : null;
-    const source = a.source && typeof a.source === "object" ? a.source : null;
+    const source = a.source && typeof a.source === "object" ? { ...a.source } : null;
+    // 出どころの送信者 (表示名) が連絡先に一意に解決できたら contact_id / contact_name も残す (AI が書いた名前は上書きしない)
+    if (source && source.contact_id == null && (source.sender || source.room)) {
+      const c = await resolveSourceContact(p, source, ctx);
+      if (c) { source.contact_id = Number(c.id); source.contact_name = c.name; }
+    }
     const est = a.estimate_min != null && a.estimate_min !== "" ? Math.max(1, Math.min(100000, Math.round(Number(a.estimate_min)))) : null;
     if (a.estimate_min != null && a.estimate_min !== "" && !Number.isFinite(Number(a.estimate_min))) throw new Error("estimate_min は分 (数値)");
     const who = a.who ? String(a.who).trim().slice(0, 60) : null;
@@ -228,9 +267,269 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi }) {
     return { site: siteOut, log: ex[0] ? logRow(ex[0]) : null, duplicate: true };
   }
 
+  // ───────── 連絡先・呼び名 ─────────
+  const CONTACT_ROLES = ["職人", "業者", "元請け", "設計", "客先", "社内"];
+  // 配列でも "a, b / c" の文字列でも受ける
+  const toList = (v) => (Array.isArray(v) ? v : v == null || v === "" ? [] : String(v).split(/[,、/／\n]/))
+    .map((x) => String(x ?? "").trim()).filter(Boolean);
+  const uniqBy = (arr, keyFn) => { const seen = new Set(); return arr.filter((x) => { const k = keyFn(x); if (!k || seen.has(k)) return false; seen.add(k); return true; }); };
+  function cleanChannel(c) {
+    if (!c || typeof c !== "object") return null;
+    const out = {
+      channel: c.channel ? String(c.channel).trim() : "LINE",
+      room_id: c.room_id ? String(c.room_id).trim() : undefined,
+      room_name: c.room_name ? String(c.room_name).trim().slice(0, 200) : undefined,
+      kind: c.kind === "group" || c.kind === "single" ? c.kind : undefined,
+      chat_id: c.chat_id != null && c.chat_id !== "" ? String(c.chat_id).trim() : undefined, // 数字の chatID は変わるので補助
+    };
+    return out.room_id || out.room_name ? out : null;
+  }
+  // 既存の channels に新しい分を重ねる。room_id が同じ、または (片方に room_id が無く) ルーム名が同じなら同じルームとして上書き
+  function mergeChannels(oldArr, newArr) {
+    const out = (Array.isArray(oldArr) ? oldArr : []).map((c) => ({ ...c }));
+    for (const n of newArr) {
+      let hit = n.room_id ? out.find((c) => c.room_id === n.room_id) : null;
+      if (!hit && n.room_name) hit = out.find((c) => (!c.room_id || !n.room_id) && c.room_name && normName(c.room_name) === normName(n.room_name));
+      if (hit) { for (const k of Object.keys(n)) if (n[k] !== undefined) hit[k] = n[k]; }
+      else out.push({ ...n });
+    }
+    return out;
+  }
+  const contactRow = (r, siteMap) => ({
+    id: Number(r.id), name: r.name, company: r.company || null,
+    aliases: Array.isArray(r.aliases) ? r.aliases : [],
+    role: r.role || null, trade: r.trade || null,
+    channels: Array.isArray(r.channels) ? r.channels : [],
+    tone: r.tone || null,
+    sites: (Array.isArray(r.site_ids) ? r.site_ids : []).map((id) => (siteMap && siteMap.get(Number(id))) || { id: Number(id) }),
+    phone: r.phone || null, email: r.email || null, notes: r.notes || null,
+    updated_by: r.updated_by, updated_at: r.updated_at,
+  });
+  // site_ids → { id, code, name } に広げて返す
+  async function contactsOut(p, rows) {
+    const ids = [...new Set(rows.flatMap((r) => (Array.isArray(r.site_ids) ? r.site_ids : [])).map(Number).filter(Number.isInteger))];
+    const siteMap = new Map();
+    if (ids.length) {
+      const { rows: ss } = await p.query(`SELECT id, site_code, name FROM sites WHERE id = ANY($1::bigint[])`, [ids]);
+      for (const s of ss) siteMap.set(Number(s.id), { id: Number(s.id), code: s.site_code || null, name: s.name });
+    }
+    return rows.map((r) => contactRow(r, siteMap));
+  }
+  const loadContacts = async (p) => (await p.query(`SELECT * FROM genba_contacts ORDER BY company NULLS LAST, name`)).rows;
+  // あいまい検索の点数: 4 完全一致 / 3 鍵が検索語で始まる (菊池 → 菊池輝) / 2 検索語が鍵で始まる / 1 部分一致。
+  // 鍵 = 名前・呼び名・会社名・ルーム名 (全部 normName)。room_id / chat_id はそのまま一致で 4
+  function contactScore(r, rawQ) {
+    const q = String(rawQ || "").trim();
+    if (!q) return 0;
+    const chans = Array.isArray(r.channels) ? r.channels : [];
+    if (chans.some((c) => c.room_id && c.room_id === q)) return 4;
+    if (chans.some((c) => c.chat_id && String(c.chat_id) === q)) return 4;
+    const qn = normName(q);
+    if (!qn) return 0;
+    const keys = [r.name, ...(Array.isArray(r.aliases) ? r.aliases : []), r.company, ...chans.map((c) => c.room_name)]
+      .filter(Boolean).map(normName).concat(r.company ? [normCompany(r.company)] : []).filter(Boolean);
+    let best = 0;
+    for (const k of keys) {
+      if (k === qn) return 4;
+      if (k.startsWith(qn)) best = Math.max(best, 3);
+      else if (qn.startsWith(k) && k.length >= 2) best = Math.max(best, 2);
+      else if (qn.length >= 2 && k.length >= 2 && (k.includes(qn) || qn.includes(k))) best = Math.max(best, 1);
+    }
+    return best;
+  }
+  // 候補を点数順に。完全一致があっても「菊池 → 菊池輝」のような前方一致は残す (自動で決めないため)。弱い一致だけ落とす
+  function rankContacts(rows, q) {
+    const scored = rows.map((r) => ({ r, s: contactScore(r, q) })).filter((x) => x.s > 0);
+    if (!scored.length) return [];
+    const max = Math.max(...scored.map((x) => x.s));
+    const floor = max >= 3 ? max - 1 : 1;
+    return scored.filter((x) => x.s >= floor).sort((a, b) => b.s - a.s || String(a.r.name).localeCompare(String(b.r.name), "ja")).map((x) => x.r);
+  }
+  // 数値 ID か、一意に引ける名前・呼び名。複数なら候補を並べて止まる (推測で決めない)
+  async function resolveContact(p, ref) {
+    const q = String(ref ?? "").trim();
+    if (!q) throw new Error("contact (名前・呼び名・ID) が必要");
+    if (/^\d+$/.test(q)) {
+      const { rows } = await p.query(`SELECT * FROM genba_contacts WHERE id=$1`, [Number(q)]);
+      if (!rows.length) throw new Error(`連絡先 ID ${q} が無い`);
+      return rows[0];
+    }
+    const hits = rankContacts(await loadContacts(p), q);
+    if (!hits.length) throw new Error(`連絡先が見つからない: ${q}。genba_contact_find で探すか genba_contact_upsert で登録する`);
+    if (hits.length > 1) throw new Error(`候補が複数: ${hits.map((r) => `#${r.id} ${r.name}${r.company ? ` (${r.company})` : ""}`).join(" / ")}。ID か会社名で指定する (推測で決めない)`);
+    return hits[0];
+  }
+  // 監視ジョブの source { sender, room } → 連絡先。sender で一意なら確定。複数ならそのルームを持つ人に絞る。
+  // sender 無し (or 不明) で room が個人ルームとして 1 人だけに登録されていればその人
+  async function resolveSourceContact(p, source, ctx = {}) {
+    try {
+      const rows = ctx.contacts || (ctx.contacts = await loadContacts(p));
+      if (!rows.length) return null;
+      const room = source.room ? String(source.room) : null;
+      const inRoom = (r) => room && (Array.isArray(r.channels) ? r.channels : []).some((c) => c.room_id === room);
+      if (source.sender) {
+        let hits = rankContacts(rows, String(source.sender));
+        if (hits.length > 1 && room) hits = hits.filter(inRoom);
+        if (hits.length === 1) return hits[0];
+        return null;
+      }
+      const byRoom = rows.filter((r) => inRoom(r) && !(r.channels || []).some((c) => c.room_id === room && c.kind === "group"));
+      return byRoom.length === 1 ? byRoom[0] : null;
+    } catch (e) { console.warn("[genba] contact resolve", e.message); return null; }
+  }
+  // 同期されたルーム (ID と名前) を連絡先の channels に結びつける: ルーム名が合えば room_id を埋め、room_id が合えばルーム名を埋める
+  async function linkRoomsToContacts(p, rooms) {
+    const named = rooms.filter((r) => r.name);
+    if (!rooms.length) return 0;
+    const rows = await loadContacts(p);
+    let n = 0;
+    for (const c of rows) {
+      const chans = Array.isArray(c.channels) ? c.channels.map((x) => ({ ...x })) : [];
+      let changed = false;
+      for (const ch of chans) {
+        if (!ch.room_id && ch.room_name) {
+          const hits = named.filter((r) => normName(r.name) === normName(ch.room_name));
+          if (hits.length === 1) { ch.room_id = hits[0].room; changed = true; }
+        } else if (ch.room_id && !ch.room_name) {
+          const hit = named.find((r) => r.room === ch.room_id);
+          if (hit) { ch.room_name = hit.name; changed = true; }
+        }
+      }
+      if (changed) { await p.query(`UPDATE genba_contacts SET channels=$2, updated_at=now() WHERE id=$1`, [c.id, JSON.stringify(chans)]); n++; }
+    }
+    return n;
+  }
+  // sites の名前/ID の配列 → sites.id の配列。一意に引けないものは warnings に
+  async function resolveSiteIds(p, list, warnings) {
+    const ids = [];
+    for (const s of list) {
+      const hits = await findSites(p, s);
+      if (hits.length === 1) ids.push(Number(hits[0].id));
+      else warnings.push(hits.length ? `現場「${s}」は候補が複数 (${hits.map((h) => h.site_code || "ID" + h.id).join(" / ")})。ID で指定する` : `現場「${s}」が見つからない`);
+    }
+    return ids;
+  }
+  const contactsNote = (hits) => (!hits.length ? "見つからない。推測で送らず人に聞く。新しい人なら genba_contact_upsert"
+    : hits.length === 1 ? undefined : "候補が複数。自動で決めずに人に聞く (ID か会社名で絞れる)");
+
   // by = 書いた人 (トークンから決まる)
   function tools(by = "小西") {
     return [
+      {
+        name: "genba_contact_find",
+        description: "人を探す (連絡先・呼び名)。名前・あだ名・会社名・LINE のルーム名・room_id をあいまい検索 (全角半角・空白・「さん」の有無・かな/カナを吸収)。人の名前やあだ名が出たら、送る前・記録する前に必ずこれで引く。match が入っていれば 1 人に確定。candidates が複数なら推測で決めず人に聞く",
+        inputSchema: { type: "object", properties: { query: { type: "string", description: "例: バカボン / 菊池 / 大丁工業 / !8YEO…:beeper.local" } }, required: ["query"] },
+        handler: async (a) => {
+          await ensureSchema();
+          const p = getPool();
+          const hits = rankContacts(await loadContacts(p), a.query);
+          const out = await contactsOut(p, hits);
+          return { query: a.query, match: out.length === 1 ? out[0] : null, candidates: out, note: contactsNote(out) };
+        },
+      },
+      {
+        name: "genba_contact_upsert",
+        description: "連絡先を登録・更新する。name + company で同一人物を判定 (company 省略時は同じ名前が 1 人だけならその人)。aliases / channels / sites は既存に足す (消えない)、他の項目は渡したものだけ上書き。channels の room_id は Beeper の変わらない ID (!xxxx:beeper.local) を正本にする。数字の chatID は chat_id に (補助)",
+        inputSchema: {
+          type: "object",
+          properties: {
+            name: { type: "string", description: "正式な名前 (例: 菊池)" },
+            company: { type: "string", description: "会社名 (例: ㈱大丁工業)" },
+            aliases: { type: "array", items: { type: "string" }, description: "呼び名・あだ名・表記ゆれ (例: バカボンさん, バカボン, 菊池さん)" },
+            role: { type: "string", enum: CONTACT_ROLES, description: "職人 / 業者 / 元請け / 設計 / 客先 / 社内" },
+            trade: { type: "string", description: "職種 (防水, 解体, 大工, 空調, 電気…)" },
+            channels: {
+              type: "array",
+              items: { type: "object", properties: { channel: { type: "string", description: "LINE / iMessage / Mail (既定 LINE)" }, room_id: { type: "string" }, room_name: { type: "string" }, kind: { type: "string", enum: ["single", "group"] }, chat_id: { type: "string" } } },
+              description: "連絡先のルーム。room_id か room_name のどちらかは必要",
+            },
+            tone: { type: "string", description: "言葉遣い (例: 丁寧語・「！」なし / 軽め・「！」可)" },
+            sites: { type: "array", items: { type: "string" }, description: "関わっている現場 (案件 ID・現場名・ID)" },
+            phone: { type: "string" }, email: { type: "string" }, notes: { type: "string" },
+          },
+          required: ["name"],
+        },
+        handler: async (a) => {
+          await ensureSchema();
+          const p = getPool();
+          const name = String(a.name || "").trim();
+          if (!name) throw new Error("name が必要");
+          const nameKey = normName(name);
+          if (!nameKey) throw new Error("name が読めない");
+          const company = a.company ? String(a.company).trim() : null;
+          const companyKey = company ? normCompany(company) : "";
+          const warnings = [];
+          // 同一人物の判定
+          const { rows: same } = await p.query(`SELECT * FROM genba_contacts WHERE name_key=$1`, [nameKey]);
+          let cur = null;
+          if (companyKey) cur = same.find((r) => r.company_key === companyKey) || (same.length === 1 && !same[0].company_key ? same[0] : null);
+          else if (same.length === 1) cur = same[0];
+          else if (same.length > 1) throw new Error(`同じ名前が複数: ${same.map((r) => `#${r.id} ${r.name} (${r.company || "会社なし"})`).join(" / ")}。company で区別する`);
+          const aliases = uniqBy([...(cur && Array.isArray(cur.aliases) ? cur.aliases : []), ...toList(a.aliases)], normName);
+          const channels = mergeChannels(cur ? cur.channels : [], (Array.isArray(a.channels) ? a.channels : [a.channels]).map(cleanChannel).filter(Boolean));
+          const siteIds = [...new Set([...(cur && Array.isArray(cur.site_ids) ? cur.site_ids.map(Number) : []), ...(await resolveSiteIds(p, toList(a.sites ?? a.site), warnings))])];
+          const role = a.role ? String(a.role).trim() : cur?.role || null;
+          if (a.role && !CONTACT_ROLES.includes(role)) warnings.push(`role は ${CONTACT_ROLES.join(" / ")} のどれかが望ましい (指定: ${role})`);
+          const pick = (k) => (a[k] != null && a[k] !== "" ? String(a[k]).trim() : cur?.[k] ?? null);
+          // 既存に当たったら名前・会社の表記は最初に登録したものを残す (「菊池さん」「大丁工業」で呼んでも正式表記は変えない)
+          const vals = [cur ? cur.name : name, nameKey, cur?.company || company || null, cur?.company_key || (company ? companyKey : ""),
+            JSON.stringify(aliases), role, pick("trade"), JSON.stringify(channels), pick("tone"), JSON.stringify(siteIds),
+            pick("phone"), pick("email"), pick("notes"), by];
+          const { rows } = cur
+            ? await p.query(
+              `UPDATE genba_contacts SET name=$2, name_key=$3, company=$4, company_key=$5, aliases=$6, role=$7, trade=$8, channels=$9, tone=$10,
+                      site_ids=$11, phone=$12, email=$13, notes=$14, updated_by=$15, updated_at=now() WHERE id=$1 RETURNING *`, [cur.id, ...vals])
+            : await p.query(
+              `INSERT INTO genba_contacts (name, name_key, company, company_key, aliases, role, trade, channels, tone, site_ids, phone, email, notes, updated_by)
+               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING *`, vals);
+          const [out] = await contactsOut(p, rows);
+          return { ...out, created: !cur, warnings: warnings.length ? warnings : undefined };
+        },
+      },
+      {
+        name: "genba_contact_alias_add",
+        description: "呼び名・あだ名を足す。「A は B のこと」「これ覚えといて」と言われたら呼ぶ。contact は名前・呼び名・ID (一意に引けないと止まるので、その時は ID か会社名で)",
+        inputSchema: { type: "object", properties: { contact: { type: "string", description: "誰に足すか (名前・呼び名・ID)" }, alias: { type: "string", description: "足す呼び名 (複数は , 区切りか配列)" } }, required: ["contact", "alias"] },
+        handler: async (a) => {
+          await ensureSchema();
+          const p = getPool();
+          const cur = await resolveContact(p, a.contact);
+          const add = toList(a.alias);
+          if (!add.length) throw new Error("alias が空");
+          const before = Array.isArray(cur.aliases) ? cur.aliases : [];
+          const aliases = uniqBy([...before, ...add], normName);
+          const { rows } = await p.query(`UPDATE genba_contacts SET aliases=$2, updated_by=$3, updated_at=now() WHERE id=$1 RETURNING *`, [cur.id, JSON.stringify(aliases), by]);
+          const [out] = await contactsOut(p, rows);
+          return { ...out, added: aliases.slice(before.length) };
+        },
+      },
+      {
+        name: "genba_contact_list",
+        description: "連絡先の一覧。site (現場) / role (職人・業者・元請け・設計・客先・社内) / trade (職種) で絞る。全部省略で全員",
+        inputSchema: { type: "object", properties: { site: { type: "string", description: "案件 ID・現場名・ID" }, role: { type: "string" }, trade: { type: "string" } } },
+        handler: async (a) => {
+          await ensureSchema();
+          const p = getPool();
+          let rows = await loadContacts(p);
+          if (a.site) { const s = await resolveSite(p, a.site); rows = rows.filter((r) => (Array.isArray(r.site_ids) ? r.site_ids : []).map(Number).includes(Number(s.id))); }
+          if (a.role) rows = rows.filter((r) => norm(r.role) === norm(a.role));
+          if (a.trade) rows = rows.filter((r) => r.trade && (norm(r.trade).includes(norm(a.trade)) || norm(a.trade).includes(norm(r.trade))));
+          return { count: rows.length, contacts: await contactsOut(p, rows) };
+        },
+      },
+      {
+        name: "genba_contact_remove",
+        description: "連絡先を 1 件消す (小西のトークンからだけ)。間違えて登録したときの掃除用。普段は使わない",
+        inputSchema: { type: "object", properties: { contact: { type: "string", description: "名前・呼び名・ID (一意に引けるもの)" } }, required: ["contact"] },
+        handler: async (a) => {
+          await ensureSchema();
+          if (by !== "小西") throw new Error("この操作は小西のトークンからだけ");
+          const p = getPool();
+          const cur = await resolveContact(p, a.contact);
+          await p.query(`DELETE FROM genba_contacts WHERE id=$1`, [cur.id]);
+          return { removed: { id: Number(cur.id), name: cur.name, company: cur.company || null } };
+        },
+      },
       {
         name: "genba_find",
         description: "現場 (案件) を探す。案件 ID (例 2609-03)・名前・名前の一部で検索。表記ゆれ (全角半角・空白) は吸収する。チャットの指示文に案件 ID があれば呼ばなくていい",
@@ -343,9 +642,10 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi }) {
           if (!items.length) throw new Error("items が空");
           const results = [];
           let added = 0, dup = 0, failed = 0;
+          const ctx = {}; // 連絡先の読み込みを 1 回にまとめる
           for (const it of items) {
             try {
-              const r = await addLog(p, by, { ...it, site: it.site || a.site });
+              const r = await addLog(p, by, { ...it, site: it.site || a.site }, undefined, ctx);
               results.push({ ok: true, duplicate: r.duplicate, log: r.log, site: r.site });
               if (r.duplicate) dup++; else added++;
             } catch (e) {
@@ -464,10 +764,13 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi }) {
         handler: async (a) => {
           await ensureSchema();
           const p = getPool();
+          // 一覧は「連絡先」を先頭に (人の名前が出たら最初に引く約束を最初に読ませる)
           const { rows } = await p.query(
-            `SELECT DISTINCT ON (topic) topic, version, body, updated_by, created_at
-               FROM genba_rules ${a.topic ? "WHERE topic=$1" : ""}
-              ORDER BY topic, version DESC`, a.topic ? [String(a.topic)] : []);
+            `SELECT * FROM (
+               SELECT DISTINCT ON (topic) topic, version, body, updated_by, created_at
+                 FROM genba_rules ${a.topic ? "WHERE topic=$1" : ""}
+                ORDER BY topic, version DESC) t
+              ORDER BY (topic <> '連絡先'), topic`, a.topic ? [String(a.topic)] : []);
           if (a.topic) {
             if (!rows.length) return { topic: a.topic, body: null, note: "このトピックのルールはまだ無い" };
             const r = rows[0];
@@ -516,12 +819,15 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi }) {
                ON CONFLICT (owner, channel, room) DO UPDATE SET name = COALESCE(EXCLUDED.name, genba_sources.name), last_seen_at = now()`,
               [by, r.channel, r.room, r.name]);
           }
+          // 連絡先に room_name だけ入っているルームは、ここで room_id が埋まる (逆も)
+          const contactsLinked = await linkRoomsToContacts(p, rooms);
           const { rows } = await p.query(
             `SELECT g.channel, g.room, g.name, g.label, g.cursor, g.site_id, s.name AS site_name, s.site_code
                FROM genba_sources g LEFT JOIN sites s ON s.id = g.site_id
               WHERE g.owner=$1 AND g.enabled AND g.site_id IS NOT NULL ORDER BY g.channel, g.name NULLS LAST, g.room`, [by]);
           return {
             synced: rooms.length,
+            contactsLinked,
             watching: rows.map((r) => ({ channel: r.channel, room: r.room, name: r.name, label: r.label, site: { id: Number(r.site_id), code: r.site_code || null, name: r.site_name }, cursor: r.cursor || null })),
             note: "watching に無いルームは読まない。ON/OFF は /genba/watch.html",
           };
@@ -621,6 +927,7 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi }) {
   const INSTRUCTIONS = [
     "現場 (genba_*): 1 現場 1 チャットで使う。データとルールは Keihi 側にあるので、どの AI からでも同じ。",
     "- 会話の最初に genba_rule_get (topic 省略) で運用ルールを読む (無ければ空のまま進める)",
+    "- 人の名前・あだ名が出たら、送る前・記録する前に必ず genba_contact_find で引く (下の ■ 連絡先)",
     "- 現場の特定: チャットの指示文に案件 ID があればそれ。無ければ genba_find(現場名)。候補が複数なら人に聞く",
     "- 「写真 (図面) 上げたい」→ genba_folder(現場, 種類) の url を渡す。人はそこに Drive アプリで上げる。何枚入ったかは list_site_photos",
     "- 進捗の報告は genba_log_add に種類ごとに分けて積む: 進捗 / 課題 / 決定 / 次やること (期限があれば due_on)。1 行 1 件、短く",
@@ -630,10 +937,16 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi }) {
     "- タスクには estimate_min (分) を付ける。「5 分で終わるタスクある？」「手が空いた」→ genba_tasks(max_minutes) から 1〜3 件を提案し、やったら kind=解決 で閉じる",
     "- ルールの変更は genba_rule_set (版が増えるだけ。消えない)。書く前に現行を見せて OK をもらう",
     "- 書いた人はトークンから自動で入る。AI が名前を書かない",
+    "■ 連絡先・呼び名 (genba_contact_*)。人はあだ名や下の名前で呼ばれる (例: バカボンさん = ㈱大丁工業 菊池)。誰か / どのルームに送るか / どんな言葉遣いか は全 AI で同じ答えにする",
+    "- 名前・あだ名・会社名・ルーム名が出たら genba_contact_find。match が入れば確定。見つからない / candidates が複数なら推測で送らず人に聞く",
+    "- 「A は B のこと」「覚えといて」と言われたら genba_contact_alias_add(contact, alias)",
+    "- 返信案は contact の tone に合わせて書く (丁寧語・「！」なし / 軽め・「！」可)",
+    "- 新しい人・会社・LINE ルームが分かったら genba_contact_upsert (name + company で同一人物)。room_id は Beeper の変わらない ID (!xxxx:beeper.local) を正本に、数字の chatID は chat_id に",
+    "- 現場ごと・職種ごとの顔ぶれは genba_contact_list(site, role, trade)",
     "■ 監視ジョブ (Cowork 等で 5 分ごとに LINE などを読んで自動記録するとき)",
     "1. genba_room_sync に Beeper 等のルーム一覧 (ID と名前だけ) を渡す → 返り値 watching が読む対象 (ON/OFF は画面 /genba/watch.html)。watching に無いルームは読まない",
     "2. 各ルームについて cursor より後のメッセージだけ読む (Beeper 等の MCP)",
-    "3. 決定・課題・次やること を抽出して genba_log_add_many で記録。各 item に source_ref = \"<channel>:<room>:<message id>\" を必ず入れる (同じメッセージは 2 回入らない)、source に { channel, room, sender, at, quote }",
+    "3. 決定・課題・次やること を抽出して genba_log_add_many で記録。各 item に source_ref = \"<channel>:<room>:<message id>\" を必ず入れる (同じメッセージは 2 回入らない)、source に { channel, room, sender, at, quote } (sender は表示名そのまま。連絡先に解決できればサーバーが contact_id を足す)",
     "4. 最後に genba_source_mark(channel, room, { last_id, last_at }) で cursor を進める",
     "5. 新着が無ければ何もしない。雑談・曖昧なものは記録しない。記録したら件数と中身を短く報告",
   ].join("\n");
