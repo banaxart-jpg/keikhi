@@ -38,6 +38,9 @@
 | `genba_contact_alias_add(contact, alias)` | 「A は B のこと」「覚えといて」→ 呼び名を足す |
 | `genba_contact_list(site?, role?, trade?)` | 現場ごと・役割ごと・職種ごとの顔ぶれ |
 | `genba_contact_remove(contact)` | 1 件消す (小西のトークンからだけ。掃除用) |
+| `genba_company_find(query)` / `genba_company_upsert({name, aliases?, role?, trades?, …})` / `genba_company_list(role?, trade?)` / `genba_company_remove` | 会社 (連絡先の `company` の本体)。価格感・得意工事は会社に付ける。返り値に所属の連絡先とメモ |
+| `genba_note_add(subject_type, subject?, kind?, body, valid_from?, valid_until?)` | 流れない情報を 人 / 会社 / 現場 / 社内 にぶら下げる (性質 / 予定 / 評価 / ルール / メモ)。期限付き |
+| `genba_note_list(subject_type?, subject?, kind?, on?, include_expired?)` / `genba_note_retire(id)` | メモの一覧 (日付時点の有効分) と引退 (消さない) |
 
 ### 連絡先・呼び名 (`genba_contacts`)
 人をあだ名や下の名前で呼ぶ (例: バカボンさん = ㈱大丁工業 菊池) ので、「誰か / どの LINE ルームに送るか / どんな言葉遣いか」を
@@ -49,6 +52,14 @@
 - `genba_room_sync` が同期したルーム名が contact の `room_name` と合えば `room_id` を自動で埋める (逆に room_id だけなら room_name を埋める)。返り値 `contactsLinked`
 - `genba_log_add` の `source.sender` が連絡先に一意に解決できたら `source.contact_id` / `source.contact_name` を足す (sender が曖昧でも `source.room` を持つ人に絞れればそれ)
 - `genba_rule_get` の一覧は topic `連絡先` を先頭に返す
+
+### 会社とメモ (`genba_companies` / `genba_notes`): 流れるもの・流れないもの
+- **出来事** (〇日に決まった・やった) は `genba_log` に流す。**今もそうであること** (性質・予定・評価・決まり) は対象にぶら下げる `genba_notes`。log に混ぜると埋まるので分ける
+- `genba_companies`: 連絡先の `company` 文字列から自動で起きる (`company_id` で結ぶ、表記は最初の登録のまま)。「金額高め」「防水が得意」は個人ではなく会社に付ける
+- `genba_notes`: `subject_type` (contact / company / site / general=社内) + `subject_id` + `kind` (性質 / 予定 / 評価 / ルール / メモ) + `body` + `valid_from` / `valid_until` + `source_ref` (監視ジョブの重複防止) + `retired_at` (消さずに引退)
+- 返り値への埋め込み: `genba_contact_find` → 本人の `notes` + `company_detail` (会社の notes 込み) + 1 件確定のときは `recent_log` (その人が出どころのログ直近 5 件)。`genba_company_find` → `notes` + `contacts`。`genba_status` → 現場の `notes` + 関わる `contacts`。`genba_rule_get` (一覧) → `general_notes` (社内の決まり)
+- 期限: 「来月から忙しい」は `valid_from`、「〜まで休み」は `valid_until`。find / status には今日時点で有効なものだけ出る。`genba_note_list(人, 予定, on=来月)` で「来月手が空いてる人」を探せる
+- `genba_rules` は AI の動き方 (版を積む)、`genba_notes` の kind=ルール は会社の決まり (締め日・入り時間など)。役割が違う
 
 ### ウォッチ画面 `/genba/watch.html`
 ログインした人のルームだけが並ぶ (小西 → 小西の Beeper、名取 → 名取の)。行ごとに現場の選択とトグル。
@@ -64,7 +75,7 @@ API: `GET /api/genba/me` / `GET /api/genba/rooms` / `PUT /api/genba/rooms/:id {e
 
 書いた人は人ごとの URL で決まる: `GET /api/mcp-connector` (ログイン済み) が `genba.名取` / `genba.LINE監視` の URL を返す (INTERNAL_TICK_SECRET から導出、リポには無い)。
 
-データ: `sites` に `site_code` / `drive_folder_id` / `client` 列を追加 (このアプリの画面は変えていない)、`genba_log` (追記のみ)、`genba_rules`、`genba_sources` / `genba_owners` (監視対象)、`genba_contacts` (連絡先)。
+データ: `sites` に `site_code` / `drive_folder_id` / `client` 列を追加 (このアプリの画面は変えていない)、`genba_log` (追記のみ)、`genba_rules`、`genba_sources` / `genba_owners` (監視対象)、`genba_contacts` / `genba_companies` (連絡先・会社)、`genba_notes` (流れないメモ)。
 写真そのものは Drive の案件フォルダに人が直接上げる。Keihi は URL を返すだけ。
 
 ## ファイル構成
