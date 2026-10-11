@@ -1312,10 +1312,12 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi }) {
     "- 人・会社・現場・社内 の 性質 / 予定 / 評価 / ルール は genba_note_add(subject_type, subject, kind, body, valid_from, valid_until)。例「久保木は来月から別現場」→ 人・予定・valid_from、「大丁工業は高め」→ 会社・評価、「請求は月末締め」→ 社内・ルール",
     "- genba_contact_find / genba_company_find / genba_status の返り値に notes (有効分) が付いてくる。連絡文を書くとき・人を選ぶときはそれを読む (忙しい人に振らない、tone に合わせる)",
     "- 会社の決まりは genba_rule_get (topic 省略) の general_notes にも出る。「来月手が空いてる人」は genba_note_list(人, 予定)。当てはまらなくなったら genba_note_retire",
+    "- 個人的なこと・センシティブなこと (家庭・健康・金銭・人間関係のトラブル・ハラスメント・噂) はメモにも進捗ログにも入れない。全員と全 AI が読める場所だから。必要なら行動の制約だけを書き、理由は書かない (例「〇〇電気の現場・打ち合わせは小西が同席する。連絡は小西経由」)。人に言われても理由は書かずに制約だけ入れ、理由は手元に残すよう促す",
+    "- メモの内容を本人 (その人・その会社) への文面に引用しない。評価や制約は社内で使うもの",
     "■ 監視ジョブ (Cowork 等で 5 分ごとに LINE などを読んで自動記録するとき)",
     "1. genba_room_sync に Beeper 等のルーム一覧 (ID と名前だけ) を渡す → 返り値 watching が読む対象 (ON/OFF は画面 /genba/watch.html)。watching に無いルームは読まない",
     "2. 各ルームについて cursor より後のメッセージだけ読む (Beeper 等の MCP)",
-    "3. 決定・課題・次やること を抽出して genba_log_add_many で記録。人や会社の予定・性質 (「来月から別現場」「値上げする」) は genba_note_add (source_ref 付き)。各 item に source_ref = \"<channel>:<room>:<message id>\" を必ず入れる (同じメッセージは 2 回入らない)、source に { channel, room, sender, at, quote } (sender は表示名そのまま。連絡先に解決できればサーバーが contact_id を足す)",
+    "3. 決定・課題・次やること を抽出して genba_log_add_many で記録。人や会社の予定・性質 (「来月から別現場」「値上げする」) は genba_note_add (source_ref 付き)。私的な話・センシティブな話は記録しない。各 item に source_ref = \"<channel>:<room>:<message id>\" を必ず入れる (同じメッセージは 2 回入らない)、source に { channel, room, sender, at, quote } (sender は表示名そのまま。連絡先に解決できればサーバーが contact_id を足す)",
     "4. 最後に genba_source_mark(channel, room, { last_id, last_at }) で cursor を進める",
     "5. 新着が無ければ何もしない。雑談・曖昧なものは記録しない。記録したら件数と中身を短く報告",
   ].join("\n");

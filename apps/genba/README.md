@@ -60,6 +60,7 @@
 - 返り値への埋め込み: `genba_contact_find` → 本人の `notes` + `company_detail` (会社の notes 込み) + 1 件確定のときは `recent_log` (その人が出どころのログ直近 5 件)。`genba_company_find` → `notes` + `contacts`。`genba_status` → 現場の `notes` + 関わる `contacts`。`genba_rule_get` (一覧) → `general_notes` (社内の決まり)
 - 期限: 「来月から忙しい」は `valid_from`、「〜まで休み」は `valid_until`。find / status には今日時点で有効なものだけ出る。`genba_note_list(人, 予定, on=来月)` で「来月手が空いてる人」を探せる
 - `genba_rules` は AI の動き方 (版を積む)、`genba_notes` の kind=ルール は会社の決まり (締め日・入り時間など)。役割が違う
+- **センシティブな情報は入れない** (家庭・健康・金銭・人間関係のトラブル・ハラスメント・噂)。全員と全 AI が読める場所なので。必要なら行動の制約だけ (「〇〇電気の現場は小西が同席」) を書き、理由は書かない。メモの内容を本人への文面に引用しない。小西だけが読めるメモ (visibility) は必要になったら足す
 
 ### ウォッチ画面 `/genba/watch.html`
 ログインした人のルームだけが並ぶ (小西 → 小西の Beeper、名取 → 名取の)。行ごとに現場の選択とトグル。
