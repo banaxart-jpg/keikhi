@@ -6,6 +6,8 @@
 //   写真・図面 = Drive の案件フォルダ (人が Drive アプリで直接上げる。Keihi はフォルダ URL を返すだけ)
 // 書いた人は MCP のトークンから決める (AI が名前を書く余地を作らない)。
 
+import crypto from "node:crypto";
+
 const SUBFOLDERS = {
   "図面": "01_図面", "見積": "02_見積", "業者見積": "02_見積", "写真": "03_写真", "資料": "04_資料", "参考": "05_参考",
 };
@@ -41,7 +43,8 @@ const folderUrl = (id) => `https://drive.google.com/drive/folders/${id}`;
 const ymd = (v) => (v == null ? null : v instanceof Date ? v.toISOString().slice(0, 10) : String(v).slice(0, 10));
 const todayJst = () => new Date(Date.now() + 9 * 3600 * 1000).toISOString().slice(0, 10);
 
-export function createGenba({ getPool, createMcpHandler, getDriveApi }) {
+// gcs = { bucket, getStorage, publicUrl, secret }: LINE 等から来た画像を PC 側 (Cowork) が PUT で流し込む口と、その署名 URL
+export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null }) {
   let schemaOk = false;
   async function ensureSchema() {
     if (schemaOk) return;
@@ -75,6 +78,35 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi }) {
     await p.query(`ALTER TABLE genba_log ADD COLUMN IF NOT EXISTS estimate_min INTEGER`);
     await p.query(`ALTER TABLE genba_log ADD COLUMN IF NOT EXISTS who TEXT`);
     await p.query(`CREATE INDEX IF NOT EXISTS genba_log_open_idx ON genba_log (kind, estimate_min) WHERE kind IN ('課題','次やること')`);
+    // 決定の変更: topic (何についての決定か) と supersedes_id (置き換えた前の行)。「今生きている決定」= 置き換えられていない行
+    await p.query(`ALTER TABLE genba_log ADD COLUMN IF NOT EXISTS topic TEXT`);
+    await p.query(`ALTER TABLE genba_log ADD COLUMN IF NOT EXISTS supersedes_id BIGINT REFERENCES genba_log(id)`);
+    await p.query(`CREATE INDEX IF NOT EXISTS genba_log_supersedes_idx ON genba_log (supersedes_id) WHERE supersedes_id IS NOT NULL`);
+    // 訂正と取り消し: 追記のみは崩さず、直したら edits に前の値を残し、消すときは voided_at で隠す (物理削除しない)
+    await p.query(`ALTER TABLE genba_log ADD COLUMN IF NOT EXISTS edits JSONB`);
+    await p.query(`ALTER TABLE genba_log ADD COLUMN IF NOT EXISTS voided_at TIMESTAMPTZ`);
+    await p.query(`ALTER TABLE genba_log ADD COLUMN IF NOT EXISTS voided_by TEXT`);
+    await p.query(`ALTER TABLE genba_log ADD COLUMN IF NOT EXISTS void_reason TEXT`);
+    // 画像・PDF (LINE 等から来たもの)。中身は GCS、ここは台帳。source_ref で同じ添付を 2 回入れない
+    await p.query(`
+      CREATE TABLE IF NOT EXISTS genba_files (
+        id           BIGSERIAL PRIMARY KEY,
+        site_id      BIGINT REFERENCES sites(id) ON DELETE SET NULL,
+        kind         TEXT NOT NULL DEFAULT '写真',   -- 写真 / 図面 / 資料 / その他
+        gcs_url      TEXT NOT NULL,
+        filename     TEXT,
+        content_type TEXT,
+        bytes        BIGINT,
+        source_ref   TEXT,
+        source       JSONB,
+        uploaded_by  TEXT NOT NULL,
+        log_id       BIGINT REFERENCES genba_log(id),
+        created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+        voided_at    TIMESTAMPTZ,
+        voided_by    TEXT
+      )`);
+    await p.query(`CREATE UNIQUE INDEX IF NOT EXISTS genba_files_source_ref_uq ON genba_files (source_ref) WHERE source_ref IS NOT NULL`);
+    await p.query(`CREATE INDEX IF NOT EXISTS genba_files_site_idx ON genba_files (site_id, created_at DESC)`);
     // 監視対象 (ホワイトリスト): owner (誰の Beeper/LINE か) × channel × room → 現場。
     // 監視ジョブがルーム一覧 (ID と名前だけ) を genba_room_sync で入れ、画面 (/genba/watch.html) でトグル。
     // enabled=true かつ site_id ありのルームだけ読む (デフォルト拒否)
@@ -262,9 +294,26 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi }) {
     source: r.source || undefined,
     estimate_min: r.estimate_min != null ? Number(r.estimate_min) : undefined,
     who: r.who || undefined,
+    topic: r.topic || undefined,
+    supersedes_id: r.supersedes_id ? Number(r.supersedes_id) : undefined,
+    superseded_by: r.superseded_by ? Number(r.superseded_by) : undefined,
+    edited: Array.isArray(r.edits) && r.edits.length ? r.edits.length : undefined,
+    voided: r.voided_at ? { at: r.voided_at, by: r.voided_by, reason: r.void_reason || undefined } : undefined,
     site: r.site_name !== undefined ? (r.site_id ? { id: Number(r.site_id), code: r.site_code || null, name: r.site_name } : null) : undefined,
     at: r.created_at,
   });
+  // 「生きている行」の条件 (SQL 断片、別名 l 前提): 取り消されていない / 解決されていない / 置き換えられていない
+  const LIVE = `l.voided_at IS NULL`;
+  const NOT_RESOLVED = `NOT EXISTS (SELECT 1 FROM genba_log r WHERE r.resolves_id = l.id AND r.voided_at IS NULL)`;
+  const NOT_SUPERSEDED = `NOT EXISTS (SELECT 1 FROM genba_log n WHERE n.supersedes_id = l.id AND n.voided_at IS NULL)`;
+  // 行の一覧に「この行を置き換えた行の ID」を付ける
+  async function withSupersededBy(p, rows) {
+    const ids = rows.map((r) => Number(r.id));
+    if (!ids.length) return rows;
+    const { rows: nx } = await p.query(`SELECT id, supersedes_id FROM genba_log WHERE supersedes_id = ANY($1::bigint[]) AND voided_at IS NULL`, [ids]);
+    const map = new Map(nx.map((n) => [Number(n.supersedes_id), Number(n.id)]));
+    return rows.map((r) => ({ ...r, superseded_by: map.get(Number(r.id)) ?? null }));
+  }
 
   // 1 行追記 (genba_log_add / genba_log_add_many 共通)。source_ref があれば重複は 2 回入らない
   async function addLog(p, by, a, siteRowCache, ctx = {}) {
@@ -277,8 +326,8 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi }) {
     if (a.kind === "解決") {
       resolvesId = Number(a.resolves_id);
       if (!Number.isInteger(resolvesId)) throw new Error("kind=解決 には resolves_id (元の課題/次やることの行 ID) が必要");
-      const { rows: orig } = await p.query(`SELECT id, kind, site_id FROM genba_log WHERE id=$1`, [resolvesId]);
-      if (!orig.length) throw new Error(`行 ${resolvesId} が無い`);
+      const { rows: orig } = await p.query(`SELECT id, kind, site_id FROM genba_log WHERE id=$1 AND voided_at IS NULL`, [resolvesId]);
+      if (!orig.length) throw new Error(`行 ${resolvesId} が無い (か取り消し済み)`);
       // 解決行は元の行と同じ現場に入れる (site を省略して ID だけで解決できるように)
       if (siteRowCache == null && a.site == null) { /* 現場未指定 → 元の行の現場を引き継ぐ */ }
       if (site && orig[0].site_id != null && Number(orig[0].site_id) !== Number(site.id)) throw new Error(`行 ${resolvesId} はこの現場のログに無い`);
@@ -304,14 +353,40 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi }) {
       useSiteId = o[0]?.site_id ?? null;
     }
     const siteOut = site ? { id: Number(site.id), code: site.site_code || null, name: site.name } : null;
+    // 変更の紐付け: supersedes_id が指定されればそれ、無ければ 決定 + topic で同じ現場の生きている決定を自動で引く
+    const topic = a.topic ? String(a.topic).trim().slice(0, 60) : null;
+    let supersedesId = null, superseded = null;
+    if (a.supersedes_id != null && a.supersedes_id !== "") {
+      supersedesId = Number(a.supersedes_id);
+      if (!Number.isInteger(supersedesId)) throw new Error("supersedes_id は行 ID");
+      const { rows: prev } = await p.query(`SELECT * FROM genba_log WHERE id=$1`, [supersedesId]);
+      if (!prev.length || prev[0].voided_at) throw new Error(`行 ${supersedesId} が無い (か取り消し済み)`);
+      if (prev[0].site_id != null && useSiteId != null && Number(prev[0].site_id) !== Number(useSiteId)) throw new Error(`行 ${supersedesId} は別の現場のログ`);
+      if (useSiteId == null && prev[0].site_id != null) useSiteId = Number(prev[0].site_id);
+      const { rows: already } = await p.query(`SELECT id FROM genba_log WHERE supersedes_id=$1 AND voided_at IS NULL`, [supersedesId]);
+      if (already.length) throw new Error(`行 ${supersedesId} は既に #${already[0].id} で置き換え済み。そちらを supersedes_id にする`);
+      superseded = prev[0];
+    } else if (a.kind === "決定" && topic) {
+      const { rows: live } = await p.query(
+        `SELECT l.* FROM genba_log l WHERE l.kind=$1 AND l.topic IS NOT NULL AND ${LIVE} AND l.site_id IS NOT DISTINCT FROM $2 AND ${NOT_SUPERSEDED}
+          ORDER BY l.created_at DESC`, ["決定", useSiteId]);
+      const hit = live.find((r) => norm(r.topic) === norm(topic));
+      if (hit) { supersedesId = Number(hit.id); superseded = hit; }
+    }
     const { rows } = await p.query(
-      `INSERT INTO genba_log (site_id, kind, body, written_by, due_on, resolves_id, photo_ids, source_ref, source, estimate_min, who)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+      `INSERT INTO genba_log (site_id, kind, body, written_by, due_on, resolves_id, photo_ids, source_ref, source, estimate_min, who, topic, supersedes_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
        ON CONFLICT (source_ref) WHERE source_ref IS NOT NULL DO NOTHING
        RETURNING *`,
-      [useSiteId, a.kind, body, by, due, resolvesId, photos ? JSON.stringify(photos) : null, sourceRef, source ? JSON.stringify(source) : null, est, who]
+      [useSiteId, a.kind, body, by, due, resolvesId, photos ? JSON.stringify(photos) : null, sourceRef, source ? JSON.stringify(source) : null, est, who, topic, supersedesId]
     );
-    if (rows.length) return { site: siteOut, log: logRow(rows[0]), duplicate: false };
+    if (rows.length) {
+      return {
+        site: siteOut, log: logRow(rows[0]), duplicate: false,
+        superseded: superseded ? { id: Number(superseded.id), body: superseded.body, at: superseded.created_at } : undefined,
+        say: superseded ? `${topic || superseded.topic || "決定"}: 「${superseded.body}」→「${body}」に変更` : undefined,
+      };
+    }
     // source_ref が既にある = 同じメッセージを前に記録済み
     const { rows: ex } = await p.query(`SELECT * FROM genba_log WHERE source_ref=$1`, [sourceRef]);
     return { site: siteOut, log: ex[0] ? logRow(ex[0]) : null, duplicate: true };
@@ -463,7 +538,7 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi }) {
       for (const o of out) {
         const { rows: lg } = await p.query(
           `SELECT l.*, s.name AS site_name, s.site_code FROM genba_log l LEFT JOIN sites s ON s.id = l.site_id
-            WHERE l.source->>'contact_id' = $1 ORDER BY l.created_at DESC LIMIT 5`, [String(o.id)]);
+            WHERE l.source->>'contact_id' = $1 AND l.voided_at IS NULL ORDER BY l.created_at DESC LIMIT 5`, [String(o.id)]);
         o.recent_log = lg.map(logRow);
       }
     }
@@ -589,6 +664,77 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi }) {
   }
   const contactsNote = (hits) => (!hits.length ? "見つからない。推測で送らず人に聞く。新しい人なら genba_contact_upsert"
     : hits.length === 1 ? undefined : "候補が複数。自動で決めずに人に聞く (ID か会社名で絞れる)");
+
+  // ───────── ファイル (GCS) ─────────
+  const MIME = { jpg: "image/jpeg", jpeg: "image/jpeg", png: "image/png", gif: "image/gif", webp: "image/webp", heic: "image/heic", pdf: "application/pdf", mp4: "video/mp4", mov: "video/quicktime", txt: "text/plain" };
+  const guessType = (name) => MIME[String(name).toLowerCase().split(".").pop()] || "application/octet-stream";
+  const b64u = (s) => Buffer.from(s).toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  const unb64u = (s) => Buffer.from(String(s).replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf8");
+  const sign = (s) => crypto.createHmac("sha256", gcs?.secret || "").update(s).digest("hex").slice(0, 32);
+  // アップロード用の一時トークン: 中身 (現場・ファイル名・source_ref・書いた人・期限) + HMAC。URL に秘密を載せずに PUT を受けられる
+  function uploadToken(payload) {
+    if (!gcs?.secret) throw new Error("アップロードの秘密鍵 (INTERNAL_TICK_SECRET) が無い");
+    const body = b64u(JSON.stringify(payload));
+    return `${body}.${sign(body)}`;
+  }
+  function readUploadToken(token) {
+    const [body, sig] = String(token || "").split(".");
+    if (!body || !sig || !gcs?.secret || sign(body) !== sig) return null;
+    try { const p = JSON.parse(unb64u(body)); return p && p.e > Date.now() ? p : null; } catch { return null; }
+  }
+  async function signRead(gsUrl, days = 7) {
+    const storage = gcs?.getStorage?.();
+    if (!storage) return null;
+    const [, , bucket, ...rest] = gsUrl.split("/");
+    const [url] = await storage.bucket(bucket).file(rest.join("/")).getSignedUrl({ version: "v2", action: "read", expires: Date.now() + days * 86400000 });
+    return url;
+  }
+  async function fileRow(r) {
+    let url = null;
+    try { url = await signRead(r.gcs_url); } catch (e) { console.warn("[genba] sign", e.message); }
+    return {
+      id: Number(r.id), kind: r.kind, filename: r.filename, content_type: r.content_type, bytes: r.bytes != null ? Number(r.bytes) : undefined,
+      url, gs: r.gcs_url, site: r.site_name !== undefined ? (r.site_id ? { id: Number(r.site_id), code: r.site_code || null, name: r.site_name } : null) : undefined,
+      source_ref: r.source_ref || undefined, source: r.source || undefined, by: r.uploaded_by, at: r.created_at,
+    };
+  }
+  // PUT /api/genba/upload/:token (認証ミドルウェアの前に express.raw と一緒にマウント)。中身を GCS に置いて台帳に 1 行
+  function uploadRoute() {
+    return async (req, res) => {
+      try {
+        const t = readUploadToken(req.params.token);
+        if (!t) return res.status(403).json({ error: "token が無効か期限切れ。genba_file_upload_url で作り直す" });
+        const buf = Buffer.isBuffer(req.body) ? req.body : null;
+        if (!buf || !buf.length) return res.status(400).json({ error: "本文が空。--data-binary @file で送る" });
+        const storage = gcs.getStorage();
+        if (!storage || !gcs.bucket) return res.status(503).json({ error: "GCS not configured" });
+        const p = getPool();
+        await ensureSchema();
+        if (t.r) {
+          const { rows: ex } = await p.query(`SELECT * FROM genba_files WHERE source_ref=$1`, [t.r]);
+          if (ex.length) return res.json({ duplicate: true, ...(await fileRow(ex[0])) });
+        }
+        const d = new Date(), ym = `${d.getUTCFullYear()}${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
+        const key = `genba/${t.s ?? "company"}/${ym}/${Date.now()}_${crypto.randomBytes(3).toString("hex")}_${t.f}`;
+        const contentType = req.headers["content-type"] && !/^application\/(octet-stream|x-www-form-urlencoded)/.test(req.headers["content-type"]) ? String(req.headers["content-type"]).split(";")[0] : t.c;
+        await storage.bucket(gcs.bucket).file(key).save(buf, { contentType, resumable: false });
+        const gsUrl = `gs://${gcs.bucket}/${key}`;
+        const { rows } = await p.query(
+          `INSERT INTO genba_files (site_id, kind, gcs_url, filename, content_type, bytes, source_ref, source, uploaded_by)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+           ON CONFLICT (source_ref) WHERE source_ref IS NOT NULL DO NOTHING RETURNING *`,
+          [t.s, t.k, gsUrl, t.f, contentType, buf.length, t.r, t.o ? JSON.stringify(t.o) : null, t.b]);
+        if (!rows.length) {
+          const { rows: ex } = await p.query(`SELECT * FROM genba_files WHERE source_ref=$1`, [t.r]);
+          return res.json({ duplicate: true, ...(await fileRow(ex[0])) });
+        }
+        res.json({ duplicate: false, ...(await fileRow(rows[0])) });
+      } catch (e) {
+        console.error("[genba] upload", e);
+        res.status(500).json({ error: e.message });
+      }
+    };
+  }
 
   // by = 書いた人 (トークンから決まる)
   function tools(by = "小西") {
@@ -959,7 +1105,7 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi }) {
       },
       {
         name: "genba_log_add",
-        description: "進捗ログに 1 行足す (追記のみ、消えない)。種類: 進捗 (やったこと・完了したこと) / 課題 / 決定 / 次やること (タスク) / 解決。人の報告は種類ごとに分けて複数回呼ぶ (例「ボード貼り完了、明日パテ。床レベル 3mm 狂い要相談」→ 進捗 + 次やること(due_on 明日) + 課題)。現場に紐づかない項目 (会社の雑務・Google マップのピン等) は site を省略する。やった人・担当は who、タスクは所要時間の目安を estimate_min (分) に入れる (「5 分で終わるタスクある？」は genba_tasks で引く)。課題や次やることが片付いたら kind=解決 で resolves_id に元の行 ID (site 省略可)。LINE 等のメッセージから記録するときは source_ref (メッセージ ID) を必ず付ける (同じものは 2 回入らない、duplicate: true が返る) と source に出どころ。書いた人はトークンから自動で入る",
+        description: "進捗ログに 1 行足す (追記のみ。直すのは genba_log_fix、消すのは genba_log_void)。種類: 進捗 (やったこと・完了したこと) / 課題 / 決定 / 次やること (タスク) / 解決。決定には topic (床材 / 巾木 / 納期 …) を付ける。決定が変わったら同じ topic で新しい決定を足せば前の決定を置き換える (返り値 superseded)。人の報告は種類ごとに分けて複数回呼ぶ (例「ボード貼り完了、明日パテ。床レベル 3mm 狂い要相談」→ 進捗 + 次やること(due_on 明日) + 課題)。現場に紐づかない項目 (会社の雑務・Google マップのピン等) は site を省略する。やった人・担当は who、タスクは所要時間の目安を estimate_min (分) に入れる (「5 分で終わるタスクある？」は genba_tasks で引く)。課題や次やることが片付いたら kind=解決 で resolves_id に元の行 ID (site 省略可)。LINE 等のメッセージから記録するときは source_ref (メッセージ ID) を必ず付ける (同じものは 2 回入らない、duplicate: true が返る) と source に出どころ。書いた人はトークンから自動で入る",
         inputSchema: {
           type: "object",
           properties: {
@@ -970,7 +1116,9 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi }) {
             body: { type: "string", description: "本文 (短く。1 行 1 件。決定は型番・数量・金額を省略しない)" },
             due_on: { type: "string", description: "期限 YYYY-MM-DD (次やること・課題)" },
             resolves_id: { type: "number", description: "kind=解決 のとき、解決した元の行 ID" },
-            photo_ids: { type: "array", items: { type: "string" }, description: "関連する Drive の写真ファイル ID (list_site_photos の file_id)" },
+            topic: { type: "string", description: "決定が何についてか (床材 / 巾木 / 納期 / 色 …)。同じ現場に同じ topic の生きている決定があれば自動でそれを置き換える (変更として紐付く)" },
+            supersedes_id: { type: "number", description: "この行が置き換える前の行 ID (決定の変更・タスクの言い換え)。topic で自動紐付けできないときに" },
+            photo_ids: { type: "array", items: { type: "string" }, description: "関連する写真・ファイルの ID (genba_file_list の id、または Drive の file_id)" },
             source_ref: { type: "string", description: "出どころの一意キー (例 LINE:<room>:<message id>)。同じ source_ref は 2 回記録されない" },
             source: { type: "object", description: "出どころ { channel, room, sender, at, quote } など自由" },
           },
@@ -1014,6 +1162,138 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi }) {
         },
       },
       {
+        name: "genba_log_fix",
+        description: "ログの行を直す (誤字・現場違い・期限・担当・所要時間・topic)。直す前の値は edits に残る (誰がいつ)。kind は変えられない (変えたいなら genba_log_void して入れ直す)",
+        inputSchema: {
+          type: "object",
+          properties: {
+            id: { type: "number" },
+            body: { type: "string" }, site: { type: "string", description: "案件 ID・現場名・ID。「会社」で現場なしに" },
+            due_on: { type: "string", description: "YYYY-MM-DD。空文字で消す" }, who: { type: "string" }, estimate_min: { type: "number" }, topic: { type: "string" },
+          },
+          required: ["id"],
+        },
+        handler: async (a) => {
+          await ensureSchema();
+          const p = getPool();
+          const id = Number(a.id);
+          const { rows: cur } = await p.query(`SELECT * FROM genba_log WHERE id=$1`, [id]);
+          if (!cur.length) throw new Error(`行 ${id} が無い`);
+          if (cur[0].voided_at) throw new Error(`行 ${id} は取り消し済み`);
+          const r = cur[0];
+          const sets = [], vals = [id], before = {};
+          const set = (col, val) => { vals.push(val); sets.push(`${col}=$${vals.length}`); before[col] = r[col] instanceof Date ? ymd(r[col]) : r[col] ?? null; };
+          if (a.body != null && String(a.body).trim()) set("body", String(a.body).trim());
+          if (a.site !== undefined) { const s = await resolveSiteOrNull(p, a.site); set("site_id", s ? s.id : null); }
+          if (a.due_on !== undefined) { if (a.due_on && !/^\d{4}-\d{2}-\d{2}$/.test(a.due_on)) throw new Error("due_on は YYYY-MM-DD"); set("due_on", a.due_on || null); }
+          if (a.who !== undefined) set("who", a.who ? String(a.who).trim().slice(0, 60) : null);
+          if (a.estimate_min !== undefined) set("estimate_min", a.estimate_min == null || a.estimate_min === "" ? null : Math.max(1, Math.round(Number(a.estimate_min))));
+          if (a.topic !== undefined) set("topic", a.topic ? String(a.topic).trim().slice(0, 60) : null);
+          if (!sets.length) throw new Error("直す項目が無い");
+          const edits = [...(Array.isArray(r.edits) ? r.edits : []), { at: new Date().toISOString(), by, before }];
+          vals.push(JSON.stringify(edits)); sets.push(`edits=$${vals.length}`);
+          const { rows } = await p.query(`UPDATE genba_log SET ${sets.join(", ")} WHERE id=$1 RETURNING *`, vals);
+          return { log: logRow(rows[0]), before };
+        },
+      },
+      {
+        name: "genba_log_void",
+        description: "ログの行を取り消す (消さずに隠す)。status / list / tasks から消える。解決の行を取り消すと元のタスクが未解決に戻り、変更の決定を取り消すと前の決定が生き返る。間違って入れたとき用",
+        inputSchema: { type: "object", properties: { id: { type: "number" }, reason: { type: "string" } }, required: ["id"] },
+        handler: async (a) => {
+          await ensureSchema();
+          const p = getPool();
+          const id = Number(a.id);
+          const { rows } = await p.query(
+            `UPDATE genba_log SET voided_at=now(), voided_by=$2, void_reason=$3 WHERE id=$1 AND voided_at IS NULL RETURNING *`,
+            [id, by, a.reason ? String(a.reason).trim() : null]);
+          if (!rows.length) throw new Error(`行 ${id} が無い (か既に取り消し済み)`);
+          const r = rows[0];
+          const effects = [];
+          if (r.kind === "解決" && r.resolves_id) effects.push(`#${r.resolves_id} が未解決に戻った`);
+          if (r.supersedes_id) effects.push(`前の行 #${r.supersedes_id} が生き返った`);
+          const { rows: nx } = await p.query(`SELECT id FROM genba_log WHERE supersedes_id=$1 AND voided_at IS NULL`, [id]);
+          if (nx.length) effects.push(`この行を置き換えた #${nx[0].id} は残る`);
+          const { rows: rs } = await p.query(`SELECT id FROM genba_log WHERE resolves_id=$1 AND voided_at IS NULL`, [id]);
+          if (rs.length) effects.push(`この行を解決した #${rs[0].id} は残る (要らなければそれも void)`);
+          return { voided: logRow(r), effects: effects.length ? effects : undefined };
+        },
+      },
+      ...(gcs ? [
+        {
+          name: "genba_file_upload_url",
+          description: "画像・PDF を Keihi (GCS) に上げるための一時 URL を作る。LINE (Beeper) に来た写真を監視ジョブが保存するとき用。本文に base64 を貼らない: 返ってきた curl を PC 側で実行してファイルを PUT する。同じ source_ref は 2 回入らない (duplicate: true で既存の情報が返る)。上げたら genba_log_add(kind=進捗, body=「写真 n 枚: 内容」, photo_ids=[file id]) で現場に残す",
+          inputSchema: {
+            type: "object",
+            properties: {
+              site: { type: "string", description: "案件 ID・現場名・ID。省略 = 現場なし" },
+              filename: { type: "string" },
+              content_type: { type: "string", description: "image/jpeg など (省略で拡張子から)" },
+              kind: { type: "string", enum: ["写真", "図面", "資料", "その他"], description: "既定 写真" },
+              source_ref: { type: "string", description: "<channel>:<room>:<message id>:<n>。同じ添付を 2 回入れないための鍵" },
+              source: { type: "object", description: "{ channel, room, sender, at, quote }" },
+            },
+            required: ["filename"],
+          },
+          handler: async (a) => {
+            await ensureSchema();
+            const p = getPool();
+            const site = await resolveSiteOrNull(p, a.site);
+            const filename = String(a.filename || "file").trim().replace(/[\\/:*?"<>|\u0000-\u001f]/g, "_").slice(0, 120);
+            const contentType = a.content_type ? String(a.content_type).trim() : guessType(filename);
+            const kind = ["写真", "図面", "資料", "その他"].includes(a.kind) ? a.kind : "写真";
+            const sourceRef = a.source_ref ? String(a.source_ref).trim().slice(0, 300) : null;
+            if (sourceRef) {
+              const { rows: ex } = await p.query(`SELECT * FROM genba_files WHERE source_ref=$1`, [sourceRef]);
+              if (ex.length) return { duplicate: true, file: await fileRow(ex[0]) };
+            }
+            const exp = Date.now() + 2 * 3600 * 1000;
+            const token = uploadToken({ s: site ? Number(site.id) : null, k: kind, f: filename, c: contentType, r: sourceRef, o: a.source && typeof a.source === "object" ? a.source : null, b: by, e: exp });
+            const url = `${gcs.publicUrl}/api/genba/upload/${token}`;
+            return {
+              duplicate: false, site: site ? siteRow(site) : null, kind, filename, content_type: contentType, expires_at: new Date(exp).toISOString(),
+              method: "PUT", upload_url: url,
+              curl: `curl -sS -X PUT -H "Content-Type: ${contentType}" --data-binary @"${filename}" "${url}"`,
+              note: "PC 側でこの curl を実行する (ファイルの中身を会話に貼らない)。返ってくる JSON の id を genba_log_add の photo_ids に入れる",
+            };
+          },
+        },
+        {
+          name: "genba_file_list",
+          description: "現場の写真・ファイル一覧 (新しい順)。URL は 7 日有効の署名付き。site 省略 = 現場なし、\"*\" = 全部",
+          inputSchema: { type: "object", properties: { site: { type: "string" }, days: { type: "number", description: "既定 90" }, kind: { type: "string" }, limit: { type: "number", description: "既定 30、最大 200" } } },
+          handler: async (a) => {
+            await ensureSchema();
+            const p = getPool();
+            const all = a.site === "*" || a.site === "全部";
+            const site = all ? null : await resolveSiteOrNull(p, a.site);
+            const where = [`f.voided_at IS NULL`, `f.created_at > now() - ($1 || ' days')::interval`];
+            const vals = [String(Math.max(1, Math.min(3650, Number(a.days) || 90)))];
+            if (!all) { if (site) { vals.push(site.id); where.push(`f.site_id=$${vals.length}`); } else where.push(`f.site_id IS NULL`); }
+            if (a.kind) { vals.push(String(a.kind)); where.push(`f.kind=$${vals.length}`); }
+            vals.push(Math.max(1, Math.min(200, Number(a.limit) || 30)));
+            const { rows } = await p.query(
+              `SELECT f.*, s.name AS site_name, s.site_code FROM genba_files f LEFT JOIN sites s ON s.id = f.site_id
+                WHERE ${where.join(" AND ")} ORDER BY f.created_at DESC LIMIT $${vals.length}`, vals);
+            const files = [];
+            for (const r of rows) files.push(await fileRow(r));
+            return { site: all ? "*" : (site ? siteRow(site) : null), count: files.length, files };
+          },
+        },
+        {
+          name: "genba_file_void",
+          description: "ファイルを一覧から外す (GCS の中身は消さない)。間違って上げたとき用",
+          inputSchema: { type: "object", properties: { id: { type: "number" } }, required: ["id"] },
+          handler: async (a) => {
+            await ensureSchema();
+            const p = getPool();
+            const { rows } = await p.query(`UPDATE genba_files SET voided_at=now(), voided_by=$2 WHERE id=$1 AND voided_at IS NULL RETURNING id, filename`, [Number(a.id), by]);
+            if (!rows.length) throw new Error(`ファイル ${a.id} が無い (か既に外してある)`);
+            return { voided: { id: Number(rows[0].id), filename: rows[0].filename } };
+          },
+        },
+      ] : []),
+      {
         name: "genba_log_list",
         description: "進捗ログの一覧 (新しい順)。site 省略 = 現場に紐づかない項目、site \"*\" = 全現場横断。days で期間、kind で種類、who で人を絞る (例: 名取が今週やったこと = who=名取, kind=進捗, days=7)。普段は genba_status で足りる",
         inputSchema: {
@@ -1023,12 +1303,30 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi }) {
             who: { type: "string", description: "人で絞る" },
             days: { type: "number", description: "既定 30" },
             kind: { type: "string", enum: LOG_KINDS },
+            topic: { type: "string", description: "決定の topic で絞る (例: 床材)" },
+            chain: { type: "number", description: "この行 ID の変更の履歴 (置き換えの連鎖) を古い順に返す。他の絞り込みは無視" },
+            include_voided: { type: "boolean", description: "取り消した行も出す (既定 false)" },
             limit: { type: "number", description: "既定 50、最大 200" },
           },
         },
         handler: async (a) => {
           await ensureSchema();
           const p = getPool();
+          if (a.chain != null) {
+            // 連鎖: 指定行から前へ (supersedes_id) と後ろへ (superseded_by) 辿る
+            const { rows: all } = await p.query(
+              `WITH RECURSIVE back AS (
+                 SELECT * FROM genba_log WHERE id=$1
+                 UNION ALL SELECT g.* FROM genba_log g JOIN back b ON g.id = b.supersedes_id),
+               fwd AS (
+                 SELECT * FROM genba_log WHERE id=$1
+                 UNION ALL SELECT g.* FROM genba_log g JOIN fwd f ON g.supersedes_id = f.id AND g.voided_at IS NULL)
+               SELECT l.*, s.name AS site_name, s.site_code FROM (SELECT * FROM back UNION SELECT * FROM fwd) l LEFT JOIN sites s ON s.id = l.site_id
+                ORDER BY l.created_at`, [Number(a.chain)]);
+            if (!all.length) throw new Error(`行 ${a.chain} が無い`);
+            const rows = await withSupersededBy(p, all);
+            return { chain_of: Number(a.chain), logs: rows.map(logRow), current: rows.filter((r) => !r.voided_at && !r.superseded_by).map((r) => Number(r.id)) };
+          }
           const all = a.site === "*" || a.site === "全部";
           const site = all ? null : await resolveSiteOrNull(p, a.site);
           const days = Math.max(1, Math.min(3650, Number(a.days) || 30));
@@ -1038,10 +1336,13 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi }) {
           if (!all) { if (site) { vals.push(site.id); where.push(`l.site_id=$${vals.length}`); } else where.push(`l.site_id IS NULL`); }
           if (a.kind) { vals.push(a.kind); where.push(`l.kind=$${vals.length}`); }
           if (a.who) { vals.push(String(a.who)); where.push(`l.who=$${vals.length}`); }
+          if (a.topic) { vals.push(norm(a.topic)); where.push(`l.topic IS NOT NULL AND lower(regexp_replace(l.topic, '[\\s　・/()（）「」、。.,_-]', '', 'g')) = $${vals.length}`); }
+          if (!a.include_voided) where.push(LIVE);
           vals.push(limit);
-          const { rows } = await p.query(
+          const { rows: raw } = await p.query(
             `SELECT l.*, s.name AS site_name, s.site_code FROM genba_log l LEFT JOIN sites s ON s.id = l.site_id
               WHERE ${where.join(" AND ")} ORDER BY l.created_at DESC LIMIT $${vals.length}`, vals);
+          const rows = await withSupersededBy(p, raw);
           return { site: all ? "*" : (site ? siteRow(site) : null), days, logs: rows.map(logRow) };
         },
       },
@@ -1061,7 +1362,7 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi }) {
         handler: async (a) => {
           await ensureSchema();
           const p = getPool();
-          const where = [`l.kind IN ('次やること','課題')`, `NOT EXISTS (SELECT 1 FROM genba_log r WHERE r.resolves_id = l.id)`];
+          const where = [`l.kind IN ('次やること','課題')`, LIVE, NOT_RESOLVED, NOT_SUPERSEDED];
           const vals = [];
           if (a.kind) { vals.push(a.kind); where.push(`l.kind=$${vals.length}`); }
           if (a.max_minutes != null) { vals.push(Math.max(1, Math.round(Number(a.max_minutes) || 0))); where.push(`l.estimate_min IS NOT NULL AND l.estimate_min <= $${vals.length}`); }
@@ -1083,25 +1384,35 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi }) {
       },
       {
         name: "genba_status",
-        description: "現場の今の状況を集計して返す: 最終更新・直近の進捗・未解決の課題・次やること・最近の決定。「今どうなってる？」にはこれを読んで要約する",
+        description: "現場の今の状況を集計して返す: 最終更新・直近の進捗・未解決の課題・次やること・今生きている決定 (変更済みのものは最新だけ、changes と previous 付き)・現場のメモ・関わる人・最近の写真。「今どうなってる？」にはこれを読んで要約する",
         inputSchema: { type: "object", properties: { site: { type: "string" } }, required: ["site"] },
         handler: async (a) => {
           await ensureSchema();
           const p = getPool();
           const site = await resolveSite(p, a.site);
-          const [last, prog, open, dec, cnt] = await Promise.all([
-            p.query(`SELECT written_by, created_at FROM genba_log WHERE site_id=$1 ORDER BY created_at DESC LIMIT 1`, [site.id]),
-            p.query(`SELECT * FROM genba_log WHERE site_id=$1 AND kind='進捗' ORDER BY created_at DESC LIMIT 3`, [site.id]),
+          const [last, prog, open, dec, cnt, files] = await Promise.all([
+            p.query(`SELECT written_by, created_at FROM genba_log WHERE site_id=$1 AND voided_at IS NULL ORDER BY created_at DESC LIMIT 1`, [site.id]),
+            p.query(`SELECT * FROM genba_log WHERE site_id=$1 AND kind='進捗' AND voided_at IS NULL ORDER BY created_at DESC LIMIT 3`, [site.id]),
             p.query(
               `SELECT l.* FROM genba_log l
-                WHERE l.site_id=$1 AND l.kind IN ('課題','次やること')
-                  AND NOT EXISTS (SELECT 1 FROM genba_log r WHERE r.resolves_id = l.id)
+                WHERE l.site_id=$1 AND l.kind IN ('課題','次やること') AND ${LIVE} AND ${NOT_RESOLVED} AND ${NOT_SUPERSEDED}
                 ORDER BY l.due_on NULLS LAST, l.created_at`, [site.id]),
-            p.query(`SELECT * FROM genba_log WHERE site_id=$1 AND kind='決定' ORDER BY created_at DESC LIMIT 3`, [site.id]),
-            p.query(`SELECT kind, COUNT(*)::int AS n FROM genba_log WHERE site_id=$1 GROUP BY kind`, [site.id]),
+            p.query(`SELECT * FROM genba_log WHERE site_id=$1 AND kind='決定' AND voided_at IS NULL ORDER BY created_at DESC`, [site.id]),
+            p.query(`SELECT kind, COUNT(*)::int AS n FROM genba_log WHERE site_id=$1 AND voided_at IS NULL GROUP BY kind`, [site.id]),
+            gcs ? p.query(`SELECT * FROM genba_files WHERE site_id=$1 AND voided_at IS NULL ORDER BY created_at DESC LIMIT 5`, [site.id]) : Promise.resolve({ rows: [] }),
           ]);
           const today = todayJst();
           const openRows = open.rows.map(logRow).map((r) => ({ ...r, overdue: !!(r.due_on && r.due_on < today) }));
+          // 決定: 生きているもの (置き換えられていない) だけ。変更の回数と直前の内容を添える
+          const decById = new Map(dec.rows.map((r) => [Number(r.id), r]));
+          const supersededIds = new Set(dec.rows.filter((r) => r.supersedes_id).map((r) => Number(r.supersedes_id)));
+          const currentDecisions = dec.rows.filter((r) => !supersededIds.has(Number(r.id))).slice(0, 10).map((r) => {
+            let changes = 0, prev = r.supersedes_id ? decById.get(Number(r.supersedes_id)) : null;
+            for (let c = r; c && c.supersedes_id && decById.has(Number(c.supersedes_id)); c = decById.get(Number(c.supersedes_id))) changes++;
+            return { ...logRow(r), changes: changes || undefined, previous: prev ? { id: Number(prev.id), body: prev.body, at: prev.created_at } : undefined };
+          });
+          const recentFiles = [];
+          for (const f of files.rows) recentFiles.push(await fileRow(f));
           const siteNotes = (await notesFor(p, "site", [site.id])).get(Number(site.id)) || [];
           const { rows: people } = await p.query(`SELECT id, name, company, role, trade, tone FROM genba_contacts WHERE site_ids @> $1::jsonb ORDER BY company NULLS LAST, name`, [JSON.stringify([Number(site.id)])]);
           return {
@@ -1113,7 +1424,8 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi }) {
             recent_progress: prog.rows.map(logRow),
             open_issues: openRows.filter((r) => r.kind === "課題"),
             todos: openRows.filter((r) => r.kind === "次やること"),
-            recent_decisions: dec.rows.map(logRow),
+            decisions: currentDecisions,
+            recent_files: recentFiles.length ? recentFiles : undefined,
             counts: Object.fromEntries(cnt.rows.map((r) => [r.kind, r.n])),
           };
         },
@@ -1297,7 +1609,9 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi }) {
     "- 「写真 (図面) 上げたい」→ genba_folder(現場, 種類) の url を渡す。人はそこに Drive アプリで上げる。何枚入ったかは list_site_photos",
     "- 進捗の報告は genba_log_add に種類ごとに分けて積む: 進捗 / 課題 / 決定 / 次やること (期限があれば due_on)。1 行 1 件、短く",
     "- 課題・次やることが片付いたら kind=解決 で resolves_id に元の行 ID (状態の上書きはしない)",
-    "- 「今どうなってる？」→ genba_status を読んで要約 (全文が要るときだけ genba_log_list)",
+    "- 決定には topic (床材 / 巾木 / 納期 …) を付ける。決定が変わったら同じ現場・同じ topic で新しい決定を足すだけで前の決定を置き換える (返り値 superseded、「A → B に変更」と報告)。topic で引けないときは supersedes_id。履歴は genba_log_list(chain=行 ID)",
+    "- 間違いは genba_log_fix (誤字・現場違い・期限・担当。前の値は edits に残る)、入れるべきでなかった行は genba_log_void (隠すだけ。解決を void すると元のタスクが戻る)。kind を変えたいときは void して入れ直す",
+    "- 「今どうなってる？」→ genba_status を読んで要約 (全文が要るときだけ genba_log_list)。写真は genba_file_list(現場)",
     "- やったこと・完了したこと (細かいものも) は kind=進捗 で who 付きで積む (例「名取が満竹華庵のシャンプーを買った」→ site=満竹華庵, kind=進捗, who=名取)。現場に紐づかない雑務は site を省略",
     "- タスクには estimate_min (分) を付ける。「5 分で終わるタスクある？」「手が空いた」→ genba_tasks(max_minutes) から 1〜3 件を提案し、やったら kind=解決 で閉じる",
     "- ルールの変更は genba_rule_set (版が増えるだけ。消えない)。書く前に現行を見せて OK をもらう",
@@ -1318,8 +1632,9 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi }) {
     "1. genba_room_sync に Beeper 等のルーム一覧 (ID と名前だけ) を渡す → 返り値 watching が読む対象 (ON/OFF は画面 /genba/watch.html)。watching に無いルームは読まない",
     "2. 各ルームについて cursor より後のメッセージだけ読む (Beeper 等の MCP)",
     "3. 決定・課題・次やること を抽出して genba_log_add_many で記録。人や会社の予定・性質 (「来月から別現場」「値上げする」) は genba_note_add (source_ref 付き)。私的な話・センシティブな話は記録しない。各 item に source_ref = \"<channel>:<room>:<message id>\" を必ず入れる (同じメッセージは 2 回入らない)、source に { channel, room, sender, at, quote } (sender は表示名そのまま。連絡先に解決できればサーバーが contact_id を足す)",
-    "4. 最後に genba_source_mark(channel, room, { last_id, last_at }) で cursor を進める",
-    "5. 新着が無ければ何もしない。雑談・曖昧なものは記録しない。記録したら件数と中身を短く報告",
+    "4. 画像・PDF が来たら genba_file_upload_url(現場, ファイル名, content_type, source_ref=<channel>:<room>:<message id>:<n>) で URL をもらい、返ってきた curl を PC 側で実行して PUT する (ファイルの中身を会話に貼らない)。上げたら genba_log_add(kind=進捗, body=「写真 n 枚: 何の写真か」, photo_ids=[file id]) で現場に残す。現場が分からない添付は上げない",
+    "5. 最後に genba_source_mark(channel, room, { last_id, last_at }) で cursor を進める",
+    "6. 新着が無ければ何もしない。雑談・曖昧なものは記録しない。記録したら件数と中身を短く報告",
   ].join("\n");
 
   // 人ごとのトークン: { token: 名前 }。URL の token で書いた人を決める
@@ -1393,5 +1708,5 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi }) {
     }));
   }
 
-  return { tools, instructions: INSTRUCTIONS, mcpRoute, ensureSchema, registerRoutes };
+  return { tools, instructions: INSTRUCTIONS, mcpRoute, ensureSchema, registerRoutes, uploadRoute };
 }

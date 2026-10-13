@@ -24,10 +24,14 @@
 | `genba_find(query)` | 案件 ID・名前・名前の一部で現場を探す (表記ゆれ吸収) |
 | `genba_register(name, code?, drive_folder_url?, client?)` | 現場に案件 ID / Drive の案件フォルダ / 客先を紐付け (無ければ作る) |
 | `genba_folder(site, kind)` | 写真 / 図面 / 見積 / 資料 / 参考 を上げる Drive フォルダの URL (無ければ案件フォルダ下に `03_写真` 等を作る) |
-| `genba_log_add(site?, kind, body, who?, estimate_min?, due_on?, resolves_id?)` | 進捗ログに追記。種類 = 進捗 (やったこと) / 課題 / 決定 / 次やること (タスク) / 解決。site 省略 = 現場に紐づかない雑務。who = やった人/担当、estimate_min = 所要時間 (分) |
+| `genba_log_add(site?, kind, body, who?, estimate_min?, due_on?, resolves_id?, topic?, supersedes_id?)` | 進捗ログに追記。種類 = 進捗 (やったこと) / 課題 / 決定 / 次やること (タスク) / 解決。site 省略 = 現場に紐づかない雑務。who = やった人/担当、estimate_min = 所要時間 (分)。決定には topic (床材 / 巾木 …)。同じ現場・同じ topic の生きている決定があれば自動で置き換える (返り値 `superseded`)、明示するなら supersedes_id |
+| `genba_log_fix(id, {body, site, due_on, who, estimate_min, topic})` | 行を直す。前の値は `edits` に残る (誰がいつ)。kind は変えない |
+| `genba_log_void(id, reason?)` | 行を取り消す (隠すだけ、消えない)。解決を void すると元のタスクが戻る、変更の決定を void すると前の決定が生き返る |
 | `genba_tasks(max_minutes?, who?, site?, kind?)` | 未解決タスクを全現場横断で (所要時間が短い順)。「5 分で終わるタスクある？」用 |
-| `genba_log_list(site, days?, kind?)` | ログ一覧 |
-| `genba_status(site)` | 最終更新・直近の進捗・未解決の課題・次やること・最近の決定 |
+| `genba_log_list(site, days?, kind?, who?, topic?, chain?, include_voided?)` | ログ一覧。`chain=行 ID` で変更の履歴 (置き換えの連鎖) を古い順に、`current` が今生きている行 |
+| `genba_file_upload_url(site?, filename, content_type?, kind?, source_ref?)` | 画像・PDF を GCS に上げる一時 URL (2 時間)。返ってくる `curl` を PC 側で実行して PUT する。同じ source_ref は duplicate |
+| `genba_file_list(site?, days?, kind?)` / `genba_file_void(id)` | 現場の写真・ファイル一覧 (7 日有効の署名 URL) と、一覧から外す |
+| `genba_status(site)` | 最終更新・直近の進捗・未解決の課題・次やること・今生きている決定 (`changes` 回数と `previous` 付き)・現場のメモ・関わる人・最近の写真 |
 | `genba_rule_get(topic?)` / `genba_rule_set(topic, body)` | 運用ルール (版を積む。消えない) |
 | `genba_log_add_many(site?, items[])` | まとめて追記 (監視ジョブ・会話から一度に抽出したとき)。各行に `duplicate` |
 | `genba_room_sync(rooms)` | 監視ジョブが自分の Beeper / LINE のルーム一覧 (ID と名前だけ) を同期。返り値 `watching` が読む対象 |
@@ -53,6 +57,18 @@
 - `genba_log_add` の `source.sender` が連絡先に一意に解決できたら `source.contact_id` / `source.contact_name` を足す (sender が曖昧でも `source.room` を持つ人に絞れればそれ)
 - `genba_rule_get` の一覧は topic `連絡先` を先頭に返す
 
+### 決定の変更・訂正・取り消し
+- 決定には `topic` (何についてか)。決定が変わったら同じ現場・同じ topic で新しい決定を足すだけで、前の決定に `supersedes_id` で紐付く (自動)。`genba_status` には生きている決定だけ出て、`changes` (何回変わったか) と `previous` (直前の内容) が付く。履歴は `genba_log_list(chain=ID)`
+- タスクの言い換えも `supersedes_id` で (元のタスクは tasks から消える)
+- 追記のみは崩さない。直すときは `genba_log_fix` (前の値を `edits` に残す)、入れるべきでなかった行は `genba_log_void` (`voided_at` で隠す、物理削除しない)。「生きている行」= void されていない・解決されていない・置き換えられていない
+
+### 写真・ファイル (`genba_files` + GCS)
+LINE (Beeper) に来た画像を監視ジョブ (PC の Cowork) が保存する流れ。ファイルの中身を AI の会話に通さない。
+1. `genba_file_upload_url(現場, ファイル名, content_type, source_ref)` → 署名トークン付きの一時 URL (2 時間) と `curl` 一式が返る
+2. PC 側でその `curl -X PUT --data-binary @file` を実行 → `PUT /api/genba/upload/:token` (認証なし、トークンは INTERNAL_TICK_SECRET で HMAC 署名、中身に現場・ファイル名・source_ref・書いた人・期限) → GCS `gs://<RECEIPTS_BUCKET>/genba/<site_id|company>/<yyyymm>/<ts>_<rand>_<name>` に保存、`genba_files` に 1 行、署名 URL (7 日) を返す
+3. `genba_log_add(kind=進捗, body="写真 n 枚: 内容", photo_ids=[file id])` で現場のログに結ぶ
+- 同じ source_ref は 2 回入らない (同じトークンで 2 回 PUT しても GCS に 2 回置かない)。`genba_file_list` / `genba_status.recent_files` で見る。URL は呼ぶたびに署名し直す
+
 ### 会社とメモ (`genba_companies` / `genba_notes`): 流れるもの・流れないもの
 - **出来事** (〇日に決まった・やった) は `genba_log` に流す。**今もそうであること** (性質・予定・評価・決まり) は対象にぶら下げる `genba_notes`。log に混ぜると埋まるので分ける
 - `genba_companies`: 連絡先の `company` 文字列から自動で起きる (`company_id` で結ぶ、表記は最初の登録のまま)。「金額高め」「防水が得意」は個人ではなく会社に付ける
@@ -72,11 +88,12 @@ API: `GET /api/genba/me` / `GET /api/genba/rooms` / `PUT /api/genba/rooms/:id {e
 1. `genba_room_sync` にルーム一覧 (ID と名前) を渡す → 返り値 `watching` が読む対象 (ON/OFF は画面)
 2. cursor より後のメッセージだけ読む (Beeper 等の MCP)
 3. 決定・課題・次やることを抽出して `genba_log_add_many`。各 item に `source_ref = "<channel>:<room>:<message id>"` (同じメッセージは 2 回入らない) と `source = {channel, room, sender, at, quote}`
-4. `genba_source_mark(channel, room, {last_id, last_at})` で cursor を進める
+4. 画像・PDF は `genba_file_upload_url` → PC で `curl` PUT → `genba_log_add(photo_ids)` (上の「写真・ファイル」)
+5. `genba_source_mark(channel, room, {last_id, last_at})` で cursor を進める
 
 書いた人は人ごとの URL で決まる: `GET /api/mcp-connector` (ログイン済み) が `genba.名取` / `genba.LINE監視` の URL を返す (INTERNAL_TICK_SECRET から導出、リポには無い)。
 
-データ: `sites` に `site_code` / `drive_folder_id` / `client` 列を追加 (このアプリの画面は変えていない)、`genba_log` (追記のみ)、`genba_rules`、`genba_sources` / `genba_owners` (監視対象)、`genba_contacts` / `genba_companies` (連絡先・会社)、`genba_notes` (流れないメモ)。
+データ: `sites` に `site_code` / `drive_folder_id` / `client` 列を追加 (このアプリの画面は変えていない)、`genba_log` (追記のみ)、`genba_rules`、`genba_sources` / `genba_owners` (監視対象)、`genba_contacts` / `genba_companies` (連絡先・会社)、`genba_notes` (流れないメモ)、`genba_files` (写真の台帳、中身は GCS)。
 写真そのものは Drive の案件フォルダに人が直接上げる。Keihi は URL を返すだけ。
 
 ## ファイル構成

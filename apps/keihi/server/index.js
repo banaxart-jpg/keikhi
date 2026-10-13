@@ -2849,8 +2849,14 @@ const GENBA_MCP_TOKENS = Object.fromEntries([
   ...(genbaDerivedToken("genba-natori") ? [[genbaDerivedToken("genba-natori"), "名取"]] : []),
   ...(genbaDerivedToken("genba-monitor") ? [[genbaDerivedToken("genba-monitor"), "LINE監視"]] : []),
 ]);
-const genba = createGenba({ getPool, createMcpHandler: dramaCreateMcpHandler, getDriveApi: () => getDriveApi() });
+const genba = createGenba({
+  getPool, createMcpHandler: dramaCreateMcpHandler, getDriveApi: () => getDriveApi(),
+  // LINE 等から来た画像の置き場 (GCS)。PC 側 (Cowork) が genba_file_upload_url の curl で PUT する。トークンは INTERNAL_TICK_SECRET で署名
+  gcs: RECEIPTS_BUCKET ? { bucket: RECEIPTS_BUCKET, getStorage: () => storage, publicUrl: DRAMA_API_BASE, secret: (process.env.INTERNAL_TICK_SECRET || "").trim() } : null,
+});
 app.all("/api/genba/mcp/:token", genba.mcpRoute(GENBA_MCP_TOKENS));
+// 画像の PUT (認証なし・署名トークンで守る)。中身は JSON ではないので express.raw でそのまま受ける
+app.put("/api/genba/upload/:token", express.raw({ type: () => true, limit: "30mb" }), genba.uploadRoute());
 
 // ═══════════════════ 統合コネクタ (claude.ai に登録する URL を 1 本にする) ═══════════════════
 // 接続 URL: https://<keihi-api の Cloud Run URL>/api/mcp/<token>
