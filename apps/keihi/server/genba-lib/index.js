@@ -137,6 +137,10 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
     await p.query(`CREATE UNIQUE INDEX IF NOT EXISTS genba_sources_owner_room_uq ON genba_sources (owner, channel, room)`);
     // 用途: 記録 (現場の進捗を自動記録。現場が要る) / 応答 (社内の人からの問い合わせに AI が答える。現場は要らない)
     await p.query(`ALTER TABLE genba_sources ADD COLUMN IF NOT EXISTS purpose TEXT NOT NULL DEFAULT '記録'`);
+    // 初版は enabled DEFAULT true で作ってしまった (CREATE TABLE IF NOT EXISTS では直らない)。デフォルト拒否に揃える。
+    // 現場もラベルも無いのに ON になっている 記録 の行は意味が無いので OFF に戻す (同期で入っただけの行)
+    await p.query(`ALTER TABLE genba_sources ALTER COLUMN enabled SET DEFAULT false`);
+    await p.query(`UPDATE genba_sources SET enabled=false WHERE enabled AND purpose='記録' AND site_id IS NULL`);
     // 画面のログイン (メール) → 持ち主の名前。トークンの名前と同じ文字列にする
     await p.query(`
       CREATE TABLE IF NOT EXISTS genba_owners (
@@ -683,7 +687,8 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
     return n;
   }
   // 社内の人 (role=社内) の個人ルームは、同期で初めて見えたときに自動で「応答」ON にする (名取から LINE が来たら AI が返す)。
-  // 一度でも人が触った行 (OFF にした・現場を付けた・ラベルを付けた・用途を変えた) には触らない
+  // 一度でも人が触った行 (現場を付けた・ラベルを付けた・用途を変えた・読み進めた) には触らない。
+  // 用途が 応答 になった行は、人が OFF にしても purpose='記録' でないので二度と自動 ON しない
   async function autoEnableInternalRooms(p, owner, rooms) {
     if (!rooms.length) return [];
     const internal = (await loadContacts(p)).filter((c) => c.role === "社内");
@@ -694,7 +699,7 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
       if (hit.length !== 1) continue;
       const { rows } = await p.query(
         `UPDATE genba_sources SET purpose='応答', enabled=true, label=$4, updated_at=now()
-          WHERE owner=$1 AND channel=$2 AND room=$3 AND enabled=false AND purpose='記録' AND site_id IS NULL AND label IS NULL AND cursor IS NULL
+          WHERE owner=$1 AND channel=$2 AND room=$3 AND purpose='記録' AND site_id IS NULL AND label IS NULL AND cursor IS NULL
           RETURNING id`, [owner, r.channel, r.room, `社内: ${hit[0].name} (自動で応答 ON)`]);
       if (rows.length) { out.push({ channel: r.channel, room: r.room, name: r.name, contact: hit[0].name, enabled: true }); continue; }
       // 既に人が触った行 (or 想定外の状態)。何が違うかを返しておく
