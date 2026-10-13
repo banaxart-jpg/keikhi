@@ -57,15 +57,25 @@ export function createMcpHandler({ name, version = "1.0.0", instructions = "", t
       if (method === "server/discover") {
         // 期待される形が公開されていないので、引数をそのまま記録して様子を見る (値は小さいので丸ごと)
         remember({ server: name, method, ok: true, params: JSON.stringify(params ?? null).slice(0, 600), ...meta });
+        // クライアント (Anthropic/ClaudeAI, 2026-07-28) は params._meta に "io.modelcontextprotocol/protocolVersion" 等を入れて来る。
+        // 応答も同じ名前空間の _meta と、素の initialize 形の両方を返す (どちらを読むか分からないため)
+        const NS = "io.modelcontextprotocol/";
+        const protocolVersion = params?._meta?.[NS + "protocolVersion"] || params?.protocolVersion || meta.proto || "2025-06-18";
+        const capabilities = { tools: { listChanged: false }, resources: { listChanged: false }, prompts: { listChanged: false } };
+        const serverInfo = { name, version, title: name };
         return okResp(id, {
-          protocolVersion: params?.protocolVersion || meta.proto || "2025-06-18",
-          capabilities: { tools: { listChanged: false }, resources: {}, prompts: {} },
-          serverInfo: { name, version },
+          protocolVersion, capabilities, serverInfo,
           ...(instructions ? { instructions } : {}),
           tools: toolList(),
           resources: [],
           resourceTemplates: [],
           prompts: [],
+          _meta: {
+            [NS + "protocolVersion"]: protocolVersion,
+            [NS + "serverInfo"]: serverInfo,
+            [NS + "serverCapabilities"]: capabilities,
+            ...(instructions ? { [NS + "instructions"]: instructions } : {}),
+          },
         });
       }
       if (method === "resources/list") return okResp(id, { resources: [] });
