@@ -957,6 +957,9 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
     return best.length === 1 ? Number(best[0].id) : null;
   }
   const isGone = (e) => e?.code === 404 || e?.code === 410 || e?.response?.status === 404 || e?.response?.status === 410;
+  // 担当が AI のタスク (届いたら書類を作って送る等、AI が実行する仕事) は人のカレンダーには出さない
+  const AI_WHO_RE = /^(ai|claude|クロード|cowork|エーアイ)$/i;
+  const isAiTask = (t) => !!(t.who && AI_WHO_RE.test(String(t.who).trim()));
   let calSyncRunning = null, calSyncLastAt = 0;
   async function syncTaskCalendar({ by = "同期" } = {}) {
     const p = getPool();
@@ -980,19 +983,31 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
     const { rows: closed } = await p.query(
       `SELECT l.* FROM genba_log l WHERE l.calendar_event IS NOT NULL AND l.cal_snapshot IS NOT NULL
          AND NOT (l.kind IN ('次やること','課題') AND ${LIVE} AND ${NOT_RESOLVED} AND ${NOT_SUPERSEDED})`);
+    const aiOpen = open.filter(isAiTask);
+    const humanOpen = open.filter((t) => !isAiTask(t));
     const events = await listTaskEvents(cal, cfg.calendarId, today);
     const byId = new Map(events.map((e) => [e.id, e]));
     const byTask = new Map();
     for (const e of events) { const t = e.extendedProperties?.private?.keihiTaskId; if (t) byTask.set(Number(t), e); }
     const claimed = new Set([...open, ...closed].map((t) => t.calendar_event).filter(Boolean));
+    // 担当が AI に変わったタスクの予定は消す (人のカレンダーから外す)
+    for (const t of aiOpen) {
+      if (!t.calendar_event || !t.cal_snapshot) continue;
+      try {
+        let ev = byId.get(t.calendar_event) || null;
+        if (!ev) { try { ev = (await cal.events.get({ calendarId: cfg.calendarId, eventId: t.calendar_event })).data; } catch (e) { if (!isGone(e)) throw e; } }
+        if (ev && ev.status !== "cancelled") { await cal.events.delete({ calendarId: cfg.calendarId, eventId: t.calendar_event }); stats.deleted++; }
+        await p.query(`UPDATE genba_log SET cal_snapshot=NULL WHERE id=$1`, [t.id]);
+      } catch (e) { stats.errors.push(`#${t.id}: ${e.message}`); }
+    }
     const resolveFromCalendar = async (t) => {
       await p.query(`INSERT INTO genba_log (site_id, kind, body, written_by, resolves_id, title) VALUES ($1,'解決',$2,$3,$4,$5)`,
         [t.site_id, "カレンダーで予定が消された (完了扱い)", by, t.id, "カレンダーで完了"]);
       await p.query(`UPDATE genba_log SET cal_snapshot=NULL WHERE id=$1`, [t.id]);
       stats.resolved++;
     };
-    // 1) Keihi の未解決タスク → カレンダー
-    for (const t of open) {
+    // 1) Keihi の未解決タスク (人の分) → カレンダー
+    for (const t of humanOpen) {
       try {
         let ev = (t.calendar_event && byId.get(t.calendar_event)) || byTask.get(Number(t.id)) || null;
         if (!ev && t.calendar_event && t.cal_snapshot) {
@@ -1064,7 +1079,7 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
         stats.imported++;
       } catch (e) { stats.errors.push(`event ${ev.id}: ${e.message}`); }
     }
-    const result = { configured: true, calendarId: cfg.calendarId, today, open: open.length, ...stats, errors: stats.errors.length ? stats.errors.slice(0, 20) : undefined };
+    const result = { configured: true, calendarId: cfg.calendarId, today, open: humanOpen.length, ai_tasks: aiOpen.length || undefined, ...stats, errors: stats.errors.length ? stats.errors.slice(0, 20) : undefined };
     await setSetting(p, SETTING_CAL_SYNC, { at: new Date().toISOString(), result }, by);
     return result;
   }
@@ -2193,7 +2208,7 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
     "- 間違いは genba_log_fix (誤字・現場違い・期限・担当。前の値は edits に残る)、入れるべきでなかった行は genba_log_void (隠すだけ。解決を void すると元のタスクが戻る)。kind を変えたいときは void して入れ直す",
     "- 「今どうなってる？」→ genba_status を読んで要約 (全文が要るときだけ genba_log_list)。写真は genba_file_list(現場)",
     "- やったこと・完了したこと (細かいものも) は kind=進捗 で who 付きで積む (例「名取が満竹華庵のシャンプーを買った」→ site=満竹華庵, kind=進捗, who=名取)。現場に紐づかない雑務は site を省略",
-    "- AI 自身の作業 (別の AI への返事・ルールやコネクタの設定・方針の相談) はタスクにしない。タスクは人 (小西・名取・職人・業者) がやる仕事だけ。入ってしまったら genba_log_void",
+    "- AI 自身の作業 (別の AI への返事・ルールやコネクタの設定・方針の相談) はタスクにしない。入ってしまったら genba_log_void。ただし「人の代わりに AI が実行する仕事」(データが届いたら書類を作って送る、返事が来たら関係者に連絡する等) は who=AI の 次やること にしてよい。who=AI のタスクは人のタスクカレンダーには出ない。genba_tasks(who=AI) で自分の分を引いて、条件が揃ったら実行して 解決",
     "- タスクには estimate_min (分) を付ける。「5 分で終わるタスクある？」「手が空いた」→ genba_tasks(max_minutes) から 1〜3 件を提案し、やったら kind=解決 で閉じる",
     "- ルールの変更は genba_rule_set (版が増えるだけ。消えない)。書く前に現行を見せて OK をもらう",
     "- 書いた人はトークンから自動で入る。AI が名前を書かない",
