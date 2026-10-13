@@ -109,9 +109,16 @@ export function createMcpHandler({ name, version = "1.0.0", instructions = "", t
       return res.status(400).json(errResp(null, -32700, "parse error: JSON body required"));
     }
     const msgs = Array.isArray(body) ? body : [body];
+    const t0 = Date.now();
     const results = (await Promise.all(msgs.map((msg) => handleOne(msg, { ua })))).filter(Boolean);
-    if (!results.length) return res.status(202).end(); // notification のみ
+    const hdr = { accept, ct: String(req.headers["content-type"] || ""), proto: req.headers["mcp-protocol-version"] || undefined, session: req.headers["mcp-session-id"] ? "yes" : undefined };
     const payload = Array.isArray(body) ? results : results[0];
+    const bytes = results.length ? Buffer.byteLength(JSON.stringify(payload)) : 0;
+    // リクエスト単位の記録 (どのクライアントが何を・どんなヘッダで投げ、何バイト返したか)。tools/call の中身は handleOne 側で別に残す
+    remember({ server: name, method: "http", methods: msgs.map((x) => `${x?.method || "?"}${x?.id === undefined || x?.id === null ? "(notif)" : ""}`), batch: Array.isArray(body) || undefined, status: results.length ? 200 : 202, ms: Date.now() - t0, bytes, hdr, ok: true, ua });
+    if (!results.length) return res.status(202).end(); // notification のみ
+    // Streamable HTTP の互換: initialize に対して Mcp-Session-Id を要求するクライアントがいても困らないよう、受け取った ID はそのまま返す
+    if (req.headers["mcp-session-id"]) res.set("Mcp-Session-Id", String(req.headers["mcp-session-id"]));
     // Streamable HTTP: クライアントが SSE しか受けないと言ってきたら、1 イベントの SSE で同じ JSON を返す
     // (JSON を受けられるクライアント = 普段の claude.ai / Claude Code はそのまま application/json)
     if (accept.includes("text/event-stream") && !accept.includes("application/json") && !accept.includes("*/*")) {
