@@ -1991,14 +1991,24 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
         {
           name: "genba_calendar_setup",
           description: "タスク専用カレンダー (Google) を登録して同期を始める (小西のトークンからだけ)。カレンダーは事前にサービスアカウントへ変更権限で共有しておく。登録すると未解決タスクが終日予定として出て、以後 5 分おきに双方向で合う。colors は 担当→colorId (既定 小西=8 グラファイト, 名取=1 ラベンダー)。dry_run: true なら何も書かず、アクセスできるか・予定が何件あるか (取り込まれる数) だけ返す。予定用のカレンダー (BANAX カレンダー) を指定しない: 中の予定が全部タスクとして取り込まれる",
-          inputSchema: { type: "object", properties: { calendar_id: { type: "string", description: "…@group.calendar.google.com" }, colors: { type: "object", description: "例 {\"小西\":\"8\",\"名取\":\"1\"}" }, default_color: { type: "string", description: "担当なしの色 (省略で色なし)" }, dry_run: { type: "boolean", description: "true = 確認だけ (何も書かない)" } }, required: ["calendar_id"] },
+          inputSchema: { type: "object", properties: { calendar_id: { type: "string", description: "…@group.calendar.google.com (create: true なら不要)" }, create: { type: "boolean", description: "true = Keihi (サービスアカウント) が新しいカレンダーを作り、share_with の人に変更権限で共有する" }, summary: { type: "string", description: "create 時の名前 (既定 BANAX タスク)" }, share_with: { type: "array", items: { type: "string" }, description: "create 時に共有するメール" }, colors: { type: "object", description: "例 {\"小西\":\"8\",\"名取\":\"1\"}" }, default_color: { type: "string", description: "担当なしの色 (省略で色なし)" }, dry_run: { type: "boolean", description: "true = 確認だけ (何も書かない)" } } },
           handler: async (a) => {
             await ensureSchema();
             if (by !== "小西") throw new Error("この操作は小西のトークンからだけ");
             const p = getPool();
-            const calendarId = String(a.calendar_id || "").trim();
-            if (!calendarId) throw new Error("calendar_id が必要");
             const cal = await getCalendarApi();
+            let calendarId = String(a.calendar_id || "").trim();
+            const shared = [];
+            if (a.create) {
+              // Keihi 自身がカレンダーを持つ (SA が所有)。人には変更権限で共有 → 相手のカレンダー一覧に自動で出る
+              const made = await cal.calendars.insert({ requestBody: { summary: a.summary ? String(a.summary).trim() : "BANAX タスク", timeZone: "Asia/Tokyo" } });
+              calendarId = made.data.id;
+              for (const email of toList(a.share_with)) {
+                try { await cal.acl.insert({ calendarId, requestBody: { role: "writer", scope: { type: "user", value: email } } }); shared.push(email); }
+                catch (e) { shared.push(`${email}: 失敗 (${e.message})`); }
+              }
+            }
+            if (!calendarId) throw new Error("calendar_id が必要 (か create: true)");
             let info;
             try { info = (await cal.calendars.get({ calendarId })).data; }
             catch (e) { throw new Error(`カレンダーが読めない (${e.message})。サービスアカウントに「変更権限」で共有されているか、ID が正しいか確認`); }
@@ -2017,7 +2027,7 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
             await setSetting(p, SETTING_CAL, { calendarId, summary: info.summary || null, colors, defaultColor: a.default_color ? String(a.default_color) : null, setAt: new Date().toISOString() }, by);
             calCfgCache = { at: 0, cfg: null };
             const sync = await syncTaskCalendar({ by });
-            return { calendar: { id: calendarId, summary: info.summary || null, timeZone: info.timeZone || null }, colors, sync };
+            return { calendar: { id: calendarId, summary: info.summary || null, timeZone: info.timeZone || null }, created: !!a.create || undefined, shared_with: shared.length ? shared : undefined, colors, sync };
           },
         },
         {
