@@ -650,14 +650,37 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
     }
     const out = rows.map((r) => contactRow(r, siteMap, notesMap, companyMap));
     if (recent) {
-      for (const o of out) {
+      // 直近のやりとりの時刻: この人からのメッセージの記録 (source.at) と、この人のルームの cursor (監視ジョブが最後に読んだメッセージの時刻)
+      const roomIds = [...new Set(rows.flatMap((r) => (Array.isArray(r.channels) ? r.channels : []).map((c) => c.room_id).filter(Boolean)))];
+      let srcRows = [];
+      if (roomIds.length) {
+        try { srcRows = (await p.query(`SELECT channel, room, cursor FROM genba_sources WHERE room = ANY($1::text[])`, [roomIds])).rows; } catch (e) { console.warn("[genba] contact rooms", e.message); }
+      }
+      for (const [i, o] of out.entries()) {
         const { rows: lg } = await p.query(
           `SELECT l.*, s.name AS site_name, s.site_code FROM genba_log l LEFT JOIN sites s ON s.id = l.site_id
             WHERE l.source->>'contact_id' = $1 AND l.voided_at IS NULL ORDER BY l.created_at DESC LIMIT 5`, [String(o.id)]);
         o.recent_log = lg.map(logRow);
+        const mine = new Set((Array.isArray(rows[i].channels) ? rows[i].channels : []).map((c) => c.room_id).filter(Boolean));
+        const times = [
+          ...lg.map((l) => l.source && l.source.at).filter(Boolean),
+          ...srcRows.filter((x) => mine.has(x.room)).map((x) => x.cursor && x.cursor.last_at).filter(Boolean),
+        ].map((t) => new Date(t).getTime()).filter((t) => Number.isFinite(t));
+        const last = times.length ? new Date(Math.max(...times)) : null;
+        o.last_contact = last ? { at: last.toISOString(), minutes_ago: Math.max(0, Math.floor((Date.now() - last.getTime()) / 60000)) } : null;
+        o.message_hint = messageHint(o.last_contact);
       }
     }
     return out;
+  }
+  // 連絡文の書き出し: 会話の続きなら挨拶を付けない (毎回「お疲れ様です！」から始めない)。Keihi が知っている範囲の時刻で判定し、送る直前にルームの直近を読むのは AI 側
+  const jstDayOf = (iso) => new Date(new Date(iso).getTime() + 9 * 3600000).toISOString().slice(0, 10);
+  function messageHint(last) {
+    const base = "送る直前にそのルームの直近 5 件を読み、会話の続きとして書く。1 通に用件は 1 つ、前に送った内容 (住所・日程・お礼) は繰り返さない";
+    if (!last) return `このルームとのやりとりの記録が無い → 最初の 1 通だけ短い挨拶 OK (tone に従う)。${base}`;
+    if (last.minutes_ago <= 180) return `${last.minutes_ago} 分前にやりとりあり → 「お疲れ様です」等の挨拶は付けない。用件から書く (続報・訂正は「先ほどの〇〇の件、」で始める)。${base}`;
+    if (jstDayOf(last.at) === todayJst()) return `今日すでにやりとりあり → 挨拶は付けず用件から書く。${base}`;
+    return `今日はまだやりとり無し → 最初の 1 通だけ短い挨拶 OK (tone に従う)。${base}`;
   }
   const loadContacts = async (p) => (await p.query(`SELECT * FROM genba_contacts ORDER BY company NULLS LAST, name`)).rows;
   // あいまい検索の点数: 4 完全一致 / 3 鍵が検索語で始まる (菊池 → 菊池輝) / 2 検索語が鍵で始まる / 1 部分一致。
@@ -1146,7 +1169,7 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
     return [
       {
         name: "genba_contact_find",
-        description: "人を探す (連絡先・呼び名)。名前・あだ名・会社名・LINE のルーム名・room_id をあいまい検索 (全角半角・空白・「さん」の有無・かな/カナを吸収)。人の名前やあだ名が出たら、送る前・記録する前に必ずこれで引く。match が入っていれば 1 人に確定。candidates が複数なら推測で決めず人に聞く",
+        description: "人を探す (連絡先・呼び名)。名前・あだ名・会社名・LINE のルーム名・room_id をあいまい検索 (全角半角・空白・「さん」の有無・かな/カナを吸収)。人の名前やあだ名が出たら、送る前・記録する前に必ずこれで引く。送るときは返り値 message_hint (直近のやりとりが近ければ挨拶なしで用件から) に従う。match が入っていれば 1 人に確定。candidates が複数なら推測で決めず人に聞く",
         inputSchema: { type: "object", properties: { query: { type: "string", description: "例: バカボン / 菊池 / 大丁工業 / !8YEO…:beeper.local" } }, required: ["query"] },
         handler: async (a) => {
           await ensureSchema();
@@ -2236,6 +2259,7 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
 
   const INSTRUCTIONS = [
     "現場 (genba_*): 1 現場 1 チャットで使う。データとルールは Keihi 側にあるので、どの AI からでも同じ。",
+    "■ 新しいチャットの最初に (毎回、聞かれる前に): 1. genba_rule_get (topic 省略) で運用ルールを読む 2. genba_audit で抜け漏れと監視ジョブの状態を見る 3. genba_tasks(who=AI) で自分の分を引く。前のチャットの内容は読み返さない。今の状態は Keihi が正本 (genba_status / genba_tasks) で、チャットは作業の場所にすぎない",
     "- 会話の最初に genba_rule_get (topic 省略) で運用ルールを読む (無ければ空のまま進める)",
     "- 人の名前・あだ名が出たら、送る前・記録する前に必ず genba_contact_find で引く (下の ■ 連絡先)",
     "- 現場の特定: チャットの指示文に案件 ID があればそれ。無ければ genba_find(現場名)。候補が複数なら人に聞く",
@@ -2256,6 +2280,11 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
     "- タスクには estimate_min (分) を付ける。「5 分で終わるタスクある？」「手が空いた」→ genba_tasks(max_minutes) から 1〜3 件を提案し、やったら kind=解決 で閉じる",
     "- ルールの変更は genba_rule_set (版が増えるだけ。消えない)。書く前に現行を見せて OK をもらう",
     "- 書いた人はトークンから自動で入る。AI が名前を書かない",
+    "■ 連絡文 (LINE・メールを人に送るとき)。毎回「お疲れ様です！」から始めない",
+    "- 送る直前にそのルームの直近 5 件を読んで、会話の続きとして書く。genba_contact_find の返り値 message_hint に従う: 3 時間以内 (または今日) にやりとりがあれば挨拶を付けず用件から書く。挨拶はその日の最初の 1 通だけ、相手が挨拶してきても返さない",
+    "- 同じ用件の続報・訂正は「先ほどの〇〇の件、」で始め、前に送った内容 (住所・日程・お礼・よろしく) を繰り返さない。1 通に用件は 1 つ。送る前に同じルーム宛の用件が他にあればまとめて 1 通にする",
+    "- 確定していないこと (元請けが最終確認中の品番・未確定の日程) は外に送らない。確定してから 1 通で送る。相手を待たせるなら「確認中です、分かり次第連絡します」の 1 行だけ",
+    "- 文面は contact の tone に従う。「！」の数・絵文字・名前の呼びかけも毎回は要らない。LINE は 3〜4 行まで",
     "■ 連絡先・呼び名 (genba_contact_*)。人はあだ名や下の名前で呼ばれる (例: バカボンさん = ㈱大丁工業 菊池)。誰か / どのルームに送るか / どんな言葉遣いか は全 AI で同じ答えにする",
     "- 名前・あだ名・会社名・ルーム名が出たら genba_contact_find。match が入れば確定。見つからない / candidates が複数なら推測で送らず人に聞く",
     "- 「A は B のこと」「覚えといて」と言われたら genba_contact_alias_add(contact, alias)",
