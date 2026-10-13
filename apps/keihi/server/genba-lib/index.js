@@ -89,6 +89,8 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
     await p.query(`ALTER TABLE genba_log ADD COLUMN IF NOT EXISTS void_reason TEXT`);
     // 一覧用の短いタイトル (40 字まで)。body は詳細として残す。空なら返すときだけ body の先頭 28 字を出す (DB には書かない)
     await p.query(`ALTER TABLE genba_log ADD COLUMN IF NOT EXISTS title TEXT`);
+    // 日程をカレンダーに入れたら、その行に event ID (か 'done') を残す。抜け漏れチェック (genba_audit) が「日程あり・未登録」を拾う
+    await p.query(`ALTER TABLE genba_log ADD COLUMN IF NOT EXISTS calendar_event TEXT`);
     // 画像・PDF (LINE 等から来たもの)。中身は GCS、ここは台帳。source_ref で同じ添付を 2 回入れない
     await p.query(`
       CREATE TABLE IF NOT EXISTS genba_files (
@@ -314,6 +316,7 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
     estimate_min: r.estimate_min != null ? Number(r.estimate_min) : undefined,
     who: r.who || undefined,
     topic: r.topic || undefined,
+    calendar_event: r.calendar_event || undefined,
     supersedes_id: r.supersedes_id ? Number(r.supersedes_id) : undefined,
     superseded_by: r.superseded_by ? Number(r.superseded_by) : undefined,
     edited: Array.isArray(r.edits) && r.edits.length ? r.edits.length : undefined,
@@ -325,6 +328,40 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
   const LIVE = `l.voided_at IS NULL`;
   const NOT_RESOLVED = `NOT EXISTS (SELECT 1 FROM genba_log r WHERE r.resolves_id = l.id AND r.voided_at IS NULL)`;
   const NOT_SUPERSEDED = `NOT EXISTS (SELECT 1 FROM genba_log n WHERE n.supersedes_id = l.id AND n.voided_at IS NULL)`;
+  // ── 抜け漏れの検知 (本文から機械的に拾う。AI の記憶に頼らない) ──
+  // 返事待ち・確認中・依頼した → 次やること (期限付き) が無いと流れる
+  const WAIT_RE = /待ち|確認中|確認する|確認して|依頼(済|した|しました|中|する)|頼ん(だ|である)|頼む|投げ(た|てある|る)|送(った|付した|付済|信した)|聞い(た|てある|てみる)|問い合わせ|回答待ち|返事|返答|見積(待ち|依頼|を頼)/;
+  // 日程を含む出来事 (搬入・打ち合わせ・現調・作業日…) → カレンダー登録が要る
+  const EVENT_RE = /搬入|搬出|打ち?合わ?せ|現調|現場調査|着工|引き?渡し|納品|作業日|作業に入|に入る|入り|立ち?会い|検査|撤去|工事|施工|取付|据付|配送|納材|開始|完了予定|夜間|朝一/;
+  const DATE_RE = /\d{1,2}\s*[\/月]\s*\d{1,2}|来週|来月|明日|明後日|今週|週末|翌日|[月火水木金土日]曜|\d{1,2}\s*時/;
+  const textOf = (r) => `${r.title || ""} ${r.body || ""}`;
+  const looksWaiting = (r) => (r.kind === "進捗" || r.kind === "決定") && WAIT_RE.test(textOf(r));
+  // 「誰の返事待ちか / 何待ちか」の手がかり: 〇〇さん・〇〇様 の名前、「見積待ち」「図面確認中」の名詞。タスクがこの手がかりを含めば片付いている扱い
+  function waitKeys(r) {
+    const s = textOf(r), keys = new Set();
+    for (const m of s.matchAll(/([\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}A-Za-z]{1,8})(さん|様|くん|ちゃん)/gu)) keys.add(m[1]);
+    for (const m of s.matchAll(/([\p{Script=Han}\p{Script=Katakana}A-Za-z]{2,10})(待ち|確認中|依頼|を頼|の返事|の回答)/gu)) keys.add(m[1]);
+    if (r.topic) keys.add(r.topic);
+    return [...keys].filter((k) => !["返事", "回答", "確認", "連絡", "依頼"].includes(k));
+  }
+  // その行の後 2 日以内に、同じ現場で、手がかりを含む未解決タスクが立っていれば OK
+  function waitingCovered(r, openTasks) {
+    const t0 = new Date(r.created_at).getTime() - 60000, t1 = t0 + 2 * 86400000 + 60000;
+    const keys = waitKeys(r);
+    return openTasks.some((t) => (t.site_id ?? null) === (r.site_id ?? null) && Number(t.id) !== Number(r.id)
+      && new Date(t.created_at).getTime() >= t0 && new Date(t.created_at).getTime() <= t1
+      && (!keys.length || keys.some((k) => textOf(t).includes(k))));
+  }
+  const looksEvent = (r) => EVENT_RE.test(textOf(r)) && (DATE_RE.test(textOf(r)) || !!r.due_on);
+  // 1 行追記したあとに AI へ返す「次にやること」。ここで拾えば AI が忘れても止まる
+  function followupsFor(row, { hasTaskInBatch = false } = {}) {
+    const out = [];
+    if (looksWaiting(row) && !hasTaskInBatch) out.push(`返事待ち・確認中の内容 → genba_log_add(kind=次やること, title=「〇〇の返事待ち」, due_on, who) を立てる (無いと流れる)`);
+    if (looksEvent(row) && !row.calendar_event) out.push(`日程が入っている → BANAX カレンダーに登録 (ルール カレンダー)。登録したら genba_log_fix(id=${Number(row.id)}, calendar_event=<event id か done>) で印を付ける`);
+    if (row.kind === "決定" && !row.topic) out.push(`決定に topic が無い → genba_log_fix(id=${Number(row.id)}, topic=…) (変更の紐付けに使う)`);
+    if ((row.kind === "次やること" || row.kind === "課題") && !row.due_on) out.push(`期限が無い → due_on を付ける (期限切れの検知に使う)`);
+    return out;
+  }
   // 行の一覧に「この行を置き換えた行の ID」を付ける
   async function withSupersededBy(p, rows) {
     const ids = rows.map((r) => Number(r.id));
@@ -342,6 +379,7 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
     const body = String(a.body || "").trim();
     if (!body) throw new Error("body が空");
     const title = cleanTitle(a.title);
+    const calendarEvent = a.calendar_event ? String(a.calendar_event).trim().slice(0, 200) : null;
     let resolvesId = null;
     if (a.kind === "解決") {
       resolvesId = Number(a.resolves_id);
@@ -394,17 +432,27 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
       if (hit) { supersedesId = Number(hit.id); superseded = hit; }
     }
     const { rows } = await p.query(
-      `INSERT INTO genba_log (site_id, kind, body, written_by, due_on, resolves_id, photo_ids, source_ref, source, estimate_min, who, topic, supersedes_id, title)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+      `INSERT INTO genba_log (site_id, kind, body, written_by, due_on, resolves_id, photo_ids, source_ref, source, estimate_min, who, topic, supersedes_id, title, calendar_event)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
        ON CONFLICT (source_ref) WHERE source_ref IS NOT NULL DO NOTHING
        RETURNING *`,
-      [useSiteId, a.kind, body, by, due, resolvesId, photos ? JSON.stringify(photos) : null, sourceRef, source ? JSON.stringify(source) : null, est, who, topic, supersedesId, title]
+      [useSiteId, a.kind, body, by, due, resolvesId, photos ? JSON.stringify(photos) : null, sourceRef, source ? JSON.stringify(source) : null, est, who, topic, supersedesId, title, calendarEvent]
     );
     if (rows.length) {
+      const followups = followupsFor(rows[0], { hasTaskInBatch: !!ctx.hasTaskInBatch });
+      let siteOverdue;
+      if (useSiteId != null && !ctx.skipOverdue) {
+        const { rows: od } = await p.query(
+          `SELECT COUNT(*)::int AS n FROM genba_log l WHERE l.site_id=$1 AND l.kind IN ('課題','次やること') AND l.due_on < $2::date AND ${LIVE} AND ${NOT_RESOLVED} AND ${NOT_SUPERSEDED}`,
+          [useSiteId, todayJst()]);
+        siteOverdue = od[0]?.n || 0;
+      }
       return {
         site: siteOut, log: logRow(rows[0]), duplicate: false,
         superseded: superseded ? { id: Number(superseded.id), body: superseded.body, at: superseded.created_at } : undefined,
         say: superseded ? `${topic || superseded.topic || "決定"}: 「${superseded.body}」→「${body}」に変更` : undefined,
+        followups: followups.length ? followups : undefined,
+        site_overdue: siteOverdue ? `この現場に期限切れのタスクが ${siteOverdue} 件 (genba_tasks(site) で確認)` : undefined,
       };
     }
     // source_ref が既にある = 同じメッセージを前に記録済み
@@ -1177,6 +1225,7 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
             topic: { type: "string", description: "決定が何についてか (床材 / 巾木 / 納期 / 色 …)。同じ現場に同じ topic の生きている決定があれば自動でそれを置き換える (変更として紐付く)" },
             supersedes_id: { type: "number", description: "この行が置き換える前の行 ID (決定の変更・タスクの言い換え)。topic で自動紐付けできないときに" },
             photo_ids: { type: "array", items: { type: "string" }, description: "関連する写真・ファイルの ID (genba_file_list の id、または Drive の file_id)" },
+            calendar_event: { type: "string", description: "日程をカレンダーに登録済みなら event ID (か done)。返り値の followups に「カレンダー登録」が出たら、登録して genba_log_fix で付ける" },
             source_ref: { type: "string", description: "出どころの一意キー (例 LINE:<room>:<message id>)。同じ source_ref は 2 回記録されない" },
             source: { type: "object", description: "出どころ { channel, room, sender, at, quote } など自由" },
           },
@@ -1205,18 +1254,21 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
           if (!items.length) throw new Error("items が空");
           const results = [];
           let added = 0, dup = 0, failed = 0;
-          const ctx = {}; // 連絡先の読み込みを 1 回にまとめる
+          // 連絡先の読み込みを 1 回にまとめる。同じ呼び出しに 次やること が入っていれば「タスク立てた？」は出さない
+          const ctx = { hasTaskInBatch: items.some((it) => it && (it.kind === "次やること" || it.kind === "課題")), skipOverdue: true };
+          const followups = new Set();
           for (const it of items) {
             try {
               const r = await addLog(p, by, { ...it, site: it.site || a.site }, undefined, ctx);
-              results.push({ ok: true, duplicate: r.duplicate, log: r.log, site: r.site });
+              results.push({ ok: true, duplicate: r.duplicate, log: r.log, site: r.site, superseded: r.superseded, followups: r.followups });
+              for (const f of r.followups || []) followups.add(f);
               if (r.duplicate) dup++; else added++;
             } catch (e) {
               failed++;
               results.push({ ok: false, error: e.message, item: { kind: it.kind, body: String(it.body || "").slice(0, 80) } });
             }
           }
-          return { added, duplicate: dup, failed, results };
+          return { added, duplicate: dup, failed, results, followups: followups.size ? [...followups] : undefined };
         },
       },
       {
@@ -1229,6 +1281,7 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
             body: { type: "string" }, site: { type: "string", description: "案件 ID・現場名・ID。「会社」で現場なしに" },
             due_on: { type: "string", description: "YYYY-MM-DD。空文字で消す" }, who: { type: "string" }, estimate_min: { type: "number" }, topic: { type: "string" },
             title: { type: "string", description: "一覧用タイトル (40 字まで)。空文字で消す" },
+            calendar_event: { type: "string", description: "カレンダーに登録した event ID (か done)。日程の行に付ける" },
           },
           required: ["id"],
         },
@@ -1249,6 +1302,7 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
           if (a.estimate_min !== undefined) set("estimate_min", a.estimate_min == null || a.estimate_min === "" ? null : Math.max(1, Math.round(Number(a.estimate_min))));
           if (a.topic !== undefined) set("topic", a.topic ? String(a.topic).trim().slice(0, 60) : null);
           if (a.title !== undefined) set("title", cleanTitle(a.title));
+          if (a.calendar_event !== undefined) set("calendar_event", a.calendar_event ? String(a.calendar_event).trim().slice(0, 200) : null);
           if (!sets.length) throw new Error("直す項目が無い");
           const edits = [...(Array.isArray(r.edits) ? r.edits : []), { at: new Date().toISOString(), by, before }];
           vals.push(JSON.stringify(edits)); sets.push(`edits=$${vals.length}`);
@@ -1430,6 +1484,56 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
               WHERE ${where.join(" AND ")} ORDER BY l.created_at DESC LIMIT $${vals.length}`, vals);
           const rows = await withSupersededBy(p, raw);
           return { site: all ? "*" : (site ? siteRow(site) : null), days, logs: rows.map(logRow) };
+        },
+      },
+      {
+        name: "genba_audit",
+        description: "抜け漏れチェック。期限切れのタスク / 期限の無いタスク / 「返事待ち・確認中」と書いたのに次やることが無い行 / 日程があるのにカレンダー未登録の行 を機械的に洗い出す。監視ジョブは 1 時間に 1 回、会話の終わりにも 1 回呼んで、出たものを片付ける (タスクを立てる・カレンダーに入れて calendar_event を付ける・終わっていれば 解決)。site 省略で全現場",
+        inputSchema: { type: "object", properties: { site: { type: "string", description: "省略で全現場" }, days: { type: "number", description: "直近何日の行を見るか (既定 7)" } } },
+        handler: async (a) => {
+          await ensureSchema();
+          const p = getPool();
+          const site = a.site ? await resolveSite(p, a.site) : null;
+          const days = Math.max(1, Math.min(90, Number(a.days) || 7));
+          const today = todayJst();
+          const [openRes, recentRes] = await Promise.all([
+            p.query(
+              `SELECT l.*, s.name AS site_name, s.site_code FROM genba_log l LEFT JOIN sites s ON s.id = l.site_id
+                WHERE l.kind IN ('次やること','課題') AND ${LIVE} AND ${NOT_RESOLVED} AND ${NOT_SUPERSEDED} ${site ? "AND l.site_id=$1" : ""}
+                ORDER BY l.due_on NULLS LAST, l.created_at`, site ? [site.id] : []),
+            p.query(
+              `SELECT l.*, s.name AS site_name, s.site_code FROM genba_log l LEFT JOIN sites s ON s.id = l.site_id
+                WHERE l.created_at > now() - ($1 || ' days')::interval AND l.kind IN ('進捗','決定','次やること') AND ${LIVE} AND ${NOT_SUPERSEDED} ${site ? "AND l.site_id=$2" : ""}
+                ORDER BY l.created_at DESC LIMIT 400`, site ? [String(days), site.id] : [String(days)]),
+          ]);
+          const open = openRes.rows, recent = recentRes.rows;
+          const brief = (r) => ({ id: Number(r.id), site: r.site_id ? r.site_name : null, kind: r.kind, title: r.title || autoTitle(r.body), due_on: ymd(r.due_on) || undefined, who: r.who || undefined, at: r.created_at });
+          const overdue = open.filter((r) => r.due_on && ymd(r.due_on) < today);
+          const threeDaysAgo = new Date(Date.now() - 3 * 86400000);
+          const noDue = open.filter((r) => !r.due_on && new Date(r.created_at) < threeDaysAgo);
+          // 返事待ち・確認中 と書いたのに、その後その現場に未解決のタスクが 1 つも立っていない
+          const waiting = recent.filter((r) => looksWaiting(r) && !waitingCovered(r, open));
+          const noCalendar = recent.filter((r) => looksEvent(r) && !r.calendar_event);
+          const parts = [];
+          if (overdue.length) parts.push(`期限切れ ${overdue.length}`);
+          if (noDue.length) parts.push(`期限なし ${noDue.length}`);
+          if (waiting.length) parts.push(`返事待ちでタスク無し ${waiting.length}`);
+          if (noCalendar.length) parts.push(`日程あり・カレンダー未確認 ${noCalendar.length}`);
+          return {
+            today, days, site: site ? siteRow(site) : "*",
+            overdue: overdue.map(brief),
+            no_due: noDue.map(brief),
+            waiting_without_task: waiting.map(brief),
+            dates_without_calendar: noCalendar.map(brief),
+            open_tasks: open.length,
+            summary: parts.length ? parts.join(" / ") : "抜け漏れなし",
+            how_to_fix: parts.length ? [
+              "期限切れ → 終わっていれば genba_log_add(kind=解決)、まだなら due_on を genba_log_fix で引き直すか、人に聞く",
+              "期限なし → genba_log_fix(due_on)",
+              "返事待ちでタスク無し → genba_log_add(kind=次やること, title=「〇〇の返事待ち」, due_on, who)",
+              "日程あり・カレンダー未確認 → カレンダーに入れて genba_log_fix(calendar_event=event id か done)。既に入っているなら done を付けるだけ",
+            ] : undefined,
+          };
         },
       },
       {
@@ -1707,6 +1811,8 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
     "- 現場の特定: チャットの指示文に案件 ID があればそれ。無ければ genba_find(現場名)。候補が複数なら人に聞く",
     "- 「写真 (図面) 上げたい」→ genba_folder(現場, 種類) の url を渡す。人はそこに Drive アプリで上げる。何枚入ったかは list_site_photos",
     "- 進捗の報告は genba_log_add に種類ごとに分けて積む: 進捗 / 課題 / 決定 / 次やること (期限があれば due_on)。1 行 1 件",
+    "- 記録したら返り値の followups を必ず読んで、その場で片付ける (次やること を立てる / カレンダーに入れて calendar_event を付ける / topic・due_on を足す)。返事待ち・確認中・日程は AI が忘れやすいので、サーバーが返す followups が最後の砦",
+    "- 会話の終わりと監視ジョブの 1 時間に 1 回は genba_audit を呼び、期限切れ・期限なし・返事待ちでタスク無し・日程あり未登録 を片付けるか人に報告する。抜け漏れは致命的なので省かない",
     "- 必ず title を付ける: 「何を・どうする」を 20 字前後 (例「工程表を辰巳さんへ送る」「巾木の色をみゆまに確認」)。決定は title に結論 (例「巾木は東リ97番か43番」)。body には経緯・数量・型番・金額・出どころの詳細。一覧は title、詳細は body で読む",
     "- 課題・次やることが片付いたら kind=解決 で resolves_id に元の行 ID (状態の上書きはしない)",
     "- 決定には topic (床材 / 巾木 / 納期 …) を付ける。決定が変わったら同じ現場・同じ topic で新しい決定を足すだけで前の決定を置き換える (返り値 superseded、「A → B に変更」と報告)。topic で引けないときは supersedes_id。履歴は genba_log_list(chain=行 ID)",

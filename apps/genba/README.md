@@ -26,7 +26,8 @@
 | `genba_folder(site, kind)` | 写真 / 図面 / 見積 / 資料 / 参考 を上げる Drive フォルダの URL (無ければ案件フォルダ下に `03_写真` 等を作る) |
 | `genba_log_add(site?, kind, title, body, who?, estimate_min?, due_on?, resolves_id?, topic?, supersedes_id?)` | 進捗ログに追記。title = 一覧用 (20 字前後、40 字まで、「何を・どうする」、決定は結論)、body = 詳細 (経緯・数量・型番・金額・出どころ)。title が無い行は返すときだけ body の先頭 28 字 (`title_auto: true`)。種類 = 進捗 (やったこと) / 課題 / 決定 / 次やること (タスク) / 解決。site 省略 = 現場に紐づかない雑務。who = やった人/担当、estimate_min = 所要時間 (分)。決定には topic (床材 / 巾木 …)。同じ現場・同じ topic の生きている決定があれば自動で置き換える (返り値 `superseded`)、明示するなら supersedes_id |
 | `genba_log_title_set_many(items[{id, title}])` | 【移行用・あとで消す】既存行に title だけを付ける (最大 200 件)。返り値 updated / missing |
-| `genba_log_fix(id, {title, body, site, due_on, who, estimate_min, topic})` | 行を直す。前の値は `edits` に残る (誰がいつ)。kind は変えない |
+| `genba_audit(site?, days?)` | 抜け漏れチェック: 期限切れ / 期限なし / 「返事待ち・確認中」なのに次やることが無い / 日程があるのにカレンダー未登録 (`calendar_event` 無し)。会話の終わりと監視ジョブの 1 時間に 1 回 |
+| `genba_log_fix(id, {title, body, site, due_on, who, estimate_min, topic, calendar_event})` | 行を直す。前の値は `edits` に残る (誰がいつ)。kind は変えない |
 | `genba_log_void(id, reason?)` | 行を取り消す (隠すだけ、消えない)。解決を void すると元のタスクが戻る、変更の決定を void すると前の決定が生き返る |
 | `genba_tasks(max_minutes?, who?, site?, kind?)` | 未解決タスクを全現場横断で (所要時間が短い順)。「5 分で終わるタスクある？」用 |
 | `genba_log_list(site, days?, kind?, who?, topic?, chain?, include_voided?)` | ログ一覧。`chain=行 ID` で変更の履歴 (置き換えの連鎖) を古い順に、`current` が今生きている行 |
@@ -57,6 +58,12 @@
 - `genba_room_sync` が同期したルーム名が contact の `room_name` と合えば `room_id` を自動で埋める (逆に room_id だけなら room_name を埋める)。どの連絡先にも結ばれていないルームで、名前が 1 人の連絡先の名前・呼び名と完全一致すれば、その人の個人ルームとして足す。返り値 `contactsLinked`
 - `genba_log_add` の `source.sender` が連絡先に一意に解決できたら `source.contact_id` / `source.contact_name` を足す (sender が曖昧でも `source.room` を持つ人に絞れればそれ)
 - `genba_rule_get` の一覧は topic `連絡先` を先頭に返す
+
+### 抜け漏れを機械的に拾う (followups / genba_audit)
+AI が「次やることを立てる」「カレンダーに入れる」を忘れるのを、記憶ではなくサーバーの返り値で止める。
+- `genba_log_add` / `add_many` の返り値に `followups[]`: 本文に「返事待ち・確認中・依頼・送付」があれば「次やることを立てる」、「搬入 / 打ち合わせ / 現調 / 作業 … + 日付」があれば「カレンダーに登録して `genba_log_fix(calendar_event)`」、決定に topic が無い / タスクに due_on が無い、を返す。`add_many` で同じ呼び出しに 次やること が入っていれば返事待ちの注意は出ない。現場に期限切れがあれば `site_overdue` も付く
+- `calendar_event` 列: カレンダーに入れたら event ID (か `done`) を行に残す。これが無い「日程あり」の行を `genba_audit` が拾う (Keihi はカレンダー自体には触らない)
+- `genba_audit`: 期限切れ / 期限なし (作成 3 日超) / 返事待ちでタスク無し (〇〇さん・〇〇待ち の手がかりを含む未解決タスクが 2 日以内に無い) / 日程あり未登録 を返す。`summary` と `how_to_fix` 付き。監視ジョブが 1 時間に 1 回回し、会話の終わりにも 1 回
 
 ### 決定の変更・訂正・取り消し
 - 決定には `topic` (何についてか)。決定が変わったら同じ現場・同じ topic で新しい決定を足すだけで、前の決定に `supersedes_id` で紐付く (自動)。`genba_status` には生きている決定だけ出て、`changes` (何回変わったか) と `previous` (直前の内容) が付く。履歴は `genba_log_list(chain=ID)`
