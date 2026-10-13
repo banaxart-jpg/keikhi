@@ -36,9 +36,9 @@
 | `genba_status(site)` | 最終更新・直近の進捗・未解決の課題・次やること・今生きている決定 (`changes` 回数と `previous` 付き)・現場のメモ・関わる人・最近の写真 |
 | `genba_rule_get(topic?)` / `genba_rule_set(topic, body)` | 運用ルール (版を積む。消えない) |
 | `genba_log_add_many(site?, items[])` | まとめて追記 (監視ジョブ・会話から一度に抽出したとき)。各行に `duplicate` |
-| `genba_room_sync(rooms)` | 監視ジョブが自分の Beeper / LINE のルーム一覧 (ID と名前だけ) を同期。返り値 `watching` が読む対象 |
-| `genba_source_add(channel, room, site?, purpose?) / list / mark / remove` | 監視 ON のルーム (自分の持ち分) と「ここまで読んだ」cursor。purpose=記録 (site 必須) / 応答 (site 不要)。載っていないルームは監視ジョブが読まない |
-| `genba_owner_set(email, label)` | 画面のログイン (メール) をトークンの名前 (小西 / 名取) に結びつける。小西のトークンからだけ |
+| `genba_room_sync(rooms)` | 監視ジョブが自分の Beeper / LINE のルーム一覧 (ID と名前だけ) を同期。返り値 `added` (初めて見えた) / `watching` (記録) / `answering` (社内の問い合わせ) |
+| `genba_source_exclude(room) / include(room)` | 個人的なルームを読む対象から外す / 戻す (ルーム名か ID) |
+| `genba_source_add(channel, room, site?, purpose?) / list / mark / remove` | ルームを現場に固定・用途を決める (普段は要らない)、一覧 (sources / excluded)、「ここまで読んだ」cursor、OFF |
 | `genba_contact_find(query)` | 人を探す (名前・あだ名・会社名・ルーム名・room_id)。1 件なら `match`、複数なら `candidates` だけ (AI は人に聞く) |
 | `genba_contact_upsert({name, company?, aliases?, role?, trade?, channels?, tone?, sites?, …})` | 連絡先の登録・更新。name + company で同一人物。aliases / channels / sites は足すだけ |
 | `genba_contact_alias_add(contact, alias)` | 「A は B のこと」「覚えといて」→ 呼び名を足す |
@@ -86,16 +86,16 @@ LINE (Beeper) に来た画像を監視ジョブ (PC の Cowork) が保存する�
 - `genba_rules` は AI の動き方 (版を積む)、`genba_notes` の kind=ルール は会社の決まり (締め日・入り時間など)。役割が違う
 - **センシティブな情報は入れない** (家庭・健康・金銭・人間関係のトラブル・ハラスメント・噂)。全員と全 AI が読める場所なので。必要なら行動の制約だけ (「〇〇電気の現場は小西が同席」) を書き、理由は書かない。メモの内容を本人への文面に引用しない。小西だけが読めるメモ (visibility) は必要になったら足す
 
-### ウォッチ画面 `/genba/watch.html`
-ログインした人のルームだけが並ぶ (小西 → 小西の Beeper、名取 → 名取の)。行ごとに用途・現場の選択とトグル。
-ON = 監視ジョブが読む、OFF = 読まない (デフォルト OFF、ホワイトリスト)。用途は 2 つ:
-- **記録** (既定): 現場に紐付けて、決定・課題・次やることを進捗ログに自動記録する。現場を選ばないと ON にできない
-- **応答**: 社内の人 (連絡先で role=社内、今は 小西・名取) からの LINE に AI が自動で返す。現場は不要。社内の人の個人ルームは初回の同期で自動的に 応答 ON になる (`autoAnswering`。OFF にすれば戻らない)。分からないことは「確認して返します」と返して小西に回す。`genba_room_sync` の返り値では `answering` に分かれて出る (`contact` 付き)。答える範囲・出さないものは運用ルール `応答` と instructions の「■ 応答」
-ルームは監視ジョブの `genba_room_sync` で入ってくる (本文は送らない、ID と名前だけ)。
-API: `GET /api/genba/me` / `GET /api/genba/rooms` / `PUT /api/genba/rooms/:id {enabled, siteId, label}` / `DELETE /api/genba/rooms/:id` (Firebase 認証)。
+### どのルームを読むか (デフォルト全部、個人的なものだけ除外)
+同期されたルームは全部読む対象。画面は無い (以前の `/genba/watch.html` は廃止)。
+- 個人的なルーム (家族・友人・私用) は AI に「〇〇のルームは読まないで」と言えば `genba_source_exclude(ルーム名)` で外れる。戻すのは `genba_source_include`
+- 初めて見えたルームは `genba_room_sync` の返り値 `added` に出る。監視ジョブはその名前をまとめて小西に見せて「読まないものある？」と 1 回聞く
+- 現場は任意。`watching` の `site` が null のルームは、メッセージの内容から AI が `genba_find` で現場を決める (決まらなければ会社全般)。いつも同じ現場なら `genba_source_add(channel, room, site)` で固定
+- 社内の人 (連絡先 role=社内、今は 小西・名取) の個人ルームは自動で用途 `応答` になり、問い合わせに答える (`answering`)
+- 一覧は `genba_source_list` (`sources` = 読む、`excluded` = 除外)
 
 ### 監視ジョブ (Cowork 等で 5 分ごとに LINE を読んで自動記録)
-1. `genba_room_sync` にルーム一覧 (ID と名前) を渡す → 返り値 `watching` が読む対象 (ON/OFF は画面)
+1. `genba_room_sync` にルーム一覧 (ID と名前) を渡す → 返り値 `watching` / `answering` が読む対象。`added` があれば小西に「読まないものある？」と聞いて `genba_source_exclude`
 2. cursor より後のメッセージだけ読む (Beeper 等の MCP)
 3. 決定・課題・次やることを抽出して `genba_log_add_many`。各 item に `source_ref = "<channel>:<room>:<message id>"` (同じメッセージは 2 回入らない) と `source = {channel, room, sender, at, quote}`
 4. 画像・PDF は `genba_file_upload_url` → PC で `curl` PUT → `genba_log_add(photo_ids)` (上の「写真・ファイル」)
@@ -103,7 +103,7 @@ API: `GET /api/genba/me` / `GET /api/genba/rooms` / `PUT /api/genba/rooms/:id {e
 
 書いた人は人ごとの URL で決まる: `GET /api/mcp-connector` (ログイン済み) が `genba.名取` / `genba.LINE監視` の URL を返す (INTERNAL_TICK_SECRET から導出、リポには無い)。
 
-データ: `sites` に `site_code` / `drive_folder_id` / `client` 列を追加 (このアプリの画面は変えていない)、`genba_log` (追記のみ)、`genba_rules`、`genba_sources` / `genba_owners` (監視対象)、`genba_contacts` / `genba_companies` (連絡先・会社)、`genba_notes` (流れないメモ)、`genba_files` (写真の台帳、中身は GCS)。
+データ: `sites` に `site_code` / `drive_folder_id` / `client` 列を追加 (このアプリの画面は変えていない)、`genba_log` (追記のみ)、`genba_rules`、`genba_sources` (監視対象)、`genba_contacts` / `genba_companies` (連絡先・会社)、`genba_notes` (流れないメモ)、`genba_files` (写真の台帳、中身は GCS)。
 写真そのものは Drive の案件フォルダに人が直接上げる。Keihi は URL を返すだけ。
 
 ## ファイル構成
