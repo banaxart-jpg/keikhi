@@ -15,6 +15,9 @@ const LOG_KINDS = ["進捗", "課題", "決定", "次やること", "待ち", "�
 // 開いたループ (解決で閉じるもの)。待ち = 相手の返事・物・データを待っている (人の仕事ではないのでタスク一覧・カレンダーには出さない)
 const OPEN_KINDS = ["課題", "次やること", "待ち"];
 const TASK_KINDS = ["次やること", "課題"];
+  // 監視ジョブの目録の分類。先頭 5 つは genba_log に入る種類
+  const SEEN_LOG_KINDS = ["決定", "課題", "次やること", "待ち", "進捗"];
+  const SEEN_KINDS = [...SEEN_LOG_KINDS, "メモ", "返信", "雑談", "私的", "画像", "既存"];
 
 // 現場名の表記ゆれ吸収: 全角→半角、空白・記号を落として小文字に
 function norm(s) {
@@ -116,6 +119,28 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
         value       JSONB NOT NULL,
         updated_by  TEXT NOT NULL,
         updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+      )`);
+    // 監視ジョブが読んだメッセージの目録 (本文は持たない: id・送り主・時刻・分類・要旨 40 字・文字数だけ)。
+    // cursor は目録なしでは進まないので「読んだのに書かなかった」が構造的に起きない。genba_audit が 雑談扱いの長文 を要確認で出す
+    await p.query(`
+      CREATE TABLE IF NOT EXISTS genba_seen (
+        id          BIGSERIAL PRIMARY KEY,
+        owner       TEXT NOT NULL,
+        channel     TEXT NOT NULL,
+        room        TEXT NOT NULL,
+        msg_id      TEXT NOT NULL,
+        sender      TEXT,
+        at          TIMESTAMPTZ,
+        kind        TEXT NOT NULL,
+        gist        TEXT,
+        len         INTEGER,
+        log_id      BIGINT REFERENCES genba_log(id) ON DELETE SET NULL,
+        note_id     BIGINT,
+        file_id     BIGINT,
+        marked_by   TEXT NOT NULL,
+        created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+        updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+        UNIQUE (channel, room, msg_id)
       )`);
     // 画像・PDF (LINE 等から来たもの)。中身は GCS、ここは台帳。source_ref で同じ添付を 2 回入れない
     await p.query(`
@@ -484,6 +509,8 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
       [useSiteId, a.kind, body, by, due, resolvesId, photos ? JSON.stringify(photos) : null, sourceRef, source ? JSON.stringify(source) : null, est, who, topic, supersedesId, title, calendarEvent, thenDo]
     );
     if (rows.length) {
+      // 目録 (genba_seen) に同じメッセージがあれば log_id を付ける (後から genba_log_add(source_ref) で入れた場合)
+      if (sourceRef) { try { await p.query(`UPDATE genba_seen SET log_id=$1, updated_at=now() WHERE log_id IS NULL AND $2 = channel || ':' || room || ':' || msg_id`, [rows[0].id, sourceRef]); } catch (e) { console.warn("[genba] seen link", e.message); } }
       const followups = followupsFor(rows[0], { hasTaskInBatch: !!ctx.hasTaskInBatch });
       let siteOverdue;
       if (useSiteId != null && !ctx.skipOverdue) {
@@ -1824,7 +1851,7 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
       },
       {
         name: "genba_audit",
-        description: "抜け漏れチェック。期限切れのタスク / 期限の無いタスク / 「返事待ち・確認中」と書いたのに次やることが無い行 / 日程があるのにカレンダー未登録の行 / 監視ジョブの停止 (genba_room_sync が 30 分以上来ていない) を機械的に洗い出す。監視ジョブは 1 時間に 1 回、会話の終わりにも 1 回呼んで、出たものを片付ける (タスクを立てる・カレンダーに入れて calendar_event を付ける・終わっていれば 解決)。site 省略で全現場",
+        description: "抜け漏れチェック。期限切れのタスク / 期限の無いタスク / 「返事待ち・確認中」と書いたのに次やることが無い行 / 日程があるのにカレンダー未登録の行 / 監視ジョブの停止 (genba_room_sync が 30 分以上来ていない) / 監視の目録で 雑談 扱いされた社外からの長文 (要確認) を機械的に洗い出す。監視ジョブは 1 時間に 1 回、会話の終わりにも 1 回呼んで、出たものを片付ける (タスクを立てる・カレンダーに入れて calendar_event を付ける・終わっていれば 解決)。site 省略で全現場",
         inputSchema: { type: "object", properties: { site: { type: "string", description: "省略で全現場" }, days: { type: "number", description: "直近何日の行を見るか (既定 7)" } } },
         handler: async (a) => {
           await ensureSchema();
@@ -1847,6 +1874,16 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
           const tasks = open.filter((r) => r.kind !== "待ち"), waits = open.filter((r) => r.kind === "待ち");
           const brief = (r) => ({ id: Number(r.id), site: r.site_id ? r.site_name : null, kind: r.kind, title: r.title || autoTitle(r.body), due_on: ymd(r.due_on) || undefined, who: r.who || undefined, then: r.then_do || undefined, at: r.created_at, days: Math.floor((Date.now() - new Date(r.created_at).getTime()) / 86400000) });
           const monitor = await monitorState(p);
+          // 監視ジョブの目録: 直近 2 日に 雑談 扱いされた 60 字以上の文で、送り主が社外の連絡先に当たり、まだ記録されていないもの → 人が見て判断する
+          const seen24 = {}; let chatReview = [];
+          try {
+            const { rows: sn } = await p.query(`SELECT * FROM genba_seen WHERE created_at > now() - interval '2 days' ORDER BY at DESC NULLS LAST LIMIT 2000`);
+            for (const r of sn) if (new Date(r.created_at).getTime() > Date.now() - 86400000) seen24[r.kind] = (seen24[r.kind] || 0) + 1;
+            const people = sn.length ? await loadContacts(p) : [];
+            const external = (sender) => { const k = normName(sender || ""); if (!k) return false; const hit = people.find((c) => c.name_key === k || (Array.isArray(c.aliases) && c.aliases.some((al) => normName(al) === k))); return !!hit && hit.role !== "社内"; };
+            chatReview = sn.filter((r) => r.kind === "雑談" && !r.log_id && (r.len || 0) >= 60 && external(r.sender)).slice(0, 20)
+              .map((r) => ({ id: r.msg_id, channel: r.channel, room: r.room, sender: r.sender, at: r.at, gist: r.gist || undefined, len: r.len }));
+          } catch (e) { console.warn("[genba] audit seen", e.message); }
           const overdue = tasks.filter((r) => r.due_on && ymd(r.due_on) < today);
           const threeDaysAgo = new Date(Date.now() - 3 * 86400000);
           const noDue = tasks.filter((r) => !r.due_on && new Date(r.created_at) < threeDaysAgo);
@@ -1862,9 +1899,12 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
           if (waiting.length) parts.push(`返事待ちで記録無し ${waiting.length}`);
           if (noCalendar.length) parts.push(`日程あり・カレンダー未確認 ${noCalendar.length}`);
           if (monitor.status === "stalled") parts.push(`監視ジョブ停止 ${monitor.minutes_ago} 分`);
+          if (chatReview.length) parts.push(`雑談扱いの長文 ${chatReview.length} (要確認)`);
           return {
             today, days, site: site ? siteRow(site) : "*",
             monitor,
+            seen_24h: Object.keys(seen24).length ? seen24 : undefined,
+            chat_review: chatReview.length ? chatReview : undefined,
             overdue: overdue.map(brief),
             no_due: noDue.map(brief),
             waiting_long: waitLong.map(brief),
@@ -1878,6 +1918,7 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
               "待ちが長い → 相手に催促する (文面を作って人に確認)。返事が来ていれば genba_log_add(kind=解決)",
               "返事待ちで記録無し → genba_log_add(kind=待ち, title=「〇〇の返事待ち」, who=相手)",
               "日程あり・カレンダー未確認 → カレンダーに入れて genba_log_fix(calendar_event=event id か done)。既に入っているなら done を付けるだけ",
+              "雑談扱いの長文 → LINE で中身を見て、記録すべきなら genba_log_add(source_ref=channel:room:id) で入れる (目録に log_id が付いて要確認から消える)。雑談でよければそのまま",
               "監視ジョブ停止 → 自分が監視ジョブなら genba_room_sync を今すぐ呼ぶ。そうでなければ小西に『監視ジョブ (5 分ごとの LINE 読み) が止まっている。Cowork のスケジュールを設定し直して』と報告",
             ] : undefined,
           };
@@ -2222,20 +2263,79 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
       },
       {
         name: "genba_source_mark",
-        description: "監視ジョブが「このルームはここまで読んだ」を記録する。cursor は自由な JSON (例 { last_id: \"...\", last_at: \"2026-10-09T15:00:00+09:00\" })。次回はこれより後だけ読む",
+        description: "監視ジョブが「このルームはここまで読んだ」を記録する。読んだメッセージの目録 items を必ず付ける (雑談・私的・画像も kind 付きで 1 件ずつ。cursor は items 無しでは進まない)。kind が 決定 / 課題 / 次やること / 待ち / 進捗 の item は title・body (・who・due_on・then・site・estimate_min・topic) を書けばサーバーが genba_log に入れる (source_ref = channel:room:id と source は自動、同じメッセージは 2 回入らない)。genba_log_add で先に入れた行は log_id、genba_note_add は kind=メモ + note_id、上げた画像は kind=画像 + file_id。AI が答えた自分の発言は 返信、前に記録した内容の繰り返しは 既存。私的な話は kind=私的 だけ (gist は保存しない)。入らない item があれば cursor は進めず error で返す (直して同じ items でもう一度)。新着が無ければ呼ばない。目録は Keihi に残り、genba_audit が『雑談扱いの長文』を要確認で出す",
         inputSchema: {
           type: "object",
-          properties: { channel: { type: "string" }, room: { type: "string" }, cursor: { type: "object" } },
+          properties: {
+            channel: { type: "string" }, room: { type: "string" },
+            cursor: { type: "object", description: "{ last_id, last_at } (読んだ最後のメッセージ)" },
+            items: {
+              type: "array", description: "cursor より後に読んだメッセージ全部 (最大 200)。1 件 1 要素",
+              items: { type: "object", properties: {
+                id: { type: "string", description: "メッセージ ID" }, sender: { type: "string", description: "送り主の表示名そのまま" }, at: { type: "string", description: "送信時刻 (ISO)" },
+                kind: { type: "string", enum: SEEN_KINDS, description: "決定 / 課題 / 次やること / 待ち / 進捗 (→ サーバーが genba_log に入れる) / メモ (genba_note_add 済み、note_id) / 返信 (AI の発言) / 雑談 / 私的 / 画像 (file_id) / 既存 (記録済みの繰り返し)" },
+                gist: { type: "string", description: "何の話か 40 字まで (私的 は保存されない)" }, len: { type: "number", description: "本文の文字数" },
+                log_id: { type: "number", description: "genba_log_add で先に入れた行 ID" }, note_id: { type: "number" }, file_id: { type: "number" },
+                title: { type: "string" }, body: { type: "string" }, site: { type: "string", description: "省略時はルームの現場 (無ければ会社全般)" }, who: { type: "string" }, due_on: { type: "string" }, estimate_min: { type: "number" }, topic: { type: "string" }, then: { type: "string" }, resolves_id: { type: "number" },
+              }, required: ["id", "kind"] },
+            },
+          },
           required: ["channel", "room", "cursor"],
         },
         handler: async (a) => {
           await ensureSchema();
           const p = getPool();
+          const channel = String(a.channel || "").trim(), room = String(a.room || "").trim();
+          const { rows: src } = await p.query(`SELECT id, site_id, cursor FROM genba_sources WHERE owner=$1 AND channel=$2 AND room=$3`, [by, channel, room]);
+          if (!src.length) throw new Error(`監視対象に無い: ${channel} / ${room} (genba_room_sync か genba_source_add で登録)`);
+          const prev = src[0].cursor && typeof src[0].cursor === "object" ? src[0].cursor : {};
+          const next = a.cursor && typeof a.cursor === "object" ? a.cursor : {};
+          const moved = String(prev.last_id ?? "") !== String(next.last_id ?? "") || String(prev.last_at ?? "") !== String(next.last_at ?? "");
+          const items = Array.isArray(a.items) ? a.items.slice(0, 200) : null;
+          if (moved && !items) throw new Error("items (読んだメッセージの目録) が無い。cursor を進めるときは読んだメッセージを 1 件ずつ { id, sender, at, kind, gist, len } で渡す (雑談・私的・画像も)。決定 / 課題 / 次やること / 待ち / 進捗 は title と body も付ければサーバーが記録する。新着が無ければ cursor は前のまま");
+          if (moved && !items.length) throw new Error("cursor が進むのに items が空。読んだメッセージを 1 件ずつ渡す (新着が無いなら cursor は前のまま)");
+          const ctx = { hasTaskInBatch: (items || []).some((it) => it && OPEN_KINDS.includes(it.kind)), skipOverdue: true };
+          const recorded = [], errors = [], counts = {}; const followups = new Set(); const waitingAll = new Map();
+          const defaultSite = src[0].site_id != null ? String(src[0].site_id) : undefined;
+          for (const it of items || []) {
+            const id = String(it?.id ?? "").trim();
+            if (!id) { errors.push({ error: "id が無い item がある" }); continue; }
+            const kind = String(it.kind || "").trim();
+            if (!SEEN_KINDS.includes(kind)) { errors.push({ id, error: `kind は ${SEEN_KINDS.join(" / ")}` }); continue; }
+            counts[kind] = (counts[kind] || 0) + 1;
+            let logId = it.log_id != null && it.log_id !== "" ? Number(it.log_id) : null;
+            let dup;
+            if (SEEN_LOG_KINDS.includes(kind) && logId == null) {
+              try {
+                const r = await addLog(p, by, {
+                  kind, title: it.title, body: it.body || it.gist, site: it.site ?? defaultSite, who: it.who, due_on: it.due_on, estimate_min: it.estimate_min,
+                  topic: it.topic, then: it.then, calendar_event: it.calendar_event, resolves_id: it.resolves_id, photo_ids: it.photo_ids,
+                  source_ref: `${channel}:${room}:${id}`, source: { channel, room, sender: it.sender, at: it.at, quote: it.gist ? String(it.gist).slice(0, 120) : undefined },
+                }, undefined, ctx);
+                logId = r.log ? Number(r.log.id) : null; dup = r.duplicate || undefined;
+                for (const f of r.followups || []) followups.add(f);
+                for (const w of r.waiting_hits || []) waitingAll.set(w.id, { ...w, from: r.log?.source?.contact_name });
+              } catch (e) { errors.push({ id, kind, error: e.message }); continue; }
+            }
+            const at = it.at && Number.isFinite(Date.parse(it.at)) ? new Date(it.at).toISOString() : null;
+            const gist = kind === "私的" ? null : (it.gist ? String(it.gist).replace(/\s+/g, " ").trim().slice(0, 60) : null);
+            const len = it.len != null && Number.isFinite(Number(it.len)) ? Math.max(0, Math.round(Number(it.len))) : null;
+            await p.query(
+              `INSERT INTO genba_seen (owner, channel, room, msg_id, sender, at, kind, gist, len, log_id, note_id, file_id, marked_by)
+               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+               ON CONFLICT (channel, room, msg_id) DO UPDATE SET kind=EXCLUDED.kind, gist=COALESCE(EXCLUDED.gist, genba_seen.gist), len=COALESCE(EXCLUDED.len, genba_seen.len),
+                 log_id=COALESCE(EXCLUDED.log_id, genba_seen.log_id), note_id=COALESCE(EXCLUDED.note_id, genba_seen.note_id), file_id=COALESCE(EXCLUDED.file_id, genba_seen.file_id), updated_at=now()`,
+              [by, channel, room, id, it.sender ? String(it.sender).slice(0, 100) : null, at, kind, gist, len, logId, it.note_id != null ? Number(it.note_id) : null, it.file_id != null ? Number(it.file_id) : null, by]);
+            recorded.push({ id, kind, log_id: logId || undefined, duplicate: dup });
+          }
+          if (errors.length) throw new Error(`目録の ${errors.length} 件が入らなかったので cursor は進めていない (入った分は残っている。直して同じ items でもう一度): ${errors.slice(0, 5).map((e) => `${e.id || "?"}: ${e.error}`).join(" / ")}`);
           const { rows } = await p.query(
             `UPDATE genba_sources SET cursor=$4, updated_at=now() WHERE owner=$1 AND channel=$2 AND room=$3 RETURNING channel, room, cursor, updated_at`,
-            [by, String(a.channel).trim(), String(a.room).trim(), JSON.stringify(a.cursor || {})]);
-          if (!rows.length) throw new Error(`監視対象に無い: ${a.channel} / ${a.room} (genba_room_sync か genba_source_add で登録)`);
-          return rows[0];
+            [by, channel, room, JSON.stringify(next)]);
+          return { ...rows[0], seen: (items || []).length, counts: Object.keys(counts).length ? counts : undefined, recorded: recorded.length ? recorded : undefined,
+            followups: followups.size ? [...followups] : undefined,
+            waiting_hits: waitingAll.size ? [...waitingAll.values()] : undefined,
+            waiting_say: waitingAll.size ? waitingSay("待っていた人から連絡が来ている。", [...waitingAll.values()]) : undefined };
         },
       },
       {
@@ -2302,18 +2402,18 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
     "1. genba_room_sync に Beeper 等のルーム一覧 (ID と名前だけ) を渡す → 返り値 watching (記録) と answering (応答) が読む対象。ルームはデフォルトで全部読む。返り値 added (初めて見えたルーム) があれば、名前をまとめて小西に見せて『この中で読まないもの (個人的なもの) ある？』と 1 回聞き、言われたものを genba_source_exclude(ルーム名) で外す",
     "1b. watching の site が null のルームは、メッセージの内容 (現場名・人・場所) から genba_find で現場を決める。決まらなければ site 省略 (会社全般) で記録。いつも同じ現場なら genba_source_add(channel, room, site) で固定してよい",
     "2. 各ルームについて cursor より後のメッセージだけ読む (Beeper 等の MCP)",
-    "3. 決定・課題・次やること・待ち を抽出して genba_log_add_many で記録。人や会社の予定・性質 (「来月から別現場」「値上げする」) は genba_note_add (source_ref 付き)。私的な話・センシティブな話は記録しない。各 item に source_ref = \"<channel>:<room>:<message id>\" を必ず入れる (同じメッセージは 2 回入らない)、source に { channel, room, sender, at, quote } (sender は表示名そのまま。連絡先に解決できればサーバーが contact_id を足す)",
+    "3. 読んだメッセージを 1 件ずつ分類して genba_source_mark(channel, room, cursor, items) に全部渡す。これが記録と cursor 更新を兼ねる (cursor は items 無しでは進まないので、読んだのに書き忘れることが構造的に起きない)。kind が 決定 / 課題 / 次やること / 待ち / 進捗 の item は title・body (・who・due_on・then・site・estimate_min・topic) を書けばサーバーが genba_log に入れる (source_ref と source は自動、同じメッセージは 2 回入らない)。人や会社の予定・性質 (「来月から別現場」「値上げする」) は genba_note_add (source_ref 付き) で入れて kind=メモ + note_id。AI が答えた自分の発言は 返信、前に記録した内容の繰り返しは 既存、それ以外は 雑談。私的な話・センシティブな話は kind=私的 だけにして gist も書かない。gist は何の話か 40 字まで、len は本文の文字数。入らない item があるとサーバーが error で返し cursor は進まない → 直して同じ items でもう一度",
     "3b. 待っていた人からの連絡 (返り値の waiting_hits / room_sync の contact.waiting) は自動発火の合図: 内容を 決定 や 進捗 で記録 → 待ちを kind=解決 で閉じる → waiting_hits の then (来たらやること) があればそれを実行 (転送・連絡・書類作成。社外への文面は小西に見せてから) → 無ければ小西に報告。待ち以外の内容なら普通に記録",
-    "4. 画像・PDF が来たら genba_file_upload_url(現場, ファイル名, content_type, source_ref=<channel>:<room>:<message id>:<n>) で URL をもらい、返ってきた curl を PC 側で実行して PUT する (ファイルの中身を会話に貼らない)。上げたら genba_log_add(kind=進捗, body=「写真 n 枚: 何の写真か」, photo_ids=[file id]) で現場に残す。現場が分からない添付は上げない",
-    "5. 最後に genba_source_mark(channel, room, { last_id, last_at }) で cursor を進める",
-    "6. 新着が無ければ何もしない。雑談・曖昧なものは記録しない。記録したら件数と中身を短く報告",
+    "4. 画像・PDF が来たら genba_file_upload_url(現場, ファイル名, content_type, source_ref=<channel>:<room>:<message id>:<n>) で URL をもらい、返ってきた curl を PC 側で実行して PUT する (ファイルの中身を会話に貼らない)。上げたら目録 (genba_source_mark の items) に kind=進捗, body=「写真 n 枚: 何の写真か」, photo_ids=[file id] で入れる (写真だけのメッセージは kind=画像 + file_id)。現場が分からない添付は上げない",
+    "5. 判断が要るもの (現場が決まらない・誰に確認するか分からない) も目録に入れてから (kind=課題 や 待ち で title に「要確認: …」) 小西に聞く。目録に入れずに cursor だけ進めない",
+    "6. 新着が無ければ何も呼ばない (cursor も触らない)。記録したら返り値 counts と中身を短く報告",
     "■ 応答 (answering のルーム = 社内の人からの LINE に AI が自動で返す。例: 名取が「浅草どうなってる？」と聞く)。社内の人 (role=社内) の個人ルームは同期で自動的に 応答 になる。小西 ↔ 名取 どちらの向きも同じ。外したいときは genba_source_exclude",
     "1. 答える相手は、そのルームの contact が role=社内 の人だけ。contact が無い・社内でない → 答えない・記録しない (小西に報告だけ)。社内の人には確認を取らずに返してよい",
     "2. 材料は Keihi だけ: genba_status / genba_tasks / genba_log_list / genba_contact_find (役割・tone・ルーム) / genba_company_find / genba_rule_get / 社内メモ。他のルームの LINE 本文は読まない・引用しない",
     "3. 出さないもの (プライベート): 人や会社の 評価 メモの中身、小西の私的な話・予定、他の人とのやりとりの原文、給与・人事・個人の連絡先 (電話・メール・住所)、制約の理由。聞かれたら「それは小西に聞いて」と返す。詳しくは genba_rule_get(応答)",
     "4. Keihi に無い・自信がない → 推測しない。「確認して返します」と返し、小西に聞く (genba_log_add(kind=次やること, title=「名取の質問: …」, who=小西, estimate_min=5) + 小西に報告)。答えが分かったら本人に返して、その行を 解決 で閉じる",
     "5. 問い合わせの中に現場の決定・タスク・完了報告が入っていれば、それは通常どおり記録する (記録と応答は両立する)",
-    "6. 答えたら genba_source_mark で cursor を進める。文面は相手の tone に合わせ、短く (LINE なので 3〜4 行まで)",
+    "6. 答えたら、その質問と自分の返事を genba_source_mark の items に入れて (質問は該当の kind か 雑談、自分の返事は 返信) cursor を進める。文面は相手の tone に合わせ、短く (LINE なので 3〜4 行まで)",
   ].join("\n");
 
   // 人ごとのトークン: { token: 名前 }。URL の token で書いた人を決める
