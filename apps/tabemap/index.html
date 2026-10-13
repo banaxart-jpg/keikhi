@@ -31,7 +31,7 @@ body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); 
 .title { font-size: 22px; font-weight: 800; }
 
 /* 世界ピン地図 */
-.wmap { width: 100%; aspect-ratio: 20 / 11; display: block; border-radius: 18px; background: #0e1730; box-shadow: 6px 6px 16px var(--sd), -5px -5px 14px var(--sl); margin: 10px 0 12px; cursor: pointer; }
+.wmap { width: 100%; aspect-ratio: 2 / 1; display: block; border-radius: 18px; background: #0e1730; box-shadow: 6px 6px 16px var(--sd), -5px -5px 14px var(--sl); margin: 10px 0 12px; cursor: pointer; }
 
 /* 制覇サマリー */
 .summary { background: var(--bg); border-radius: 20px; padding: 18px; box-shadow: 6px 6px 16px var(--sd), -5px -5px 14px var(--sl); margin: 0 0 16px; }
@@ -189,6 +189,7 @@ function toBase64(file, maxSize = 1200, q = 0.6) {
 
 // ── データ ──
 async function load() {
+  loadWorld().then(() => { if ($("app").style.display !== "none") render(); });
   try { visits = await api("GET", "/api/tabemap"); }
   catch (e) { toast("読み込み失敗: " + e.message, true); visits = []; }
   render();
@@ -206,56 +207,81 @@ function conqueredSet() {
   return s;
 }
 
-// ── 塗り絵ワールド地図（各国を位置ごとのタイルに。食べた国を塗りつぶす）──
-// 緯度経度をグリッドに投影し、重なったら近いマスへずらして配置（決定論的）
-const GRID = (() => {
-  const cols = 20, rows = 11, taken = {}, layout = {};
-  const key = (c, r) => c + "," + r;
-  for (const [name, [lat, lng]] of Object.entries(COORD)) {
-    let c = Math.max(0, Math.min(cols - 1, Math.round((lng + 180) / 360 * (cols - 1))));
-    let r = Math.max(0, Math.min(rows - 1, Math.round((90 - lat) / 180 * (rows - 1))));
-    if (taken[key(c, r)]) {
-      let found = null;
-      for (let rad = 1; rad < Math.max(cols, rows) && !found; rad++)
-        for (let dc = -rad; dc <= rad && !found; dc++)
-          for (let dr = -rad; dr <= rad && !found; dr++) {
-            if (Math.max(Math.abs(dc), Math.abs(dr)) !== rad) continue;
-            const nc = c + dc, nr = r + dr;
-            if (nc < 0 || nc >= cols || nr < 0 || nr >= rows || taken[key(nc, nr)]) continue;
-            found = [nc, nr];
-          }
-      if (found) { c = found[0]; r = found[1]; }
-    }
-    taken[key(c, r)] = 1; layout[name] = { col: c, row: r };
-  }
-  return { cols, rows, layout };
-})();
-function rr(g, x, y, w, h, r) { g.beginPath(); g.moveTo(x + r, y); g.arcTo(x + w, y, x + w, y + h, r); g.arcTo(x + w, y + h, x, y + h, r); g.arcTo(x, y + h, x, y, r); g.arcTo(x, y, x + w, y, r); g.closePath(); }
+// ── 本物の世界地図（食べた国をオレンジに塗りつぶす。小さい国はリストから）──
+// 日本語名 → ISO3166 数値コード（world.json のキー / 先頭ゼロ付き3桁）
+const NAME2ISO = {
+  "日本":"392","韓国":"410","中国":"156","台湾":"158","タイ":"764","ベトナム":"704","インド":"356","ネパール":"524","インドネシア":"360","マレーシア":"458","シンガポール":"702","フィリピン":"608","スリランカ":"144","ミャンマー":"104","モンゴル":"496","カンボジア":"116",
+  "トルコ":"792","レバノン":"422","イスラエル":"376","イラン":"364","シリア":"760",
+  "イタリア":"380","フランス":"250","スペイン":"724","ドイツ":"276","イギリス":"826","ポルトガル":"620","ギリシャ":"300","ロシア":"643","ハンガリー":"348","ポーランド":"616","スイス":"756","ベルギー":"056","オランダ":"528","スウェーデン":"752","ジョージア":"268","ウクライナ":"804",
+  "エジプト":"818","モロッコ":"504","エチオピア":"231","チュニジア":"788","ナイジェリア":"566","南アフリカ":"710","セネガル":"686","ケニア":"404",
+  "アメリカ":"840","メキシコ":"484","カナダ":"124","キューバ":"192","ジャマイカ":"388",
+  "ブラジル":"076","ペルー":"604","アルゼンチン":"032","コロンビア":"170","チリ":"152",
+  "オーストラリア":"036","ニュージーランド":"554",
+};
+const ISO2NAME = {}; for (const [n, c] of Object.entries(NAME2ISO)) ISO2NAME[c] = n;
+
+let worldFeats = null;   // [{id:"392", d:[[[lon,lat],...], ...]}]
+async function loadWorld() {
+  if (worldFeats) return worldFeats;
+  try { worldFeats = await (await fetch("/tabemap/world.json")).json(); }
+  catch (e) { worldFeats = []; }
+  return worldFeats;
+}
+// 正距円筒図法（equirectangular）: 経度→x, 緯度→y
+function projX(lon, W) { return (lon + 180) / 360 * W; }
+function projY(lat, H) { return (90 - lat) / 180 * H; }
+
 function drawMap(conq) {
   const cv = $("wmap"); if (!cv) return;
-  const cssW = cv.clientWidth || 340, cell = cssW / GRID.cols, cssH = cell * GRID.rows;
+  const cssW = cv.clientWidth || 340, cssH = cssW / 2;   // 2:1
   const DPR = Math.min(2, devicePixelRatio || 1);
   cv.width = Math.round(cssW * DPR); cv.height = Math.round(cssH * DPR);
   const g = cv.getContext("2d"); g.setTransform(DPR, 0, 0, DPR, 0, 0);
   g.clearRect(0, 0, cssW, cssH);
-  const pad = cell * 0.09, radius = cell * 0.22;
-  g.textAlign = "center"; g.textBaseline = "middle";
-  for (const [name, pos] of Object.entries(GRID.layout)) {
-    const x = pos.col * cell + pad, y = pos.row * cell + pad, w = cell - 2 * pad, h = cell - 2 * pad;
-    const done = conq.has(name);
-    rr(g, x, y, w, h, radius);
-    if (done) { g.fillStyle = "#e8590c"; g.fill(); }
-    else { g.fillStyle = "rgba(150,162,196,0.10)"; g.fill(); g.lineWidth = 1; g.strokeStyle = "rgba(150,162,196,0.25)"; g.stroke(); }
-    g.globalAlpha = done ? 1 : 0.3;
-    g.font = `${Math.round(cell * 0.5)}px serif`;
-    g.fillText(FLAG[name], x + w / 2, y + h / 2 + 1);
-    g.globalAlpha = 1;
+  g.fillStyle = "#0e1730"; g.fillRect(0, 0, cssW, cssH);   // 海
+  if (!worldFeats || !worldFeats.length) {
+    g.fillStyle = "rgba(230,235,255,0.5)"; g.font = "13px sans-serif"; g.textAlign = "center"; g.textBaseline = "middle";
+    g.fillText("地図を読み込み中…", cssW / 2, cssH / 2);
+    return;
+  }
+  const conqISO = new Set();
+  conq.forEach(n => { const c = NAME2ISO[n]; if (c) conqISO.add(c); });
+  for (const f of worldFeats) {
+    const done = conqISO.has(f.id);
+    g.beginPath();
+    for (const ring of f.d) {
+      for (let i = 0; i < ring.length; i++) {
+        const x = projX(ring[i][0], cssW), y = projY(ring[i][1], cssH);
+        if (i === 0) g.moveTo(x, y); else g.lineTo(x, y);
+      }
+      g.closePath();
+    }
+    g.fillStyle = done ? "#e8590c" : "rgba(150,162,196,0.14)";
+    g.fill("evenodd");
+    g.lineWidth = 0.5; g.strokeStyle = done ? "#ffd9b0" : "rgba(150,162,196,0.30)";
+    g.stroke();
   }
 }
+// 点(lon,lat)が国の多角形内か（ray casting, 全リング通算の even-odd）
+function inFeature(f, lon, lat) {
+  let inside = false;
+  for (const ring of f.d) {
+    for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+      const xi = ring[i][0], yi = ring[i][1], xj = ring[j][0], yj = ring[j][1];
+      if (((yi > lat) !== (yj > lat)) && (lon < (xj - xi) * (lat - yi) / (yj - yi) + xi)) inside = !inside;
+    }
+  }
+  return inside;
+}
 $("wmap").addEventListener("click", (e) => {
-  const r = e.currentTarget.getBoundingClientRect(), cell = r.width / GRID.cols;
-  const col = Math.floor((e.clientX - r.left) / cell), row = Math.floor((e.clientY - r.top) / cell);
-  for (const [name, pos] of Object.entries(GRID.layout)) if (pos.col === col && pos.row === row) { openCountry(name); return; }
+  if (!worldFeats || !worldFeats.length) return;
+  const r = e.currentTarget.getBoundingClientRect();
+  const lon = (e.clientX - r.left) / r.width * 360 - 180;
+  const lat = 90 - (e.clientY - r.top) / r.height * 180;
+  // 記録対象にしてる国をタップしたらその国を開く
+  for (const f of worldFeats) {
+    if (ISO2NAME[f.id] && inFeature(f, lon, lat)) { openCountry(ISO2NAME[f.id]); return; }
+  }
 });
 addEventListener("resize", () => { if ($("app").style.display !== "none") render(); });
 
