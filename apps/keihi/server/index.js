@@ -36,7 +36,7 @@ import { composeSeries as dramaComposeSeries, writeScript as dramaWriteScript, c
 import { reviewGeneratedImage as dramaReviewImage } from "./drama-lib/gemini.js";
 import { searchWebImages as dramaSearchWebImages } from "./drama-lib/websearch.js";
 import { splitGridImage as dramaSplitGridImage } from "./drama-lib/gridsplit.js";
-import { createMcpHandler as dramaCreateMcpHandler } from "./drama-lib/mcp.js";
+import { createMcpHandler as dramaCreateMcpHandler, recentMcpCalls } from "./drama-lib/mcp.js";
 import { createGenba } from "./genba-lib/index.js";
 import { createSns } from "./sns-lib/index.js";
 import { createMeeting } from "./meeting-lib/index.js";
@@ -2855,6 +2855,12 @@ const genba = createGenba({
   gcs: RECEIPTS_BUCKET ? { bucket: RECEIPTS_BUCKET, getStorage: () => storage, publicUrl: DRAMA_API_BASE, secret: (process.env.INTERNAL_TICK_SECRET || "").trim() } : null,
 });
 app.all("/api/genba/mcp/:token", genba.mcpRoute(GENBA_MCP_TOKENS));
+// 直近の MCP 呼び出し (全コネクタ分、引数の中身なし)。Cloud Logging を開かずに「どのツールが何 ms で失敗したか」を見る用
+app.get("/api/genba/mcp/:token/recent", (req, res) => {
+  if (!GENBA_MCP_TOKENS[req.params.token]) return res.status(403).json({ error: "forbidden" });
+  const n = Math.max(1, Math.min(200, Number(req.query.n) || 50));
+  res.json({ server: { version: APP_VERSION, startedAt: SERVER_STARTED_AT, uptimeSec: Math.round(process.uptime()) }, calls: recentMcpCalls().slice(0, n) });
+});
 // 画像の PUT (認証なし・署名トークンで守る)。中身は JSON ではないので express.raw でそのまま受ける
 app.put("/api/genba/upload/:token", express.raw({ type: () => true, limit: "30mb" }), genba.uploadRoute());
 
@@ -14703,4 +14709,11 @@ if (DEV) {
   );
 }
 
-app.listen(PORT, () => console.log(`keihi-api listening on ${PORT} (DEV=${!!DEV})`));
+app.listen(PORT, () => {
+  console.log(`keihi-api listening on ${PORT} (DEV=${!!DEV})`);
+  // コールドスタート直後の最初の MCP 呼び出しが DDL (ensureSchema ≈ 60 文) を待たされないよう、起動と同時に先に済ませる
+  if (getPool()) {
+    const t0 = Date.now();
+    genba.ensureSchema().then(() => console.log(`[genba] schema ready ${Date.now() - t0}ms`)).catch((e) => console.warn("[genba] schema warmup failed:", e.message));
+  }
+});

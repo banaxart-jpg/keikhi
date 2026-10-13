@@ -65,6 +65,9 @@ steps:
       - --cpu=1
       - --min-instances=0
       - --max-instances=3
+      # 起動中だけ CPU を増やしてコールドスタートを短くする (待機中の課金は増えない)。
+      # claude.ai 側 (Artifact 等) のタイムアウトが短いクライアントが、起動直後の最初の呼び出しで落ちないように
+      - --cpu-boost
 
   - id: prep-config
     name: gcr.io/google.com/cloudsdktool/cloud-sdk

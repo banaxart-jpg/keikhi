@@ -45,9 +45,16 @@ const todayJst = () => new Date(Date.now() + 9 * 3600 * 1000).toISOString().slic
 
 // gcs = { bucket, getStorage, publicUrl, secret }: LINE 等から来た画像を PC 側 (Cowork) が PUT で流し込む口と、その署名 URL
 export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null }) {
-  let schemaOk = false;
+  // 1 プロセスで 1 回だけ。同時に来た最初の数リクエストは同じ promise を待つ (DDL を重ねて走らせない)。
+  // 起動時に index.js から先に呼んでおく (コールドスタート直後の最初のツール呼び出しを速くする)
+  let schemaOk = false, schemaPromise = null;
   async function ensureSchema() {
     if (schemaOk) return;
+    if (schemaPromise) return schemaPromise;
+    schemaPromise = ensureSchemaOnce().catch((e) => { schemaPromise = null; throw e; });
+    return schemaPromise;
+  }
+  async function ensureSchemaOnce() {
     const p = getPool();
     if (!p) throw new Error("DB not configured");
     // sites (現場マスタ、/genba/ アプリが管理) に案件 ID・Drive フォルダ・客先を足す。既存アプリは触らない
