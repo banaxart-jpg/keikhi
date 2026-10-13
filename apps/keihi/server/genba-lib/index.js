@@ -107,6 +107,8 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
     await p.query(`ALTER TABLE genba_log ADD COLUMN IF NOT EXISTS calendar_event TEXT`);
     // タスクカレンダー同期用: 最後にカレンダーへ書いた状態 {date, summary, colorId}。これと予定の今を比べて「人が動かしたか」を見る
     await p.query(`ALTER TABLE genba_log ADD COLUMN IF NOT EXISTS cal_snapshot JSONB`);
+    // 待ち の「来たらやること」(ジョブ化): 返事・データが届いたら誰が何をするか。待っていた相手からの連絡で waiting_hits に載り、AI がそれを実行する
+    await p.query(`ALTER TABLE genba_log ADD COLUMN IF NOT EXISTS then_do TEXT`);
     // 設定 (タスクカレンダーの ID と色の対応など)。デプロイ無しで変えられるように DB に置く
     await p.query(`
       CREATE TABLE IF NOT EXISTS genba_settings (
@@ -329,6 +331,14 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
     if ([...t].length > TITLE_MAX) throw new Error(`title は ${TITLE_MAX} 字まで (${[...t].length} 字)`);
     return t;
   }
+  const THEN_MAX = 300;
+  function cleanThen(v) {
+    if (v == null) return null;
+    const t = String(v).trim().replace(/\s+/g, " ");
+    if (!t) return null;
+    if ([...t].length > THEN_MAX) throw new Error(`then は ${THEN_MAX} 字まで (${[...t].length} 字)`);
+    return t;
+  }
   const autoTitle = (body) => { const s = String(body || "").replace(/\s+/g, " ").trim(); const cs = [...s]; return cs.length > 28 ? cs.slice(0, 28).join("") : s; };
   const logRow = (r) => ({
     id: Number(r.id), kind: r.kind, title: r.title || autoTitle(r.body), title_auto: r.title ? undefined : true, body: r.body, by: r.written_by,
@@ -341,6 +351,7 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
     who: r.who || undefined,
     topic: r.topic || undefined,
     calendar_event: r.calendar_event || undefined,
+    then: r.then_do || undefined,
     supersedes_id: r.supersedes_id ? Number(r.supersedes_id) : undefined,
     superseded_by: r.superseded_by ? Number(r.superseded_by) : undefined,
     edited: Array.isArray(r.edits) && r.edits.length ? r.edits.length : undefined,
@@ -408,6 +419,7 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
     if (!body) throw new Error("body が空");
     const title = cleanTitle(a.title);
     const calendarEvent = a.calendar_event ? String(a.calendar_event).trim().slice(0, 200) : null;
+    const thenDo = cleanThen(a.then);
     let resolvesId = null;
     if (a.kind === "解決") {
       resolvesId = Number(a.resolves_id);
@@ -465,11 +477,11 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
       if (hit) { supersedesId = Number(hit.id); superseded = hit; }
     }
     const { rows } = await p.query(
-      `INSERT INTO genba_log (site_id, kind, body, written_by, due_on, resolves_id, photo_ids, source_ref, source, estimate_min, who, topic, supersedes_id, title, calendar_event)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+      `INSERT INTO genba_log (site_id, kind, body, written_by, due_on, resolves_id, photo_ids, source_ref, source, estimate_min, who, topic, supersedes_id, title, calendar_event, then_do)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
        ON CONFLICT (source_ref) WHERE source_ref IS NOT NULL DO NOTHING
        RETURNING *`,
-      [useSiteId, a.kind, body, by, due, resolvesId, photos ? JSON.stringify(photos) : null, sourceRef, source ? JSON.stringify(source) : null, est, who, topic, supersedesId, title, calendarEvent]
+      [useSiteId, a.kind, body, by, due, resolvesId, photos ? JSON.stringify(photos) : null, sourceRef, source ? JSON.stringify(source) : null, est, who, topic, supersedesId, title, calendarEvent, thenDo]
     );
     if (rows.length) {
       const followups = followupsFor(rows[0], { hasTaskInBatch: !!ctx.hasTaskInBatch });
@@ -487,7 +499,7 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
         followups: followups.length ? followups : undefined,
         site_overdue: siteOverdue ? `この現場に期限切れのタスクが ${siteOverdue} 件 (genba_tasks(site) で確認)` : undefined,
         waiting_hits: waitingHits.length ? waitingHits : undefined,
-        waiting_say: waitingHits.length ? `${source.contact_name} からの連絡。待っていた件 ${waitingHits.map((w) => `#${w.id} ${w.title}`).join(" / ")} の返事なら、内容を記録して genba_log_add(kind=解決, resolves_id=…) で閉じ、次にやること (小西への報告・次のタスク) に進む` : undefined,
+        waiting_say: waitingHits.length ? waitingSay(`${source.contact_name} からの連絡。`, waitingHits) : undefined,
       };
     }
     // source_ref が既にある = 同じメッセージを前に記録済み
@@ -745,7 +757,13 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
   function waitingFor(contact, waits) {
     const keys = new Set([contact.name_key, ...(Array.isArray(contact.aliases) ? contact.aliases.map(normName) : [])].filter(Boolean));
     return waits.filter((w) => (w.who && keys.has(normName(w.who))) || (!w.who && [...keys].some((k) => k.length >= 2 && normName(w.title || "").includes(k))))
-      .map((w) => ({ id: Number(w.id), title: w.title || autoTitle(w.body), site: w.site_id ? { id: Number(w.site_id), name: w.site_name } : null, since: w.created_at }));
+      .map((w) => ({ id: Number(w.id), title: w.title || autoTitle(w.body), then: w.then_do || undefined, site: w.site_id ? { id: Number(w.site_id), name: w.site_name } : null, since: w.created_at }));
+  }
+  // 待っていた相手から連絡が来たときに AI へ返す指示文。then (来たらやること) があればそれを実行させる
+  function waitingSay(lead, hits) {
+    const list = hits.map((w) => `#${w.id} ${w.title}${w.from ? ` (${w.from})` : ""}${w.then ? ` → 来たら: ${w.then}` : ""}`).join(" / ");
+    const anyThen = hits.some((w) => w.then);
+    return `${lead}待っていた件 ${list} の返事なら、内容を記録して genba_log_add(kind=解決, resolves_id=…) で閉じ、${anyThen ? "「来たら」に書いてあることを実行する (送る相手は genba_contact_find。社外の人への文面は小西に見せてから、社内なら確認なしでよい)。無いものは" : ""}小西に報告して次のタスクに進む`;
   }
   // 同期されたルーム (ID と名前) を連絡先の channels に結びつける: ルーム名が合えば room_id を埋め、room_id が合えばルーム名を埋める
   async function linkRoomsToContacts(p, rooms) {
@@ -1082,6 +1100,21 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
     const result = { configured: true, calendarId: cfg.calendarId, today, open: humanOpen.length, ai_tasks: aiOpen.length || undefined, ...stats, errors: stats.errors.length ? stats.errors.slice(0, 20) : undefined };
     await setSetting(p, SETTING_CAL_SYNC, { at: new Date().toISOString(), result }, by);
     return result;
+  }
+  // 監視ジョブの生存確認: genba_room_sync が呼ばれた時刻を残し、30 分以上来なければ「止まっている」と返す
+  // (Cowork のチャットを変えるとスケジュールが消えることがある。AI の記憶に頼らず、サーバーが止まったことを言う)
+  const SETTING_ROOM_SYNC = "room_sync_last", MONITOR_STALL_MIN = 30;
+  async function markRoomSync(p, by, rooms) {
+    try { await setSetting(p, SETTING_ROOM_SYNC, { at: new Date().toISOString(), by, rooms }, by); } catch (e) { console.warn("[genba] room_sync mark", e.message); }
+  }
+  async function monitorState(p) {
+    let last = null;
+    try { last = await getSetting(p, SETTING_ROOM_SYNC); } catch (e) { console.warn("[genba] monitor state", e.message); }
+    if (!last || !last.at) return { status: "never", say: "監視ジョブ (genba_room_sync) がまだ一度も来ていない" };
+    const min = Math.floor((Date.now() - new Date(last.at).getTime()) / 60000);
+    const stalled = min >= MONITOR_STALL_MIN;
+    return { status: stalled ? "stalled" : "ok", last_at: last.at, by: last.by || undefined, minutes_ago: min,
+      say: stalled ? `監視ジョブが ${min} 分止まっている (最後の genba_room_sync: ${last.at}${last.by ? ` / ${last.by}` : ""})。Cowork のスケジュール (5 分ごと) が消えていないか確認、新しいチャットに移ったなら設定し直す` : undefined };
   }
   // 読まれたときに 5 分に 1 回だけ同期を回す (監視ジョブが 5 分ごとに genba_room_sync を呼ぶので、それが時計になる)
   async function maybeSyncCalendar() {
@@ -1494,6 +1527,7 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
             supersedes_id: { type: "number", description: "この行が置き換える前の行 ID (決定の変更・タスクの言い換え)。topic で自動紐付けできないときに" },
             photo_ids: { type: "array", items: { type: "string" }, description: "関連する写真・ファイルの ID (genba_file_list の id、または Drive の file_id)" },
             calendar_event: { type: "string", description: "日程をカレンダーに登録済みなら event ID (か done)。返り値の followups に「カレンダー登録」が出たら、登録して genba_log_fix で付ける" },
+            then: { type: "string", description: "来たらやること (kind=待ち のとき)。返事・データが届いたら誰が何をするか (例「シートをギさんへ転送 (AI、確認なしで)」「小西に報告」)。待っていた相手から連絡が来ると waiting_hits にこれが載り、AI がそのまま実行する。who=AI のタスクなら実行の条件と手順" },
             source_ref: { type: "string", description: "出どころの一意キー (例 LINE:<room>:<message id>)。同じ source_ref は 2 回記録されない" },
             source: { type: "object", description: "出どころ { channel, room, sender, at, quote } など自由" },
           },
@@ -1540,12 +1574,12 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
           }
           return { added, duplicate: dup, failed, results, followups: followups.size ? [...followups] : undefined,
             waiting_hits: waitingAll.size ? [...waitingAll.values()] : undefined,
-            waiting_say: waitingAll.size ? `待っていた人から連絡が来ている: ${[...waitingAll.values()].map((w) => `#${w.id} ${w.title} (${w.from})`).join(" / ")}。返事なら記録して 解決 で閉じ、次にやることに進む` : undefined };
+            waiting_say: waitingAll.size ? waitingSay("待っていた人から連絡が来ている。", [...waitingAll.values()]) : undefined };
         },
       },
       {
         name: "genba_log_fix",
-        description: "ログの行を直す (誤字・現場違い・期限・担当・所要時間・topic・title)。直す前の値は edits に残る (誰がいつ)。kind は 課題 / 次やること / 待ち の間だけ変えられる (「これは待ちだ」の付け替え用)。それ以外は genba_log_void して入れ直す",
+        description: "ログの行を直す (誤字・現場違い・期限・担当・所要時間・topic・title・then)。直す前の値は edits に残る (誰がいつ)。kind は 課題 / 次やること / 待ち の間だけ変えられる (「これは待ちだ」の付け替え用)。それ以外は genba_log_void して入れ直す",
         inputSchema: {
           type: "object",
           properties: {
@@ -1555,6 +1589,7 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
             title: { type: "string", description: "一覧用タイトル (40 字まで)。空文字で消す" },
             kind: { type: "string", enum: OPEN_KINDS, description: "課題 / 次やること / 待ち の付け替え" },
             calendar_event: { type: "string", description: "カレンダーに登録した event ID (か done)。日程の行に付ける" },
+            then: { type: "string", description: "来たらやること (待ち / who=AI のタスク)。空文字で消す" },
           },
           required: ["id"],
         },
@@ -1580,6 +1615,7 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
           if (a.topic !== undefined) set("topic", a.topic ? String(a.topic).trim().slice(0, 60) : null);
           if (a.title !== undefined) set("title", cleanTitle(a.title));
           if (a.calendar_event !== undefined) set("calendar_event", a.calendar_event ? String(a.calendar_event).trim().slice(0, 200) : null);
+          if (a.then !== undefined) set("then_do", cleanThen(a.then));
           if (!sets.length) throw new Error("直す項目が無い");
           const edits = [...(Array.isArray(r.edits) ? r.edits : []), { at: new Date().toISOString(), by, before }];
           vals.push(JSON.stringify(edits)); sets.push(`edits=$${vals.length}`);
@@ -1765,7 +1801,7 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
       },
       {
         name: "genba_audit",
-        description: "抜け漏れチェック。期限切れのタスク / 期限の無いタスク / 「返事待ち・確認中」と書いたのに次やることが無い行 / 日程があるのにカレンダー未登録の行 を機械的に洗い出す。監視ジョブは 1 時間に 1 回、会話の終わりにも 1 回呼んで、出たものを片付ける (タスクを立てる・カレンダーに入れて calendar_event を付ける・終わっていれば 解決)。site 省略で全現場",
+        description: "抜け漏れチェック。期限切れのタスク / 期限の無いタスク / 「返事待ち・確認中」と書いたのに次やることが無い行 / 日程があるのにカレンダー未登録の行 / 監視ジョブの停止 (genba_room_sync が 30 分以上来ていない) を機械的に洗い出す。監視ジョブは 1 時間に 1 回、会話の終わりにも 1 回呼んで、出たものを片付ける (タスクを立てる・カレンダーに入れて calendar_event を付ける・終わっていれば 解決)。site 省略で全現場",
         inputSchema: { type: "object", properties: { site: { type: "string", description: "省略で全現場" }, days: { type: "number", description: "直近何日の行を見るか (既定 7)" } } },
         handler: async (a) => {
           await ensureSchema();
@@ -1786,7 +1822,8 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
           ]);
           const open = openRes.rows, recent = recentRes.rows;
           const tasks = open.filter((r) => r.kind !== "待ち"), waits = open.filter((r) => r.kind === "待ち");
-          const brief = (r) => ({ id: Number(r.id), site: r.site_id ? r.site_name : null, kind: r.kind, title: r.title || autoTitle(r.body), due_on: ymd(r.due_on) || undefined, who: r.who || undefined, at: r.created_at, days: Math.floor((Date.now() - new Date(r.created_at).getTime()) / 86400000) });
+          const brief = (r) => ({ id: Number(r.id), site: r.site_id ? r.site_name : null, kind: r.kind, title: r.title || autoTitle(r.body), due_on: ymd(r.due_on) || undefined, who: r.who || undefined, then: r.then_do || undefined, at: r.created_at, days: Math.floor((Date.now() - new Date(r.created_at).getTime()) / 86400000) });
+          const monitor = await monitorState(p);
           const overdue = tasks.filter((r) => r.due_on && ymd(r.due_on) < today);
           const threeDaysAgo = new Date(Date.now() - 3 * 86400000);
           const noDue = tasks.filter((r) => !r.due_on && new Date(r.created_at) < threeDaysAgo);
@@ -1801,8 +1838,10 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
           if (waitLong.length) parts.push(`待ちが長い ${waitLong.length}`);
           if (waiting.length) parts.push(`返事待ちで記録無し ${waiting.length}`);
           if (noCalendar.length) parts.push(`日程あり・カレンダー未確認 ${noCalendar.length}`);
+          if (monitor.status === "stalled") parts.push(`監視ジョブ停止 ${monitor.minutes_ago} 分`);
           return {
             today, days, site: site ? siteRow(site) : "*",
+            monitor,
             overdue: overdue.map(brief),
             no_due: noDue.map(brief),
             waiting_long: waitLong.map(brief),
@@ -1816,6 +1855,7 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
               "待ちが長い → 相手に催促する (文面を作って人に確認)。返事が来ていれば genba_log_add(kind=解決)",
               "返事待ちで記録無し → genba_log_add(kind=待ち, title=「〇〇の返事待ち」, who=相手)",
               "日程あり・カレンダー未確認 → カレンダーに入れて genba_log_fix(calendar_event=event id か done)。既に入っているなら done を付けるだけ",
+              "監視ジョブ停止 → 自分が監視ジョブなら genba_room_sync を今すぐ呼ぶ。そうでなければ小西に『監視ジョブ (5 分ごとの LINE 読み) が止まっている。Cowork のスケジュールを設定し直して』と報告",
             ] : undefined,
           };
         },
@@ -1851,8 +1891,10 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
               ORDER BY (l.estimate_min IS NULL), l.estimate_min, l.due_on NULLS LAST, l.created_at
               LIMIT $${vals.length}`, vals);
           const today = todayJst();
+          const monitor = await monitorState(p);
           return {
             today,
+            monitor,
             tasks: rows.map(logRow).map((r) => ({ ...r, overdue: !!(r.due_on && r.due_on < today) })),
             hint: rows.length ? "候補を 1〜3 件に絞って提案。やったら genba_log_add(kind=解決, resolves_id=その id)" : "条件に合う未解決タスクは無い",
           };
@@ -1978,6 +2020,7 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
               [by, r.channel, r.room, r.name]);
             if (ins[0]?.inserted) added.push({ channel: r.channel, room: r.room, name: r.name });
           }
+          await markRoomSync(p, by, rooms.length);
           // 連絡先に room_name だけ入っているルームは、ここで room_id が埋まる (逆も)
           const contactsLinked = await linkRoomsToContacts(p, rooms);
           const autoAnswering = await autoEnableInternalRooms(p, by, rooms);
@@ -2204,6 +2247,7 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
     "- 必ず title を付ける: 「何を・どうする」を 20 字前後 (例「工程表を辰巳さんへ送る」「巾木の色をみゆまに確認」)。決定は title に結論 (例「巾木は東リ97番か43番」)。body には経緯・数量・型番・金額・出どころの詳細。一覧は title、詳細は body で読む",
     "- 課題・次やること・待ちが片付いたら kind=解決 で resolves_id に元の行 ID (状態の上書きはしない)",
     "- 「〇〇さんの返事待ち」「見積待ち」「データ待ち」は kind=待ち (who=待っている相手)。人の仕事ではないので タスク一覧・タスクカレンダーには出ない。due_on は返事が要る日があるときだけ。返事が来たら 解決。3 日以上返事が無ければ genba_audit が「待ちが長い」で出すので催促する。タスク (次やること) は人が手を動かす仕事だけ",
+    "- 待ちは『誰を待つ (who)』+『来たら何をする (then)』で 1 件のジョブ。「シートデータが来たら即ギさんへ」→ kind=待ち, who=送ってくる相手, then=「シートをギさんへ転送 (AI)」。then があれば、相手から連絡が来たとき (waiting_hits) に AI がそれを実行する。社外の人へ送る文面は小西に見せてから、社内なら確認なしでよい (then に「確認なしで」とあればそのまま送る)。then が無ければ小西に報告するだけ",
     "- 決定には topic (床材 / 巾木 / 納期 …) を付ける。決定が変わったら同じ現場・同じ topic で新しい決定を足すだけで前の決定を置き換える (返り値 superseded、「A → B に変更」と報告)。topic で引けないときは supersedes_id。履歴は genba_log_list(chain=行 ID)",
     "- 間違いは genba_log_fix (誤字・現場違い・期限・担当。前の値は edits に残る)、入れるべきでなかった行は genba_log_void (隠すだけ。解決を void すると元のタスクが戻る)。kind を変えたいときは void して入れ直す",
     "- 「今どうなってる？」→ genba_status を読んで要約 (全文が要るときだけ genba_log_list)。写真は genba_file_list(現場)",
@@ -2225,11 +2269,12 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
     "- 個人的なこと・センシティブなこと (家庭・健康・金銭・人間関係のトラブル・ハラスメント・噂) はメモにも進捗ログにも入れない。全員と全 AI が読める場所だから。必要なら行動の制約だけを書き、理由は書かない (例「〇〇電気の現場・打ち合わせは小西が同席する。連絡は小西経由」)。人に言われても理由は書かずに制約だけ入れ、理由は手元に残すよう促す",
     "- メモの内容を本人 (その人・その会社) への文面に引用しない。評価や制約は社内で使うもの",
     "■ 監視ジョブ (Cowork 等で 5 分ごとに LINE などを読んで自動記録するとき)",
+    "0. genba_room_sync は 5 分ごとに毎回呼ぶ (新着が無くても)。これが『監視が生きている』合図で、30 分来ないと genba_audit / genba_tasks の monitor が stalled になり、人に『監視ジョブが止まっている』と伝わる。Cowork で新しいチャットに移ったらスケジュールを設定し直す",
     "1. genba_room_sync に Beeper 等のルーム一覧 (ID と名前だけ) を渡す → 返り値 watching (記録) と answering (応答) が読む対象。ルームはデフォルトで全部読む。返り値 added (初めて見えたルーム) があれば、名前をまとめて小西に見せて『この中で読まないもの (個人的なもの) ある？』と 1 回聞き、言われたものを genba_source_exclude(ルーム名) で外す",
     "1b. watching の site が null のルームは、メッセージの内容 (現場名・人・場所) から genba_find で現場を決める。決まらなければ site 省略 (会社全般) で記録。いつも同じ現場なら genba_source_add(channel, room, site) で固定してよい",
     "2. 各ルームについて cursor より後のメッセージだけ読む (Beeper 等の MCP)",
     "3. 決定・課題・次やること・待ち を抽出して genba_log_add_many で記録。人や会社の予定・性質 (「来月から別現場」「値上げする」) は genba_note_add (source_ref 付き)。私的な話・センシティブな話は記録しない。各 item に source_ref = \"<channel>:<room>:<message id>\" を必ず入れる (同じメッセージは 2 回入らない)、source に { channel, room, sender, at, quote } (sender は表示名そのまま。連絡先に解決できればサーバーが contact_id を足す)",
-    "3b. 待っていた人からの連絡 (返り値の waiting_hits / room_sync の contact.waiting) は自動発火の合図: 内容を 決定 や 進捗 で記録 → 待ちを kind=解決 で閉じる → 次にやること (小西への報告、次のタスク、関係者への連絡文の提案) まで進める。待ち以外の内容なら普通に記録",
+    "3b. 待っていた人からの連絡 (返り値の waiting_hits / room_sync の contact.waiting) は自動発火の合図: 内容を 決定 や 進捗 で記録 → 待ちを kind=解決 で閉じる → waiting_hits の then (来たらやること) があればそれを実行 (転送・連絡・書類作成。社外への文面は小西に見せてから) → 無ければ小西に報告。待ち以外の内容なら普通に記録",
     "4. 画像・PDF が来たら genba_file_upload_url(現場, ファイル名, content_type, source_ref=<channel>:<room>:<message id>:<n>) で URL をもらい、返ってきた curl を PC 側で実行して PUT する (ファイルの中身を会話に貼らない)。上げたら genba_log_add(kind=進捗, body=「写真 n 枚: 何の写真か」, photo_ids=[file id]) で現場に残す。現場が分からない添付は上げない",
     "5. 最後に genba_source_mark(channel, room, { last_id, last_at }) で cursor を進める",
     "6. 新着が無ければ何もしない。雑談・曖昧なものは記録しない。記録したら件数と中身を短く報告",
