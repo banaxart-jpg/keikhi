@@ -39,6 +39,8 @@
 | `genba_rule_get(topic?)` / `genba_rule_set(topic, body)` | 運用ルール (版を積む。消えない) |
 | `genba_log_add_many(site?, items[])` | まとめて追記 (監視ジョブ・会話から一度に抽出したとき)。各行に `duplicate` |
 | `genba_source_mark(channel, room, cursor, items[])` | 監視ジョブの「ここまで読んだ」+ 読んだメッセージの目録。items は 1 件 1 要素 `{id, sender, at, kind, gist(40 字), len, …}`。kind が 決定 / 課題 / 次やること / 待ち / 進捗 なら title・body を付ければサーバーが genba_log に入れる (source_ref 自動)。メモ=note_id、画像=file_id、返信=AI の発言、雑談 / 私的 (gist 保存なし) / 既存。**cursor は items 無しでは進まない**、入らない item があれば cursor を進めずに error。目録は `genba_seen` (本文は持たない) に残る |
+| `related_tasks` / `related_say` (genba_log_add / add_many / genba_source_mark の返り値) | 連絡の送り主 (連絡先に解決できた人・会社) の名前・呼び名・会社名が title / body / who に出ている未解決タスク。「この連絡で状態は変わった？」を AI に見直させる (終わった → 解決、相手待ち → `genba_log_fix(kind=待ち, who, then)`、変わらない → `genba_log_fix(id, confirm=true)`)。社内の人からの連絡では出ない |
+| `genba_log_fix(id, confirm=true)` | 何も変えずに「見直した」印を edits に残す。`genba_audit` の「動きがあるのに未更新」が消える |
 | `genba_room_sync(rooms)` | 監視ジョブが自分の Beeper / LINE のルーム一覧 (ID と名前だけ) を同期。返り値 `added` (初めて見えた) / `watching` (記録) / `answering` (社内の問い合わせ) |
 | `genba_source_exclude(room) / include(room)` | 個人的なルームを読む対象から外す / 戻す (ルーム名か ID) |
 | `genba_source_add(channel, room, site?, purpose?) / list / mark / remove` | ルームを現場に固定・用途を決める (普段は要らない)、一覧 (sources / excluded)、「ここまで読んだ」cursor、OFF |
@@ -111,7 +113,8 @@ LINE (Beeper) に来た画像を監視ジョブ (PC の Cowork) が保存する�
 2. cursor より後のメッセージだけ読む (Beeper 等の MCP)
 3. 読んだメッセージを 1 件ずつ分類して `genba_source_mark(channel, room, cursor, items)` に全部渡す (記録と cursor 更新を兼ねる)。決定 / 課題 / 次やること / 待ち / 進捗 は title・body を書けばサーバーが genba_log に入れる (`source_ref` / `source` 自動)。雑談・私的・画像・返信・既存も kind を付けて入れる
 4. 画像・PDF は `genba_file_upload_url` → PC で `curl` PUT → 目録に kind=進捗 + photo_ids (上の「写真・ファイル」)
-5. cursor は items 無しでは進まない。入らない item があればサーバーが error で止め、直して同じ items でもう一度。「読んだのに書かなかった」が構造的に起きない。`genba_audit` が 雑談 扱いされた社外からの 60 字以上の文を `chat_review` (要確認) で出す
+5. `genba_audit` の `stale_tasks` (動きがあるのに未更新): 目録に `contact_id` が残るので、関係者から連絡が来た後に触られていないタスクが出る。メールも同じ目録に入れる (`channel=Mail`, `room=差出人アドレス`。連絡先に email がある相手だけ `watching`、他は `mail_unknown`)
+6. cursor は items 無しでは進まない。入らない item があればサーバーが error で止め、直して同じ items でもう一度。「読んだのに書かなかった」が構造的に起きない。`genba_audit` が 雑談 扱いされた社外からの 60 字以上の文を `chat_review` (要確認) で出す
 
 書いた人は人ごとの URL で決まる: `GET /api/mcp-connector` (ログイン済み) が `genba.名取` / `genba.LINE監視` の URL を返す (INTERNAL_TICK_SECRET から導出、リポには無い)。
 
