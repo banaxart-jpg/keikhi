@@ -141,11 +141,8 @@ export function createMcpHandler({ name, version = "1.0.0", instructions = "", t
     if (proto) res.set("MCP-Protocol-Version", proto);
     // Streamable HTTP: クライアントが SSE しか受けないと言ってきたら、1 イベントの SSE で同じ JSON を返す
     // (JSON を受けられるクライアント = 普段の claude.ai / Claude Code はそのまま application/json)
-    // 実験 (2026-10-13): Artifact ブリッジ (MCP-Protocol-Version: 2026-07-28) は JSON 応答を受け付けず server/discover を繰り返す。
-    // このクライアントには SSE で返してみる (Accept に text/event-stream を含むので仕様上は正当)
-    const wantsSse = (accept.includes("text/event-stream") && !accept.includes("application/json") && !accept.includes("*/*"))
-      || (proto === "2026-07-28" && accept.includes("text/event-stream"));
-    if (wantsSse) {
+    // (2026-10-13 に protocol 2026-07-28 のクライアントへ SSE で返す実験をしたが、挙動は変わらなかったので JSON に戻した)
+    if (accept.includes("text/event-stream") && !accept.includes("application/json") && !accept.includes("*/*")) {
       res.status(200).set({ "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "keep-alive" });
       return res.end(`event: message\ndata: ${JSON.stringify(payload)}\n\n`);
     }
