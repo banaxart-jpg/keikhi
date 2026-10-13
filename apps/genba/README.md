@@ -28,7 +28,7 @@
 | `genba_log_title_set_many(items[{id, title}])` | 【移行用・あとで消す】既存行に title だけを付ける (最大 200 件)。返り値 updated / missing |
 | `genba_calendar_setup(calendar_id, colors?, dry_run?)` / `genba_calendar_sync()` / `genba_calendar_status()` | タスク専用カレンダーとの双方向同期 (下の「タスクカレンダー同期」) |
 | `genba_contact_find(query)` の `message_hint` / `last_contact` | 送る相手との直近のやりとり (この人からの記録の `source.at` と、そのルームの cursor の `last_at` の新しい方)。3 時間以内・今日なら「挨拶なしで用件から」、無ければ「最初の 1 通だけ挨拶 OK」。毎回「お疲れ様です！」から始めないため |
-| `genba_audit(site?, days?)` | 抜け漏れチェック: 期限切れ / 期限なし / 「返事待ち・確認中」なのに次やることが無い / 日程があるのにカレンダー未登録 (`calendar_event` 無し) / 監視ジョブの停止 (`monitor`: `genba_room_sync` が 30 分以上来ていなければ stalled)。会話の終わりと監視ジョブの 1 時間に 1 回 |
+| `genba_audit(site?, days?)` | 抜け漏れチェック: 相手待ちの言葉が title の次やること (`waiting_as_task`) / title が似ている未解決の組 (`similar_tasks`, score ≥ 0.45) / 期限切れ / 期限なし / 「返事待ち・確認中」なのに次やることが無い / 日程があるのにカレンダー未登録 (`calendar_event` 無し) / 監視ジョブの停止 (`monitor`: `genba_room_sync` が 30 分以上来ていなければ stalled)。会話の終わりと監視ジョブの 1 時間に 1 回 |
 | `genba_log_fix(id, {title, body, site, due_on, who, estimate_min, topic, calendar_event})` | 行を直す。前の値は `edits` に残る (誰がいつ)。kind は変えない |
 | `genba_log_void(id, reason?)` | 行を取り消す (隠すだけ、消えない)。解決を void すると元のタスクが戻る、変更の決定を void すると前の決定が生き返る |
 | `genba_tasks(max_minutes?, who?, site?, kind?, include_waiting?)` | 未解決タスクを全現場横断で (所要時間が短い順)。「5 分で終わるタスクある？」用。待ち は既定で含まない。返り値 `monitor` に監視ジョブの生存状態 (画面に「監視が止まっている」を出す用) |
@@ -40,6 +40,7 @@
 | `genba_log_add_many(site?, items[])` | まとめて追記 (監視ジョブ・会話から一度に抽出したとき)。各行に `duplicate` |
 | `genba_source_mark(channel, room, cursor, items[])` | 監視ジョブの「ここまで読んだ」+ 読んだメッセージの目録。items は 1 件 1 要素 `{id, sender, at, kind, gist(40 字), len, …}`。kind が 決定 / 課題 / 次やること / 待ち / 進捗 なら title・body を付ければサーバーが genba_log に入れる (source_ref 自動)。メモ=note_id、画像=file_id、返信=AI の発言、雑談 / 私的 (gist 保存なし) / 既存。**cursor は items 無しでは進まない**、入らない item があれば cursor を進めずに error。目録は `genba_seen` (本文は持たない) に残る |
 | `related_tasks` / `related_say` (genba_log_add / add_many / genba_source_mark の返り値) | 連絡の送り主 (連絡先に解決できた人・会社) の名前・呼び名・会社名が title / body / who に出ている未解決タスク。「この連絡で状態は変わった？」を AI に見直させる (終わった → 解決、相手待ち → `genba_log_fix(kind=待ち, who, then)`、変わらない → `genba_log_fix(id, confirm=true)`)。社内の人からの連絡では出ない |
+| 書き込みガード (`genba_log_add` / `add_many` / 目録) | ① title が「〜待ち」「届いたら」の 次やること・課題 は自動で `待ち` になる (返り値 `auto`、who は title の「〇〇さん」から)。② 同じ現場の未解決 (課題 / 次やること / 待ち) に title が似た行 (同一 / 包含 / 2 文字組 Dice ≥ 0.6) があれば入らず error「重複かも #id」。目録 (`genba_source_mark`) では既存の行に寄せる (`duplicate_of`)。③ 担当が職人・業者で日程のあるタスクは followups に「予定では？」。①② は `force: true` で無視 |
 | `genba_log_fix(id, confirm=true)` | 何も変えずに「見直した」印を edits に残す。`genba_audit` の「動きがあるのに未更新」が消える |
 | `genba_room_sync(rooms)` | 監視ジョブが自分の Beeper / LINE のルーム一覧 (ID と名前だけ) を同期。返り値 `added` (初めて見えた) / `watching` (記録) / `answering` (社内の問い合わせ) |
 | `genba_source_exclude(room) / include(room)` | 個人的なルームを読む対象から外す / 戻す (ルーム名か ID) |
