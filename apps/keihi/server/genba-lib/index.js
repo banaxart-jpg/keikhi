@@ -133,6 +133,8 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
     await p.query(`ALTER TABLE genba_sources ALTER COLUMN site_id DROP NOT NULL`);
     await p.query(`ALTER TABLE genba_sources DROP CONSTRAINT IF EXISTS genba_sources_channel_room_key`);
     await p.query(`CREATE UNIQUE INDEX IF NOT EXISTS genba_sources_owner_room_uq ON genba_sources (owner, channel, room)`);
+    // 用途: 記録 (現場の進捗を自動記録。現場が要る) / 応答 (社内の人からの問い合わせに AI が答える。現場は要らない)
+    await p.query(`ALTER TABLE genba_sources ADD COLUMN IF NOT EXISTS purpose TEXT NOT NULL DEFAULT '記録'`);
     // 画面のログイン (メール) → 持ち主の名前。トークンの名前と同じ文字列にする
     await p.query(`
       CREATE TABLE IF NOT EXISTS genba_owners (
@@ -635,20 +637,34 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
     const named = rooms.filter((r) => r.name);
     if (!rooms.length) return 0;
     const rows = await loadContacts(p);
-    let n = 0;
-    for (const c of rows) {
-      const chans = Array.isArray(c.channels) ? c.channels.map((x) => ({ ...x })) : [];
-      let changed = false;
-      for (const ch of chans) {
+    const state = rows.map((c) => ({ c, chans: Array.isArray(c.channels) ? c.channels.map((x) => ({ ...x })) : [], changed: false }));
+    // 1) 連絡先に室名だけ / ID だけ入っているものを埋める
+    for (const s of state) {
+      for (const ch of s.chans) {
         if (!ch.room_id && ch.room_name) {
           const hits = named.filter((r) => normName(r.name) === normName(ch.room_name));
-          if (hits.length === 1) { ch.room_id = hits[0].room; changed = true; }
+          if (hits.length === 1) { ch.room_id = hits[0].room; s.changed = true; }
         } else if (ch.room_id && !ch.room_name) {
           const hit = named.find((r) => r.room === ch.room_id);
-          if (hit) { ch.room_name = hit.name; changed = true; }
+          if (hit) { ch.room_name = hit.name; s.changed = true; }
         }
       }
-      if (changed) { await p.query(`UPDATE genba_contacts SET channels=$2, updated_at=now() WHERE id=$1`, [c.id, JSON.stringify(chans)]); n++; }
+    }
+    // 2) どの連絡先にも結ばれていないルームで、名前が 1 人の連絡先の名前・呼び名と一致するものは、その人の個人ルームとして足す
+    for (const r of named) {
+      if (state.some((s) => s.chans.some((ch) => ch.room_id === r.room))) continue;
+      const key = normName(r.name);
+      if (!key) continue;
+      const hits = state.filter((s) => s.c.name_key === key || (Array.isArray(s.c.aliases) ? s.c.aliases : []).some((al) => normName(al) === key));
+      if (hits.length !== 1) continue;
+      hits[0].chans.push({ channel: r.channel || "LINE", room_id: r.room, room_name: r.name, kind: "single" });
+      hits[0].changed = true;
+    }
+    let n = 0;
+    for (const s of state) {
+      if (!s.changed) continue;
+      await p.query(`UPDATE genba_contacts SET channels=$2, updated_at=now() WHERE id=$1`, [s.c.id, JSON.stringify(s.chans)]);
+      n++;
     }
     return n;
   }
@@ -1475,7 +1491,7 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
       },
       {
         name: "genba_room_sync",
-        description: "監視ジョブの最初に、自分の Beeper / LINE のルーム一覧 (ID と名前だけ。本文は送らない) を同期する。画面 (/genba/watch.html) にトグル付きで並ぶ。同期しても監視は ON にならない (ON/OFF は画面か genba_source_add)。返り値の watching に ON のルームと現場が入るので、そのまま読む対象にする",
+        description: "監視ジョブの最初に、自分の Beeper / LINE のルーム一覧 (ID と名前だけ。本文は送らない) を同期する。画面 (/genba/watch.html) にトグル付きで並ぶ。同期しても監視は ON にならない (ON/OFF は画面か genba_source_add)。返り値の watching (用途=記録: 現場の進捗を記録する) と answering (用途=応答: 社内の人の問い合わせに答える) に ON のルームが入るので、それだけを読む",
         inputSchema: {
           type: "object",
           properties: {
@@ -1499,41 +1515,51 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
           // 連絡先に room_name だけ入っているルームは、ここで room_id が埋まる (逆も)
           const contactsLinked = await linkRoomsToContacts(p, rooms);
           const { rows } = await p.query(
-            `SELECT g.channel, g.room, g.name, g.label, g.cursor, g.site_id, s.name AS site_name, s.site_code
+            `SELECT g.channel, g.room, g.name, g.label, g.cursor, g.site_id, g.purpose, s.name AS site_name, s.site_code
                FROM genba_sources g LEFT JOIN sites s ON s.id = g.site_id
-              WHERE g.owner=$1 AND g.enabled AND g.site_id IS NOT NULL ORDER BY g.channel, g.name NULLS LAST, g.room`, [by]);
+              WHERE g.owner=$1 AND g.enabled AND (g.site_id IS NOT NULL OR g.purpose='応答') ORDER BY g.channel, g.name NULLS LAST, g.room`, [by]);
+          const contacts = rows.some((r) => r.purpose === "応答") ? await loadContacts(p) : [];
+          const contactOf = (room) => {
+            const hits = contacts.filter((c) => (Array.isArray(c.channels) ? c.channels : []).some((ch) => ch.room_id === room));
+            return hits.length === 1 ? { id: Number(hits[0].id), name: hits[0].name, role: hits[0].role || null, tone: hits[0].tone || null } : null;
+          };
+          const site = (r) => (r.site_id ? { id: Number(r.site_id), code: r.site_code || null, name: r.site_name } : null);
           return {
             synced: rooms.length,
             contactsLinked,
-            watching: rows.map((r) => ({ channel: r.channel, room: r.room, name: r.name, label: r.label, site: { id: Number(r.site_id), code: r.site_code || null, name: r.site_name }, cursor: r.cursor || null })),
-            note: "watching に無いルームは読まない。ON/OFF は /genba/watch.html",
+            watching: rows.filter((r) => r.purpose !== "応答").map((r) => ({ channel: r.channel, room: r.room, name: r.name, label: r.label, site: site(r), cursor: r.cursor || null })),
+            answering: rows.filter((r) => r.purpose === "応答").map((r) => ({ channel: r.channel, room: r.room, name: r.name, label: r.label, site: site(r), contact: contactOf(r.room), cursor: r.cursor || null })),
+            note: "watching / answering に無いルームは読まない。ON/OFF と用途は /genba/watch.html。answering は contact が社内 (role=社内) の人だけ答える",
           };
         },
       },
       {
         name: "genba_source_add",
-        description: "ルーム (LINE グループ等) を現場に紐付けて監視 ON にする (自分の持ち分だけ)。画面 /genba/watch.html のトグルと同じ。登録されていないルームは監視ジョブが読まない",
+        description: "ルーム (LINE グループ等) を監視 ON にする (自分の持ち分だけ)。画面 /genba/watch.html のトグルと同じ。purpose=記録 (既定) は現場に紐付けて進捗を記録する (site 必須)。purpose=応答 は社内の人の問い合わせに答える用 (site 不要)。登録されていないルームは監視ジョブが読まない",
         inputSchema: {
           type: "object",
           properties: {
             channel: { type: "string", description: "LINE / Beeper / Slack など" },
             room: { type: "string", description: "ルーム ID (監視側が一意に引ける文字列)" },
-            site: { type: "string", description: "案件 ID・現場名・ID" },
+            site: { type: "string", description: "案件 ID・現場名・ID (記録のとき必須)" },
+            purpose: { type: "string", enum: ["記録", "応答"], description: "既定 記録" },
             label: { type: "string", description: "人が見て分かる名前 (例: 田中様 LINE)" },
           },
-          required: ["channel", "room", "site"],
+          required: ["channel", "room"],
         },
         handler: async (a) => {
           await ensureSchema();
           const p = getPool();
-          const site = await resolveSite(p, a.site);
+          const purpose = a.purpose === "応答" ? "応答" : "記録";
+          if (purpose === "記録" && !a.site) throw new Error("記録のルームは site が必要 (応答なら purpose=応答)");
+          const site = a.site ? await resolveSite(p, a.site) : null;
           const { rows } = await p.query(
-            `INSERT INTO genba_sources (owner, channel, room, label, site_id, enabled, added_by)
-             VALUES ($1, $2, $3, $4, $5, true, $1)
-             ON CONFLICT (owner, channel, room) DO UPDATE SET site_id = EXCLUDED.site_id, label = COALESCE(EXCLUDED.label, genba_sources.label), enabled = true, updated_at = now()
+            `INSERT INTO genba_sources (owner, channel, room, label, site_id, enabled, added_by, purpose)
+             VALUES ($1, $2, $3, $4, $5, true, $1, $6)
+             ON CONFLICT (owner, channel, room) DO UPDATE SET site_id = COALESCE(EXCLUDED.site_id, genba_sources.site_id), label = COALESCE(EXCLUDED.label, genba_sources.label), enabled = true, purpose = EXCLUDED.purpose, updated_at = now()
              RETURNING *`,
-            [by, String(a.channel).trim(), String(a.room).trim(), a.label ? String(a.label).trim() : null, site.id]);
-          return { owner: by, channel: rows[0].channel, room: rows[0].room, name: rows[0].name, label: rows[0].label, site: siteRow(site), enabled: rows[0].enabled };
+            [by, String(a.channel).trim(), String(a.room).trim(), a.label ? String(a.label).trim() : null, site ? site.id : null, purpose]);
+          return { owner: by, channel: rows[0].channel, room: rows[0].room, name: rows[0].name, label: rows[0].label, purpose: rows[0].purpose, site: site ? siteRow(site) : null, enabled: rows[0].enabled };
         },
       },
       {
@@ -1544,10 +1570,10 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
           await ensureSchema();
           const p = getPool();
           const { rows } = await p.query(
-            `SELECT g.*, s.name AS site_name, s.site_code FROM genba_sources g JOIN sites s ON s.id = g.site_id
+            `SELECT g.*, s.name AS site_name, s.site_code FROM genba_sources g LEFT JOIN sites s ON s.id = g.site_id
               WHERE g.owner=$1 AND g.enabled ${a.channel ? "AND g.channel=$2" : ""} ORDER BY g.channel, g.name NULLS LAST, g.room`,
             a.channel ? [by, String(a.channel)] : [by]);
-          return { owner: by, sources: rows.map((r) => ({ channel: r.channel, room: r.room, name: r.name, label: r.label, site: { id: Number(r.site_id), code: r.site_code || null, name: r.site_name }, cursor: r.cursor || null, updated_at: r.updated_at })) };
+          return { owner: by, sources: rows.map((r) => ({ channel: r.channel, room: r.room, name: r.name, label: r.label, purpose: r.purpose || "記録", site: r.site_id ? { id: Number(r.site_id), code: r.site_code || null, name: r.site_name } : null, cursor: r.cursor || null, updated_at: r.updated_at })) };
         },
       },
       {
@@ -1629,12 +1655,19 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
     "- 個人的なこと・センシティブなこと (家庭・健康・金銭・人間関係のトラブル・ハラスメント・噂) はメモにも進捗ログにも入れない。全員と全 AI が読める場所だから。必要なら行動の制約だけを書き、理由は書かない (例「〇〇電気の現場・打ち合わせは小西が同席する。連絡は小西経由」)。人に言われても理由は書かずに制約だけ入れ、理由は手元に残すよう促す",
     "- メモの内容を本人 (その人・その会社) への文面に引用しない。評価や制約は社内で使うもの",
     "■ 監視ジョブ (Cowork 等で 5 分ごとに LINE などを読んで自動記録するとき)",
-    "1. genba_room_sync に Beeper 等のルーム一覧 (ID と名前だけ) を渡す → 返り値 watching が読む対象 (ON/OFF は画面 /genba/watch.html)。watching に無いルームは読まない",
+    "1. genba_room_sync に Beeper 等のルーム一覧 (ID と名前だけ) を渡す → 返り値 watching (記録) と answering (応答) が読む対象 (ON/OFF と用途は画面 /genba/watch.html)。どちらにも無いルームは読まない",
     "2. 各ルームについて cursor より後のメッセージだけ読む (Beeper 等の MCP)",
     "3. 決定・課題・次やること を抽出して genba_log_add_many で記録。人や会社の予定・性質 (「来月から別現場」「値上げする」) は genba_note_add (source_ref 付き)。私的な話・センシティブな話は記録しない。各 item に source_ref = \"<channel>:<room>:<message id>\" を必ず入れる (同じメッセージは 2 回入らない)、source に { channel, room, sender, at, quote } (sender は表示名そのまま。連絡先に解決できればサーバーが contact_id を足す)",
     "4. 画像・PDF が来たら genba_file_upload_url(現場, ファイル名, content_type, source_ref=<channel>:<room>:<message id>:<n>) で URL をもらい、返ってきた curl を PC 側で実行して PUT する (ファイルの中身を会話に貼らない)。上げたら genba_log_add(kind=進捗, body=「写真 n 枚: 何の写真か」, photo_ids=[file id]) で現場に残す。現場が分からない添付は上げない",
     "5. 最後に genba_source_mark(channel, room, { last_id, last_at }) で cursor を進める",
     "6. 新着が無ければ何もしない。雑談・曖昧なものは記録しない。記録したら件数と中身を短く報告",
+    "■ 応答 (answering のルーム = 社内の人からの問い合わせに AI が答える。例: 名取が会社の LINE に「浅草どうなってる？」と聞く)",
+    "1. 答える相手は、そのルームの contact が role=社内 の人だけ。contact が無い・社内でない → 答えない・記録しない (小西に報告だけ)",
+    "2. 材料は Keihi だけ: genba_status / genba_tasks / genba_log_list / genba_contact_find (役割・tone・ルーム) / genba_company_find / genba_rule_get / 社内メモ。他のルームの LINE 本文は読まない・引用しない",
+    "3. 出さないもの (プライベート): 人や会社の 評価 メモの中身、小西の私的な話・予定、他の人とのやりとりの原文、給与・人事・個人の連絡先 (電話・メール・住所)、制約の理由。聞かれたら「それは小西に聞いて」と返す。詳しくは genba_rule_get(応答)",
+    "4. 分からないことは推測で答えない。「分からないので小西に確認する」と返し、genba_log_add(kind=次やること, body=「名取からの質問: …」, who=小西, estimate_min=5) で残す",
+    "5. 問い合わせの中に現場の決定・タスク・完了報告が入っていれば、それは通常どおり記録する (記録と応答は両立する)",
+    "6. 答えたら genba_source_mark で cursor を進める。文面は相手の tone に合わせ、短く (LINE なので 3〜4 行まで)",
   ].join("\n");
 
   // 人ごとのトークン: { token: 名前 }。URL の token で書いた人を決める
@@ -1669,12 +1702,12 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
       const owner = await ownerOf(p, req.user.email);
       if (!owner) return res.json({ owner: null, rooms: [] });
       const { rows } = await p.query(
-        `SELECT g.id, g.channel, g.room, g.name, g.label, g.enabled, g.site_id, g.cursor, g.last_seen_at, g.updated_at,
+        `SELECT g.id, g.channel, g.room, g.name, g.label, g.enabled, g.site_id, g.purpose, g.cursor, g.last_seen_at, g.updated_at,
                 s.name AS site_name, s.site_code
            FROM genba_sources g LEFT JOIN sites s ON s.id = g.site_id
           WHERE g.owner=$1 ORDER BY g.enabled DESC, g.channel, g.name NULLS LAST, g.room`, [owner]);
       res.json({ owner, rooms: rows.map((r) => ({
-        id: Number(r.id), channel: r.channel, room: r.room, name: r.name, label: r.label, enabled: r.enabled,
+        id: Number(r.id), channel: r.channel, room: r.room, name: r.name, label: r.label, enabled: r.enabled, purpose: r.purpose || "記録",
         siteId: r.site_id ? Number(r.site_id) : null, siteName: r.site_name || null, siteCode: r.site_code || null,
         cursor: r.cursor || null, lastSeenAt: r.last_seen_at, updatedAt: r.updated_at,
       })) });
@@ -1689,15 +1722,16 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
       if (typeof b.enabled === "boolean") { vals.push(b.enabled); sets.push(`enabled=$${vals.length}`); }
       if ("siteId" in b) { vals.push(b.siteId == null ? null : Number(b.siteId)); sets.push(`site_id=$${vals.length}`); }
       if ("label" in b) { vals.push(b.label ? String(b.label).trim().slice(0, 200) : null); sets.push(`label=$${vals.length}`); }
+      if (typeof b.purpose === "string") { vals.push(b.purpose === "応答" ? "応答" : "記録"); sets.push(`purpose=$${vals.length}`); }
       if (!sets.length) return res.status(400).json({ error: "変更が無い" });
-      const { rows } = await p.query(`UPDATE genba_sources SET ${sets.join(", ")}, updated_at=now() WHERE owner=$1 AND id=$2 RETURNING id, enabled, site_id`, vals);
+      const { rows } = await p.query(`UPDATE genba_sources SET ${sets.join(", ")}, updated_at=now() WHERE owner=$1 AND id=$2 RETURNING id, enabled, site_id, purpose`, vals);
       if (!rows.length) return res.status(404).json({ error: "not found" });
-      if (rows[0].enabled && !rows[0].site_id) {
-        // 現場が無いまま ON にはできない (ログの行き先が無い)
+      if (rows[0].enabled && !rows[0].site_id && rows[0].purpose !== "応答") {
+        // 記録のルームは現場が無いまま ON にはできない (ログの行き先が無い)。応答は現場なしで OK
         await p.query(`UPDATE genba_sources SET enabled=false WHERE id=$1`, [id]);
-        return res.status(400).json({ error: "現場を選んでから ON にする" });
+        return res.status(400).json({ error: "現場を選んでから ON にする (問い合わせ用なら 用途を 応答 に)" });
       }
-      res.json({ id: Number(rows[0].id), enabled: rows[0].enabled, siteId: rows[0].site_id ? Number(rows[0].site_id) : null });
+      res.json({ id: Number(rows[0].id), enabled: rows[0].enabled, siteId: rows[0].site_id ? Number(rows[0].site_id) : null, purpose: rows[0].purpose || "記録" });
     }));
     // 一覧から消す (同期されればまた出てくる)
     app.delete("/api/genba/rooms/:id", wrap(async (p, req, res) => {

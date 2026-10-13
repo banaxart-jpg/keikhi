@@ -35,7 +35,7 @@
 | `genba_rule_get(topic?)` / `genba_rule_set(topic, body)` | 運用ルール (版を積む。消えない) |
 | `genba_log_add_many(site?, items[])` | まとめて追記 (監視ジョブ・会話から一度に抽出したとき)。各行に `duplicate` |
 | `genba_room_sync(rooms)` | 監視ジョブが自分の Beeper / LINE のルーム一覧 (ID と名前だけ) を同期。返り値 `watching` が読む対象 |
-| `genba_source_add / list / mark / remove` | 監視 ON のルーム (自分の持ち分) と「ここまで読んだ」cursor。載っていないルームは監視ジョブが読まない |
+| `genba_source_add(channel, room, site?, purpose?) / list / mark / remove` | 監視 ON のルーム (自分の持ち分) と「ここまで読んだ」cursor。purpose=記録 (site 必須) / 応答 (site 不要)。載っていないルームは監視ジョブが読まない |
 | `genba_owner_set(email, label)` | 画面のログイン (メール) をトークンの名前 (小西 / 名取) に結びつける。小西のトークンからだけ |
 | `genba_contact_find(query)` | 人を探す (名前・あだ名・会社名・ルーム名・room_id)。1 件なら `match`、複数なら `candidates` だけ (AI は人に聞く) |
 | `genba_contact_upsert({name, company?, aliases?, role?, trade?, channels?, tone?, sites?, …})` | 連絡先の登録・更新。name + company で同一人物。aliases / channels / sites は足すだけ |
@@ -53,7 +53,7 @@
 - `channels[]` = `{ channel (LINE/iMessage/Mail), room_id, room_name, kind (single/group), chat_id }`。**room_id は Beeper の変わらない ID** (`!xxxx:beeper.local`) を正本にする。数字の chatID は変わることがあるので `chat_id` (補助)
 - 検索は名前・呼び名・会社名・ルーム名を全部 `normName` (全角→半角、空白・記号を落とす、末尾の「さん/様/くん/ちゃん」を落とす、ひらがな→カタカナ) に通して比較。会社名は 株式会社 / ㈱ / (株) も落とす
 - 完全一致があっても「菊池 → 菊池 輝」のような前方一致は候補に残す。**候補が複数なら AI は自動で決めない** (`match` が null)
-- `genba_room_sync` が同期したルーム名が contact の `room_name` と合えば `room_id` を自動で埋める (逆に room_id だけなら room_name を埋める)。返り値 `contactsLinked`
+- `genba_room_sync` が同期したルーム名が contact の `room_name` と合えば `room_id` を自動で埋める (逆に room_id だけなら room_name を埋める)。どの連絡先にも結ばれていないルームで、名前が 1 人の連絡先の名前・呼び名と完全一致すれば、その人の個人ルームとして足す。返り値 `contactsLinked`
 - `genba_log_add` の `source.sender` が連絡先に一意に解決できたら `source.contact_id` / `source.contact_name` を足す (sender が曖昧でも `source.room` を持つ人に絞れればそれ)
 - `genba_rule_get` の一覧は topic `連絡先` を先頭に返す
 
@@ -79,8 +79,10 @@ LINE (Beeper) に来た画像を監視ジョブ (PC の Cowork) が保存する�
 - **センシティブな情報は入れない** (家庭・健康・金銭・人間関係のトラブル・ハラスメント・噂)。全員と全 AI が読める場所なので。必要なら行動の制約だけ (「〇〇電気の現場は小西が同席」) を書き、理由は書かない。メモの内容を本人への文面に引用しない。小西だけが読めるメモ (visibility) は必要になったら足す
 
 ### ウォッチ画面 `/genba/watch.html`
-ログインした人のルームだけが並ぶ (小西 → 小西の Beeper、名取 → 名取の)。行ごとに現場の選択とトグル。
-ON = 監視ジョブが読んで現場の進捗に記録、OFF = 読まない (デフォルト OFF、ホワイトリスト)。
+ログインした人のルームだけが並ぶ (小西 → 小西の Beeper、名取 → 名取の)。行ごとに用途・現場の選択とトグル。
+ON = 監視ジョブが読む、OFF = 読まない (デフォルト OFF、ホワイトリスト)。用途は 2 つ:
+- **記録** (既定): 現場に紐付けて、決定・課題・次やることを進捗ログに自動記録する。現場を選ばないと ON にできない
+- **応答**: 社内の人 (連絡先で role=社内) からの問い合わせに AI が答える。現場は不要。`genba_room_sync` の返り値では `answering` に分かれて出る (`contact` 付き)。答える範囲・出さないものは運用ルール `応答` と instructions の「■ 応答」
 ルームは監視ジョブの `genba_room_sync` で入ってくる (本文は送らない、ID と名前だけ)。
 API: `GET /api/genba/me` / `GET /api/genba/rooms` / `PUT /api/genba/rooms/:id {enabled, siteId, label}` / `DELETE /api/genba/rooms/:id` (Firebase 認証)。
 
