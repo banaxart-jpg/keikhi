@@ -2031,6 +2031,26 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
           },
         },
         {
+          name: "genba_calendar_share",
+          description: "タスクカレンダー (Keihi が持っている方) を人に共有する (小西のトークンからだけ)。emails に「予定の変更権限」で共有。相手は Google カレンダーの「他のカレンダー」→ カレンダーに登録 で ID を貼って一覧に出す",
+          inputSchema: { type: "object", properties: { emails: { type: "array", items: { type: "string" } }, role: { type: "string", enum: ["writer", "reader"], description: "既定 writer" } }, required: ["emails"] },
+          handler: async (a) => {
+            await ensureSchema();
+            if (by !== "小西") throw new Error("この操作は小西のトークンからだけ");
+            const p = getPool();
+            const cfg = await taskCalendarConfig(p, { fresh: true });
+            if (!cfg) throw new Error("タスクカレンダーが未登録 (genba_calendar_setup)");
+            const cal = await getCalendarApi();
+            const role = a.role === "reader" ? "reader" : "writer";
+            const out = [];
+            for (const email of toList(a.emails)) {
+              try { await cal.acl.insert({ calendarId: cfg.calendarId, requestBody: { role, scope: { type: "user", value: email } } }); out.push({ email, role, ok: true }); }
+              catch (e) { out.push({ email, ok: false, error: e.message }); }
+            }
+            return { calendarId: cfg.calendarId, shared: out, note: "相手側: Google カレンダー →「他のカレンダー」の ＋ →「カレンダーに登録」に calendarId を貼る" };
+          },
+        },
+        {
           name: "genba_calendar_sync",
           description: "タスクカレンダーと今すぐ同期する (普段は 5 分おきに自動)。返り値に 作成 / 更新 / 削除 / 解決 / 取り込み の件数",
           inputSchema: { type: "object", properties: {} },
