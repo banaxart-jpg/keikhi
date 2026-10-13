@@ -55,14 +55,22 @@ export function createMcpHandler({ name, version = "1.0.0", instructions = "", t
       // claude.ai の Artifact ブリッジが最初に投げてくる独自メソッド (標準外)。initialize + tools/list をまとめた形で返す。
       // これに -32601 を返すとブリッジが upstream_error にしてしまう (2026-10-13 に /recent で観測)
       if (method === "server/discover") {
+        // 期待される形が公開されていないので、引数をそのまま記録して様子を見る (値は小さいので丸ごと)
+        remember({ server: name, method, ok: true, params: JSON.stringify(params ?? null).slice(0, 600), ...meta });
         return okResp(id, {
-          protocolVersion: params?.protocolVersion || "2025-06-18",
-          capabilities: { tools: { listChanged: false } },
+          protocolVersion: params?.protocolVersion || meta.proto || "2025-06-18",
+          capabilities: { tools: { listChanged: false }, resources: {}, prompts: {} },
           serverInfo: { name, version },
           ...(instructions ? { instructions } : {}),
           tools: toolList(),
+          resources: [],
+          resourceTemplates: [],
+          prompts: [],
         });
       }
+      if (method === "resources/list") return okResp(id, { resources: [] });
+      if (method === "resources/templates/list") return okResp(id, { resourceTemplates: [] });
+      if (method === "prompts/list") return okResp(id, { prompts: [] });
       if (method === "tools/call") {
         const tool = toolMap.get(params?.name);
         if (!tool) {
@@ -110,15 +118,17 @@ export function createMcpHandler({ name, version = "1.0.0", instructions = "", t
     }
     const msgs = Array.isArray(body) ? body : [body];
     const t0 = Date.now();
-    const results = (await Promise.all(msgs.map((msg) => handleOne(msg, { ua })))).filter(Boolean);
-    const hdr = { accept, ct: String(req.headers["content-type"] || ""), proto: req.headers["mcp-protocol-version"] || undefined, session: req.headers["mcp-session-id"] ? "yes" : undefined };
+    const proto = req.headers["mcp-protocol-version"] ? String(req.headers["mcp-protocol-version"]) : undefined;
+    const results = (await Promise.all(msgs.map((msg) => handleOne(msg, { ua, proto })))).filter(Boolean);
+    const hdr = { accept, ct: String(req.headers["content-type"] || ""), proto, session: req.headers["mcp-session-id"] ? "yes" : undefined };
     const payload = Array.isArray(body) ? results : results[0];
     const bytes = results.length ? Buffer.byteLength(JSON.stringify(payload)) : 0;
     // リクエスト単位の記録 (どのクライアントが何を・どんなヘッダで投げ、何バイト返したか)。tools/call の中身は handleOne 側で別に残す
     remember({ server: name, method: "http", methods: msgs.map((x) => `${x?.method || "?"}${x?.id === undefined || x?.id === null ? "(notif)" : ""}`), batch: Array.isArray(body) || undefined, status: results.length ? 200 : 202, ms: Date.now() - t0, bytes, hdr, ok: true, ua });
     if (!results.length) return res.status(202).end(); // notification のみ
-    // Streamable HTTP の互換: initialize に対して Mcp-Session-Id を要求するクライアントがいても困らないよう、受け取った ID はそのまま返す
+    // Streamable HTTP の互換: 受け取った Mcp-Session-Id / MCP-Protocol-Version はそのまま返す (新しい版のクライアントが応答側にも求める可能性)
     if (req.headers["mcp-session-id"]) res.set("Mcp-Session-Id", String(req.headers["mcp-session-id"]));
+    if (proto) res.set("MCP-Protocol-Version", proto);
     // Streamable HTTP: クライアントが SSE しか受けないと言ってきたら、1 イベントの SSE で同じ JSON を返す
     // (JSON を受けられるクライアント = 普段の claude.ai / Claude Code はそのまま application/json)
     if (accept.includes("text/event-stream") && !accept.includes("application/json") && !accept.includes("*/*")) {
