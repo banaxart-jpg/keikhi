@@ -682,6 +682,24 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
     }
     return n;
   }
+  // 社内の人 (role=社内) の個人ルームは、同期で初めて見えたときに自動で「応答」ON にする (名取から LINE が来たら AI が返す)。
+  // 一度でも人が触った行 (OFF にした・現場を付けた・ラベルを付けた・用途を変えた) には触らない
+  async function autoEnableInternalRooms(p, owner, rooms) {
+    if (!rooms.length) return [];
+    const internal = (await loadContacts(p)).filter((c) => c.role === "社内");
+    if (!internal.length) return [];
+    const out = [];
+    for (const r of rooms) {
+      const hit = internal.filter((c) => (Array.isArray(c.channels) ? c.channels : []).some((ch) => ch.room_id === r.room && ch.kind !== "group"));
+      if (hit.length !== 1) continue;
+      const { rows } = await p.query(
+        `UPDATE genba_sources SET purpose='応答', enabled=true, label=$4, updated_at=now()
+          WHERE owner=$1 AND channel=$2 AND room=$3 AND enabled=false AND purpose='記録' AND site_id IS NULL AND label IS NULL AND cursor IS NULL
+          RETURNING id`, [owner, r.channel, r.room, `社内: ${hit[0].name} (自動で応答 ON)`]);
+      if (rows.length) out.push({ channel: r.channel, room: r.room, name: r.name, contact: hit[0].name });
+    }
+    return out;
+  }
   // sites の名前/ID の配列 → sites.id の配列。一意に引けないものは warnings に
   async function resolveSiteIds(p, list, warnings) {
     const ids = [];
@@ -1558,6 +1576,7 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
           }
           // 連絡先に room_name だけ入っているルームは、ここで room_id が埋まる (逆も)
           const contactsLinked = await linkRoomsToContacts(p, rooms);
+          const autoAnswering = await autoEnableInternalRooms(p, by, rooms);
           const { rows } = await p.query(
             `SELECT g.channel, g.room, g.name, g.label, g.cursor, g.site_id, g.purpose, s.name AS site_name, s.site_code
                FROM genba_sources g LEFT JOIN sites s ON s.id = g.site_id
@@ -1571,9 +1590,10 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
           return {
             synced: rooms.length,
             contactsLinked,
+            autoAnswering: autoAnswering.length ? autoAnswering : undefined,
             watching: rows.filter((r) => r.purpose !== "応答").map((r) => ({ channel: r.channel, room: r.room, name: r.name, label: r.label, site: site(r), cursor: r.cursor || null })),
             answering: rows.filter((r) => r.purpose === "応答").map((r) => ({ channel: r.channel, room: r.room, name: r.name, label: r.label, site: site(r), contact: contactOf(r.room), cursor: r.cursor || null })),
-            note: "watching / answering に無いルームは読まない。ON/OFF と用途は /genba/watch.html。answering は contact が社内 (role=社内) の人だけ答える",
+            note: "watching / answering に無いルームは読まない。ON/OFF と用途は /genba/watch.html。社内 (role=社内) の人の個人ルームは初回の同期で自動的に応答 ON になる (autoAnswering)。answering は contact が社内の人だけ答える",
           };
         },
       },
@@ -1706,11 +1726,11 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
     "4. 画像・PDF が来たら genba_file_upload_url(現場, ファイル名, content_type, source_ref=<channel>:<room>:<message id>:<n>) で URL をもらい、返ってきた curl を PC 側で実行して PUT する (ファイルの中身を会話に貼らない)。上げたら genba_log_add(kind=進捗, body=「写真 n 枚: 何の写真か」, photo_ids=[file id]) で現場に残す。現場が分からない添付は上げない",
     "5. 最後に genba_source_mark(channel, room, { last_id, last_at }) で cursor を進める",
     "6. 新着が無ければ何もしない。雑談・曖昧なものは記録しない。記録したら件数と中身を短く報告",
-    "■ 応答 (answering のルーム = 社内の人からの問い合わせに AI が答える。例: 名取が会社の LINE に「浅草どうなってる？」と聞く)",
-    "1. 答える相手は、そのルームの contact が role=社内 の人だけ。contact が無い・社内でない → 答えない・記録しない (小西に報告だけ)",
+    "■ 応答 (answering のルーム = 社内の人からの LINE に AI が自動で返す。例: 名取が「浅草どうなってる？」と聞く)。社内の人 (role=社内) の個人ルームは同期で自動的に 応答 ON になる。小西 ↔ 名取 どちらの向きも同じ",
+    "1. 答える相手は、そのルームの contact が role=社内 の人だけ。contact が無い・社内でない → 答えない・記録しない (小西に報告だけ)。社内の人には確認を取らずに返してよい",
     "2. 材料は Keihi だけ: genba_status / genba_tasks / genba_log_list / genba_contact_find (役割・tone・ルーム) / genba_company_find / genba_rule_get / 社内メモ。他のルームの LINE 本文は読まない・引用しない",
     "3. 出さないもの (プライベート): 人や会社の 評価 メモの中身、小西の私的な話・予定、他の人とのやりとりの原文、給与・人事・個人の連絡先 (電話・メール・住所)、制約の理由。聞かれたら「それは小西に聞いて」と返す。詳しくは genba_rule_get(応答)",
-    "4. 分からないことは推測で答えない。「分からないので小西に確認する」と返し、genba_log_add(kind=次やること, body=「名取からの質問: …」, who=小西, estimate_min=5) で残す",
+    "4. Keihi に無い・自信がない → 推測しない。「確認して返します」と返し、小西に聞く (genba_log_add(kind=次やること, title=「名取の質問: …」, who=小西, estimate_min=5) + 小西に報告)。答えが分かったら本人に返して、その行を 解決 で閉じる",
     "5. 問い合わせの中に現場の決定・タスク・完了報告が入っていれば、それは通常どおり記録する (記録と応答は両立する)",
     "6. 答えたら genba_source_mark で cursor を進める。文面は相手の tone に合わせ、短く (LINE なので 3〜4 行まで)",
   ].join("\n");

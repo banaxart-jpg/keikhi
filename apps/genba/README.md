@@ -83,7 +83,7 @@ LINE (Beeper) に来た画像を監視ジョブ (PC の Cowork) が保存する�
 ログインした人のルームだけが並ぶ (小西 → 小西の Beeper、名取 → 名取の)。行ごとに用途・現場の選択とトグル。
 ON = 監視ジョブが読む、OFF = 読まない (デフォルト OFF、ホワイトリスト)。用途は 2 つ:
 - **記録** (既定): 現場に紐付けて、決定・課題・次やることを進捗ログに自動記録する。現場を選ばないと ON にできない
-- **応答**: 社内の人 (連絡先で role=社内) からの問い合わせに AI が答える。現場は不要。`genba_room_sync` の返り値では `answering` に分かれて出る (`contact` 付き)。答える範囲・出さないものは運用ルール `応答` と instructions の「■ 応答」
+- **応答**: 社内の人 (連絡先で role=社内、今は 小西・名取) からの LINE に AI が自動で返す。現場は不要。社内の人の個人ルームは初回の同期で自動的に 応答 ON になる (`autoAnswering`。OFF にすれば戻らない)。分からないことは「確認して返します」と返して小西に回す。`genba_room_sync` の返り値では `answering` に分かれて出る (`contact` 付き)。答える範囲・出さないものは運用ルール `応答` と instructions の「■ 応答」
 ルームは監視ジョブの `genba_room_sync` で入ってくる (本文は送らない、ID と名前だけ)。
 API: `GET /api/genba/me` / `GET /api/genba/rooms` / `PUT /api/genba/rooms/:id {enabled, siteId, label}` / `DELETE /api/genba/rooms/:id` (Firebase 認証)。
 
