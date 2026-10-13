@@ -696,7 +696,10 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
         `UPDATE genba_sources SET purpose='応答', enabled=true, label=$4, updated_at=now()
           WHERE owner=$1 AND channel=$2 AND room=$3 AND enabled=false AND purpose='記録' AND site_id IS NULL AND label IS NULL AND cursor IS NULL
           RETURNING id`, [owner, r.channel, r.room, `社内: ${hit[0].name} (自動で応答 ON)`]);
-      if (rows.length) out.push({ channel: r.channel, room: r.room, name: r.name, contact: hit[0].name });
+      if (rows.length) { out.push({ channel: r.channel, room: r.room, name: r.name, contact: hit[0].name, enabled: true }); continue; }
+      // 既に人が触った行 (or 想定外の状態)。何が違うかを返しておく
+      const { rows: cur } = await p.query(`SELECT enabled, purpose, site_id, label, cursor FROM genba_sources WHERE owner=$1 AND channel=$2 AND room=$3`, [owner, r.channel, r.room]);
+      out.push({ channel: r.channel, room: r.room, name: r.name, contact: hit[0].name, enabled: false, state: cur[0] ? { enabled: cur[0].enabled, purpose: cur[0].purpose, site_id: cur[0].site_id, label: cur[0].label, cursor: cur[0].cursor } : "row not found" });
     }
     return out;
   }
@@ -1590,7 +1593,8 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
           return {
             synced: rooms.length,
             contactsLinked,
-            autoAnswering: autoAnswering.length ? autoAnswering : undefined,
+            autoAnswering: autoAnswering.some((x) => x.enabled) ? autoAnswering.filter((x) => x.enabled).map(({ enabled: _e, ...x }) => x) : undefined,
+            internalRooms: autoAnswering.length ? autoAnswering : undefined, // 社内の人のルームの現状 (自動 ON 済み / 人が設定済み)
             watching: rows.filter((r) => r.purpose !== "応答").map((r) => ({ channel: r.channel, room: r.room, name: r.name, label: r.label, site: site(r), cursor: r.cursor || null })),
             answering: rows.filter((r) => r.purpose === "応答").map((r) => ({ channel: r.channel, room: r.room, name: r.name, label: r.label, site: site(r), contact: contactOf(r.room), cursor: r.cursor || null })),
             note: "watching / answering に無いルームは読まない。ON/OFF と用途は /genba/watch.html。社内 (role=社内) の人の個人ルームは初回の同期で自動的に応答 ON になる (autoAnswering)。answering は contact が社内の人だけ答える",
