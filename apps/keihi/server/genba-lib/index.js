@@ -847,8 +847,14 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
     };
   }
 
+  // 読むだけのツール (readOnlyHint): claude.ai 側がキャッシュ・watch の可否を判断するのに使う
+  const READ_ONLY = new Set(["genba_find", "genba_log_list", "genba_tasks", "genba_status", "genba_rule_get", "genba_audit",
+    "genba_contact_find", "genba_contact_list", "genba_company_find", "genba_company_list", "genba_note_list", "genba_file_list", "genba_source_list"]);
   // by = 書いた人 (トークンから決まる)
   function tools(by = "小西") {
+    return toolsFor(by).map((t) => (READ_ONLY.has(t.name) ? { ...t, annotations: { readOnlyHint: true } } : t));
+  }
+  function toolsFor(by) {
     return [
       {
         name: "genba_contact_find",
@@ -1453,7 +1459,7 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
             topic: { type: "string", description: "決定の topic で絞る (例: 床材)" },
             chain: { type: "number", description: "この行 ID の変更の履歴 (置き換えの連鎖) を古い順に返す。他の絞り込みは無視" },
             include_voided: { type: "boolean", description: "取り消した行も出す (既定 false)" },
-            limit: { type: "number", description: "既定 50、最大 200" },
+            limit: { type: "number", description: "既定 50、最大 500" },
           },
         },
         handler: async (a) => {
@@ -1477,7 +1483,7 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
           const all = a.site === "*" || a.site === "全部";
           const site = all ? null : await resolveSiteOrNull(p, a.site);
           const days = Math.max(1, Math.min(3650, Number(a.days) || 30));
-          const limit = Math.max(1, Math.min(200, Number(a.limit) || 50));
+          const limit = Math.max(1, Math.min(500, Number(a.limit) || 50));
           const where = [`l.created_at > now() - ($1 || ' days')::interval`];
           const vals = [String(days)];
           if (!all) { if (site) { vals.push(site.id); where.push(`l.site_id=$${vals.length}`); } else where.push(`l.site_id IS NULL`); }

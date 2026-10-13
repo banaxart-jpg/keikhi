@@ -2,7 +2,7 @@
 // claude.ai のカスタムコネクタ (リモート MCP) から接続する用。
 // SDK は入れず JSON-RPC を直接さばく: 依存を増やさない + stateless で Cloud Run と相性が良い。
 //
-// 対応: initialize / notifications/* / ping / tools/list / tools/call
+// 対応: initialize / notifications/* / ping / tools/list / tools/call / server/discover (claude.ai Artifact ブリッジ用)
 // セッション管理はしない (毎リクエスト独立)。GET の SSE ストリームは張らない (405)。
 // レスポンスは application/json (Streamable HTTP 仕様上、サーバーは JSON 応答を選べる)。
 // Accept が text/event-stream だけのクライアントには、同じ JSON を 1 イベントの SSE で返す。
@@ -45,13 +45,22 @@ export function createMcpHandler({ name, version = "1.0.0", instructions = "", t
       }
       if (method === "ping") return okResp(id, {});
       if (method.startsWith("notifications/")) return null; // 応答不要
-      if (method === "tools/list") {
+      const toolList = () => tools.map((t) => ({
+        name: t.name,
+        description: t.description,
+        inputSchema: t.inputSchema || { type: "object", properties: {} },
+        ...(t.annotations ? { annotations: t.annotations } : {}),
+      }));
+      if (method === "tools/list") return okResp(id, { tools: toolList() });
+      // claude.ai の Artifact ブリッジが最初に投げてくる独自メソッド (標準外)。initialize + tools/list をまとめた形で返す。
+      // これに -32601 を返すとブリッジが upstream_error にしてしまう (2026-10-13 に /recent で観測)
+      if (method === "server/discover") {
         return okResp(id, {
-          tools: tools.map((t) => ({
-            name: t.name,
-            description: t.description,
-            inputSchema: t.inputSchema || { type: "object", properties: {} },
-          })),
+          protocolVersion: params?.protocolVersion || "2025-06-18",
+          capabilities: { tools: { listChanged: false } },
+          serverInfo: { name, version },
+          ...(instructions ? { instructions } : {}),
+          tools: toolList(),
         });
       }
       if (method === "tools/call") {
@@ -80,7 +89,7 @@ export function createMcpHandler({ name, version = "1.0.0", instructions = "", t
         }
       }
       if (isNotification) return null;
-      remember({ server: name, method, ok: false, error: "method not found", ...meta });
+      remember({ server: name, method, ok: false, error: "method not found", paramsKeys: params && typeof params === "object" ? Object.keys(params) : undefined, ...meta });
       return errResp(id, -32601, `method not found: ${method}`);
     } catch (e) {
       console.error(`[mcp:${name}] ${method} crashed:`, e);
