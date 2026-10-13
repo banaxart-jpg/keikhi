@@ -44,7 +44,8 @@ const ymd = (v) => (v == null ? null : v instanceof Date ? v.toISOString().slice
 const todayJst = () => new Date(Date.now() + 9 * 3600 * 1000).toISOString().slice(0, 10);
 
 // gcs = { bucket, getStorage, publicUrl, secret }: LINE 等から来た画像を PC 側 (Cowork) が PUT で流し込む口と、その署名 URL
-export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null }) {
+// getCalendarApi = Google Calendar API (SA 認証)。タスク専用カレンダーとの双方向同期に使う (無ければ同期機能は出ない)
+export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null, getCalendarApi = null }) {
   // 1 プロセスで 1 回だけ。同時に来た最初の数リクエストは同じ promise を待つ (DDL を重ねて走らせない)。
   // 起動時に index.js から先に呼んでおく (コールドスタート直後の最初のツール呼び出しを速くする)
   let schemaOk = false, schemaPromise = null;
@@ -98,6 +99,16 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
     await p.query(`ALTER TABLE genba_log ADD COLUMN IF NOT EXISTS title TEXT`);
     // 日程をカレンダーに入れたら、その行に event ID (か 'done') を残す。抜け漏れチェック (genba_audit) が「日程あり・未登録」を拾う
     await p.query(`ALTER TABLE genba_log ADD COLUMN IF NOT EXISTS calendar_event TEXT`);
+    // タスクカレンダー同期用: 最後にカレンダーへ書いた状態 {date, summary, colorId}。これと予定の今を比べて「人が動かしたか」を見る
+    await p.query(`ALTER TABLE genba_log ADD COLUMN IF NOT EXISTS cal_snapshot JSONB`);
+    // 設定 (タスクカレンダーの ID と色の対応など)。デプロイ無しで変えられるように DB に置く
+    await p.query(`
+      CREATE TABLE IF NOT EXISTS genba_settings (
+        key         TEXT PRIMARY KEY,
+        value       JSONB NOT NULL,
+        updated_by  TEXT NOT NULL,
+        updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+      )`);
     // 画像・PDF (LINE 等から来たもの)。中身は GCS、ここは台帳。source_ref で同じ添付を 2 回入れない
     await p.query(`
       CREATE TABLE IF NOT EXISTS genba_files (
@@ -363,10 +374,14 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
   // 1 行追記したあとに AI へ返す「次にやること」。ここで拾えば AI が忘れても止まる
   function followupsFor(row, { hasTaskInBatch = false } = {}) {
     const out = [];
+    const isTask = row.kind === "次やること" || row.kind === "課題";
     if (looksWaiting(row) && !hasTaskInBatch) out.push(`返事待ち・確認中の内容 → genba_log_add(kind=次やること, title=「〇〇の返事待ち」, due_on, who) を立てる (無いと流れる)`);
-    if (looksEvent(row) && !row.calendar_event) out.push(`日程が入っている → BANAX カレンダーに登録 (ルール カレンダー)。登録したら genba_log_fix(id=${Number(row.id)}, calendar_event=<event id か done>) で印を付ける`);
+    // タスクはタスクカレンダーに Keihi が自動で出すので AI がカレンダーに入れない。決定・進捗に含まれる日程 (搬入・打ち合わせ) だけ人の判断で
+    if (looksEvent(row) && !row.calendar_event && !(isTask && taskCalendarOn)) out.push(`日程が入っている → BANAX カレンダーに登録 (ルール カレンダー)。登録したら genba_log_fix(id=${Number(row.id)}, calendar_event=<event id か done>) で印を付ける`);
     if (row.kind === "決定" && !row.topic) out.push(`決定に topic が無い → genba_log_fix(id=${Number(row.id)}, topic=…) (変更の紐付けに使う)`);
-    if ((row.kind === "次やること" || row.kind === "課題") && !row.due_on) out.push(`期限が無い → due_on を付ける (期限切れの検知に使う)`);
+    if (isTask && !row.due_on) out.push(taskCalendarOn
+      ? `期限が無い → due_on を付ける。無いと【なるはや】として今日のカレンダーに出続ける (カレンダー上で日付を動かせば期限になる)`
+      : `期限が無い → due_on を付ける (期限切れの検知に使う)`);
     return out;
   }
   // 行の一覧に「この行を置き換えた行の ID」を付ける
@@ -845,6 +860,192 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
         res.status(500).json({ error: e.message });
       }
     };
+  }
+
+  // ───────── タスクカレンダー同期 (Keihi が正本、カレンダーは見る窓) ─────────
+  // 専用カレンダー「BANAX タスク」と未解決タスクを双方向に合わせる。AI は関与しない (拾い漏れを仕組みで無くす)。
+  //   Keihi → カレンダー: 未解決タスク = 終日予定 1 件。期限切れは今日に【期限切れ M/D】、期限なしは今日に【なるはや】。解決・取り消しで予定を消す
+  //   カレンダー → Keihi: 人が予定を動かした = 期限変更、件名を変えた = title 変更、消した = 解決。人が直接作った予定 = 次やること として取り込む
+  //   3 者比較: genba_log.cal_snapshot (最後に書いた状態) と予定の今が違えば人が触った、Keihi の望む状態と違えば Keihi から書く
+  const SETTING_CAL = "task_calendar", SETTING_CAL_SYNC = "task_calendar_sync";
+  const DEFAULT_COLORS = { "小西": "8", "名取": "1" }; // Google カレンダーの colorId: 8 = グラファイト, 1 = ラベンダー
+  let taskCalendarOn = false; // 設定があるか (followups / audit の出し分けに使う。起動後の最初の読みで更新)
+  let calCfgCache = { at: 0, cfg: null };
+  async function getSetting(p, key) { const { rows } = await p.query(`SELECT value FROM genba_settings WHERE key=$1`, [key]); return rows[0]?.value ?? null; }
+  async function setSetting(p, key, value, by) {
+    await p.query(`INSERT INTO genba_settings (key, value, updated_by) VALUES ($1,$2,$3) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value, updated_by=EXCLUDED.updated_by, updated_at=now()`, [key, JSON.stringify(value), by]);
+  }
+  async function taskCalendarConfig(p, { fresh = false } = {}) {
+    if (!fresh && Date.now() - calCfgCache.at < 60000) return calCfgCache.cfg;
+    const cfg = await getSetting(p, SETTING_CAL);
+    calCfgCache = { at: Date.now(), cfg: cfg && cfg.calendarId ? cfg : null };
+    taskCalendarOn = !!calCfgCache.cfg;
+    return calCfgCache.cfg;
+  }
+  const evDate = (ev) => (ev?.start?.date ? String(ev.start.date).slice(0, 10)
+    : ev?.start?.dateTime ? new Date(new Date(ev.start.dateTime).getTime() + 9 * 3600000).toISOString().slice(0, 10) : null);
+  const addDaysStr = (day, n) => { const t = new Date(day + "T00:00:00Z"); t.setUTCDate(t.getUTCDate() + n); return t.toISOString().slice(0, 10); };
+  const mdJp = (d) => `${Number(d.slice(5, 7))}/${Number(d.slice(8, 10))}`;
+  const CAL_PREFIX_RE = /^(?:【(?:期限切れ|なるはや)[^】]*】\s*)+/;
+  const safeTitle = (s) => { const t = String(s || "").replace(/\s+/g, " ").trim(); const cs = [...t]; return cs.length > TITLE_MAX ? cs.slice(0, TITLE_MAX).join("") : t; };
+  // タスクをカレンダーにどう見せるか
+  function desiredEvent(task, cfg, today) {
+    const due = ymd(task.due_on);
+    const date = due ? (due < today ? today : due) : today;
+    const prefix = due && due < today ? `【期限切れ ${mdJp(due)}】` : !due ? "【なるはや】" : "";
+    const colors = cfg.colors || DEFAULT_COLORS;
+    const colorId = (task.who && colors[task.who]) || cfg.defaultColor || null;
+    const summary = `${prefix}${task.title || autoTitle(task.body)}`;
+    const description = `${task.site_name ? `現場: ${task.site_name}\n` : ""}${task.kind === "課題" ? "課題\n" : ""}${task.who ? `担当: ${task.who}\n` : ""}${task.body}\n\n(Keihi #${Number(task.id)} が管理。終わったら Keihi で解決 → この予定は消える。日付を動かすと期限が変わる。予定を消すと解決扱い)`;
+    return { date, summary, colorId, description };
+  }
+  const eventBody = (taskId, want) => ({
+    summary: want.summary, description: want.description,
+    start: { date: want.date }, end: { date: addDaysStr(want.date, 1) },
+    ...(want.colorId ? { colorId: String(want.colorId) } : {}),
+    transparency: "transparent",
+    extendedProperties: { private: { keihiTaskId: String(taskId) } },
+  });
+  const snapOf = (want) => ({ date: want.date, summary: want.summary, colorId: want.colorId || null });
+  async function listTaskEvents(cal, calendarId, today) {
+    const out = []; let pageToken;
+    do {
+      const r = await cal.events.list({
+        calendarId, singleEvents: true, showDeleted: true, maxResults: 2500, pageToken,
+        timeMin: `${addDaysStr(today, -120)}T00:00:00+09:00`, timeMax: `${addDaysStr(today, 400)}T00:00:00+09:00`,
+      });
+      out.push(...(r.data.items || [])); pageToken = r.data.nextPageToken;
+    } while (pageToken);
+    return out;
+  }
+  // 件名から現場を当てる (現場名が 1 つだけ含まれていればそれ)
+  async function guessSiteId(p, text) {
+    const t = norm(text);
+    if (!t) return null;
+    const { rows } = await p.query(`SELECT id, name FROM sites WHERE done_at IS NULL`);
+    const hits = rows.filter((s) => { const k = norm(s.name); return k.length >= 2 && t.includes(k); }).sort((a, b) => norm(b.name).length - norm(a.name).length);
+    if (!hits.length) return null;
+    const top = norm(hits[0].name).length;
+    const best = hits.filter((s) => norm(s.name).length === top);
+    return best.length === 1 ? Number(best[0].id) : null;
+  }
+  const isGone = (e) => e?.code === 404 || e?.code === 410 || e?.response?.status === 404 || e?.response?.status === 410;
+  let calSyncRunning = null, calSyncLastAt = 0;
+  async function syncTaskCalendar({ by = "同期" } = {}) {
+    const p = getPool();
+    if (!p) throw new Error("DB not configured");
+    await ensureSchema();
+    const cfg = await taskCalendarConfig(p, { fresh: true });
+    if (!cfg) return { configured: false, note: "genba_calendar_setup でタスク専用カレンダーを登録する" };
+    if (!getCalendarApi) return { configured: true, error: "Calendar API が配線されていない" };
+    if (calSyncRunning) return calSyncRunning;
+    calSyncRunning = runCalendarSync(p, cfg, by).finally(() => { calSyncRunning = null; calSyncLastAt = Date.now(); });
+    return calSyncRunning;
+  }
+  async function runCalendarSync(p, cfg, by) {
+    const cal = await getCalendarApi();
+    const today = todayJst();
+    const stats = { created: 0, updated: 0, deleted: 0, resolved: 0, imported: 0, due_changed: 0, title_changed: 0, errors: [] };
+    const colorsRev = Object.fromEntries(Object.entries(cfg.colors || DEFAULT_COLORS).map(([w, c]) => [String(c), w]));
+    const { rows: open } = await p.query(
+      `SELECT l.*, s.name AS site_name FROM genba_log l LEFT JOIN sites s ON s.id = l.site_id
+        WHERE l.kind IN ('次やること','課題') AND ${LIVE} AND ${NOT_RESOLVED} AND ${NOT_SUPERSEDED} ORDER BY l.id`);
+    const { rows: closed } = await p.query(
+      `SELECT l.* FROM genba_log l WHERE l.kind IN ('次やること','課題') AND l.calendar_event IS NOT NULL AND l.cal_snapshot IS NOT NULL
+         AND NOT (${LIVE} AND ${NOT_RESOLVED} AND ${NOT_SUPERSEDED})`);
+    const events = await listTaskEvents(cal, cfg.calendarId, today);
+    const byId = new Map(events.map((e) => [e.id, e]));
+    const byTask = new Map();
+    for (const e of events) { const t = e.extendedProperties?.private?.keihiTaskId; if (t) byTask.set(Number(t), e); }
+    const claimed = new Set([...open, ...closed].map((t) => t.calendar_event).filter(Boolean));
+    const resolveFromCalendar = async (t) => {
+      await p.query(`INSERT INTO genba_log (site_id, kind, body, written_by, resolves_id, title) VALUES ($1,'解決',$2,$3,$4,$5)`,
+        [t.site_id, "カレンダーで予定が消された (完了扱い)", by, t.id, "カレンダーで完了"]);
+      await p.query(`UPDATE genba_log SET cal_snapshot=NULL WHERE id=$1`, [t.id]);
+      stats.resolved++;
+    };
+    // 1) Keihi の未解決タスク → カレンダー
+    for (const t of open) {
+      try {
+        let ev = (t.calendar_event && byId.get(t.calendar_event)) || byTask.get(Number(t.id)) || null;
+        if (!ev && t.calendar_event && t.cal_snapshot) {
+          // 一覧の窓に無い: 直接見る (消されていれば 404 / cancelled)
+          try { ev = (await cal.events.get({ calendarId: cfg.calendarId, eventId: t.calendar_event })).data; }
+          catch (e) { if (isGone(e)) ev = { id: t.calendar_event, status: "cancelled" }; else throw e; }
+        }
+        if (ev && ev.status === "cancelled") { await resolveFromCalendar(t); continue; }
+        let task = t;
+        if (ev && t.cal_snapshot) {
+          // 人がカレンダーで触ったか (前回書いた状態と比べる)
+          const snap = t.cal_snapshot, evD = evDate(ev), evS = String(ev.summary || "");
+          const sets = [], vals = [t.id], before = {};
+          if (evD && evD !== snap.date) { vals.push(evD); sets.push(`due_on=$${vals.length}`); before.due_on = ymd(t.due_on); task = { ...task, due_on: evD }; stats.due_changed++; }
+          if (evS !== snap.summary) {
+            const nt = safeTitle(evS.replace(CAL_PREFIX_RE, ""));
+            if (nt && nt !== (t.title || autoTitle(t.body))) { vals.push(nt); sets.push(`title=$${vals.length}`); before.title = t.title ?? null; task = { ...task, title: nt }; stats.title_changed++; }
+          }
+          if (sets.length) {
+            const edits = [...(Array.isArray(t.edits) ? t.edits : []), { at: new Date().toISOString(), by: `${by} (カレンダー)`, before }];
+            vals.push(JSON.stringify(edits)); sets.push(`edits=$${vals.length}`);
+            await p.query(`UPDATE genba_log SET ${sets.join(", ")} WHERE id=$1`, vals);
+          }
+        }
+        const want = desiredEvent(task, cfg, today);
+        if (!ev) {
+          const res = await cal.events.insert({ calendarId: cfg.calendarId, requestBody: eventBody(t.id, want) });
+          await p.query(`UPDATE genba_log SET calendar_event=$2, cal_snapshot=$3 WHERE id=$1`, [t.id, res.data.id, JSON.stringify(snapOf(want))]);
+          stats.created++;
+        } else {
+          const cur = { date: evDate(ev), summary: String(ev.summary || ""), colorId: ev.colorId ? String(ev.colorId) : null };
+          const differs = cur.date !== want.date || cur.summary !== want.summary || (want.colorId && cur.colorId !== String(want.colorId)) || !ev.extendedProperties?.private?.keihiTaskId;
+          if (differs) { await cal.events.patch({ calendarId: cfg.calendarId, eventId: ev.id, requestBody: eventBody(t.id, want) }); stats.updated++; }
+          if (differs || !t.cal_snapshot || t.calendar_event !== ev.id) {
+            await p.query(`UPDATE genba_log SET calendar_event=$2, cal_snapshot=$3 WHERE id=$1`, [t.id, ev.id, JSON.stringify(snapOf(want))]);
+          }
+        }
+      } catch (e) { stats.errors.push(`#${t.id}: ${e.message}`); }
+    }
+    // 2) 閉じたタスク (解決・取り消し・置き換え) の予定を消す
+    for (const t of closed) {
+      try {
+        let ev = byId.get(t.calendar_event) || null;
+        if (!ev) { try { ev = (await cal.events.get({ calendarId: cfg.calendarId, eventId: t.calendar_event })).data; } catch (e) { if (!isGone(e)) throw e; } }
+        if (ev && ev.status !== "cancelled") { await cal.events.delete({ calendarId: cfg.calendarId, eventId: t.calendar_event }); stats.deleted++; }
+        await p.query(`UPDATE genba_log SET cal_snapshot=NULL WHERE id=$1`, [t.id]);
+      } catch (e) { stats.errors.push(`#${t.id}: ${e.message}`); }
+    }
+    // 3) 人がカレンダーに直接作った予定 → 次やること として取り込む
+    for (const ev of events) {
+      if (ev.status === "cancelled" || ev.extendedProperties?.private?.keihiTaskId || ev.recurringEventId || ev.recurrence || claimed.has(ev.id)) continue;
+      const summary = String(ev.summary || "").trim();
+      if (!summary) continue;
+      try {
+        const date = evDate(ev);
+        const who = colorsRev[String(ev.colorId || "")] || null;
+        const siteId = await guessSiteId(p, `${summary} ${ev.description || ""}`);
+        const title = safeTitle(summary.replace(CAL_PREFIX_RE, ""));
+        const body = ev.description ? `${summary}\n${String(ev.description).trim()}` : summary;
+        const { rows } = await p.query(
+          `INSERT INTO genba_log (site_id, kind, body, written_by, due_on, who, title, calendar_event, source)
+           VALUES ($1,'次やること',$2,$3,$4,$5,$6,$7,$8) RETURNING id`,
+          [siteId, body, by, date, who, title, ev.id, JSON.stringify({ channel: "calendar", room: cfg.calendarId, at: ev.created || null, creator: ev.creator?.email || null })]);
+        const id = Number(rows[0].id);
+        const { rows: srow } = siteId ? await p.query(`SELECT name FROM sites WHERE id=$1`, [siteId]) : { rows: [] };
+        const want = desiredEvent({ id, kind: "次やること", due_on: date, title, body, who, site_name: srow[0]?.name || null }, cfg, today);
+        await cal.events.patch({ calendarId: cfg.calendarId, eventId: ev.id, requestBody: eventBody(id, want) });
+        await p.query(`UPDATE genba_log SET cal_snapshot=$2 WHERE id=$1`, [id, JSON.stringify(snapOf(want))]);
+        stats.imported++;
+      } catch (e) { stats.errors.push(`event ${ev.id}: ${e.message}`); }
+    }
+    const result = { configured: true, calendarId: cfg.calendarId, today, open: open.length, ...stats, errors: stats.errors.length ? stats.errors.slice(0, 20) : undefined };
+    await setSetting(p, SETTING_CAL_SYNC, { at: new Date().toISOString(), result }, by);
+    return result;
+  }
+  // 読まれたときに 5 分に 1 回だけ同期を回す (監視ジョブが 5 分ごとに genba_room_sync を呼ぶので、それが時計になる)
+  async function maybeSyncCalendar() {
+    if (!getCalendarApi || Date.now() - calSyncLastAt < 5 * 60000) return null;
+    calSyncLastAt = Date.now();
+    try { return await syncTaskCalendar({}); } catch (e) { console.warn("[genba] calendar sync failed:", e.message); return { error: e.message }; }
   }
 
   // ルーム名か ID → 自分の持ち分の genba_sources の行 (名前は normName で比較。複数当たれば止まる)
@@ -1518,6 +1719,7 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
         handler: async (a) => {
           await ensureSchema();
           const p = getPool();
+          await maybeSyncCalendar();
           const site = a.site ? await resolveSite(p, a.site) : null;
           const days = Math.max(1, Math.min(90, Number(a.days) || 7));
           const today = todayJst();
@@ -1538,7 +1740,7 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
           const noDue = open.filter((r) => !r.due_on && new Date(r.created_at) < threeDaysAgo);
           // 返事待ち・確認中 と書いたのに、その後その現場に未解決のタスクが 1 つも立っていない
           const waiting = recent.filter((r) => looksWaiting(r) && !waitingCovered(r, open));
-          const noCalendar = recent.filter((r) => looksEvent(r) && !r.calendar_event);
+          const noCalendar = recent.filter((r) => looksEvent(r) && !r.calendar_event && !(taskCalendarOn && (r.kind === "次やること" || r.kind === "課題")));
           const parts = [];
           if (overdue.length) parts.push(`期限切れ ${overdue.length}`);
           if (noDue.length) parts.push(`期限なし ${noDue.length}`);
@@ -1577,6 +1779,7 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
         handler: async (a) => {
           await ensureSchema();
           const p = getPool();
+          await maybeSyncCalendar();
           const where = [`l.kind IN ('次やること','課題')`, LIVE, NOT_RESOLVED, NOT_SUPERSEDED];
           const vals = [];
           if (a.kind) { vals.push(a.kind); where.push(`l.kind=$${vals.length}`); }
@@ -1605,6 +1808,7 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
           await ensureSchema();
           const p = getPool();
           const site = await resolveSite(p, a.site);
+          await maybeSyncCalendar();
           const [last, prog, open, dec, cnt, files] = await Promise.all([
             p.query(`SELECT written_by, created_at FROM genba_log WHERE site_id=$1 AND voided_at IS NULL ORDER BY created_at DESC LIMIT 1`, [site.id]),
             p.query(`SELECT * FROM genba_log WHERE site_id=$1 AND kind='進捗' AND voided_at IS NULL ORDER BY created_at DESC LIMIT 3`, [site.id]),
@@ -1701,6 +1905,7 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
         handler: async (a) => {
           await ensureSchema();
           const p = getPool();
+          await maybeSyncCalendar();
           const rooms = (Array.isArray(a.rooms) ? a.rooms : []).slice(0, 300)
             .map((r) => ({ channel: String(r.channel || "").trim(), room: String(r.room || "").trim(), name: r.name ? String(r.name).trim().slice(0, 200) : null }))
             .filter((r) => r.channel && r.room);
@@ -1782,6 +1987,57 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
           return { owner: by, sources: rows.filter((r) => r.enabled).map(row), excluded: rows.filter((r) => !r.enabled).map(row) };
         },
       },
+      ...(getCalendarApi ? [
+        {
+          name: "genba_calendar_setup",
+          description: "タスク専用カレンダー (Google) を登録して同期を始める (小西のトークンからだけ)。カレンダーは事前にサービスアカウントへ変更権限で共有しておく。登録すると未解決タスクが終日予定として出て、以後 5 分おきに双方向で合う。colors は 担当→colorId (既定 小西=8 グラファイト, 名取=1 ラベンダー)。dry_run: true なら何も書かず、アクセスできるか・予定が何件あるか (取り込まれる数) だけ返す。予定用のカレンダー (BANAX カレンダー) を指定しない: 中の予定が全部タスクとして取り込まれる",
+          inputSchema: { type: "object", properties: { calendar_id: { type: "string", description: "…@group.calendar.google.com" }, colors: { type: "object", description: "例 {\"小西\":\"8\",\"名取\":\"1\"}" }, default_color: { type: "string", description: "担当なしの色 (省略で色なし)" }, dry_run: { type: "boolean", description: "true = 確認だけ (何も書かない)" } }, required: ["calendar_id"] },
+          handler: async (a) => {
+            await ensureSchema();
+            if (by !== "小西") throw new Error("この操作は小西のトークンからだけ");
+            const p = getPool();
+            const calendarId = String(a.calendar_id || "").trim();
+            if (!calendarId) throw new Error("calendar_id が必要");
+            const cal = await getCalendarApi();
+            let info;
+            try { info = (await cal.calendars.get({ calendarId })).data; }
+            catch (e) { throw new Error(`カレンダーが読めない (${e.message})。サービスアカウントに「変更権限」で共有されているか、ID が正しいか確認`); }
+            if (a.dry_run) {
+              const evs = await listTaskEvents(cal, calendarId, todayJst());
+              const liveEvs = evs.filter((e) => e.status !== "cancelled" && !e.recurringEventId && !e.recurrence);
+              const { rows: cnt } = await p.query(`SELECT COUNT(*)::int AS n FROM genba_log l WHERE l.kind IN ('次やること','課題') AND ${LIVE} AND ${NOT_RESOLVED} AND ${NOT_SUPERSEDED}`);
+              return {
+                dry_run: true, calendar: { id: calendarId, summary: info.summary || null, timeZone: info.timeZone || null },
+                would_import: liveEvs.length, sample: liveEvs.slice(0, 8).map((e) => ({ date: evDate(e), summary: e.summary })),
+                would_create: cnt[0]?.n || 0,
+                note: liveEvs.length > 20 ? "予定が多い。これは予定用のカレンダーでは？ タスク専用の空のカレンダーを作ってそれを登録する" : "問題なければ dry_run を外して登録",
+              };
+            }
+            const colors = a.colors && typeof a.colors === "object" ? Object.fromEntries(Object.entries(a.colors).map(([k, v]) => [String(k).trim(), String(v)])) : DEFAULT_COLORS;
+            await setSetting(p, SETTING_CAL, { calendarId, summary: info.summary || null, colors, defaultColor: a.default_color ? String(a.default_color) : null, setAt: new Date().toISOString() }, by);
+            calCfgCache = { at: 0, cfg: null };
+            const sync = await syncTaskCalendar({ by });
+            return { calendar: { id: calendarId, summary: info.summary || null, timeZone: info.timeZone || null }, colors, sync };
+          },
+        },
+        {
+          name: "genba_calendar_sync",
+          description: "タスクカレンダーと今すぐ同期する (普段は 5 分おきに自動)。返り値に 作成 / 更新 / 削除 / 解決 / 取り込み の件数",
+          inputSchema: { type: "object", properties: {} },
+          handler: async () => { await ensureSchema(); return syncTaskCalendar({ by }); },
+        },
+        {
+          name: "genba_calendar_status",
+          description: "タスクカレンダー同期の設定と最後の結果",
+          inputSchema: { type: "object", properties: {} },
+          handler: async () => {
+            await ensureSchema();
+            const p = getPool();
+            const cfg = await getSetting(p, SETTING_CAL), last = await getSetting(p, SETTING_CAL_SYNC);
+            return { configured: !!(cfg && cfg.calendarId), config: cfg, last_sync: last, note: cfg ? undefined : "genba_calendar_setup(calendar_id) で登録" };
+          },
+        },
+      ] : []),
       {
         name: "genba_source_exclude",
         description: "個人的なルーム (家族・友人・私用) を読む対象から外す。room はルーム名か ID (自分の持ち分から、名前の表記ゆれは吸収。複数当たれば止まる)。外したルームは本文を読まない・記録しない。戻すのは genba_source_include",
@@ -1850,6 +2106,7 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
     "- 現場の特定: チャットの指示文に案件 ID があればそれ。無ければ genba_find(現場名)。候補が複数なら人に聞く",
     "- 「写真 (図面) 上げたい」→ genba_folder(現場, 種類) の url を渡す。人はそこに Drive アプリで上げる。何枚入ったかは list_site_photos",
     "- 進捗の報告は genba_log_add に種類ごとに分けて積む: 進捗 / 課題 / 決定 / 次やること (期限があれば due_on)。1 行 1 件",
+    "■ タスクとカレンダー: タスクの正本は Keihi。タスク専用カレンダー (BANAX タスク) には Keihi が未解決タスクを自動で出す (AI がタスクをカレンダーに入れない)。期限切れは今日に【期限切れ】、期限なしは今日に【なるはや】で出続ける。人がカレンダーで日付を動かせば期限、件名を変えれば title、消せば 解決 になる。人が直接作った予定も 次やること として取り込まれる。だから due_on は必ず付ける (無いと毎日【なるはや】で出る)。決定・進捗に含まれる日程 (搬入・打ち合わせ) はタスクではないので、これまで通り BANAX カレンダー (予定) に AI が入れて calendar_event を付ける",
     "- 記録したら返り値の followups を必ず読んで、その場で片付ける (次やること を立てる / カレンダーに入れて calendar_event を付ける / topic・due_on を足す)。返事待ち・確認中・日程は AI が忘れやすいので、サーバーが返す followups が最後の砦",
     "- 会話の終わりと監視ジョブの 1 時間に 1 回は genba_audit を呼び、期限切れ・期限なし・返事待ちでタスク無し・日程あり未登録 を片付けるか人に報告する。抜け漏れは致命的なので省かない",
     "- 必ず title を付ける: 「何を・どうする」を 20 字前後 (例「工程表を辰巳さんへ送る」「巾木の色をみゆまに確認」)。決定は title に結論 (例「巾木は東リ97番か43番」)。body には経緯・数量・型番・金額・出どころの詳細。一覧は title、詳細は body で読む",
@@ -1902,5 +2159,5 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
     };
   }
 
-  return { tools, instructions: INSTRUCTIONS, mcpRoute, ensureSchema, uploadRoute };
+  return { tools, instructions: INSTRUCTIONS, mcpRoute, ensureSchema, uploadRoute, syncTaskCalendar };
 }

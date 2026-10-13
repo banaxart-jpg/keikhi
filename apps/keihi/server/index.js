@@ -2853,6 +2853,7 @@ const genba = createGenba({
   getPool, createMcpHandler: dramaCreateMcpHandler, getDriveApi: () => getDriveApi(),
   // LINE 等から来た画像の置き場 (GCS)。PC 側 (Cowork) が genba_file_upload_url の curl で PUT する。トークンは INTERNAL_TICK_SECRET で署名
   gcs: RECEIPTS_BUCKET ? { bucket: RECEIPTS_BUCKET, getStorage: () => storage, publicUrl: DRAMA_API_BASE, secret: (process.env.INTERNAL_TICK_SECRET || "").trim() } : null,
+  getCalendarApi: () => getCalendarApi(), // タスク専用カレンダーとの双方向同期 (SA にカレンダーを共有してもらう)
 });
 app.all("/api/genba/mcp/:token", genba.mcpRoute(GENBA_MCP_TOKENS));
 // 直近の MCP 呼び出し (全コネクタ分、引数の中身なし)。Cloud Logging を開かずに「どのツールが何 ms で失敗したか」を見る用
@@ -3171,7 +3172,7 @@ async function getGoogleAuth() {
     scopes: [
       "https://www.googleapis.com/auth/spreadsheets",
       "https://www.googleapis.com/auth/drive",
-      "https://www.googleapis.com/auth/calendar.readonly", // sheets-mcp schedule_setup の祝日取得
+      "https://www.googleapis.com/auth/calendar", // sheets-mcp の祝日取得 (読み) + genba のタスクカレンダー同期 (書き)
     ],
   });
   googleAuthClient = await auth.getClient();
@@ -5942,6 +5943,12 @@ app.post("/api/yado/refresh", async (req, res) => {
 // /api/internal/yado/sync-bookings: 差分同期 (Cloud Scheduler が日次で叩く場合用、任意)。
 // 認証は INTERNAL_TICK_SECRET ヘッダ (kaigi と同方式、auth middleware の /internal 分岐で済む)。
 // last_sync_modified 以降に変更された予約 (= 新規 + 変更 + キャンセル) を全部拾う。
+// タスクカレンダー同期 (Cloud Scheduler から 10 分おきに叩く用。x-tick-secret で認証。普段は genba_tasks 等が読まれたときにも 5 分に 1 回回る)
+app.post("/api/internal/genba/calendar-sync", async (req, res) => {
+  try { res.json(await genba.syncTaskCalendar({ by: "同期" })); }
+  catch (e) { console.error("[genba] calendar-sync", e); res.status(500).json({ error: e.message }); }
+});
+
 app.post("/api/internal/yado/sync-bookings", async (req, res) => {
   if (!BEDS24_API_TOKEN) return res.status(503).json({ error: "MANCHIKAN_BEDS_KEY not set" });
   try {
