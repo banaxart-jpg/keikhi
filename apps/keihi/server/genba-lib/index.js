@@ -87,6 +87,8 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
     await p.query(`ALTER TABLE genba_log ADD COLUMN IF NOT EXISTS voided_at TIMESTAMPTZ`);
     await p.query(`ALTER TABLE genba_log ADD COLUMN IF NOT EXISTS voided_by TEXT`);
     await p.query(`ALTER TABLE genba_log ADD COLUMN IF NOT EXISTS void_reason TEXT`);
+    // 一覧用の短いタイトル (40 字まで)。body は詳細として残す。空なら返すときだけ body の先頭 28 字を出す (DB には書かない)
+    await p.query(`ALTER TABLE genba_log ADD COLUMN IF NOT EXISTS title TEXT`);
     // 画像・PDF (LINE 等から来たもの)。中身は GCS、ここは台帳。source_ref で同じ添付を 2 回入れない
     await p.query(`
       CREATE TABLE IF NOT EXISTS genba_files (
@@ -226,6 +228,7 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
       )`);
     await p.query(`CREATE INDEX IF NOT EXISTS genba_notes_subject_idx ON genba_notes (subject_type, subject_id) WHERE retired_at IS NULL`);
     await p.query(`CREATE UNIQUE INDEX IF NOT EXISTS genba_notes_source_ref_uq ON genba_notes (source_ref) WHERE source_ref IS NOT NULL`);
+    await p.query(`ALTER TABLE genba_notes ADD COLUMN IF NOT EXISTS title TEXT`);
     schemaOk = true;
   }
 
@@ -287,8 +290,18 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
     return { id: made.data.id, name: sub, created: true };
   }
 
+  const TITLE_MAX = 40;
+  // title の入力チェック: 空は null、40 字まで
+  function cleanTitle(v) {
+    if (v == null) return null;
+    const t = String(v).trim().replace(/\s+/g, " ");
+    if (!t) return null;
+    if ([...t].length > TITLE_MAX) throw new Error(`title は ${TITLE_MAX} 字まで (${[...t].length} 字)`);
+    return t;
+  }
+  const autoTitle = (body) => { const s = String(body || "").replace(/\s+/g, " ").trim(); const cs = [...s]; return cs.length > 28 ? cs.slice(0, 28).join("") : s; };
   const logRow = (r) => ({
-    id: Number(r.id), kind: r.kind, body: r.body, by: r.written_by,
+    id: Number(r.id), kind: r.kind, title: r.title || autoTitle(r.body), title_auto: r.title ? undefined : true, body: r.body, by: r.written_by,
     due_on: ymd(r.due_on),
     resolves_id: r.resolves_id ? Number(r.resolves_id) : null,
     photo_ids: Array.isArray(r.photo_ids) && r.photo_ids.length ? r.photo_ids : undefined,
@@ -324,6 +337,7 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
     if (!LOG_KINDS.includes(a.kind)) throw new Error(`kind は ${LOG_KINDS.join(" / ")}`);
     const body = String(a.body || "").trim();
     if (!body) throw new Error("body が空");
+    const title = cleanTitle(a.title);
     let resolvesId = null;
     if (a.kind === "解決") {
       resolvesId = Number(a.resolves_id);
@@ -376,11 +390,11 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
       if (hit) { supersedesId = Number(hit.id); superseded = hit; }
     }
     const { rows } = await p.query(
-      `INSERT INTO genba_log (site_id, kind, body, written_by, due_on, resolves_id, photo_ids, source_ref, source, estimate_min, who, topic, supersedes_id)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+      `INSERT INTO genba_log (site_id, kind, body, written_by, due_on, resolves_id, photo_ids, source_ref, source, estimate_min, who, topic, supersedes_id, title)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
        ON CONFLICT (source_ref) WHERE source_ref IS NOT NULL DO NOTHING
        RETURNING *`,
-      [useSiteId, a.kind, body, by, due, resolvesId, photos ? JSON.stringify(photos) : null, sourceRef, source ? JSON.stringify(source) : null, est, who, topic, supersedesId]
+      [useSiteId, a.kind, body, by, due, resolvesId, photos ? JSON.stringify(photos) : null, sourceRef, source ? JSON.stringify(source) : null, est, who, topic, supersedesId, title]
     );
     if (rows.length) {
       return {
@@ -465,7 +479,7 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
   const noteRow = (r, subject) => ({
     id: Number(r.id), subject_type: SUBJECT_LABEL[r.subject_type] || r.subject_type,
     subject: subject !== undefined ? subject : (r.subject_id != null ? { id: Number(r.subject_id) } : null),
-    kind: r.kind, body: r.body,
+    kind: r.kind, title: r.title || undefined, body: r.body,
     valid_from: ymd(r.valid_from) || undefined, valid_until: ymd(r.valid_until) || undefined,
     by: r.written_by, source_ref: r.source_ref || undefined, source: r.source || undefined,
     at: r.created_at, retired_at: r.retired_at || undefined,
@@ -959,6 +973,7 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
             subject_type: { type: "string", enum: ["人", "会社", "現場", "社内"] },
             subject: { type: "string", description: "対象の名前・呼び名・ID (社内のときは省略)" },
             kind: { type: "string", enum: NOTE_KINDS, description: "既定 メモ" },
+            title: { type: "string", description: "一覧用の短いタイトル (40 字まで、任意)" },
             body: { type: "string", description: "1 行で。主語を入れる (誰が / どの会社が)" },
             valid_from: { type: "string", description: "この日から有効 (YYYY-MM-DD)" },
             valid_until: { type: "string", description: "この日まで有効 (YYYY-MM-DD)" },
@@ -981,10 +996,10 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
           const sourceRef = a.source_ref ? String(a.source_ref).trim().slice(0, 300) : null;
           const source = a.source && typeof a.source === "object" ? a.source : null;
           const { rows } = await p.query(
-            `INSERT INTO genba_notes (subject_type, subject_id, kind, body, valid_from, valid_until, written_by, source_ref, source)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+            `INSERT INTO genba_notes (subject_type, subject_id, kind, body, valid_from, valid_until, written_by, source_ref, source, title)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
              ON CONFLICT (source_ref) WHERE source_ref IS NOT NULL DO NOTHING RETURNING *`,
-            [subj.type, subj.id, kind, body, from, until, by, sourceRef, source ? JSON.stringify(source) : null]);
+            [subj.type, subj.id, kind, body, from, until, by, sourceRef, source ? JSON.stringify(source) : null, cleanTitle(a.title)]);
           if (!rows.length) {
             const { rows: ex } = await p.query(`SELECT * FROM genba_notes WHERE source_ref=$1`, [sourceRef]);
             return { duplicate: true, note: ex[0] ? noteRow(ex[0], { id: subj.id, label: subj.label }) : null };
@@ -1121,7 +1136,7 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
       },
       {
         name: "genba_log_add",
-        description: "進捗ログに 1 行足す (追記のみ。直すのは genba_log_fix、消すのは genba_log_void)。種類: 進捗 (やったこと・完了したこと) / 課題 / 決定 / 次やること (タスク) / 解決。決定には topic (床材 / 巾木 / 納期 …) を付ける。決定が変わったら同じ topic で新しい決定を足せば前の決定を置き換える (返り値 superseded)。人の報告は種類ごとに分けて複数回呼ぶ (例「ボード貼り完了、明日パテ。床レベル 3mm 狂い要相談」→ 進捗 + 次やること(due_on 明日) + 課題)。現場に紐づかない項目 (会社の雑務・Google マップのピン等) は site を省略する。やった人・担当は who、タスクは所要時間の目安を estimate_min (分) に入れる (「5 分で終わるタスクある？」は genba_tasks で引く)。課題や次やることが片付いたら kind=解決 で resolves_id に元の行 ID (site 省略可)。LINE 等のメッセージから記録するときは source_ref (メッセージ ID) を必ず付ける (同じものは 2 回入らない、duplicate: true が返る) と source に出どころ。書いた人はトークンから自動で入る",
+        description: "進捗ログに 1 行足す (追記のみ。直すのは genba_log_fix、消すのは genba_log_void)。title (一覧用、20 字前後) と body (詳細) を分けて書く。種類: 進捗 (やったこと・完了したこと) / 課題 / 決定 / 次やること (タスク) / 解決。決定には topic (床材 / 巾木 / 納期 …) を付ける。決定が変わったら同じ topic で新しい決定を足せば前の決定を置き換える (返り値 superseded)。人の報告は種類ごとに分けて複数回呼ぶ (例「ボード貼り完了、明日パテ。床レベル 3mm 狂い要相談」→ 進捗 + 次やること(due_on 明日) + 課題)。現場に紐づかない項目 (会社の雑務・Google マップのピン等) は site を省略する。やった人・担当は who、タスクは所要時間の目安を estimate_min (分) に入れる (「5 分で終わるタスクある？」は genba_tasks で引く)。課題や次やることが片付いたら kind=解決 で resolves_id に元の行 ID (site 省略可)。LINE 等のメッセージから記録するときは source_ref (メッセージ ID) を必ず付ける (同じものは 2 回入らない、duplicate: true が返る) と source に出どころ。書いた人はトークンから自動で入る",
         inputSchema: {
           type: "object",
           properties: {
@@ -1129,7 +1144,8 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
             who: { type: "string", description: "やった人 / 担当 (例: 名取)。省略可" },
             estimate_min: { type: "number", description: "所要時間の目安 (分)。タスク (次やること・課題) に付ける" },
             kind: { type: "string", enum: LOG_KINDS },
-            body: { type: "string", description: "本文 (短く。1 行 1 件。決定は型番・数量・金額を省略しない)" },
+            title: { type: "string", description: "一覧用の短いタイトル (20 字前後、40 字まで)。「何を・どうする」(例: 工程表を辰巳さんへ送る / 巾木の色をみゆまに確認)。決定は結論を書く (例: 巾木は東リ97番か43番)。新しく記録するときは必ず付ける" },
+            body: { type: "string", description: "詳細 (経緯・数量・型番・金額・出どころ)。1 行 1 件。決定は型番・数量・金額を省略しない" },
             due_on: { type: "string", description: "期限 YYYY-MM-DD (次やること・課題)" },
             resolves_id: { type: "number", description: "kind=解決 のとき、解決した元の行 ID" },
             topic: { type: "string", description: "決定が何についてか (床材 / 巾木 / 納期 / 色 …)。同じ現場に同じ topic の生きている決定があれば自動でそれを置き換える (変更として紐付く)" },
@@ -1147,7 +1163,7 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
       },
       {
         name: "genba_log_add_many",
-        description: "進捗ログを複数行まとめて足す (監視ジョブや、会話を貼られて一度に抽出したとき用)。items の各要素は genba_log_add と同じ引数 (site を省略したら共通の site)。1 件ずつ入るので途中で失敗しても前の行は残る。結果に各行の duplicate が付く",
+        description: "進捗ログを複数行まとめて足す (監視ジョブや、会話を貼られて一度に抽出したとき用)。items の各要素は genba_log_add と同じ引数 (title / kind / body / … 。site を省略したら共通の site)。1 件ずつ入るので途中で失敗しても前の行は残る。結果に各行の duplicate が付く",
         inputSchema: {
           type: "object",
           properties: {
@@ -1179,13 +1195,14 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
       },
       {
         name: "genba_log_fix",
-        description: "ログの行を直す (誤字・現場違い・期限・担当・所要時間・topic)。直す前の値は edits に残る (誰がいつ)。kind は変えられない (変えたいなら genba_log_void して入れ直す)",
+        description: "ログの行を直す (誤字・現場違い・期限・担当・所要時間・topic・title)。直す前の値は edits に残る (誰がいつ)。kind は変えられない (変えたいなら genba_log_void して入れ直す)",
         inputSchema: {
           type: "object",
           properties: {
             id: { type: "number" },
             body: { type: "string" }, site: { type: "string", description: "案件 ID・現場名・ID。「会社」で現場なしに" },
             due_on: { type: "string", description: "YYYY-MM-DD。空文字で消す" }, who: { type: "string" }, estimate_min: { type: "number" }, topic: { type: "string" },
+            title: { type: "string", description: "一覧用タイトル (40 字まで)。空文字で消す" },
           },
           required: ["id"],
         },
@@ -1205,6 +1222,7 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
           if (a.who !== undefined) set("who", a.who ? String(a.who).trim().slice(0, 60) : null);
           if (a.estimate_min !== undefined) set("estimate_min", a.estimate_min == null || a.estimate_min === "" ? null : Math.max(1, Math.round(Number(a.estimate_min))));
           if (a.topic !== undefined) set("topic", a.topic ? String(a.topic).trim().slice(0, 60) : null);
+          if (a.title !== undefined) set("title", cleanTitle(a.title));
           if (!sets.length) throw new Error("直す項目が無い");
           const edits = [...(Array.isArray(r.edits) ? r.edits : []), { at: new Date().toISOString(), by, before }];
           vals.push(JSON.stringify(edits)); sets.push(`edits=$${vals.length}`);
@@ -1233,6 +1251,32 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
           const { rows: rs } = await p.query(`SELECT id FROM genba_log WHERE resolves_id=$1 AND voided_at IS NULL`, [id]);
           if (rs.length) effects.push(`この行を解決した #${rs[0].id} は残る (要らなければそれも void)`);
           return { voided: logRow(r), effects: effects.length ? effects : undefined };
+        },
+      },
+      {
+        name: "genba_log_title_set_many",
+        description: "【移行用・あとで消す】既存のログ行に title だけを付ける。items: [{ id, title }] (最大 200 件)。body・kind・日付には触らない、新しい行も作らない。AI が本文を読んで付けたタイトルを流し込む用。返り値は更新できた件数と、無かった id",
+        inputSchema: {
+          type: "object",
+          properties: { items: { type: "array", items: { type: "object", properties: { id: { type: "number" }, title: { type: "string" } }, required: ["id", "title"] }, description: "最大 200 件" } },
+          required: ["items"],
+        },
+        handler: async (a) => {
+          await ensureSchema();
+          const p = getPool();
+          const items = Array.isArray(a.items) ? a.items.slice(0, 200) : [];
+          if (!items.length) throw new Error("items が空");
+          let updated = 0;
+          const missing = [], invalid = [];
+          for (const it of items) {
+            const id = Number(it?.id);
+            if (!Number.isInteger(id)) { invalid.push({ id: it?.id, error: "id が数値でない" }); continue; }
+            let title;
+            try { title = cleanTitle(it.title); } catch (e) { invalid.push({ id, error: e.message }); continue; }
+            const { rows } = await p.query(`UPDATE genba_log SET title=$2 WHERE id=$1 RETURNING id`, [id, title]);
+            if (rows.length) updated++; else missing.push(id);
+          }
+          return { updated, missing, invalid: invalid.length ? invalid : undefined };
         },
       },
       ...(gcs ? [
@@ -1633,7 +1677,8 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
     "- 人の名前・あだ名が出たら、送る前・記録する前に必ず genba_contact_find で引く (下の ■ 連絡先)",
     "- 現場の特定: チャットの指示文に案件 ID があればそれ。無ければ genba_find(現場名)。候補が複数なら人に聞く",
     "- 「写真 (図面) 上げたい」→ genba_folder(現場, 種類) の url を渡す。人はそこに Drive アプリで上げる。何枚入ったかは list_site_photos",
-    "- 進捗の報告は genba_log_add に種類ごとに分けて積む: 進捗 / 課題 / 決定 / 次やること (期限があれば due_on)。1 行 1 件、短く",
+    "- 進捗の報告は genba_log_add に種類ごとに分けて積む: 進捗 / 課題 / 決定 / 次やること (期限があれば due_on)。1 行 1 件",
+    "- 必ず title を付ける: 「何を・どうする」を 20 字前後 (例「工程表を辰巳さんへ送る」「巾木の色をみゆまに確認」)。決定は title に結論 (例「巾木は東リ97番か43番」)。body には経緯・数量・型番・金額・出どころの詳細。一覧は title、詳細は body で読む",
     "- 課題・次やることが片付いたら kind=解決 で resolves_id に元の行 ID (状態の上書きはしない)",
     "- 決定には topic (床材 / 巾木 / 納期 …) を付ける。決定が変わったら同じ現場・同じ topic で新しい決定を足すだけで前の決定を置き換える (返り値 superseded、「A → B に変更」と報告)。topic で引けないときは supersedes_id。履歴は genba_log_list(chain=行 ID)",
     "- 間違いは genba_log_fix (誤字・現場違い・期限・担当。前の値は edits に残る)、入れるべきでなかった行は genba_log_void (隠すだけ。解決を void すると元のタスクが戻る)。kind を変えたいときは void して入れ直す",
