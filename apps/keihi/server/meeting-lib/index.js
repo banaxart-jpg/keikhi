@@ -48,6 +48,9 @@ const INSTRUCTIONS = [
   "内容を聞かれたら meeting_list / meeting_search で探し、meeting_get で本文を読んでから答える。",
   "本文の [mm:ss] は会議開始からの経過時間。話者名は文字起こし AI の推定なので断定しない。",
   "画面共有していた会議は meeting_get の frames に静止画の一覧が出る。画面の話が出てきたら meeting_frames で該当時刻の画像を見る。",
+  "会議名が仮 (meeting_list / meeting_get の needs_title: true) のときは、本文を読んだついでに meeting_update(id, title) で名前を付ける。聞かずに付けてよい (後から人が直せる)。",
+  "名前は「相手か現場 + 議題」を 20 字前後で (例「銀座 厨房の電気配線の打ち合わせ」「平居さん 浴室の止水栓と搬入」)。日付と時刻は held_at に入っているので名前に入れない。誰の会議か分からないときは議題だけでよい。",
+  "本文がまだ短い・空のとき (録音中かもしれない) は名前を付けずに、あとでもう一度読む。名前を付けたら needs_title は消える。",
   "id が rec: で始まるものは録音メモアプリの記録 (読み取り専用)。",
 ].join("\n");
 
@@ -101,6 +104,13 @@ export function createMeeting({ getPool, createMcpHandler, callGemini, getStorag
       )`);
     await p.query(`CREATE INDEX IF NOT EXISTS meeting_frames_idx ON meeting_frames (meeting_id, at_sec)`);
     await p.query(`CREATE INDEX IF NOT EXISTS meetings_held_idx ON meetings (COALESCE(held_at, created_at) DESC)`);
+    // 会議名が仮 (人が付けていない) = AI が本文を読んだときに名前を付ける。列を足した最初の 1 回だけ、
+    // これまでの自動名 (「10/13 の会議」「無題の会議」「空」) を仮の名前として印を付ける
+    const had = (await p.query(`SELECT 1 FROM information_schema.columns WHERE table_name='meetings' AND column_name='title_auto'`)).rows.length > 0;
+    await p.query(`ALTER TABLE meetings ADD COLUMN IF NOT EXISTS title_auto BOOLEAN NOT NULL DEFAULT false`);
+    if (!had) {
+      await p.query(`UPDATE meetings SET title_auto = true WHERE title_auto = false AND (btrim(title) = '' OR title = '無題の会議' OR title ~ '^[0-9]{1,2}/[0-9]{1,2}( [0-9]{1,2}:[0-9]{2})? の会議$')`);
+    }
     schemaReady = true;
   }
 
@@ -210,49 +220,68 @@ export function createMeeting({ getPool, createMcpHandler, callGemini, getStorag
     }
   }
 
+  // 仮の名前: 「10/15 14:30 の会議」(日本時間)。人も AI も名前を付けていない会議に入り、title_auto の印が付く
+  const placeholderTitle = (when) => {
+    const j = new Date((when ? new Date(when) : new Date()).getTime() + 9 * 3600000);
+    return `${j.getUTCMonth() + 1}/${j.getUTCDate()} ${String(j.getUTCHours()).padStart(2, "0")}:${String(j.getUTCMinutes()).padStart(2, "0")} の会議`;
+  };
+
   async function createMeetingRow(a) {
     const id = Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
     const heldAt = a.held_at && !isNaN(new Date(a.held_at)) ? new Date(a.held_at).toISOString() : new Date().toISOString();
+    const typed = String(a.title || "").trim().slice(0, 120);
     await pool().query(
-      `INSERT INTO meetings (id, title, held_at, participants, memo) VALUES ($1,$2,$3,$4,$5)`,
-      [id, String(a.title || "無題の会議").slice(0, 120), heldAt, String(a.participants || "").slice(0, 500), String(a.memo || "").slice(0, 5000)]);
+      `INSERT INTO meetings (id, title, held_at, participants, memo, title_auto) VALUES ($1,$2,$3,$4,$5,$6)`,
+      [id, typed || placeholderTitle(heldAt), heldAt, String(a.participants || "").slice(0, 500), String(a.memo || "").slice(0, 5000), !typed]);
     return id;
   }
 
-  async function updateMeetingRow(id, a) {
+  // m = 今の行 (title / title_auto を比べるため)。title を空にする = 「名前は AI に任せる」(仮の名前に戻す)。
+  // 今と同じ title が来たとき (画面がメモだけ保存するとき) は印を変えない。違う title が来たら人か AI が付けた名前
+  async function updateMeetingRow(m, a) {
     const heldAt = a.held_at && !isNaN(new Date(a.held_at)) ? new Date(a.held_at).toISOString() : null;
+    let title = null, auto = null;
+    if (a.title != null) {
+      const t = String(a.title).trim().slice(0, 120);
+      if (!t) { if (!m.title_auto) { title = placeholderTitle(m.held_at || m.created_at); auto = true; } }
+      else if (t !== m.title) { title = t; auto = false; }
+    }
     await pool().query(
       `UPDATE meetings SET title = COALESCE($2, title), held_at = COALESCE($3, held_at),
-              participants = COALESCE($4, participants), memo = COALESCE($5, memo), updated_at = now() WHERE id=$1`,
-      [id, a.title != null ? String(a.title).slice(0, 120) : null, heldAt,
-       a.participants != null ? String(a.participants).slice(0, 500) : null, a.memo != null ? String(a.memo).slice(0, 5000) : null]);
+              participants = COALESCE($4, participants), memo = COALESCE($5, memo), title_auto = COALESCE($6, title_auto), updated_at = now() WHERE id=$1`,
+      [m.id, title, heldAt,
+       a.participants != null ? String(a.participants).slice(0, 500) : null, a.memo != null ? String(a.memo).slice(0, 5000) : null, auto]);
   }
+
+  const TITLE_HINT = "会議名が仮です。本文を読んで「相手か現場 + 議題」を 20 字前後の名前にして、meeting_update(id, title) で付ける。聞かずに付けてよい。日付は名前に入れない。";
+  const SHORT_HINT = "会議名が仮ですが、本文がまだ短い (録音中かもしれない) ので名前はあとで付ける。";
 
   const str = { type: "string" };
   const tools = [
     {
       name: "meeting_list",
-      description: "会議の一覧 (新しい順)。query を入れるとタイトル・参加者・本文で絞り込む。",
-      inputSchema: { type: "object", properties: { query: str, limit: { type: "integer", description: "既定 30、最大 200" } } },
+      description: "会議の一覧 (新しい順)。query を入れるとタイトル・参加者・本文で絞り込む。needs_title: true は名前が仮の会議 (読んだときに meeting_update で名前を付ける)。untitled: true で名前が仮のものだけに絞る。",
+      inputSchema: { type: "object", properties: { query: str, untitled: { type: "boolean", description: "true = 名前が仮の会議だけ" }, limit: { type: "integer", description: "既定 30、最大 200" } } },
       handler: async (a) => {
         await ensureSchema();
         const limit = Math.min(200, Math.max(1, Number(a.limit) || 30));
         const q = String(a.query || "").trim();
         const like = `%${q}%`;
         const { rows } = await pool().query(
-          `SELECT m.id, m.title, m.held_at, m.participants, m.memo, m.created_at, m.updated_at,
+          `SELECT m.id, m.title, m.title_auto, m.held_at, m.participants, m.memo, m.created_at, m.updated_at,
                   COUNT(s.id)::int AS segments, COALESCE(SUM(length(s.text)),0)::int AS chars,
                   COALESCE(MAX(s.start_sec),0)::int AS last_sec
              FROM meetings m LEFT JOIN meeting_segments s ON s.meeting_id = m.id
-            ${q ? `WHERE m.title ILIKE $1 OR m.participants ILIKE $1 OR m.memo ILIKE $1
-                   OR EXISTS (SELECT 1 FROM meeting_segments x WHERE x.meeting_id=m.id AND x.text ILIKE $1)` : ""}
+            ${[q ? `(m.title ILIKE $1 OR m.participants ILIKE $1 OR m.memo ILIKE $1
+                   OR EXISTS (SELECT 1 FROM meeting_segments x WHERE x.meeting_id=m.id AND x.text ILIKE $1))` : "", a.untitled ? "m.title_auto" : ""].filter(Boolean).reduce((acc, c, i) => acc + (i ? " AND " : "WHERE ") + c, "")}
             GROUP BY m.id ORDER BY COALESCE(m.held_at, m.created_at) DESC LIMIT ${limit}`, q ? [like] : []);
-        const recs = await recRows(q ? `WHERE title ILIKE $1 OR summary ILIKE $1 OR transcript ILIKE $1` : "", q ? [like] : [], limit);
+        const recs = a.untitled ? [] : await recRows(q ? `WHERE title ILIKE $1 OR summary ILIKE $1 OR transcript ILIKE $1` : "", q ? [like] : [], limit);
         const list = [
           ...rows.map((r) => ({
             id: r.id, title: r.title, held_at: r.held_at || r.created_at, participants: r.participants,
             memo: r.memo, segments: r.segments, chars: r.chars, approx_minutes: Math.ceil((r.last_sec + 60) / 60) * (r.segments ? 1 : 0),
             source: "meeting", updated_at: r.updated_at,
+            needs_title: r.title_auto ? true : undefined,
           })),
           ...recs.map((r) => ({
             id: `rec:${r.id}`, title: r.title, held_at: r.created_at, chars: (r.transcript || "").length,
@@ -268,6 +297,7 @@ export function createMeeting({ getPool, createMcpHandler, callGemini, getStorag
       description: [
         "会議 1 件の文字起こし本文を返す。長いときは offset / max_chars で続きを読む (next_offset が null なら最後まで)。",
         "[mm:ss] は会議開始からの経過時間。frames は画面共有の静止画 (画面が変わった時刻)。中身は meeting_frames で見る。",
+        "needs_title: true (title_hint 付き) は会議名が仮。読んだら meeting_update で名前を付ける。",
       ].join("\n"),
       inputSchema: {
         type: "object", required: ["id"],
@@ -290,6 +320,7 @@ export function createMeeting({ getPool, createMcpHandler, callGemini, getStorag
             frames: frames.map((f) => ({ frame_id: f.id, at: f.at })),
           };
           text = await meetingText(id);
+          if (m.title_auto) { meta.needs_title = true; meta.title_hint = text.length >= 200 ? TITLE_HINT : SHORT_HINT; }
         }
         const offset = Math.max(0, Number(a.offset) || 0);
         const max = Math.min(200000, Math.max(1000, Number(a.max_chars) || 60000));
@@ -370,7 +401,7 @@ export function createMeeting({ getPool, createMcpHandler, callGemini, getStorag
     },
     {
       name: "meeting_create",
-      description: "新しい会議を作る (他ツールの文字起こしを貼り込む用)。返ってきた id に meeting_add_text で中身を足す。",
+      description: "新しい会議を作る (他ツールの文字起こしを貼り込む用)。返ってきた id に meeting_add_text で中身を足す。名前は中身から決めて付ける。決まらなければ空でよい (仮の名前になり、あとで読んだときに付ける)。",
       inputSchema: {
         type: "object", required: ["title"],
         properties: { title: str, held_at: { type: "string", description: "ISO 8601 (省略時は今)" }, participants: str, memo: str },
@@ -399,7 +430,7 @@ export function createMeeting({ getPool, createMcpHandler, callGemini, getStorag
     },
     {
       name: "meeting_update",
-      description: "会議のタイトル・日時・参加者・メモを直す (渡した項目だけ)。",
+      description: "会議のタイトル・日時・参加者・メモを直す (渡した項目だけ)。needs_title の会議は、本文を読んで決めた名前をここで付ける (付けると仮の印が消える)。title を空にすると仮の名前に戻る。",
       inputSchema: {
         type: "object", required: ["id"],
         properties: { id: str, title: str, held_at: str, participants: str, memo: str },
@@ -407,8 +438,9 @@ export function createMeeting({ getPool, createMcpHandler, callGemini, getStorag
       handler: async (a) => {
         await ensureSchema();
         const m = await mustMeeting(a.id);
-        await updateMeetingRow(m.id, a);
-        return { id: m.id, ok: true };
+        await updateMeetingRow(m, a);
+        const { rows } = await pool().query(`SELECT title, title_auto FROM meetings WHERE id=$1`, [m.id]);
+        return { id: m.id, ok: true, title: rows[0].title, needs_title: rows[0].title_auto ? true : undefined };
       },
     },
     {
@@ -437,7 +469,7 @@ export function createMeeting({ getPool, createMcpHandler, callGemini, getStorag
     };
     app.get("/api/meeting", wrap(async (req, res) => {
       const { rows } = await pool().query(
-        `SELECT m.id, m.title, m.held_at AS "heldAt", m.participants, m.updated_at AS "updatedAt",
+        `SELECT m.id, m.title, m.title_auto AS "titleAuto", m.held_at AS "heldAt", m.participants, m.updated_at AS "updatedAt",
                 COUNT(DISTINCT s.id)::int AS segments, COALESCE(MAX(s.start_sec),0)::int AS "lastSec",
                 (SELECT COUNT(*)::int FROM meeting_frames f WHERE f.meeting_id = m.id) AS frames
            FROM meetings m LEFT JOIN meeting_segments s ON s.meeting_id = m.id
@@ -453,14 +485,15 @@ export function createMeeting({ getPool, createMcpHandler, callGemini, getStorag
         `SELECT part, start_sec AS "startSec", text, source FROM meeting_segments WHERE meeting_id=$1 ORDER BY part, start_sec`, [m.id]);
       const frames = (await frameList(m.id)).map((f) => ({ id: f.id, atSec: f.at_sec }));
       res.json({
-        id: m.id, title: m.title, heldAt: m.held_at, participants: m.participants, memo: m.memo,
+        id: m.id, title: m.title, titleAuto: !!m.title_auto, heldAt: m.held_at, participants: m.participants, memo: m.memo,
         segments: rows, frames,
       });
     }));
     app.put("/api/meeting/:id", wrap(async (req, res) => {
       const m = await mustMeeting(req.params.id);
-      await updateMeetingRow(m.id, req.body || {});
-      res.json({ id: m.id, ok: true });
+      await updateMeetingRow(m, req.body || {});
+      const { rows } = await pool().query(`SELECT title, title_auto AS "titleAuto" FROM meetings WHERE id=$1`, [m.id]);
+      res.json({ id: m.id, ok: true, title: rows[0].title, titleAuto: !!rows[0].titleAuto });
     }));
     app.delete("/api/meeting/:id", wrap(async (req, res) => {
       const m = await mustMeeting(req.params.id);

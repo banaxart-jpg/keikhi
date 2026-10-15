@@ -5,6 +5,7 @@
 ## 使い方
 - ランチャーから [会議の文字起こし] をタップ
 - 会議名を入れて「始める」→ そのまま録音スタート。15 秒ごとに文字が出てくる
+  - **会議名は空でも OK**。空なら「10/15 14:30 の会議」という仮の名前になり、Claude が会議を読んだとき (`meeting_get`) に内容から名前を付ける (`meeting_update`)。付いた名前は画面にも出る。自分で書いてもよく、名前を消すと Claude に任せる状態に戻る
 - PC では「画面も」で画面共有。画面が変わったときだけ静止画を残す
   - オンライン会議（Meet / Zoom のブラウザ版など）は**タブを共有して「音声も共有」をオン**にすると相手の声も文字になる
 - 「一時停止」「終了」。あとから開いて「続きを録音」もできる
@@ -17,6 +18,7 @@
 - 画面: getDisplayMedia の映像を 2 秒ごとに縮小比較し、変化して落ち着いたら JPEG（最大 1600px）を `POST /api/meeting/:id/frame` → GCS
 - 「いま」の行はブラウザ内蔵の音声認識による簡易字幕（保存しない。iPhone では出ない）
 - 音声そのものは保存しない。残るのは文字と静止画だけ
+- 会議名の仮フラグ: `meetings.title_auto`。人も Claude も名前を付けていない会議が true。`meeting_list` / `meeting_get` に `needs_title: true` (get は `title_hint` 付き。本文が 200 字未満なら「あとで」) が付く。`meeting_list(untitled: true)` で仮の名前だけ。`meeting_update(title)` で名前が付くと false になる。画面は会議名を人が書き換えたときだけ title を送る (古い画面が Claude の付けた名前を上書きしない)
 - サーバー / MCP: `apps/keihi/server/meeting-lib/`
 
 ## 注意

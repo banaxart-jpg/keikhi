@@ -38,6 +38,9 @@ input.inp, textarea.inp { width: 100%; padding: 11px 13px; border-radius: 12px; 
 .mtg { padding: 14px 15px; border-radius: 16px; background: var(--bg); box-shadow: 5px 5px 12px var(--sd), -4px -4px 10px var(--sl); margin-bottom: 10px; cursor: pointer; display: flex; justify-content: space-between; align-items: center; gap: 10px; }
 .mtg .mt { font-size: 15px; font-weight: 800; }
 .mtg .mm { font-size: 11px; color: var(--text2); font-weight: 600; margin-top: 3px; font-variant-numeric: tabular-nums; }
+.mtg .mt.auto { color: var(--text2); font-weight: 700; }
+.tag-auto { display: inline-block; font-size: 10px; font-weight: 700; color: var(--accent); border: 1px solid var(--accent); border-radius: 8px; padding: 0 6px; margin-left: 6px; vertical-align: 2px; white-space: nowrap; }
+.auto-note { font-size: 11px; color: var(--text2); font-weight: 600; margin-top: 4px; }
 .empty { text-align: center; color: var(--text2); font-weight: 600; font-size: 13px; padding: 30px 20px; line-height: 1.8; }
 
 /* 会議画面 */
@@ -104,7 +107,7 @@ input.inp, textarea.inp { width: 100%; padding: 11px 13px; border-radius: 12px; 
     <div class="title">会議の文字起こし</div>
     <div class="subtitle">録音しながら 15 秒ごとに文字にしていきます。PC なら画面共有も一緒に残せて、あとで Claude のチャットからそのまま読めます。</div>
     <div class="newrow">
-      <input class="inp" id="newTitle" placeholder="会議名（空でも OK）">
+      <input class="inp" id="newTitle" placeholder="会議名（空なら、あとで Claude が読んで付けます）">
       <button class="pill rec" id="newBtn" type="button"><span class="icon">mic</span> 始める</button>
     </div>
     <div id="list"></div>
@@ -113,6 +116,7 @@ input.inp, textarea.inp { width: 100%; padding: 11px 13px; border-radius: 12px; 
   <!-- 会議 -->
   <div class="wrap" id="mtgView" hidden>
     <div class="head"><input class="inp tin" id="mTitle" aria-label="会議名"></div>
+    <div class="auto-note" id="mAutoNote" hidden>仮の名前です。Claude が会議を読むと名前を付けます（ここで直接書き換えてもOK。空にすると Claude に任せます）</div>
     <div class="meta" id="mMeta"></div>
     <div class="controls">
       <button class="pill rec" id="recBtn" type="button"><span class="icon">mic</span> 録音</button>
@@ -177,7 +181,7 @@ async function loadList() {
   $("list").innerHTML = meetings.map(m => `
     <div class="mtg" data-id="${esc(m.id)}">
       <div style="min-width:0;">
-        <div class="mt">${esc(m.title || "無題の会議")}</div>
+        <div class="mt${m.titleAuto ? " auto" : ""}">${esc(m.title || "無題の会議")}${m.titleAuto ? `<span class="tag-auto">名前は Claude が付けます</span>` : ""}</div>
         <div class="mm">${fmtDate(m.heldAt)}${m.segments ? " ・ 約" + Math.max(1, Math.ceil((m.lastSec + 15) / 60)) + "分" : ""}${m.frames ? " ・ 画面 " + m.frames + "枚" : ""}</div>
       </div>
       <span class="icon" style="color:var(--text3)">chevron_right</span>
@@ -185,8 +189,7 @@ async function loadList() {
   document.querySelectorAll(".mtg").forEach(el => el.addEventListener("click", () => openMeeting(el.dataset.id)));
 }
 async function createMeeting() {
-  const d = new Date();
-  const title = $("newTitle").value.trim() || `${d.getMonth() + 1}/${d.getDate()} の会議`;
+  const title = $("newTitle").value.trim(); // 空なら仮の名前 (サーバーが付ける) で、Claude が読んだときに名前を付ける
   $("newBtn").disabled = true;
   try {
     const { id } = await api("POST", "/api/meeting", { title });
@@ -205,7 +208,8 @@ async function openMeeting(id, { autoStart = false } = {}) {
   $("listView").hidden = true; $("mtgView").hidden = false;
   $("backBtn").innerHTML = `<span class="icon">arrow_back</span> 一覧`;
   $("backBtn").href = "#";
-  $("mTitle").value = cur.title || "";
+  $("mTitle").value = cur.title || ""; titleDirty = false;
+  $("mAutoNote").hidden = !cur.titleAuto;
   $("mPeople").value = cur.participants || "";
   $("mMemo").value = cur.memo || "";
   $("screenBtn").hidden = !navigator.mediaDevices?.getDisplayMedia;
@@ -222,6 +226,9 @@ async function refreshFromServer() {
     const srcs = new Map(cur.frames.map(f => [f.id, f.src]));
     cur.segments = d.segments;
     cur.frames = d.frames.map(f => ({ ...f, src: srcs.get(f.id) }));
+    // Claude が名前を付けたら画面にも出す (人が入力中のときは触らない)
+    if (cur.titleAuto && !d.titleAuto && document.activeElement !== $("mTitle")) { cur.title = d.title; $("mTitle").value = d.title; }
+    cur.titleAuto = d.titleAuto; $("mAutoNote").hidden = !cur.titleAuto;
     renderMeta(); renderTl();
   } catch {}
 }
@@ -523,13 +530,18 @@ function stopSpeech() {
 }
 
 // ───────── 編集まわり ─────────
-let saveT = null;
+let saveT = null, titleDirty = false;
 function saveMeta() {
   clearTimeout(saveT);
   saveT = setTimeout(async () => {
     if (!cur) return;
-    try { await api("PUT", `/api/meeting/${cur.id}`, { title: $("mTitle").value.trim() || "無題の会議", participants: $("mPeople").value, memo: $("mMemo").value }); }
-    catch (e) { toast("保存失敗: " + e.message, true); }
+    try {
+      const body = { participants: $("mPeople").value, memo: $("mMemo").value };
+      if (titleDirty) { body.title = $("mTitle").value.trim(); titleDirty = false; } // 会議名は人が書き換えたときだけ送る (古い画面が Claude の付けた名前を上書きしない)
+      const r = await api("PUT", `/api/meeting/${cur.id}`, body);
+      cur.title = r.title; cur.titleAuto = !!r.titleAuto; $("mAutoNote").hidden = !cur.titleAuto;
+      if (document.activeElement !== $("mTitle")) $("mTitle").value = r.title; // サーバーの名前に揃える (空にした = 仮の名前に戻る / Claude が付けた名前が出る)
+    } catch (e) { toast("保存失敗: " + e.message, true); }
   }, 700);
 }
 async function addPaste() {
@@ -549,7 +561,7 @@ async function delMeeting() {
   catch (e) { toast("削除失敗: " + e.message, true); }
 }
 function claudePrompt() {
-  return `会議「${$("mTitle").value.trim() || "無題の会議"}」(id: ${cur.id}) を keihi コネクタの meeting_get で読んで。画面共有の話が出てきたら meeting_frames で該当時刻の画面も見て。`;
+  return `会議「${$("mTitle").value.trim() || "無題の会議"}」(id: ${cur.id}) を keihi コネクタの meeting_get で読んで。画面共有の話が出てきたら meeting_frames で該当時刻の画面も見て。${cur.titleAuto ? "会議名が仮なので、読んだら meeting_update で名前も付けて。" : ""}`;
 }
 
 // Claude につなぐ（統合コネクタ URL）
@@ -583,6 +595,7 @@ $("screenBtn").addEventListener("click", toggleScreen);
 $("copyBtn").addEventListener("click", () => copyText(claudePrompt()));
 $("claudeBtn").addEventListener("click", openClaude);
 $("moreTog").addEventListener("click", () => { $("moreBody").hidden = !$("moreBody").hidden; });
+$("mTitle").addEventListener("input", () => { titleDirty = true; });
 ["mTitle", "mPeople", "mMemo"].forEach(id => $(id).addEventListener("input", saveMeta));
 $("pasteBtn").addEventListener("click", addPaste);
 $("delBtn").addEventListener("click", delMeeting);
