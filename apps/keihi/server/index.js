@@ -40,6 +40,7 @@ import { createMcpHandler as dramaCreateMcpHandler, recentMcpCalls } from "./dra
 import { createGenba } from "./genba-lib/index.js";
 import { createSns } from "./sns-lib/index.js";
 import { createMeeting } from "./meeting-lib/index.js";
+import { createDepth } from "./depth-lib/index.js";
 import sharp from "sharp";
 import { fileURLToPath } from "node:url";
 
@@ -3160,6 +3161,17 @@ app.use("/api", async (req, res, next) => {
 
 const genAI = GEMINI_API_KEY ? new GoogleGenerativeAI(GEMINI_API_KEY) : null;
 const storage = RECEIPTS_BUCKET ? new Storage() : null;
+
+// ═══════════════════ 奥行きビューア (/depth/) ═══════════════════
+// 写真 → Depth Anything V2 Small (ONNX) で深度マップ → GCS (depth/<id>/)。詳細は depth-lib/index.js。
+// /api/depth/* は上の認証ゲートを通る (推論コストがかかるので社内限定)。
+// /depth/v/<id>/<素材> は /api の外 = 認証なし。ビューア (Hosting の /depth/v/<id>) が WebGL テクスチャとして読む
+const depth = createDepth({ getPool, getStorage: () => storage, bucket: RECEIPTS_BUCKET });
+app.get("/api/depth", depth.list);
+app.post("/api/depth", depth.create);
+app.patch("/api/depth/:id", depth.patch);
+app.delete("/api/depth/:id", depth.remove);
+app.get("/depth/v/:id/:name", depth.asset);
 
 // ───── Google Sheets (経費レコードの自動書き込み) ─────
 // SHEET_ID が設定されていればサーバから直接 Sheets API で行を append。
@@ -14717,6 +14729,8 @@ if (DEV) {
 
 app.listen(PORT, () => {
   console.log(`keihi-api listening on ${PORT} (DEV=${!!DEV})`);
+  // 奥行きビューアの ONNX モデル (~100MB) を先に読んでおく (最初のアップロードを待たせない)
+  depth.warmup();
   // コールドスタート直後の最初の MCP 呼び出しが DDL (ensureSchema ≈ 60 文) を待たされないよう、起動と同時に先に済ませる
   if (getPool()) {
     const t0 = Date.now();

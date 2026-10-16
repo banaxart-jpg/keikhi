@@ -1,0 +1,341 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#000000">
+<title>奥行き</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+html, body { height: 100%; background: #000; overflow: hidden; overscroll-behavior: none; touch-action: none; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Hiragino Sans', sans-serif; color: #fff; }
+canvas { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
+
+#start { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,0.35); z-index: 10; cursor: pointer; }
+#start span { padding: 14px 26px; border-radius: 999px; background: rgba(255,255,255,0.16); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); font-size: 16px; font-weight: 700; letter-spacing: .04em; }
+#start.loading { cursor: default; }
+
+#hint { position: fixed; left: 50%; bottom: calc(28px + env(safe-area-inset-bottom)); transform: translateX(-50%); padding: 10px 16px; border-radius: 12px; background: rgba(0,0,0,0.55); font-size: 13px; font-weight: 600; white-space: nowrap; opacity: 0; transition: opacity .4s; pointer-events: none; z-index: 20; }
+#hint.show { opacity: 1; }
+
+#panel { position: fixed; left: 50%; bottom: calc(18px + env(safe-area-inset-bottom)); transform: translateX(-50%); width: min(340px, calc(100vw - 24px)); padding: 14px 16px 12px; border-radius: 16px; background: rgba(20,20,24,0.78); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); z-index: 30; display: none; touch-action: auto; }
+#panel.show { display: block; }
+#panel label { display: block; font-size: 12px; font-weight: 600; color: rgba(255,255,255,0.75); margin-top: 6px; }
+#panel label b { float: right; font-weight: 600; font-variant-numeric: tabular-nums; color: #fff; }
+#panel input[type=range] { width: 100%; margin: 6px 0 4px; accent-color: #8b8cff; }
+#panel .row { display: flex; gap: 8px; margin-top: 10px; }
+#panel button { flex: 1; padding: 9px 0; border-radius: 10px; border: none; font-size: 13px; font-weight: 700; font-family: inherit; cursor: pointer; background: rgba(255,255,255,0.14); color: #fff; }
+#panel button.primary { background: #5b5cf0; }
+#panel button:disabled { opacity: .5; }
+#save { display: none; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="start" class="loading"><span id="startText">読み込み中…</span></div>
+<div id="hint"></div>
+<div id="panel">
+  <label>奥行きの強さ <b id="ampV"></b><input type="range" id="amp" min="0" max="0.15" step="0.005"></label>
+  <label>画面の面の位置 <b id="focusV"></b><input type="range" id="focus" min="0" max="1" step="0.01"></label>
+  <div class="row">
+    <button id="save" class="primary">保存</button>
+    <button id="close">閉じる</button>
+  </div>
+</div>
+
+<script src="/config.js"></script>
+<script type="module">
+const $ = (id) => document.getElementById(id);
+const API_BASE = (window.API_BASE || "").replace(/\/$/, "");
+const ID = (location.pathname.match(/\/depth\/v\/([A-Za-z0-9_-]{22})/) || [])[1]
+  || new URLSearchParams(location.search).get("id");
+const ASSET = (name) => `${API_BASE}/depth/v/${ID}/${name}`;
+const reduceMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
+const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+
+let meta = { focus: 0.5, amp: 0.06 };
+
+function hint(msg, ms = 2600) {
+  const h = $("hint"); h.textContent = msg; h.classList.add("show");
+  clearTimeout(hint._t); hint._t = setTimeout(() => h.classList.remove("show"), ms);
+}
+
+// ── WebGL ──
+const canvas = $("c");
+const gl = canvas.getContext("webgl", { antialias: false, alpha: false, premultipliedAlpha: false });
+if (!gl) { $("startText").textContent = "このブラウザでは表示できません (WebGL)"; throw new Error("no webgl"); }
+
+const VS = `attribute vec2 p; void main(){ gl_Position = vec4(p, 0., 1.); }`;
+// 視差オクルージョン: 奥行き d (0=奥, 1=手前) の点は画面上で off × (d − focus) ずれる。
+// 各ピクセルで手前から奥へ d を 48 段下げ、「その d で来るはずの場所の深度 ≥ d」になる最初の d を探し、
+// 二分探索 6 回で詰めて色を取る。層に分けないので継ぎ目が出ない
+const FS = `
+precision highp float;
+uniform sampler2D uImg, uDep;
+uniform vec2 uView, uOrigin, uSize, uOff; // すべて実ピクセル
+uniform float uFocus;
+float dep(vec2 s){ return texture2D(uDep, clamp(s,0.,1.)).r; }
+void main(){
+  vec2 px = vec2(gl_FragCoord.x, uView.y - gl_FragCoord.y);
+  vec2 iu = (px - uOrigin) / uSize;
+  vec2 o  = uOff / uSize;
+  const int N = 48; float st = 1. / float(N);
+  float d = 1., hit = 0.;
+  for (int i = 0; i < N; i++) {
+    if (dep(iu - o * (d - uFocus)) >= d) { hit = d; break; }
+    d -= st;
+  }
+  float lo = hit, hi = min(hit + st, 1.);
+  for (int j = 0; j < 6; j++) { float m = (lo + hi) * .5;
+    if (dep(iu - o * (m - uFocus)) >= m) lo = m; else hi = m; }
+  vec3 col = texture2D(uImg, clamp(iu - o * (lo - uFocus), 0., 1.)).rgb;
+  vec2 q = px / uView - .5; col *= 1. - dot(q, q) * .35; // 周辺を少し落とす
+  gl_FragColor = vec4(col, 1.);
+}`;
+function shader(type, src) {
+  const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s);
+  if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s));
+  return s;
+}
+const prog = gl.createProgram();
+gl.attachShader(prog, shader(gl.VERTEX_SHADER, VS));
+gl.attachShader(prog, shader(gl.FRAGMENT_SHADER, FS));
+gl.linkProgram(prog);
+gl.useProgram(prog);
+const buf = gl.createBuffer();
+gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
+const aP = gl.getAttribLocation(prog, "p");
+gl.enableVertexAttribArray(aP);
+gl.vertexAttribPointer(aP, 2, gl.FLOAT, false, 0, 0);
+const U = Object.fromEntries(["uImg", "uDep", "uView", "uOrigin", "uSize", "uOff", "uFocus"].map((n) => [n, gl.getUniformLocation(prog, n)]));
+
+// 2 の累乗でないサイズなので CLAMP_TO_EDGE + LINEAR、ミップマップなし
+function texture(unit, img, raw) {
+  const t = gl.createTexture();
+  gl.activeTexture(gl.TEXTURE0 + unit);
+  gl.bindTexture(gl.TEXTURE_2D, t);
+  gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+  gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
+  // 深度は値そのものが欲しいので色空間変換をしない
+  gl.pixelStorei(gl.UNPACK_COLORSPACE_CONVERSION_WEBGL, raw ? gl.NONE : gl.BROWSER_DEFAULT_WEBGL);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGB, gl.RGB, gl.UNSIGNED_BYTE, img);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  return t;
+}
+const loadImage = (src) => new Promise((resolve, reject) => {
+  const img = new Image();
+  img.crossOrigin = "anonymous"; // テクスチャに使うので CORS 付きで読む (サーバーは ACAO:* を返す)
+  img.onload = () => resolve(img);
+  img.onerror = () => reject(new Error("画像を読み込めませんでした"));
+  img.src = src;
+});
+
+let imgW = 1, imgH = 1;
+function resize() {
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  const w = Math.round(innerWidth * dpr), h = Math.round(innerHeight * dpr);
+  if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
+  gl.viewport(0, 0, w, h);
+  // cover (画面を埋める) × 1.08 で、ずらしても端が見えないようにする
+  const s = Math.max(w / imgW, h / imgH) * 1.08;
+  const sw = imgW * s, sh = imgH * s;
+  gl.uniform2f(U.uView, w, h);
+  gl.uniform2f(U.uSize, sw, sh);
+  gl.uniform2f(U.uOrigin, (w - sw) / 2, (h - sh) / 2);
+  dirty = true;
+}
+
+// ── 動き ──
+// target: 入力から決まる -1..1、cur: 毎フレーム 10% ずつ target に寄せる
+const target = { x: 0, y: 0 }, cur = { x: 0, y: 0 };
+let dirty = true, started = false, gyroSeen = false, interacted = false;
+let lastOff = [NaN, NaN];
+
+function draw(t) {
+  if (started && !gyroSeen && !interacted && !reduceMotion) {
+    // センサーも指もまだ来ていない間だけ、ゆっくり揺らして奥行きを見せる
+    const s = t / 1000;
+    target.x = Math.sin(s * 0.7) * 0.6;
+    target.y = Math.sin(s * 0.9 + 1) * 0.3;
+  }
+  cur.x += (target.x - cur.x) * 0.1;
+  cur.y += (target.y - cur.y) * 0.1;
+  const k = Math.min(canvas.width, canvas.height) * meta.amp;
+  const ox = cur.x * k, oy = cur.y * k;
+  if (dirty || Math.abs(ox - lastOff[0]) > 0.05 || Math.abs(oy - lastOff[1]) > 0.05) {
+    gl.uniform2f(U.uOff, ox, oy);
+    gl.uniform1f(U.uFocus, meta.focus);
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    lastOff = [ox, oy]; dirty = false;
+  }
+  requestAnimationFrame(draw);
+}
+
+// ジャイロ: 最初の値を基準にし、基準は毎イベント 0.4% ずつ現在値に寄せる (持ち方が変わってもゆっくり正面に戻る)
+let base = null;
+function onOrient(e) {
+  if (e.beta == null || e.gamma == null) return;
+  gyroSeen = true;
+  let b = e.beta, g = e.gamma;
+  const ang = (screen.orientation && typeof screen.orientation.angle === "number") ? screen.orientation.angle : (window.orientation || 0);
+  const a = ((ang + 180) % 360 + 360) % 360 - 180; // 270 → -90
+  if (a === 90) { const bb = b; b = -g; g = bb; }
+  else if (a === -90) { const bb = b; b = g; g = -bb; }
+  if (!base) base = { b, g };
+  base.b += (b - base.b) * 0.004;
+  base.g += (g - base.g) * 0.004;
+  // 右に傾ける → 手前の物が右へ、奥の物が左へ (窓の向こうをのぞく感じ)。逆なら符号を反転する
+  target.x = clamp((g - base.g) / 22, -1, 1);
+  target.y = clamp((b - base.b) / 22, -1, 1);
+}
+// 画面が回ったら基準を取り直す (縦横で beta/gamma の意味が入れ替わるため)
+window.addEventListener("orientationchange", () => { base = null; });
+screen.orientation?.addEventListener?.("change", () => { base = null; });
+function listenGyro() {
+  window.addEventListener("deviceorientation", onOrient);
+  setTimeout(() => { if (!gyroSeen) hint("傾きセンサーが届いていません。指でなぞると動かせます"); }, 1500);
+}
+
+// タッチ: なぞった量で動かす / マウス: 位置で動かす
+let drag = null, multi = null, lastTouch = 0;
+canvas.addEventListener("touchstart", (e) => {
+  lastTouch = performance.now();
+  if (e.touches.length === 2) {
+    multi = { t: performance.now(), pts: [...e.touches].map((p) => [p.clientX, p.clientY]), moved: false };
+    drag = null; return;
+  }
+  if (e.touches.length === 1 && !multi) {
+    const p = e.touches[0];
+    drag = { x: p.clientX, y: p.clientY, tx: target.x, ty: target.y };
+  }
+}, { passive: true });
+canvas.addEventListener("touchmove", (e) => {
+  if (multi) {
+    for (const p of e.touches) {
+      if (multi.pts.every(([x, y]) => Math.hypot(p.clientX - x, p.clientY - y) > 12)) multi.moved = true;
+    }
+    return;
+  }
+  if (!drag || gyroSeen) return;
+  interacted = true;
+  const p = e.touches[0], r = Math.min(innerWidth, innerHeight) * 0.4;
+  target.x = clamp(drag.tx + (p.clientX - drag.x) / r, -1, 1);
+  target.y = clamp(drag.ty + (p.clientY - drag.y) / r, -1, 1);
+}, { passive: true });
+canvas.addEventListener("touchend", (e) => {
+  if (multi && e.touches.length === 0) {
+    // 2 本指タップ (短く・動かさず) で設定パネル
+    if (!multi.moved && performance.now() - multi.t < 400) togglePanel();
+    multi = null;
+  }
+  if (e.touches.length === 0) drag = null;
+}, { passive: true });
+window.addEventListener("mousemove", (e) => {
+  if (!started || gyroSeen || performance.now() - lastTouch < 1000) return; // タップ後の疑似 mousemove は無視
+  interacted = true;
+  target.x = clamp((e.clientX / innerWidth) * 2 - 1, -1, 1);
+  target.y = clamp((e.clientY / innerHeight) * 2 - 1, -1, 1);
+});
+// PC は ダブルクリックで設定パネル
+canvas.addEventListener("dblclick", () => togglePanel());
+
+// ── 設定パネル ──
+function syncPanel() {
+  $("amp").value = meta.amp; $("ampV").textContent = meta.amp.toFixed(3);
+  $("focus").value = meta.focus; $("focusV").textContent = meta.focus.toFixed(2);
+}
+function togglePanel() {
+  const p = $("panel");
+  p.classList.toggle("show");
+  if (p.classList.contains("show")) { syncPanel(); checkAuth(); }
+}
+$("amp").addEventListener("input", (e) => { meta.amp = Number(e.target.value); $("ampV").textContent = meta.amp.toFixed(3); dirty = true; });
+$("focus").addEventListener("input", (e) => { meta.focus = Number(e.target.value); $("focusV").textContent = meta.focus.toFixed(2); dirty = true; });
+$("close").addEventListener("click", () => $("panel").classList.remove("show"));
+
+// 認証済み (同じサイトのランチャーでログインしていれば共有される) のときだけ「保存」を出す
+let authUser = null, authChecked = false;
+async function checkAuth() {
+  if (authChecked) return;
+  authChecked = true;
+  try {
+    const { initializeApp } = await import("https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js");
+    const { getAuth, onAuthStateChanged } = await import("https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js");
+    const cfg = await fetch("/__/firebase/init.json").then((r) => r.json());
+    cfg.authDomain = location.hostname;
+    const auth = getAuth(initializeApp(cfg));
+    onAuthStateChanged(auth, (u) => { authUser = u; $("save").style.display = u ? "" : "none"; });
+  } catch { /* 見るだけなら認証は要らない */ }
+}
+$("save").addEventListener("click", async () => {
+  if (!authUser) return;
+  const b = $("save"); b.disabled = true;
+  try {
+    const r = await fetch(`${API_BASE}/api/depth/${ID}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json", Authorization: "Bearer " + await authUser.getIdToken() },
+      body: JSON.stringify({ amp: meta.amp, focus: meta.focus }),
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
+    hint("保存しました", 1500);
+  } catch (e) { hint(e.message, 3000); }
+  finally { b.disabled = false; }
+});
+
+// ── 開始 ──
+// iOS は requestPermission をユーザー操作の中で、他の非同期処理を挟まずに呼ばないとダイアログが出ない
+function start() {
+  if (started || $("start").classList.contains("loading")) return;
+  const DOE = window.DeviceOrientationEvent;
+  let perm = null;
+  if (DOE && typeof DOE.requestPermission === "function") {
+    try { perm = DOE.requestPermission(); } catch { perm = Promise.resolve("denied"); }
+  }
+  started = true;
+  $("start").remove();
+  if (perm) {
+    perm.then((s) => {
+      if (s === "granted") listenGyro();
+      else hint("傾きセンサーが届いていません。指でなぞると動かせます");
+    }).catch(() => hint("傾きセンサーが届いていません。指でなぞると動かせます"));
+  } else if (DOE) {
+    listenGyro();
+  } else {
+    hint("傾きセンサーが届いていません。指でなぞると動かせます");
+  }
+}
+$("start").addEventListener("click", start);
+
+(async () => {
+  if (!ID || !API_BASE) { $("startText").textContent = "見つかりませんでした"; return; }
+  try {
+    const [m, img, dep] = await Promise.all([
+      fetch(ASSET("meta.json")).then((r) => { if (!r.ok) throw new Error("見つかりませんでした"); return r.json(); }),
+      loadImage(ASSET("image.jpg")),
+      loadImage(ASSET("depth.png")),
+    ]);
+    meta = { ...meta, ...m };
+    imgW = img.naturalWidth; imgH = img.naturalHeight;
+    texture(0, img, false);
+    texture(1, dep, true);
+    gl.uniform1i(U.uImg, 0);
+    gl.uniform1i(U.uDep, 1);
+    resize();
+    window.addEventListener("resize", resize);
+    requestAnimationFrame(draw);
+    $("start").classList.remove("loading");
+    $("startText").textContent = "タップして始める";
+  } catch (e) {
+    $("startText").textContent = e.message;
+  }
+})();
+</script>
+</body>
+</html>

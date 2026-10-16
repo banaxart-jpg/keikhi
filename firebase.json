@@ -19,6 +19,9 @@
       "**/*.md",
       "admin/**"
     ],
+    "rewrites": [
+      { "source": "/depth/v/**", "destination": "/depth/v/index.html" }
+    ],
     "headers": [
       {
         "source": "**",

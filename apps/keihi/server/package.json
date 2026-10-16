@@ -19,6 +19,7 @@
     "googleapis": "^144.0.0",
     "pg": "^8.13.1",
     "sharp": "^0.33.5",
-    "heic-convert": "^2.1.0"
+    "heic-convert": "^2.1.0",
+    "onnxruntime-node": "1.30.0"
   }
 }

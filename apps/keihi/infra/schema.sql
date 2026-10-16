@@ -182,3 +182,14 @@ CREATE TABLE IF NOT EXISTS yado_meta (
   value      TEXT NOT NULL,
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- 奥行きビューア (/depth/): 作品一覧。素材は GCS depth/<id>/ (image.jpg, depth.png, meta.json, thumb.jpg)。
+-- depth-lib が初回アクセスで同じ CREATE を流すので、手で適用しなくても動く
+CREATE TABLE IF NOT EXISTS depth_works (
+  id TEXT PRIMARY KEY,
+  owner_email TEXT NOT NULL,
+  file_name TEXT,
+  width INT NOT NULL,
+  height INT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
