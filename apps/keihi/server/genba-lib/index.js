@@ -27,12 +27,12 @@ function norm(s) {
 // (「バカボンさん」「ばかぼん」「菊池　さん」→ 同じ鍵)。両側を同じ関数に通すので、鍵同士の比較だけに使う
 const HONORIFIC_RE = /(さん|サン|様|さま|くん|君|ちゃん|氏|殿|先生|社長|部長|課長|専務|常務|会長)$/;
 const kanaFold = (s) => s.replace(/[\u3041-\u3096]/g, (ch) => String.fromCharCode(ch.charCodeAt(0) + 0x60));
-function normName(s) {
+export function normName(s) {
   const t = String(s || "").normalize("NFKC").trim().replace(HONORIFIC_RE, "");
   return kanaFold(norm(t));
 }
 // 会社名: 株式会社 / (株) / ㈱ 等の法人格を落とす (NFKC で ㈱ → (株) になる)。かなはカタカナに寄せる
-function normCompany(s) {
+export function normCompany(s) {
   return kanaFold(norm(String(s || "").normalize("NFKC").replace(/株式会社|有限会社|合同会社|合資会社|\(株\)|\(有\)|\(同\)|㈱|㈲/g, "")));
 }
 function driveFolderIdOf(input) {

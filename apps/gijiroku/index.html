@@ -568,15 +568,17 @@ function claudePrompt() {
 async function openClaude() {
   $("cBody").innerHTML = `<h3>Claude につなぐ</h3><p>読み込み中…</p>`;
   $("cModal").classList.add("open");
-  let url = "";
-  try { url = (await api("GET", "/api/mcp-connector")).url; } catch (e) { $("cBody").innerHTML = `<h3>Claude につなぐ</h3><p>${esc(e.message)}</p>`; return; }
+  let url = "", extras = [];
+  try { const r = await api("GET", "/api/mcp-connector"); url = r.url; extras = Array.isArray(r.extras) ? r.extras : []; } catch (e) { $("cBody").innerHTML = `<h3>Claude につなぐ</h3><p>${esc(e.message)}</p>`; return; }
   $("cBody").innerHTML = `
     <h3>Claude につなぐ</h3>
     <p>claude.ai の「設定 → コネクタ → カスタムコネクタを追加」にこの URL を 1 回入れるだけ。会議・スプレッドシート・現場写真・ドラマ・SNS のツールが全部この 1 本に入っています。</p>
     <div class="code">${esc(url)}</div>
     <div class="row"><button class="pill primary" id="cCopy" type="button"><span class="icon">content_copy</span> URL をコピー</button></div>
-    <p style="margin-top:14px;">この URL は合言葉入り。人に渡さないでください。</p>`;
+    <p style="margin-top:14px;">この URL は合言葉入り。人に渡さないでください。</p>
+    ${extras.map((x, i) => `<h3 style="margin-top:20px;">${esc(x.name)}</h3><p>${esc(x.note || "")}</p><div class="code">${esc(x.url)}</div><div class="row"><button class="pill" type="button" data-x="${i}"><span class="icon">content_copy</span> URL をコピー</button></div>`).join("")}`;
   $("cCopy").addEventListener("click", () => copyText(url));
+  document.querySelectorAll("#cBody [data-x]").forEach(b => b.addEventListener("click", () => copyText(extras[+b.dataset.x].url)));
 }
 $("cModal").addEventListener("click", e => { if (e.target === $("cModal")) $("cModal").classList.remove("open"); });
 (() => {

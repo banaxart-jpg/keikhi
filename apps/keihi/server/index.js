@@ -37,7 +37,8 @@ import { reviewGeneratedImage as dramaReviewImage } from "./drama-lib/gemini.js"
 import { searchWebImages as dramaSearchWebImages } from "./drama-lib/websearch.js";
 import { splitGridImage as dramaSplitGridImage } from "./drama-lib/gridsplit.js";
 import { createMcpHandler as dramaCreateMcpHandler, recentMcpCalls } from "./drama-lib/mcp.js";
-import { createGenba } from "./genba-lib/index.js";
+import { createGenba, normName as genbaNormName, normCompany as genbaNormCompany } from "./genba-lib/index.js";
+import { createPrivate } from "./private-lib/index.js";
 import { createSns } from "./sns-lib/index.js";
 import { createMeeting } from "./meeting-lib/index.js";
 import { createYado } from "./yado-lib/index.js";
@@ -2908,6 +2909,22 @@ app.all("/api/mcp/:token", async (req, res) => {
   const tools = [...genba.tools("小西"), ...meeting.tools, ...yado.tools, ...sheetsMcpHandler.meta.tools, ...dramaMcpHandler.meta.tools, ...snsTools]
     .filter((t) => (seen.has(t.name) ? (console.warn(`[mcp] ツール名の重複を無視: ${t.name}`), false) : seen.add(t.name)));
   return dramaCreateMcpHandler({ name: "keihi", instructions: UNIFIED_MCP_INSTRUCTIONS, tools })(req, res);
+});
+
+// ═══════════════════ 小西だけの非公開の記録 (専用コネクタ。他の人からは見えない) ═══════════════════
+// private_* ツールは統合コネクタにも genba の人ごと URL にも載せない。この専用 URL だけ。URL は GET /api/mcp-connector に
+// 小西のログインのときだけ載る (他の人の返り値には項目ごと無い)。トークン違いは 404 (ここに何かあるとも分からない)。
+// 呼び出しは /recent にもログにも残さない (quiet)。詳細は private-lib/index.js。
+const PRIVATE_MCP_TOKEN = (process.env.PRIVATE_MCP_TOKEN || "").trim()
+  || ((process.env.INTERNAL_TICK_SECRET || "").trim()
+    ? crypto.createHmac("sha256", (process.env.INTERNAL_TICK_SECRET || "").trim()).update("private-konishi-v1").digest("hex").slice(0, 40)
+    : "");
+const priv = createPrivate({ getPool, getCalendarApi: () => getCalendarApi(), normName: genbaNormName, normCompany: genbaNormCompany });
+const privHandler = dramaCreateMcpHandler({ name: "private", instructions: priv.instructions, tools: priv.tools("小西"), quiet: true });
+const tokenEq = (a, b) => { const x = Buffer.from(String(a)), y = Buffer.from(String(b)); return x.length === y.length && crypto.timingSafeEqual(x, y); };
+app.all("/api/private/mcp/:token", (req, res) => {
+  if (!PRIVATE_MCP_TOKEN || !tokenEq(req.params.token, PRIVATE_MCP_TOKEN)) return res.status(404).json({ error: "not found" });
+  return privHandler(req, res);
 });
 
 // 旧 現場写真コネクタの URL も同じ統合ハンドラで生かしておく (登録済みでも壊れない)
@@ -12045,9 +12062,15 @@ app.get("/api/mcp-connector", (req, res) => {
   const genbaUrls = Object.fromEntries(Object.entries(GENBA_MCP_TOKENS)
     .filter(([tok]) => tok !== "kx9m2genba7vqt4wp8zh")
     .map(([tok, name]) => [name, `${KEIHI_API_PUBLIC_URL}/api/genba/mcp/${tok}`]));
+  // その人だけに出す追加のコネクタ (返り値の項目は、該当する人のときだけ付く。他の人には extras 自体が無い)
+  const extras = [];
+  if (PRIVATE_MCP_TOKEN && priv.isOwnerEmail(req.user?.email)) {
+    extras.push({ name: "小西専用", url: `${KEIHI_API_PUBLIC_URL}/api/private/mcp/${PRIVATE_MCP_TOKEN}`, note: "別のカスタムコネクタとして 1 回登録 (名前は「小西専用」にする)。自分の Claude だけにつなぎ、名取などの応答を動かすセッションにはつながない" });
+  }
   res.json({
     url: `${KEIHI_API_PUBLIC_URL}/api/mcp/${KEIHI_MCP_TOKEN}`,
     genba: { note: "現場 (genba_*) だけの人ごとの URL。書いた人がこの名前で入る", ...genbaUrls },
+    ...(extras.length ? { extras } : {}),
   });
 });
 
