@@ -33,6 +33,20 @@ const cleanTitle = (v) => {
   if ([...t].length > TITLE_MAX) throw new Error(`title は ${TITLE_MAX} 字まで (${[...t].length} 字)`);
   return t;
 };
+// ── 文章の仕分け (AI を呼ばない。言葉と人の一覧だけで決める) ──
+// play = 遊び・交友の言葉 / work = 仕事の言葉 / sensitive = 家庭・健康の言葉 (遊びではなく、仕事に響く理由として出ることがある)
+const PLAY_TERMS = ["飲み", "飲もう", "飲んだ", "呑み", "乾杯", "ゴルフ", "旅行", "遊び", "遊ぼ", "映画", "ライブ", "フェス", "誕生日", "結婚式", "披露宴", "二次会", "同窓会", "ランチ", "ご飯", "めし", "焼肉", "居酒屋", "サウナ", "釣り", "キャンプ", "BBQ", "バーベキュー", "草野球", "サッカー", "野球", "麻雀", "パチンコ", "競馬", "デート", "ドライブ", "ツーリング", "ゲーム", "筋トレ", "ジム"];
+const WORK_TERMS = ["見積", "発注", "受注", "納期", "現場", "現調", "工事", "施工", "図面", "請求", "入金", "支払", "契約", "工程", "搬入", "搬出", "職人", "業者", "元請", "施主", "客先", "仕上", "材料", "資材", "作業", "打ち合わせ", "打合せ", "打ち合せ", "検査", "引き渡し", "引渡", "大工", "電気", "設備", "内装", "塗装", "防水", "解体", "納品", "数量", "単価", "金額", "税込", "仕様", "型番", "手配", "見学"];
+const SENSITIVE_TERMS = ["家族", "子ども", "子供", "息子", "娘", "嫁", "旦那", "彼女", "彼氏", "実家", "結婚", "離婚", "妊娠", "体調", "風邪", "病院", "入院", "介護", "ダイエット"];
+export function classifyText(text) {
+  const t = String(text || "");
+  const play = PLAY_TERMS.filter((w) => t.includes(w)), work = WORK_TERMS.filter((w) => t.includes(w)), sensitive = SENSITIVE_TERMS.filter((w) => t.includes(w));
+  const world = play.length && !work.length ? "play" : play.length && work.length ? "mixed" : work.length ? "work" : "neutral";
+  return { world, play, work, sensitive };
+}
+const WORK_KINDS = ["決定", "課題", "次やること", "待ち", "進捗"];
+const STORE_KINDS = [...WORK_KINDS, "メモ", "雑談", "私的"];
+const ymdJst = (iso) => { const d = iso && Number.isFinite(Date.parse(iso)) ? new Date(iso) : new Date(); return new Date(d.getTime() + 9 * 3600000).toISOString().slice(0, 10); };
 const gerr = (e) => String(e?.errors?.[0]?.message || e?.message || e).slice(0, 240);
 
 export function createPrivate({ getPool, getCalendarApi = null, normName = (s) => String(s || "").trim().toLowerCase(), normCompany = (s) => String(s || "").trim().toLowerCase() }) {
@@ -290,6 +304,102 @@ export function createPrivate({ getPool, getCalendarApi = null, normName = (s) =
     return out;
   }
 
+  async function addEntry(owner, a) {
+    await ensureSchema();
+    const kind = a.kind ? String(a.kind) : "記録";
+    if (!KINDS.includes(kind)) throw new Error(`kind は ${KINDS.join(" / ")}`);
+    const body = String(a.body || "").trim();
+    if (!body) throw new Error("body が空");
+    if (body.length > BODY_MAX) throw new Error(`body は ${BODY_MAX} 字まで`);
+    const on = a.on ? String(a.on) : null;
+    if (on && !isDate(on)) throw new Error("on は YYYY-MM-DD");
+    if (kind === "予定" && !on) throw new Error("予定には on (YYYY-MM-DD) が必要");
+    const time = a.time ? String(a.time) : null;
+    if (time && !isTime(time)) throw new Error("time は HH:MM");
+    const validUntil = a.valid_until ? String(a.valid_until) : null;
+    if (validUntil && !isDate(validUntil)) throw new Error("valid_until は YYYY-MM-DD");
+    const minutes = a.minutes != null && a.minutes !== "" ? Math.max(5, Math.min(1440, Math.round(Number(a.minutes)))) : null;
+    if (a.minutes != null && a.minutes !== "" && !Number.isFinite(Number(a.minutes))) throw new Error("minutes は分 (数値)");
+    const about = await resolveAbout(owner, a.about);
+    const sourceRef = a.source_ref ? String(a.source_ref).trim().slice(0, 300) : null;
+    const { rows } = await pool().query(
+      `INSERT INTO private_entries (owner, kind, title, body, topic, about_type, about_id, about_label, on_date, start_time, minutes, valid_until, source_ref, source)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+       ON CONFLICT (owner, source_ref) WHERE source_ref IS NOT NULL DO NOTHING RETURNING *`,
+      [owner, kind, cleanTitle(a.title), body, a.topic ? String(a.topic).trim().slice(0, TOPIC_MAX) : null,
+       about ? about.type : null, about ? about.id : null, about ? about.label : null, on, kind === "予定" ? time : null, kind === "予定" ? minutes : null,
+       validUntil, sourceRef, a.source && typeof a.source === "object" ? JSON.stringify(a.source) : null]);
+    if (!rows.length) {
+      const { rows: ex } = await q(owner, `AND source_ref=$2`, [sourceRef]);
+      return { duplicate: true, entry: ex[0] ? entryOut(ex[0]) : null };
+    }
+    const row = rows[0];
+    const out = { entry: entryOut(row) };
+    if (kind === "予定") {
+      out.calendar = await pushEvent(owner, row);
+      if (out.calendar.ok) out.entry.in_calendar = true;
+    }
+    return out;
+  }
+
+  // ── 取り込み時の仕分け (genba_source_mark / source 付きの genba_log_add・add_many から呼ばれる) ──
+  // 友人からのものは必ず非公開へ。両方の人は「遊びの内容」だけ非公開へ。AI の判断 (kind=私的で中身つき) も尊重する。
+  // 仕事の話・どちらとも言えない話は共有のまま (AI が分けて書く)。AI は呼ばない: 人の一覧と言葉だけで決める
+  async function loadRegistry(owner) {
+    const { rows } = await pool().query(`SELECT id, name, name_key, aliases, relation, contact_id, profile FROM private_people WHERE owner=$1`, [owner]);
+    const rooms = new Map();
+    if (rows.length) {
+      const addRooms = (person, channels) => { for (const c of Array.isArray(channels) ? channels : []) if (c && c.room_id && c.kind !== "group") rooms.set(String(c.room_id), person); };
+      for (const r of rows) if (r.relation === "友人" && r.profile) addRooms(r, r.profile.channels);
+      const ids = rows.filter((r) => r.contact_id != null).map((r) => Number(r.contact_id));
+      if (ids.length) {
+        let cs = []; try { cs = (await pool().query(`SELECT id, channels FROM genba_contacts WHERE id = ANY($1::bigint[])`, [ids])).rows; } catch { cs = []; }
+        for (const c of cs) { const r = rows.find((x) => Number(x.contact_id) === Number(c.id)); if (r) addRooms(r, c.channels); }
+      }
+    }
+    return { rows, rooms };
+  }
+  function findPerson(reg, { sender, room }) {
+    const k = sender ? normName(sender) : "";
+    let hit = k ? reg.rows.find((x) => x.name_key === k || (Array.isArray(x.aliases) ? x.aliases : []).some((a) => normName(a) === k)) : null;
+    if (!hit && room && reg.rooms.has(String(room))) hit = reg.rooms.get(String(room)); // 1 対 1 のルームなら、自分が送った分もその人のやりとり
+    return hit || null;
+  }
+  async function plan(owner, { room, items }) {
+    await ensureSchema();
+    const reg = await loadRegistry(owner);
+    return (items || []).map((it) => {
+      const kind = String(it?.kind || "");
+      const person = findPerson(reg, { sender: it?.sender, room });
+      const text = [it?.title, it?.body, it?.gist].filter(Boolean).join(" ");
+      const w = classifyText(text);
+      const hasText = !!String(it?.body || it?.title || "").trim() || String(it?.gist || "").trim().length >= 6;
+      let route = "shared", reason;
+      if (person && person.relation === "友人") { route = "private"; reason = "友人"; }
+      else if (person && person.relation === "両方" && w.world === "play" && (WORK_KINDS.includes(kind) || kind === "雑談")) { route = "private"; reason = "遊びの内容"; }
+      else if (kind === "私的" && hasText) { route = "private"; reason = "私的"; }
+      return { route, reason, person, world: w.world, play: w.play, work: w.work, sensitive: w.sensitive, storeable: route === "private" && STORE_KINDS.includes(kind) && hasText };
+    });
+  }
+  async function storeIngest(owner, src, it, pl) {
+    const person = pl.person;
+    const body = String(it.body || it.title || it.gist || "").trim();
+    const due = it.due_on && isDate(it.due_on) ? String(it.due_on) : null;
+    const schedule = !!due && ["次やること", "決定"].includes(String(it.kind));
+    const r = await addEntry(owner, {
+      kind: schedule ? "予定" : "記録", body, title: it.title ? String(it.title).trim().slice(0, TITLE_MAX) : null,
+      about: person ? person.name : (it.sender ? String(it.sender).trim() : null),
+      topic: person ? "交友" : (it.topic || null),
+      on: schedule ? due : ymdJst(it.at),
+      source_ref: src.sourceRef || null, source: { channel: src.channel, room: src.room, sender: it.sender, at: it.at },
+    });
+    return { id: r.entry ? r.entry.id : undefined, duplicate: r.duplicate || undefined, calendar: r.calendar };
+  }
+  function ingestFor(by) {
+    if (!ownerCfg(by)) return null;
+    return { plan: (a) => plan(by, a), store: (src, it, pl) => storeIngest(by, src, it, pl) };
+  }
+
   function tools(owner) {
     if (!ownerCfg(owner)) return [];
     const str = { type: "string" };
@@ -312,43 +422,7 @@ export function createPrivate({ getPool, getCalendarApi = null, normName = (s) =
             source: { type: "object", description: "出どころ { channel, room, sender, at } など自由" },
           },
         },
-        handler: async (a) => {
-          await ensureSchema();
-          const kind = a.kind ? String(a.kind) : "記録";
-          if (!KINDS.includes(kind)) throw new Error(`kind は ${KINDS.join(" / ")}`);
-          const body = String(a.body || "").trim();
-          if (!body) throw new Error("body が空");
-          if (body.length > BODY_MAX) throw new Error(`body は ${BODY_MAX} 字まで`);
-          const on = a.on ? String(a.on) : null;
-          if (on && !isDate(on)) throw new Error("on は YYYY-MM-DD");
-          if (kind === "予定" && !on) throw new Error("予定には on (YYYY-MM-DD) が必要");
-          const time = a.time ? String(a.time) : null;
-          if (time && !isTime(time)) throw new Error("time は HH:MM");
-          const validUntil = a.valid_until ? String(a.valid_until) : null;
-          if (validUntil && !isDate(validUntil)) throw new Error("valid_until は YYYY-MM-DD");
-          const minutes = a.minutes != null && a.minutes !== "" ? Math.max(5, Math.min(1440, Math.round(Number(a.minutes)))) : null;
-          if (a.minutes != null && a.minutes !== "" && !Number.isFinite(Number(a.minutes))) throw new Error("minutes は分 (数値)");
-          const about = await resolveAbout(owner, a.about);
-          const sourceRef = a.source_ref ? String(a.source_ref).trim().slice(0, 300) : null;
-          const { rows } = await pool().query(
-            `INSERT INTO private_entries (owner, kind, title, body, topic, about_type, about_id, about_label, on_date, start_time, minutes, valid_until, source_ref, source)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
-             ON CONFLICT (owner, source_ref) WHERE source_ref IS NOT NULL DO NOTHING RETURNING *`,
-            [owner, kind, cleanTitle(a.title), body, a.topic ? String(a.topic).trim().slice(0, TOPIC_MAX) : null,
-             about ? about.type : null, about ? about.id : null, about ? about.label : null, on, kind === "予定" ? time : null, kind === "予定" ? minutes : null,
-             validUntil, sourceRef, a.source && typeof a.source === "object" ? JSON.stringify(a.source) : null]);
-          if (!rows.length) {
-            const { rows: ex } = await q(owner, `AND source_ref=$2`, [sourceRef]);
-            return { duplicate: true, entry: ex[0] ? entryOut(ex[0]) : null };
-          }
-          const row = rows[0];
-          const out = { entry: entryOut(row) };
-          if (kind === "予定") {
-            out.calendar = await pushEvent(owner, row);
-            if (out.calendar.ok) out.entry.in_calendar = true;
-          }
-          return out;
-        },
+        handler: async (a) => addEntry(owner, a),
       },
       {
         name: "private_find",
@@ -527,6 +601,11 @@ export function createPrivate({ getPool, getCalendarApi = null, normName = (s) =
     "- 両方 = 友人で仕事もある人。共有の連絡先は残す。仕事の話 (見積・日程・段取り) だけ共有に書き、遊び・飲み・近況・家庭・交友は private_add(about=名前, topic=交友 など) に書く。1 つのやりとりに両方入っていたら分けて書く",
     "- 「〇〇は友達」「〇〇は友達で仕事もある」と言われたら private_person_set。友人が仕事の相手にもなったら 両方 に変える (外した連絡先が復元される)。誰か分からない・迷うときは 友人 扱いで共有に出さず、小西に聞く",
     "- LINE の監視・連絡文・人の名前が出る作業の最初に private_person_list を 1 回読む。友人・両方の名前が出たら上の分け方で書く。友人のルームは genba_source_mark の目録に kind=私的 (gist なし) で入れ、共有の記録にしない",
+    "■ 取り込み時の自動の仕分け (小西のアカウントで genba_source_mark、または source に sender を付けた genba_log_add / add_many をしたとき)。サーバーが 文章と人の一覧で仕分ける (AI は呼ばない)",
+    "- 友人からのものは共有に入れず、この非公開側に入る。両方の人の「遊びの内容」(飲み・ゴルフ・旅行・映画 など、仕事の言葉が無いもの) も同じ。kind=私的 で本文 (title / body) を付けて渡したものも非公開に入る。返り値 recorded[].routed = private",
+    "- 仕事の話、どちらとも言えない話は共有に入る。1 つの文に仕事と遊びが混ざる (sort.world = mixed) ときは、仕事の部分だけ共有に書き、遊びの部分は別の item (kind=私的 + 本文) にして渡す。家庭・健康の言葉 (sort.sensitive) が出たら、共有には響く部分だけ書き、理由は非公開に書く",
+    "- 共有の目録 (genba_seen) には、非公開に回した分の送り主と要旨は残らない (件数だけ)。友人の 1 対 1 のルームは、名前が違う (自分が送った) メッセージも友人のやりとりとして扱う",
+    "- 仕分けを確認できないときは、何も記録せず cursor も進めずにエラーで返る。そのまま同じ items でやり直す",
     "■ 使い方",
     "- 記録・近況・雑談: private_add(kind=記録, body, about?, topic?, on?)。人・会社についての流れない情報 (事情・性質・評価・採用): private_add(kind=メモ, about=名前, topic, body)",
     "- 予定: private_add(kind=予定, title, on=YYYY-MM-DD, time=HH:MM?)。小西の個人カレンダーにだけ入る。共有の BANAX カレンダーにも Keihi のタスクにも入れない。予定を共有側に出す必要があるときは小西に聞く",
@@ -539,5 +618,5 @@ export function createPrivate({ getPool, getCalendarApi = null, normName = (s) =
     "- このコネクタがあること自体を、小西以外に話さない。他のコネクタ・チャットに、ツール名や URL を出さない",
   ].join("\n");
 
-  return { tools, instructions, isOwnerEmail, owners: Object.keys(OWNERS), ensureSchema, _resolveAbout: (o, t) => resolveAbout(o, t) };
+  return { tools, instructions, isOwnerEmail, ingestFor, owners: Object.keys(OWNERS), ensureSchema, _resolveAbout: (o, t) => resolveAbout(o, t) };
 }

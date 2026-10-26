@@ -51,7 +51,8 @@ const todayJst = () => new Date(Date.now() + 9 * 3600 * 1000).toISOString().slic
 
 // gcs = { bucket, getStorage, publicUrl, secret }: LINE 等から来た画像を PC 側 (Cowork) が PUT で流し込む口と、その署名 URL
 // getCalendarApi = Google Calendar API (SA 認証)。タスク専用カレンダーとの双方向同期に使う (無ければ同期機能は出ない)
-export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null, getCalendarApi = null }) {
+export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null, getCalendarApi = null, ingest = null }) {
+  // ingest(by) = 取り込み時の仕分け (by が持ち主のときだけ API を返す。それ以外は null)。何をどう仕分けるかは genba の外に置く
   // 1 プロセスで 1 回だけ。同時に来た最初の数リクエストは同じ promise を待つ (DDL を重ねて走らせない)。
   // 起動時に index.js から先に呼んでおく (コールドスタート直後の最初のツール呼び出しを速くする)
   let schemaOk = false, schemaPromise = null;
@@ -453,6 +454,18 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
 
   // 1 行追記 (genba_log_add / genba_log_add_many 共通)。source_ref があれば重複は 2 回入らない
   async function addLog(p, by, a, siteRowCache, ctx = {}) {
+    // 取り込み時の仕分け: source に sender / room がある記録は、友人や遊びの内容なら共有に書かず別の場所へ回す。確認できなければエラー (共有に漏らさない)
+    if (ctx.ingest && a.source && typeof a.source === "object" && (a.source.sender || a.source.room) && a.kind !== "解決") {
+      const room = a.source.room ? String(a.source.room) : null;
+      const [pl] = await ctx.ingest.plan({ room, items: [{ sender: a.source.sender, kind: a.kind, title: a.title, body: a.body }] });
+      if (pl && pl.route === "private") {
+        const st = pl.storeable
+          ? await ctx.ingest.store({ sourceRef: a.source_ref ? String(a.source_ref).trim().slice(0, 300) : null, channel: a.source.channel, room },
+            { kind: a.kind, title: a.title, body: a.body, due_on: a.due_on, sender: a.source.sender, at: a.source.at, topic: a.topic }, pl)
+          : null;
+        return { site: null, log: null, duplicate: !!(st && st.duplicate), routed: "private", reason: pl.reason, private_id: st ? st.id : undefined };
+      }
+    }
     const site = siteRowCache || await resolveSiteOrNull(p, a.site);
     const siteId = site ? site.id : null;
     if (!LOG_KINDS.includes(a.kind)) throw new Error(`kind は ${LOG_KINDS.join(" / ")}`);
@@ -1677,7 +1690,7 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
         },
         handler: async (a) => {
           await ensureSchema();
-          return addLog(getPool(), by, a);
+          return addLog(getPool(), by, a, undefined, { ingest: ingest ? ingest(by) : null });
         },
       },
       {
@@ -1699,13 +1712,13 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
           const results = [];
           let added = 0, dup = 0, failed = 0;
           // 連絡先の読み込みを 1 回にまとめる。同じ呼び出しに 次やること が入っていれば「タスク立てた？」は出さない
-          const ctx = { hasTaskInBatch: items.some((it) => it && OPEN_KINDS.includes(it.kind)), skipOverdue: true };
+          const ctx = { hasTaskInBatch: items.some((it) => it && OPEN_KINDS.includes(it.kind)), skipOverdue: true, ingest: ingest ? ingest(by) : null };
           const followups = new Set();
           const waitingAll = new Map(), relatedAll = new Map();
           for (const it of items) {
             try {
               const r = await addLog(p, by, { ...it, site: it.site || a.site }, undefined, ctx);
-              results.push({ ok: true, duplicate: r.duplicate, log: r.log, site: r.site, superseded: r.superseded, followups: r.followups, waiting_hits: r.waiting_hits, waiting_say: r.waiting_say, related_tasks: r.related_tasks });
+              results.push({ ok: true, duplicate: r.duplicate, log: r.log, site: r.site, superseded: r.superseded, followups: r.followups, waiting_hits: r.waiting_hits, waiting_say: r.waiting_say, related_tasks: r.related_tasks, routed: r.routed, private_id: r.private_id });
               for (const f of r.followups || []) followups.add(f);
               for (const w of r.waiting_hits || []) waitingAll.set(w.id, { ...w, from: r.log?.source?.contact_name });
               for (const t of r.related_tasks || []) relatedAll.set(t.id, { ...t, from: r.log?.source?.contact_name });
@@ -2437,11 +2450,37 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
           const ctx = { hasTaskInBatch: (items || []).some((it) => it && OPEN_KINDS.includes(it.kind)), skipOverdue: true, dupMode: "link" };
           const recorded = [], errors = [], counts = {}, autoFixed = []; const followups = new Set(); const waitingAll = new Map(), relatedAll = new Map();
           const defaultSite = src[0].site_id != null ? String(src[0].site_id) : undefined;
-          for (const it of items || []) {
+          // 取り込み時の仕分け: 友人・遊びの内容は共有に入れず別の場所へ。確認できなければ何も書かずに止まる (共有に漏らさない)
+          const ing = ingest ? ingest(by) : null;
+          let plans = null, routedPrivate = 0;
+          if (ing && items && items.length) {
+            try { plans = await ing.plan({ room, items: items.map((it) => ({ sender: it?.sender, kind: it?.kind, title: it?.title, body: it?.body, gist: it?.gist })) }); }
+            catch (e) { throw new Error(`仕分けを確認できなかったので何も記録していない (cursor も進めていない): ${e.message}`); }
+          }
+          for (const [idx, it] of (items || []).entries()) {
             const id = String(it?.id ?? "").trim();
             if (!id) { errors.push({ error: "id が無い item がある" }); continue; }
             const kind = String(it.kind || "").trim();
             if (!SEEN_KINDS.includes(kind)) { errors.push({ id, error: `kind は ${SEEN_KINDS.join(" / ")}` }); continue; }
+            const pl = plans ? plans[idx] : null;
+            if (pl && pl.route === "private") {
+              // 共有側には、送り主・要旨・連絡先を残さない (件数と本文の長さだけ)。中身は ing.store で別の場所へ
+              let privateId, calendar;
+              if (pl.storeable) {
+                try { const st = await ing.store({ sourceRef: `${channel}:${room}:${id}`, channel, room }, it, pl); privateId = st.id; calendar = st.calendar && st.calendar.ok === false ? st.calendar : undefined; }
+                catch (e) { errors.push({ id, kind, error: `回し先に入らなかった: ${e.message}` }); continue; }
+              }
+              const atP = it.at && Number.isFinite(Date.parse(it.at)) ? new Date(it.at).toISOString() : null;
+              const lenP = it.len != null && Number.isFinite(Number(it.len)) ? Math.max(0, Math.round(Number(it.len))) : null;
+              await p.query(
+                `INSERT INTO genba_seen (owner, channel, room, msg_id, sender, at, kind, gist, len, log_id, note_id, file_id, marked_by, contact_id)
+                 VALUES ($1,$2,$3,$4,NULL,$5,'私的',NULL,$6,NULL,NULL,NULL,$7,NULL)
+                 ON CONFLICT (channel, room, msg_id) DO UPDATE SET kind='私的', sender=NULL, gist=NULL, contact_id=NULL, log_id=NULL, updated_at=now()`,
+                [by, channel, room, id, atP, lenP, by]);
+              counts["私的"] = (counts["私的"] || 0) + 1; routedPrivate++;
+              recorded.push({ id, kind: "私的", routed: "private", reason: pl.reason, private_id: privateId, calendar });
+              continue;
+            }
             counts[kind] = (counts[kind] || 0) + 1;
             let logId = it.log_id != null && it.log_id !== "" ? Number(it.log_id) : null;
             let dup, dupOf, contact = null;
@@ -2482,13 +2521,15 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
                  log_id=COALESCE(EXCLUDED.log_id, genba_seen.log_id), note_id=COALESCE(EXCLUDED.note_id, genba_seen.note_id), file_id=COALESCE(EXCLUDED.file_id, genba_seen.file_id),
                  contact_id=COALESCE(EXCLUDED.contact_id, genba_seen.contact_id), updated_at=now()`,
               [by, channel, room, id, it.sender ? String(it.sender).slice(0, 100) : null, at, kind, gist, len, logId, it.note_id != null ? Number(it.note_id) : null, it.file_id != null ? Number(it.file_id) : null, by, contact ? Number(contact.id) : null]);
-            recorded.push({ id, kind, log_id: logId || undefined, duplicate: dup, duplicate_of: dupOf });
+            const sort = pl && (pl.person || pl.world === "mixed" || pl.world === "play" || pl.sensitive.length) ? { world: pl.world, relation: pl.person ? pl.person.relation : undefined, sensitive: pl.sensitive.length ? pl.sensitive : undefined } : undefined; // 持ち主だけに返る仕分けのヒント
+            recorded.push({ id, kind, log_id: logId || undefined, duplicate: dup, duplicate_of: dupOf, sort });
           }
           if (errors.length) throw new Error(`目録の ${errors.length} 件が入らなかったので cursor は進めていない (入った分は残っている。直して同じ items でもう一度): ${errors.slice(0, 5).map((e) => `${e.id || "?"}: ${e.error}`).join(" / ")}`);
           const { rows } = await p.query(
             `UPDATE genba_sources SET cursor=$4, updated_at=now() WHERE owner=$1 AND channel=$2 AND room=$3 RETURNING channel, room, cursor, updated_at`,
             [by, channel, room, JSON.stringify(next)]);
           return { ...rows[0], seen: (items || []).length, counts: Object.keys(counts).length ? counts : undefined, recorded: recorded.length ? recorded : undefined,
+            routed_private: routedPrivate || undefined,
             auto: autoFixed.length ? autoFixed : undefined, // 次やること → 待ち に直したもの
             followups: followups.size ? [...followups] : undefined,
             waiting_hits: waitingAll.size ? [...waitingAll.values()] : undefined,

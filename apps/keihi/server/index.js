@@ -2862,6 +2862,7 @@ const genba = createGenba({
   // LINE 等から来た画像の置き場 (GCS)。PC 側 (Cowork) が genba_file_upload_url の curl で PUT する。トークンは INTERNAL_TICK_SECRET で署名
   gcs: RECEIPTS_BUCKET ? { bucket: RECEIPTS_BUCKET, getStorage: () => storage, publicUrl: DRAMA_API_BASE, secret: (process.env.INTERNAL_TICK_SECRET || "").trim() } : null,
   getCalendarApi: () => getCalendarApi(), // タスク専用カレンダーとの双方向同期 (SA にカレンダーを共有してもらう)
+  ingest: (by) => priv.ingestFor(by), // 取り込み時の仕分け (持ち主のアカウントのときだけ働く)。priv は下で作る (呼ばれるのはリクエスト時)
 });
 app.all("/api/genba/mcp/:token", genba.mcpRoute(GENBA_MCP_TOKENS));
 // 直近の MCP 呼び出し (全コネクタ分、引数の中身なし)。Cloud Logging を開かずに「どのツールが何 ms で失敗したか」を見る用
