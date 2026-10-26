@@ -43,6 +43,14 @@ Beds24 を毎回叩かず DB キャッシュ経由にすることで:
 - `POST /api/yado/strategy` — Gemini に予約集計 + 施設情報 + 過去 12 ヶ月推移を渡して戦略生成
 - `POST /api/yado/sync` — 取引シートへの同期 (Beds24 同期とは別物、命名紛らわしいが既存名維持)
 
+### AI から読む (MCP、読み取り専用)
+統合コネクタ (自社MCP) に `yado_*` の 2 ツールがある。`apps/keihi/server/yado-lib/index.js`。書き込みも Beds24 への問い合わせもしない (DB の `yado_bookings` を読むだけ)。
+- `yado_bookings(from?, to?, channel?, include_cancelled?, limit?)` — 期間にかかる予約 (到着順) と空き日 `vacant`。省略で今日から 30 日。取消は既定で除く
+- `yado_sales(month? | from_month?, to_month?)` — 月ごとの予約数・泊数・稼働率・gross / commission / net・ADR・チャネル別。省略で 2 か月前〜3 か月先。`month` 指定でその月だけ国別・リードタイムつき
+- 売上は画面と同じ按分 (予約の総額を泊数で割って、その月にかかる泊数分だけ計上)、稼働率は 1 室として 泊数 ÷ 日数。AI が答える数字は画面のサマリーと一致する
+- どちらも返り値の `data` に最終同期の時刻。同期は 🔄 ボタンの手動 (自動同期は未設定) なので、24 時間以上前なら「古い」と注意が付く
+- 宿泊者名は返すが、メール・電話・住所は DB に無いので出ない
+
 ### env var (Cloud Run の env で管理)
 - `MANCHIKAN_BEDS_KEY` — Beds24 v2 API token
 - `MANCHIKAN_PROP_ID` — 物件 ID (満竹華庵 = 223365)
