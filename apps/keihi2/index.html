@@ -634,12 +634,24 @@ let swipeQueue = [];
 let swipeIndex = 0;
 
 async function showSwipe() {
-  await loadData();
-  swipeQueue = unsortedRecords();
-  swipeIndex = 0;
-  refreshUnsortedCount();
-  renderSwipe();
-  show("swipeScreen");
+  show("swipeScreen");   // 先に画面を出す（読み込みや描画でコケても「← 撮影」で戻れるように）
+  const stack = $("swipeStack");
+  stack.textContent = "読み込み中…";
+  try {
+    await loadData();
+    swipeQueue = unsortedRecords();
+    swipeIndex = 0;
+    refreshUnsortedCount();
+    renderSwipe();
+  } catch (e) {
+    console.error(e);
+    stack.textContent = "";
+    const err = document.createElement("div");
+    err.className = "sw-done";
+    err.innerHTML = "読み込みでエラーが出ました。<br>「← 撮影」で戻って、もう一度ためしてください。";
+    stack.appendChild(err);
+    toast("読み込みエラー: " + (e.message || e), true);
+  }
 }
 
 function renderSwipe() {
@@ -658,12 +670,28 @@ function renderSwipe() {
     return;
   }
   // 次のカード (背面・プリロード用) を先に積んで、その上に現在カード
-  if (swipeIndex + 1 < swipeQueue.length) {
-    const back = createSwipeCard(swipeQueue[swipeIndex + 1], true);
-    stack.appendChild(back);
+  try {
+    if (swipeIndex + 1 < swipeQueue.length) {
+      const back = createSwipeCard(swipeQueue[swipeIndex + 1], true);
+      stack.appendChild(back);
+    }
+    const front = createSwipeCard(swipeQueue[swipeIndex], false);
+    stack.appendChild(front);
+  } catch (e) {
+    // 1 件でも表示に失敗したら、その伝票は飛ばして次へ（画面ごと固まらせない）
+    console.error("createSwipeCard failed", e);
+    stack.textContent = "";
+    const err = document.createElement("div");
+    err.className = "sw-done";
+    err.innerHTML = "この伝票の表示でエラーが出ました。<br>「→ あとで」で飛ばすか「← 撮影」で戻ってください。";
+    const skip = document.createElement("button");
+    skip.type = "button"; skip.className = "sw-site"; skip.textContent = "→ この伝票を飛ばす";
+    skip.style.marginTop = "14px";
+    skip.addEventListener("click", () => { swipeIndex++; renderSwipe(); });
+    stack.appendChild(err);
+    stack.appendChild(skip);
+    return;
   }
-  const front = createSwipeCard(swipeQueue[swipeIndex], false);
-  stack.appendChild(front);
   // さらに次のカードの画像をプリロード
   if (swipeIndex + 2 < swipeQueue.length) {
     loadImage(swipeQueue[swipeIndex + 2].id);
@@ -802,9 +830,14 @@ function escapeHtml(s) {
 }
 
 async function showSort() {
-  await loadData();
-  renderSort();
-  show("sortScreen");
+  show("sortScreen");   // 先に画面を出す（コケても「← 撮影」で戻れるように）
+  try {
+    await loadData();
+    renderSort();
+  } catch (e) {
+    console.error(e);
+    toast("読み込みエラー: " + (e.message || e), true);
+  }
 }
 
 function unsortedRecords() {
