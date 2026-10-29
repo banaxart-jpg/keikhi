@@ -1,0 +1,1534 @@
+<!DOCTYPE html>
+<html lang="ja">
+<!-- スプレッドシート：Google スプレッドシート風の表計算。データはこの端末 (localStorage) に保存 -->
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="シート">
+<link rel="apple-touch-icon" href="/icon.png">
+<title>スプレッドシート</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@24,400,0,0">
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+:root {
+  --bg: #f8f9fa; --panel: #ffffff; --line: #e2e3e3; --head: #f8f9fa; --head-on: #d3e3fd;
+  --text: #1f1f1f; --text2: #5f6368; --text3: #9aa0a6;
+  --accent: #0b8043; --sel: #1a73e8; --sel-bg: rgba(26,115,232,0.10);
+}
+html, body { height: 100%; }
+body { font-family: 'Outfit', -apple-system, 'Hiragino Sans', sans-serif; background: var(--bg); color: var(--text); overflow: hidden; }
+.icon { font-family: 'Material Symbols Outlined'; font-weight: normal; font-style: normal; font-size: 20px; display: inline-block; line-height: 1; letter-spacing: normal; text-transform: none; white-space: nowrap; direction: ltr; -webkit-font-smoothing: antialiased; }
+button { font-family: inherit; color: inherit; }
+
+#app { height: 100dvh; display: flex; flex-direction: column; padding-top: env(safe-area-inset-top); }
+
+/* ── ヘッダー ── */
+.top { display: flex; align-items: center; gap: 6px; padding: 10px 10px 6px; background: var(--panel); }
+.logo { width: 34px; height: 34px; border-radius: 8px; background: var(--accent); color: #fff; display: flex; align-items: center; justify-content: center; flex-shrink: 0; text-decoration: none; }
+.book-name { flex: 1; min-width: 0; border: 1px solid transparent; border-radius: 6px; padding: 5px 8px; font-size: 17px; font-weight: 600; font-family: inherit; background: transparent; color: var(--text); }
+.book-name:hover { border-color: var(--line); }
+.book-name:focus { outline: none; border-color: var(--sel); background: #fff; }
+.ibtn { width: 34px; height: 34px; border: none; background: transparent; border-radius: 50%; display: flex; align-items: center; justify-content: center; cursor: pointer; flex-shrink: 0; }
+.ibtn:hover { background: #f1f3f4; }
+.ibtn:active { background: #e8eaed; }
+.ibtn.on { background: var(--head-on); color: #0b57d0; }
+.ibtn:disabled { opacity: 0.35; cursor: default; }
+
+/* ── ツールバー ── */
+.toolbar { display: flex; align-items: center; gap: 2px; padding: 4px 8px; margin: 0 8px 6px; background: #edf2fa; border-radius: 22px; overflow-x: auto; flex-shrink: 0; }
+.toolbar::-webkit-scrollbar { display: none; }
+.toolbar .ibtn { width: 30px; height: 30px; border-radius: 6px; }
+.toolbar .ibtn .icon { font-size: 19px; }
+.sep { width: 1px; height: 20px; background: #c7c7c7; margin: 0 4px; flex-shrink: 0; }
+.color-btn { position: relative; }
+.color-btn .bar { position: absolute; left: 6px; right: 6px; bottom: 4px; height: 3px; border-radius: 1px; }
+
+/* ── 数式バー ── */
+.fbar { display: flex; align-items: center; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); background: var(--panel); flex-shrink: 0; }
+.namebox { width: 78px; border: none; border-right: 1px solid var(--line); padding: 7px 8px; font-size: 13px; font-family: inherit; color: var(--text); background: transparent; text-align: center; }
+.namebox:focus { outline: none; background: #fff; box-shadow: inset 0 0 0 2px var(--sel); }
+.fx { color: var(--text3); font-style: italic; font-weight: 700; padding: 0 8px; font-size: 13px; font-family: Georgia, serif; }
+.finput { flex: 1; min-width: 0; border: none; padding: 7px 8px; font-size: 14px; font-family: inherit; background: transparent; color: var(--text); }
+.finput:focus { outline: none; }
+
+/* ── グリッド ── */
+.grid-wrap { flex: 1; overflow: auto; position: relative; background: #fff; overscroll-behavior: contain; }
+table.grid { border-collapse: separate; border-spacing: 0; table-layout: fixed; font-size: 13px; position: relative; }
+.grid th, .grid td { border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); height: 23px; padding: 0 4px; white-space: nowrap; overflow: hidden; text-overflow: clip; }
+.grid thead th { position: sticky; top: 0; z-index: 3; background: var(--head); color: var(--text2); font-weight: 400; font-size: 11px; text-align: center; border-bottom-color: #c4c7c5; user-select: none; -webkit-user-select: none; cursor: default; }
+.grid tbody th { position: sticky; left: 0; z-index: 2; background: var(--head); color: var(--text2); font-weight: 400; font-size: 11px; text-align: center; border-right-color: #c4c7c5; user-select: none; -webkit-user-select: none; }
+.grid thead th.corner { left: 0; z-index: 4; }
+.grid th.on { background: var(--head-on); color: #0b57d0; font-weight: 700; }
+.grid { -webkit-touch-callout: none; }
+.grid td { background: #fff; cursor: cell; user-select: none; -webkit-user-select: none; line-height: 22px; }
+.grid td.num { text-align: right; }
+.grid td.bool, .grid td.err { text-align: center; }
+.grid td.err { color: #d93025; }
+.grid td.in { background-image: linear-gradient(var(--sel-bg), var(--sel-bg)); }
+.col-resize { position: absolute; right: -3px; top: 0; bottom: 0; width: 7px; cursor: col-resize; z-index: 5; touch-action: none; }
+
+/* 選択枠 */
+.sel-box { position: absolute; border: 1px solid var(--sel); pointer-events: none; z-index: 1; display: none; }
+.act-box { position: absolute; border: 2px solid var(--sel); pointer-events: none; z-index: 1; display: none; }
+.fill-handle { position: absolute; width: 9px; height: 9px; background: var(--sel); border: 1.5px solid #fff; border-radius: 2px; z-index: 2; cursor: crosshair; display: none; touch-action: none; }
+.fill-box { position: absolute; border: 1px dashed #5f6368; pointer-events: none; z-index: 1; display: none; }
+.ref-box { position: absolute; border: 2px dashed #e37400; background: rgba(227,116,0,0.06); pointer-events: none; z-index: 1; display: none; }
+.cell-editor { position: absolute; z-index: 6; border: 2px solid var(--sel); padding: 0 3px; font-family: inherit; font-size: 13px; line-height: 19px; background: #fff; color: var(--text); outline: none; resize: none; overflow: hidden; white-space: pre; box-shadow: 0 2px 6px rgba(60,64,67,0.3); }
+.cell-editor.hidden { opacity: 0; pointer-events: none; width: 1px !important; height: 1px !important; border: none; box-shadow: none; }
+
+/* 行追加 */
+.more-rows { padding: 12px 0 30px 50px; }
+.more-rows button { border: 1px solid var(--line); background: #fff; border-radius: 6px; padding: 7px 14px; font-size: 13px; cursor: pointer; color: var(--text2); display: inline-flex; align-items: center; gap: 4px; }
+
+/* ── 下：シートタブ + 集計 ── */
+.bottom { display: flex; align-items: center; background: var(--panel); border-top: 1px solid var(--line); padding: 4px 6px calc(4px + env(safe-area-inset-bottom)); gap: 4px; flex-shrink: 0; }
+.tabs { display: flex; gap: 2px; overflow-x: auto; flex: 1; min-width: 0; }
+.tabs::-webkit-scrollbar { display: none; }
+.tab { border: none; background: transparent; padding: 7px 12px; border-radius: 6px; font-size: 13px; cursor: pointer; white-space: nowrap; color: var(--text2); display: flex; align-items: center; gap: 2px; }
+.tab:hover { background: #f1f3f4; }
+.tab.on { background: #e1e9f7; color: #0b57d0; font-weight: 700; }
+.tab .icon { font-size: 16px; }
+.stat { font-size: 12px; color: var(--text2); white-space: nowrap; padding: 0 6px; cursor: pointer; flex-shrink: 0; }
+
+/* ── ポップアップメニュー ── */
+.menu { position: fixed; z-index: 30; background: #fff; border-radius: 8px; box-shadow: 0 4px 16px rgba(60,64,67,0.28); padding: 6px 0; min-width: 200px; max-height: 70vh; overflow-y: auto; display: none; }
+.menu.open { display: block; }
+.menu .mi { display: flex; align-items: center; gap: 12px; width: 100%; border: none; background: transparent; padding: 9px 16px; font-size: 14px; cursor: pointer; text-align: left; }
+.menu .mi:hover { background: #f1f3f4; }
+.menu .mi .icon { color: var(--text2); font-size: 19px; }
+.menu .mi.danger { color: #c5221f; }
+.menu .mi.danger .icon { color: #c5221f; }
+.menu .mi.cur { font-weight: 700; color: #0b57d0; }
+.menu .mi .sub { margin-left: auto; color: var(--text3); font-size: 12px; }
+.menu hr { border: none; border-top: 1px solid var(--line); margin: 6px 0; }
+.menu .mlabel { font-size: 11px; color: var(--text3); padding: 6px 16px 2px; font-weight: 700; letter-spacing: 0.05em; }
+.swatches { display: grid; grid-template-columns: repeat(8, 22px); gap: 6px; padding: 8px 14px; }
+.sw { width: 22px; height: 22px; border-radius: 50%; border: 1px solid rgba(0,0,0,0.12); cursor: pointer; }
+.sw.none { background: #fff; position: relative; }
+.sw.none::after { content: ''; position: absolute; left: 10px; top: -2px; bottom: -2px; width: 1.5px; background: #d93025; transform: rotate(45deg); }
+.menu-back { position: fixed; inset: 0; z-index: 29; display: none; }
+.menu-back.open { display: block; }
+
+.toast { position: fixed; left: 50%; bottom: calc(60px + env(safe-area-inset-bottom)); transform: translateX(-50%); background: #323232; color: #fff; padding: 10px 18px; border-radius: 6px; font-size: 13px; z-index: 40; opacity: 0; transition: opacity 0.2s; pointer-events: none; }
+.toast.show { opacity: 1; }
+</style>
+</head>
+<body>
+<div id="app">
+  <div class="top">
+    <a class="logo" href="/" title="ランチャーへ"><span class="icon">table_view</span></a>
+    <input class="book-name" id="bookName" spellcheck="false">
+    <button class="ibtn" id="btnFile" title="ファイル"><span class="icon">folder_open</span></button>
+  </div>
+
+  <div class="toolbar" id="toolbar">
+    <button class="ibtn" data-act="undo" title="元に戻す (Ctrl+Z)"><span class="icon">undo</span></button>
+    <button class="ibtn" data-act="redo" title="やり直す (Ctrl+Y)"><span class="icon">redo</span></button>
+    <span class="sep"></span>
+    <button class="ibtn" data-act="fmt" title="表示形式"><span class="icon">123</span></button>
+    <button class="ibtn" data-act="fmt-yen" title="通貨 (円)"><span class="icon">currency_yen</span></button>
+    <button class="ibtn" data-act="fmt-pct" title="パーセント"><span class="icon">percent</span></button>
+    <span class="sep"></span>
+    <button class="ibtn" data-act="b" title="太字 (Ctrl+B)"><span class="icon">format_bold</span></button>
+    <button class="ibtn" data-act="i" title="斜体 (Ctrl+I)"><span class="icon">format_italic</span></button>
+    <button class="ibtn" data-act="s" title="取り消し線"><span class="icon">strikethrough_s</span></button>
+    <button class="ibtn color-btn" data-act="fc" title="文字の色"><span class="icon">format_color_text</span><span class="bar" id="fcBar" style="background:#1f1f1f"></span></button>
+    <button class="ibtn color-btn" data-act="bg" title="塗りつぶしの色"><span class="icon">format_color_fill</span><span class="bar" id="bgBar" style="background:#fff;outline:1px solid #ccc"></span></button>
+    <span class="sep"></span>
+    <button class="ibtn" data-act="al" title="配置"><span class="icon" id="alIcon">format_align_left</span></button>
+    <button class="ibtn" data-act="sum" title="関数"><span class="icon">functions</span></button>
+    <button class="ibtn" data-act="clear" title="書式をクリア"><span class="icon">format_clear</span></button>
+  </div>
+
+  <div class="fbar">
+    <input class="namebox" id="nameBox" spellcheck="false">
+    <span class="fx">fx</span>
+    <input class="finput" id="fInput" spellcheck="false" autocomplete="off" autocapitalize="off">
+  </div>
+
+  <div class="grid-wrap" id="gridWrap">
+    <table class="grid" id="grid"></table>
+    <div class="sel-box" id="selBox"></div>
+    <div class="act-box" id="actBox"></div>
+    <div class="fill-box" id="fillBox"></div>
+    <div class="ref-box" id="refBox"></div>
+    <div class="fill-handle" id="fillHandle"></div>
+    <textarea class="cell-editor hidden" id="cellEditor" spellcheck="false" autocomplete="off" autocapitalize="off" rows="1"></textarea>
+    <div class="more-rows"><button id="btnMoreRows"><span class="icon">add</span>行を 50 行追加</button></div>
+  </div>
+
+  <div class="bottom">
+    <button class="ibtn" id="btnAddSheet" title="シートを追加"><span class="icon">add</span></button>
+    <div class="tabs" id="tabs"></div>
+    <div class="stat" id="stat"></div>
+  </div>
+</div>
+
+<div class="menu-back" id="menuBack"></div>
+<div class="menu" id="menu"></div>
+<div class="toast" id="toast"></div>
+<input type="file" id="csvFile" accept=".csv,.tsv,text/csv,text/plain" style="display:none">
+
+<script src="/config.js"></script>
+<script>
+"use strict";
+// ═══════════════════════════════════════════════
+//  ユーティリティ
+// ═══════════════════════════════════════════════
+const $ = (id) => document.getElementById(id);
+const colName = (c) => { let s = ""; c++; while (c > 0) { const m = (c - 1) % 26; s = String.fromCharCode(65 + m) + s; c = Math.floor((c - 1) / 26); } return s; };
+const colIndex = (s) => { let n = 0; for (const ch of s.toUpperCase()) n = n * 26 + (ch.charCodeAt(0) - 64); return n - 1; };
+const key = (c, r) => colName(c) + (r + 1);
+const parseKey = (k) => { const m = /^([A-Z]+)(\d+)$/.exec(k); return m ? { c: colIndex(m[1]), r: +m[2] - 1 } : null; };
+const uid = () => Math.random().toString(36).slice(2, 10);
+const clone = (o) => JSON.parse(JSON.stringify(o));
+const isTouch = () => matchMedia("(pointer: coarse)").matches;
+function toast(msg) { const t = $("toast"); t.textContent = msg; t.classList.add("show"); clearTimeout(toast._t); toast._t = setTimeout(() => t.classList.remove("show"), 1800); }
+
+// ═══════════════════════════════════════════════
+//  データ (localStorage)
+// ═══════════════════════════════════════════════
+const STORE_KEY = "sheet.v1";
+const DEF_COLS = 26, DEF_ROWS = 100, DEF_W = 100;
+
+function newSheet(name) { return { id: uid(), name, cells: {}, colW: {}, rows: DEF_ROWS, cols: DEF_COLS }; }
+function newBook(name) { const s = newSheet("シート1"); return { id: uid(), name, sheets: [s], active: s.id, updated: Date.now() }; }
+
+let store;
+try { store = JSON.parse(localStorage.getItem(STORE_KEY)); } catch (e) { store = null; }
+if (!store || !store.books || !store.books.length) { const b = newBook("無題のスプレッドシート"); store = { books: [b], current: b.id }; }
+
+let saveTimer = null;
+function save() {
+  book().updated = Date.now();
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => {
+    try { localStorage.setItem(STORE_KEY, JSON.stringify(store)); }
+    catch (e) { toast("保存できませんでした (容量オーバー?)"); }
+  }, 250);
+}
+window.addEventListener("pagehide", () => { clearTimeout(saveTimer); try { localStorage.setItem(STORE_KEY, JSON.stringify(store)); } catch (e) {} });
+
+const book = () => store.books.find((b) => b.id === store.current) || store.books[0];
+const sheet = () => { const b = book(); return b.sheets.find((s) => s.id === b.active) || b.sheets[0]; };
+const findSheetByName = (name) => book().sheets.find((s) => s.name.toLowerCase() === String(name).toLowerCase());
+
+// ═══════════════════════════════════════════════
+//  数式エンジン
+// ═══════════════════════════════════════════════
+class FErr { constructor(code) { this.code = code; } toString() { return this.code; } }
+const E = { DIV0: new FErr("#DIV/0!"), VALUE: new FErr("#VALUE!"), REF: new FErr("#REF!"), NAME: new FErr("#NAME?"), NA: new FErr("#N/A"), ERR: new FErr("#ERROR!"), NUM: new FErr("#NUM!") };
+const isErr = (v) => v instanceof FErr;
+
+// 入力文字列 → 値 (数式以外)
+function parseLiteral(raw) {
+  if (raw === "" || raw == null) return { v: null };
+  const t = raw.trim();
+  if (/^(true|false)$/i.test(t)) return { v: /^true$/i.test(t) };
+  let m;
+  if ((m = /^([-+]?)[¥￥]\s?([\d,]*\.?\d+)$/.exec(t))) return { v: +(m[1] + m[2].replace(/,/g, "")), fmt: "yen" };
+  if ((m = /^([-+]?[\d,]*\.?\d+)\s?%$/.exec(t))) return { v: +m[1].replace(/,/g, "") / 100, fmt: "pct" };
+  if (/^[-+]?\d{1,3}(,\d{3})+(\.\d+)?$/.test(t)) return { v: +t.replace(/,/g, ""), fmt: "num" };
+  if (/^[-+]?(\d+\.?\d*|\.\d+)(e[-+]?\d+)?$/i.test(t)) return { v: +t };
+  return { v: raw };
+}
+
+// トークナイザ
+function tokenize(src) {
+  const toks = []; let i = 0;
+  const refRe = /^(?:('(?:[^']|'')+'|[^\s!'"(),+\-*/&=<>^:;%{}]+)!)?(\$?[A-Za-z]{1,3}\$?\d+)(?::(\$?[A-Za-z]{1,3}\$?\d+))?/;
+  const colRangeRe = /^(?:('(?:[^']|'')+'|[^\s!'"(),+\-*/&=<>^:;%{}]+)!)?\$?([A-Za-z]{1,3}):\$?([A-Za-z]{1,3})(?![\w(])/;
+  while (i < src.length) {
+    const ch = src[i];
+    if (/\s/.test(ch)) { i++; continue; }
+    const rest = src.slice(i);
+    if (/^#REF!/i.test(rest)) throw E.REF;
+    if (ch === '"') {
+      let j = i + 1, s = "";
+      while (j < src.length) { if (src[j] === '"') { if (src[j + 1] === '"') { s += '"'; j += 2; continue; } break; } s += src[j++]; }
+      if (j >= src.length) throw E.ERR;
+      toks.push({ t: "str", v: s }); i = j + 1; continue;
+    }
+    let m;
+    if ((m = /^(\d+\.?\d*|\.\d+)(e[-+]?\d+)?/i.exec(rest))) { toks.push({ t: "num", v: +m[0] }); i += m[0].length; continue; }
+    if ((m = colRangeRe.exec(rest))) {
+      toks.push({ t: "colrange", sheet: m[1] ? m[1].replace(/^'|'$/g, "").replace(/''/g, "'") : null, a: m[2].toUpperCase(), b: m[3].toUpperCase() });
+      i += m[0].length; continue;
+    }
+    if ((m = refRe.exec(rest)) && !/^[\w(]/.test(rest.slice(m[0].length))) {
+      toks.push({ t: "ref", sheet: m[1] ? m[1].replace(/^'|'$/g, "").replace(/''/g, "'") : null, a: m[2].replace(/\$/g, "").toUpperCase(), b: m[3] ? m[3].replace(/\$/g, "").toUpperCase() : null });
+      i += m[0].length; continue;
+    }
+    if ((m = /^[A-Za-z_][A-Za-z0-9_.]*/.exec(rest))) { toks.push({ t: "id", v: m[0].toUpperCase() }); i += m[0].length; continue; }
+    if ((m = /^(<=|>=|<>|[-+*/^&=<>(),:;%])/.exec(rest))) { toks.push({ t: "op", v: m[0] === ";" ? "," : m[0] }); i += m[0].length; continue; }
+    throw E.ERR;
+  }
+  return toks;
+}
+
+// 再帰下降パーサ + 評価器
+function evaluate(src, ctx) {
+  const toks = tokenize(src); let p = 0;
+  const peek = () => toks[p];
+  const isOp = (v) => toks[p] && toks[p].t === "op" && toks[p].v === v;
+  const eat = (v) => { if (!isOp(v)) throw E.ERR; p++; };
+
+  const num = (v) => {
+    if (isErr(v)) throw v;
+    if (v && v.range) { if (v.range.length === 1 && v.range[0].length === 1) return num(v.range[0][0]); throw E.VALUE; }
+    if (v == null || v === "") return 0;
+    if (typeof v === "boolean") return v ? 1 : 0;
+    if (typeof v === "number") return v;
+    const lit = parseLiteral(String(v)); if (typeof lit.v === "number") return lit.v;
+    throw E.VALUE;
+  };
+  const str = (v) => {
+    if (isErr(v)) throw v;
+    if (v && v.range) { if (v.range.length === 1 && v.range[0].length === 1) return str(v.range[0][0]); throw E.VALUE; }
+    if (v == null) return "";
+    if (typeof v === "boolean") return v ? "TRUE" : "FALSE";
+    if (typeof v === "number") return fmtAuto(v);
+    return String(v);
+  };
+  const scalar = (v) => { if (v && v.range) { if (v.range.length === 1 && v.range[0].length === 1) return v.range[0][0]; throw E.VALUE; } return v; };
+
+  function expr() { return compare(); }
+  function compare() {
+    let l = concat();
+    while (peek() && peek().t === "op" && ["=", "<>", "<", ">", "<=", ">="].includes(peek().v)) {
+      const op = toks[p++].v; const r = concat();
+      l = cmp(scalar(l), scalar(r), op);
+    }
+    return l;
+  }
+  function concat() { let l = add(); while (isOp("&")) { p++; const r = add(); l = str(l) + str(r); } return l; }
+  function add() { let l = mul(); while (isOp("+") || isOp("-")) { const op = toks[p++].v; const r = mul(); l = op === "+" ? num(l) + num(r) : num(l) - num(r); } return l; }
+  function mul() {
+    let l = pow();
+    while (isOp("*") || isOp("/")) { const op = toks[p++].v; const r = pow(); if (op === "*") l = num(l) * num(r); else { const d = num(r); if (d === 0) throw E.DIV0; l = num(l) / d; } }
+    return l;
+  }
+  function pow() { let l = unary(); while (isOp("^")) { p++; const r = unary(); l = Math.pow(num(l), num(r)); } return l; }
+  function unary() { if (isOp("-")) { p++; return -num(unary()); } if (isOp("+")) { p++; return num(unary()); } return postfix(); }
+  function postfix() { let v = primary(); while (isOp("%")) { p++; v = num(v) / 100; } return v; }
+  function primary() {
+    const t = toks[p++];
+    if (!t) throw E.ERR;
+    if (t.t === "num" || t.t === "str") return t.v;
+    if (t.t === "op" && t.v === "(") { const v = expr(); eat(")"); return v; }
+    if (t.t === "ref") return ctx.ref(t);
+    if (t.t === "colrange") return ctx.colrange(t);
+    if (t.t === "id") {
+      if (isOp("(")) {
+        p++; const args = [];
+        if (!isOp(")")) {
+          do {
+            if (isOp(",") || isOp(")")) { args.push(undefined); }
+            else args.push(lazyArg());
+          } while (isOp(",") && ++p);
+        }
+        eat(")");
+        const fn = FUNCS[t.v];
+        if (!fn) throw E.NAME;
+        return fn(args, { num, str, scalar });
+      }
+      if (t.v === "TRUE") return true;
+      if (t.v === "FALSE") return false;
+      throw E.NAME;
+    }
+    throw E.ERR;
+  }
+  // IF / IFERROR 用に引数を遅延評価できるよう、評価済み値 or エラーを包む
+  function lazyArg() {
+    try { return { ok: expr() }; }
+    catch (e) {
+      if (!isErr(e)) throw e;
+      // エラーでも残りのトークンをスキップする必要がある → 括弧の深さで読み飛ばし
+      let depth = 0;
+      while (p < toks.length) {
+        const t = toks[p];
+        if (t.t === "op" && t.v === "(") depth++;
+        else if (t.t === "op" && t.v === ")") { if (depth === 0) break; depth--; }
+        else if (t.t === "op" && t.v === "," && depth === 0) break;
+        p++;
+      }
+      return { err: e };
+    }
+  }
+  const v = expr();
+  if (p < toks.length) throw E.ERR;
+  return v;
+}
+
+function cmp(a, b, op) {
+  if (isErr(a)) throw a; if (isErr(b)) throw b;
+  const norm = (x) => (x == null ? "" : x);
+  a = norm(a); b = norm(b);
+  let r;
+  if (typeof a === "number" && typeof b === "number") r = a - b;
+  else if (typeof a === "boolean" || typeof b === "boolean") { const x = typeof a === "boolean" ? 2 : typeof a === "string" ? 1 : 0, y = typeof b === "boolean" ? 2 : typeof b === "string" ? 1 : 0; r = x === y ? (a === b ? 0 : a ? 1 : -1) : x - y; }
+  else if (typeof a === "string" && typeof b === "string") { const x = a.toLowerCase(), y = b.toLowerCase(); r = x < y ? -1 : x > y ? 1 : 0; }
+  else if (a === "" || b === "") { r = a === "" ? (b === "" || b === 0 ? 0 : -1) : (a === 0 ? 0 : 1); }
+  else r = typeof a === "number" ? -1 : 1;
+  return { "=": r === 0, "<>": r !== 0, "<": r < 0, ">": r > 0, "<=": r <= 0, ">=": r >= 0 }[op];
+}
+
+// ── 関数 ──
+function argVal(a) { if (a === undefined) return undefined; if (a.err) throw a.err; return a.ok; }
+function flat(args) { // 範囲を展開した値の配列 (範囲内の空白・文字列も含む)
+  const out = [];
+  for (const a of args) {
+    const v = argVal(a);
+    if (v && v.range) { for (const row of v.range) for (const x of row) out.push({ v: x, fromRange: true }); }
+    else out.push({ v, fromRange: false });
+  }
+  return out;
+}
+function nums(args, h) { // 数値だけ集める (範囲内の文字列・空白は無視、直接指定は数値化)
+  const out = [];
+  for (const { v, fromRange } of flat(args)) {
+    if (isErr(v)) throw v;
+    if (fromRange) { if (typeof v === "number") out.push(v); }
+    else if (v !== undefined) out.push(h.num(v));
+  }
+  return out;
+}
+function makeCrit(c) {
+  if (isErr(c)) throw c;
+  if (typeof c === "number" || typeof c === "boolean") return (v) => v === c;
+  const m = /^(<=|>=|<>|=|<|>)?(.*)$/s.exec(String(c ?? ""));
+  const op = m[1] || "=", rhsRaw = m[2];
+  const lit = parseLiteral(rhsRaw);
+  const rhs = rhsRaw === "" ? "" : lit.v;
+  if (typeof rhs === "string" && (op === "=" || op === "<>") && /[*?]/.test(rhs)) {
+    const re = new RegExp("^" + rhs.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".") + "$", "i");
+    return (v) => (op === "=") === re.test(v == null ? "" : String(v));
+  }
+  return (v) => {
+    if (isErr(v)) return false;
+    if (typeof rhs === "number" && typeof v !== "number") return op === "<>";
+    return cmp(v, rhs, op);
+  };
+}
+function rangeArg(a) { const v = argVal(a); if (v && v.range) return v.range; return [[v]]; }
+function roundTo(x, d, mode) { const f = Math.pow(10, d); const y = x * f; const r = mode === "up" ? Math.sign(y) * Math.ceil(Math.abs(y) - 1e-9) : mode === "down" ? Math.trunc(y) : Math.sign(y) * Math.round(Math.abs(y) + 1e-9); return r / f; }
+
+const FUNCS = {
+  SUM: (a, h) => nums(a, h).reduce((s, x) => s + x, 0),
+  AVERAGE: (a, h) => { const n = nums(a, h); if (!n.length) throw E.DIV0; return n.reduce((s, x) => s + x, 0) / n.length; },
+  MIN: (a, h) => { const n = nums(a, h); return n.length ? Math.min(...n) : 0; },
+  MAX: (a, h) => { const n = nums(a, h); return n.length ? Math.max(...n) : 0; },
+  PRODUCT: (a, h) => nums(a, h).reduce((s, x) => s * x, 1),
+  COUNT: (a) => flat(a).filter(({ v, fromRange }) => typeof v === "number" || (!fromRange && v !== undefined && typeof parseLiteral(String(v)).v === "number")).length,
+  COUNTA: (a) => flat(a).filter(({ v }) => v !== null && v !== undefined && v !== "").length,
+  COUNTBLANK: (a) => flat(a).filter(({ v }) => v === null || v === "").length,
+  IF: (a, h) => { const c = h.scalar(argVal(a[0])); const t = typeof c === "string" ? (() => { throw E.VALUE; })() : !!h.num(c); const r = t ? (a[1] === undefined ? true : argVal(a[1])) : (a[2] === undefined ? false : argVal(a[2])); return r; },
+  IFERROR: (a) => { if (a[0] && a[0].err) return a[1] === undefined ? "" : argVal(a[1]); const v = argVal(a[0]); if (isErr(v)) return argVal(a[1]); return v; },
+  IFS: (a, h) => { for (let i = 0; i + 1 < a.length; i += 2) if (h.num(h.scalar(argVal(a[i])))) return argVal(a[i + 1]); throw E.NA; },
+  AND: (a, h) => flat(a).every(({ v }) => v == null || v === "" ? true : !!h.num(v)),
+  OR: (a, h) => flat(a).some(({ v }) => v == null || v === "" ? false : !!h.num(v)),
+  NOT: (a, h) => !h.num(h.scalar(argVal(a[0]))),
+  ROUND: (a, h) => roundTo(h.num(argVal(a[0])), a[1] ? h.num(argVal(a[1])) : 0),
+  ROUNDUP: (a, h) => roundTo(h.num(argVal(a[0])), a[1] ? h.num(argVal(a[1])) : 0, "up"),
+  ROUNDDOWN: (a, h) => roundTo(h.num(argVal(a[0])), a[1] ? h.num(argVal(a[1])) : 0, "down"),
+  INT: (a, h) => Math.floor(h.num(argVal(a[0]))),
+  ABS: (a, h) => Math.abs(h.num(argVal(a[0]))),
+  MOD: (a, h) => { const x = h.num(argVal(a[0])), y = h.num(argVal(a[1])); if (y === 0) throw E.DIV0; return x - y * Math.floor(x / y); },
+  SQRT: (a, h) => { const x = h.num(argVal(a[0])); if (x < 0) throw E.NUM; return Math.sqrt(x); },
+  POWER: (a, h) => Math.pow(h.num(argVal(a[0])), h.num(argVal(a[1]))),
+  CONCATENATE: (a, h) => flat(a).map(({ v }) => h.str(v)).join(""),
+  CONCAT: (a, h) => flat(a).map(({ v }) => h.str(v)).join(""),
+  TEXTJOIN: (a, h) => { const d = h.str(argVal(a[0])), skip = !!h.num(argVal(a[1])); return flat(a.slice(2)).map(({ v }) => h.str(v)).filter((s) => !(skip && s === "")).join(d); },
+  LEN: (a, h) => h.str(argVal(a[0])).length,
+  UPPER: (a, h) => h.str(argVal(a[0])).toUpperCase(),
+  LOWER: (a, h) => h.str(argVal(a[0])).toLowerCase(),
+  TRIM: (a, h) => h.str(argVal(a[0])).trim().replace(/\s+/g, " "),
+  LEFT: (a, h) => h.str(argVal(a[0])).slice(0, a[1] ? h.num(argVal(a[1])) : 1),
+  RIGHT: (a, h) => { const s = h.str(argVal(a[0])), n = a[1] ? h.num(argVal(a[1])) : 1; return n ? s.slice(-n) : ""; },
+  MID: (a, h) => { const s = h.str(argVal(a[0])), st = h.num(argVal(a[1])), n = h.num(argVal(a[2])); return s.substr(st - 1, n); },
+  SUBSTITUTE: (a, h) => h.str(argVal(a[0])).split(h.str(argVal(a[1]))).join(h.str(argVal(a[2]))),
+  TODAY: () => { const d = new Date(); return `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()}`; },
+  NOW: () => { const d = new Date(); return `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()} ${d.getHours()}:${String(d.getMinutes()).padStart(2, "0")}`; },
+  SUMIF: (a) => { const r = rangeArg(a[0]), f = makeCrit(argVal(a[1])), s = a[2] ? rangeArg(a[2]) : r; let t = 0; r.forEach((row, i) => row.forEach((v, j) => { if (f(v)) { const x = s[i] && s[i][j]; if (typeof x === "number") t += x; } })); return t; },
+  COUNTIF: (a) => { const r = rangeArg(a[0]), f = makeCrit(argVal(a[1])); let n = 0; r.forEach((row) => row.forEach((v) => { if (f(v)) n++; })); return n; },
+  AVERAGEIF: (a) => { const r = rangeArg(a[0]), f = makeCrit(argVal(a[1])), s = a[2] ? rangeArg(a[2]) : r; let t = 0, n = 0; r.forEach((row, i) => row.forEach((v, j) => { if (f(v)) { const x = s[i] && s[i][j]; if (typeof x === "number") { t += x; n++; } } })); if (!n) throw E.DIV0; return t / n; },
+  SUMIFS: (a) => { const s = rangeArg(a[0]); const cs = []; for (let i = 1; i + 1 < a.length; i += 2) cs.push([rangeArg(a[i]), makeCrit(argVal(a[i + 1]))]); let t = 0; s.forEach((row, i) => row.forEach((x, j) => { if (typeof x === "number" && cs.every(([r, f]) => f(r[i] && r[i][j]))) t += x; })); return t; },
+  COUNTIFS: (a) => { const cs = []; for (let i = 0; i + 1 < a.length; i += 2) cs.push([rangeArg(a[i]), makeCrit(argVal(a[i + 1]))]); let n = 0; cs[0][0].forEach((row, i) => row.forEach((_, j) => { if (cs.every(([r, f]) => f(r[i] && r[i][j]))) n++; })); return n; },
+  VLOOKUP: (a, h) => {
+    const k = h.scalar(argVal(a[0])), r = rangeArg(a[1]), ci = h.num(argVal(a[2])), approx = a[3] === undefined ? true : !!h.num(argVal(a[3]));
+    if (ci < 1 || ci > (r[0] || []).length) throw E.REF;
+    if (!approx) { for (const row of r) if (cmp(row[0], k, "=")) return row[ci - 1]; throw E.NA; }
+    let hit = null; for (const row of r) { if (row[0] == null) continue; if (cmp(row[0], k, "<=")) hit = row; else break; }
+    if (!hit) throw E.NA; return hit[ci - 1];
+  },
+  HLOOKUP: (a, h) => {
+    const k = h.scalar(argVal(a[0])), r = rangeArg(a[1]), ri = h.num(argVal(a[2])), approx = a[3] === undefined ? true : !!h.num(argVal(a[3]));
+    if (ri < 1 || ri > r.length) throw E.REF;
+    const head = r[0];
+    if (!approx) { const j = head.findIndex((v) => cmp(v, k, "=")); if (j < 0) throw E.NA; return r[ri - 1][j]; }
+    let hit = -1; head.forEach((v, j) => { if (v != null && cmp(v, k, "<=")) hit = j; }); if (hit < 0) throw E.NA; return r[ri - 1][hit];
+  },
+  INDEX: (a, h) => { const r = rangeArg(a[0]); let i = h.num(argVal(a[1])), j = a[2] ? h.num(argVal(a[2])) : 1; if (r.length === 1 && a[2] === undefined) { j = i; i = 1; } const row = r[i - 1]; if (!row || j < 1 || j > row.length) throw E.REF; return row[j - 1]; },
+  MATCH: (a, h) => { const k = h.scalar(argVal(a[0])), r = rangeArg(a[1]).flat(), t = a[2] === undefined ? 1 : h.num(argVal(a[2])); if (t === 0) { const i = r.findIndex((v) => cmp(v, k, "=")); if (i < 0) throw E.NA; return i + 1; } let hit = -1; r.forEach((v, i) => { if (v != null && cmp(v, k, t > 0 ? "<=" : ">=")) hit = i; }); if (hit < 0) throw E.NA; return hit + 1; },
+  ISBLANK: (a, h) => { const v = h.scalar(argVal(a[0])); return v == null || v === ""; },
+  ISNUMBER: (a, h) => typeof h.scalar(argVal(a[0])) === "number",
+  ISTEXT: (a, h) => typeof h.scalar(argVal(a[0])) === "string",
+  ISERROR: (a) => !!(a[0] && a[0].err) || isErr(a[0] && a[0].ok),
+  RAND: () => Math.random(),
+  RANDBETWEEN: (a, h) => { const lo = Math.ceil(h.num(argVal(a[0]))), hi = Math.floor(h.num(argVal(a[1]))); return lo + Math.floor(Math.random() * (hi - lo + 1)); },
+  PI: () => Math.PI,
+  VALUE: (a, h) => h.num(h.str(argVal(a[0]))),
+  N: (a, h) => { const v = h.scalar(argVal(a[0])); return typeof v === "number" ? v : typeof v === "boolean" ? +v : 0; },
+};
+const FUNC_NAMES = Object.keys(FUNCS).sort();
+
+// ── 再計算 (シート単位のキャッシュ、循環参照は #REF!) ──
+let calcCache = new Map(); // sheetId -> Map(key -> value)
+let calcStack = new Set();
+function invalidate() { calcCache = new Map(); }
+
+function cellValue(sh, c, r) {
+  if (c < 0 || r < 0) throw E.REF;
+  let m = calcCache.get(sh.id); if (!m) { m = new Map(); calcCache.set(sh.id, m); }
+  const k = key(c, r);
+  if (m.has(k)) return m.get(k);
+  const cell = sh.cells[k];
+  let v = null;
+  if (cell && cell.v !== undefined && cell.v !== "") {
+    if (typeof cell.v === "string" && cell.v[0] === "=" && cell.v.length > 1) {
+      const sk = sh.id + ":" + k;
+      if (calcStack.has(sk)) return E.REF;
+      calcStack.add(sk);
+      try {
+        v = evaluate(cell.v.slice(1), makeCtx(sh));
+        if (v && v.range) v = v.range.length === 1 && v.range[0].length === 1 ? v.range[0][0] : E.VALUE;
+        if (v === undefined) v = null;
+        if (typeof v === "number" && !isFinite(v)) v = E.NUM;
+      } catch (e) { v = isErr(e) ? e : E.ERR; }
+      calcStack.delete(sk);
+    } else v = parseLiteral(cell.v).v;
+  }
+  m.set(k, v);
+  return v;
+}
+function makeCtx(sh) {
+  const resolve = (name) => { if (!name) return sh; const s = findSheetByName(name); if (!s) throw E.REF; return s; };
+  return {
+    ref(t) {
+      const s = resolve(t.sheet);
+      const A = parseKey(t.a); if (!A) throw E.REF;
+      if (!t.b) return cellValue(s, A.c, A.r);
+      const B = parseKey(t.b); if (!B) throw E.REF;
+      return rangeOf(s, Math.min(A.c, B.c), Math.min(A.r, B.r), Math.max(A.c, B.c), Math.max(A.r, B.r));
+    },
+    colrange(t) {
+      const s = resolve(t.sheet); const a = colIndex(t.a), b = colIndex(t.b);
+      return rangeOf(s, Math.min(a, b), 0, Math.max(a, b), s.rows - 1);
+    },
+  };
+}
+function rangeOf(s, c1, r1, c2, r2) {
+  if ((c2 - c1 + 1) * (r2 - r1 + 1) > 200000) throw E.REF;
+  const out = [];
+  for (let r = r1; r <= r2; r++) { const row = []; for (let c = c1; c <= c2; c++) row.push(cellValue(s, c, r)); out.push(row); }
+  return { range: out };
+}
+
+// ── 数式内の参照を書き換える (コピー/オートフィル/行列の挿入削除) ──
+// fn(sheetName|null, col, row, absC, absR) -> {c, r} | null(=#REF!)
+function rewriteRefs(formula, fn) {
+  if (typeof formula !== "string" || formula[0] !== "=") return formula;
+  const parts = formula.split(/("(?:[^"]|"")*")/);
+  const re = /(^|[^A-Za-z0-9_.$'!])((?:'(?:[^']|'')+'|[A-Za-z0-9_぀-ヿ㐀-鿿＀-￯]+)!)?(\$?)([A-Za-z]{1,3})(\$?)(\d+)(?![A-Za-z0-9_(])/g;
+  return parts.map((part, i) => {
+    if (i % 2 === 1) return part;
+    return part.replace(re, (all, pre, sp, ac, col, ar, row) => {
+      const sname = sp ? sp.slice(0, -1).replace(/^'|'$/g, "").replace(/''/g, "'") : null;
+      const res = fn(sname, colIndex(col), +row - 1, !!ac, !!ar);
+      if (!res) return pre + "#REF!";
+      if (res.c < 0 || res.r < 0) return pre + "#REF!";
+      return pre + (sp || "") + ac + colName(res.c) + ar + (res.r + 1);
+    });
+  }).join("");
+}
+const shiftFormula = (f, dc, dr) => rewriteRefs(f, (s, c, r, ac, ar) => ({ c: ac ? c : c + dc, r: ar ? r : r + dr }));
+
+// ═══════════════════════════════════════════════
+//  表示形式
+// ═══════════════════════════════════════════════
+function fmtAuto(v) {
+  if (Number.isInteger(v)) return String(v);
+  const s = String(+v.toPrecision(12));
+  return s;
+}
+function fmtValue(v, fmt) {
+  if (v == null) return "";
+  if (isErr(v)) return v.code;
+  if (typeof v === "boolean") return v ? "TRUE" : "FALSE";
+  if (typeof v === "number") {
+    switch (fmt) {
+      case "num": return v.toLocaleString("ja-JP", { maximumFractionDigits: 2 });
+      case "num0": return Math.round(v).toLocaleString("ja-JP");
+      case "dec2": return v.toLocaleString("ja-JP", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+      case "yen": return (v < 0 ? "-¥" : "¥") + Math.abs(Math.round(v)).toLocaleString("ja-JP");
+      case "pct": return (v * 100).toLocaleString("ja-JP", { maximumFractionDigits: 2 }) + "%";
+      case "plain": return fmtAuto(v);
+      default: return fmtAuto(v);
+    }
+  }
+  return String(v);
+}
+const FORMATS = [
+  { id: "", name: "自動", ex: "1000.12" },
+  { id: "plain", name: "書式なしテキスト", ex: "1000.12" },
+  { id: "num", name: "数値", ex: "1,000.12" },
+  { id: "num0", name: "数値 (整数)", ex: "1,000" },
+  { id: "dec2", name: "小数 2 桁", ex: "1,000.12" },
+  { id: "yen", name: "通貨 (円)", ex: "¥1,000" },
+  { id: "pct", name: "パーセント", ex: "10.12%" },
+];
+
+// ═══════════════════════════════════════════════
+//  状態
+// ═══════════════════════════════════════════════
+let act = { c: 0, r: 0 };          // アクティブセル
+let anchor = { c: 0, r: 0 };       // 範囲選択の起点
+let selEnd = { c: 0, r: 0 };       // 範囲選択の終点
+let editing = false;               // セル編集中
+let editFromBar = false;           // 数式バーで編集中
+let editOrig = "";
+let undoStack = [], redoStack = [];
+let clip = null;                   // 内部クリップボード
+
+const selRect = () => ({ c1: Math.min(anchor.c, selEnd.c), r1: Math.min(anchor.r, selEnd.r), c2: Math.max(anchor.c, selEnd.c), r2: Math.max(anchor.r, selEnd.r) });
+
+function pushUndo() {
+  undoStack.push({ sheetId: sheet().id, data: clone(sheet()), act: { ...act }, anchor: { ...anchor }, selEnd: { ...selEnd } });
+  if (undoStack.length > 100) undoStack.shift();
+  redoStack = [];
+}
+function applySnap(from, to) {
+  const b = book(); const snap = from.pop(); if (!snap) return;
+  const i = b.sheets.findIndex((s) => s.id === snap.sheetId); if (i < 0) return;
+  to.push({ sheetId: snap.sheetId, data: clone(b.sheets[i]), act: { ...act }, anchor: { ...anchor }, selEnd: { ...selEnd } });
+  b.sheets[i] = snap.data; b.active = snap.sheetId;
+  act = snap.act; anchor = snap.anchor; selEnd = snap.selEnd;
+  invalidate(); save(); buildGrid(); renderTabs();
+}
+const undo = () => { if (editing) return; applySnap(undoStack, redoStack); };
+const redo = () => { if (editing) return; applySnap(redoStack, undoStack); };
+
+// セルの書き込み (書式は保持)
+function setRaw(sh, c, r, raw) {
+  const k = key(c, r);
+  const cell = sh.cells[k] || {};
+  if (raw === "" || raw == null) { delete cell.v; }
+  else {
+    cell.v = raw;
+    if (typeof raw === "string" && raw[0] !== "=") {
+      const lit = parseLiteral(raw);
+      if (lit.fmt && !cell.s?.fmt) { cell.s = cell.s || {}; cell.s.fmt = lit.fmt; }
+    }
+  }
+  if (cell.v === undefined && (!cell.s || !Object.keys(cell.s).length)) delete sh.cells[k];
+  else sh.cells[k] = cell;
+}
+function setStyle(fn) {
+  pushUndo();
+  const sh = sheet(), { c1, r1, c2, r2 } = selRect();
+  for (let r = r1; r <= r2; r++) for (let c = c1; c <= c2; c++) {
+    const k = key(c, r); const cell = sh.cells[k] || {}; cell.s = cell.s || {};
+    fn(cell.s, c, r);
+    for (const p in cell.s) if (cell.s[p] === undefined || cell.s[p] === "" || cell.s[p] === false) delete cell.s[p];
+    if (!Object.keys(cell.s).length) delete cell.s;
+    if (cell.v === undefined && !cell.s) delete sh.cells[k]; else sh.cells[k] = cell;
+  }
+  save(); renderCells(); updateToolbar();
+}
+
+// ═══════════════════════════════════════════════
+//  グリッド描画
+// ═══════════════════════════════════════════════
+const gridEl = $("grid"), wrap = $("gridWrap");
+let tdMap = []; // [r][c] -> td
+let thCols = [], thRows = [];
+
+function buildGrid() {
+  const sh = sheet();
+  let html = "<colgroup><col style='width:46px'>";
+  for (let c = 0; c < sh.cols; c++) html += `<col style="width:${sh.colW[c] || DEF_W}px">`;
+  html += "</colgroup><thead><tr><th class='corner'></th>";
+  for (let c = 0; c < sh.cols; c++) html += `<th data-c="${c}">${colName(c)}<div class="col-resize" data-c="${c}"></div></th>`;
+  html += "</tr></thead><tbody>";
+  for (let r = 0; r < sh.rows; r++) {
+    html += `<tr><th data-r="${r}">${r + 1}</th>`;
+    for (let c = 0; c < sh.cols; c++) html += `<td data-c="${c}" data-r="${r}"></td>`;
+    html += "</tr>";
+  }
+  html += "</tbody>";
+  gridEl.innerHTML = html;
+  gridEl.style.width = (46 + Array.from({ length: sh.cols }, (_, c) => sh.colW[c] || DEF_W).reduce((a, b) => a + b, 0)) + "px";
+  tdMap = []; const rows = gridEl.tBodies[0].rows;
+  thRows = [];
+  for (let r = 0; r < sh.rows; r++) { const tr = rows[r]; thRows.push(tr.cells[0]); tdMap.push(Array.from(tr.cells).slice(1)); }
+  thCols = Array.from(gridEl.tHead.rows[0].cells).slice(1);
+  clampSel();
+  renderCells();
+}
+function clampSel() {
+  const sh = sheet();
+  const cl = (p) => ({ c: Math.max(0, Math.min(sh.cols - 1, p.c)), r: Math.max(0, Math.min(sh.rows - 1, p.r)) });
+  act = cl(act); anchor = cl(anchor); selEnd = cl(selEnd);
+}
+
+function renderCells() {
+  invalidate();
+  const sh = sheet();
+  for (let r = 0; r < sh.rows; r++) for (let c = 0; c < sh.cols; c++) {
+    const td = tdMap[r][c]; const cell = sh.cells[key(c, r)];
+    if (!cell) { if (td._d) { td.textContent = ""; td.className = ""; td.removeAttribute("style"); td._d = 0; } continue; }
+    const v = cellValue(sh, c, r); const s = cell.s || {};
+    let cls = "";
+    if (isErr(v)) cls = "err"; else if (typeof v === "number" && s.fmt !== "plain") cls = "num"; else if (typeof v === "boolean") cls = "bool";
+    td.className = cls;
+    td.textContent = fmtValue(v, s.fmt);
+    let st = "";
+    if (s.b) st += "font-weight:700;";
+    if (s.i) st += "font-style:italic;";
+    if (s.st) st += "text-decoration:line-through;";
+    if (s.fc) st += `color:${s.fc};`;
+    if (s.bg) st += `background-color:${s.bg};`;
+    if (s.al) st += `text-align:${s.al};`;
+    td.setAttribute("style", st);
+    td._d = 1;
+  }
+  renderSel();
+}
+
+function cellRect(c, r) { const td = tdMap[r] && tdMap[r][c]; if (!td) return null; return { x: td.offsetLeft, y: td.offsetTop, w: td.offsetWidth, h: td.offsetHeight }; }
+function boxRect(c1, r1, c2, r2) { const a = cellRect(c1, r1), b = cellRect(c2, r2); if (!a || !b) return null; return { x: a.x, y: a.y, w: b.x + b.w - a.x, h: b.y + b.h - a.y }; }
+function place(el, rc, inset = 0) { if (!rc) { el.style.display = "none"; return; } el.style.display = "block"; el.style.left = rc.x - 1 + inset + "px"; el.style.top = rc.y - 1 + inset + "px"; el.style.width = rc.w + 1 - inset * 2 + "px"; el.style.height = rc.h + 1 - inset * 2 + "px"; }
+
+let prevIn = [];
+function renderSel() {
+  const { c1, r1, c2, r2 } = selRect();
+  prevIn.forEach((td) => td.classList.remove("in")); prevIn = [];
+  thCols.forEach((th) => th.classList.remove("on")); thRows.forEach((th) => th.classList.remove("on"));
+  const multi = c1 !== c2 || r1 !== r2;
+  if (multi) for (let r = r1; r <= r2; r++) for (let c = c1; c <= c2; c++) { if (c === act.c && r === act.r) continue; const td = tdMap[r][c]; td.classList.add("in"); prevIn.push(td); }
+  for (let c = c1; c <= c2; c++) thCols[c] && thCols[c].classList.add("on");
+  for (let r = r1; r <= r2; r++) thRows[r] && thRows[r].classList.add("on");
+  place($("selBox"), multi ? boxRect(c1, r1, c2, r2) : null);
+  place($("actBox"), cellRect(act.c, act.r));
+  const br = boxRect(c1, r1, c2, r2);
+  const fh = $("fillHandle");
+  if (br && !editing) { fh.style.display = "block"; fh.style.left = br.x + br.w - 5 + "px"; fh.style.top = br.y + br.h - 5 + "px"; } else fh.style.display = "none";
+  $("nameBox").value = multi ? `${key(c1, r1)}:${key(c2, r2)}` : key(act.c, act.r);
+  if (!editing) { const cell = sheet().cells[key(act.c, act.r)]; $("fInput").value = cell && cell.v != null ? cell.v : ""; }
+  updateToolbar(); renderStat();
+  if (!editing) positionHiddenEditor();
+}
+function renderStat() {
+  const { c1, r1, c2, r2 } = selRect();
+  const el = $("stat");
+  if (c1 === c2 && r1 === r2) { el.textContent = ""; return; }
+  const sh = sheet(); let sum = 0, n = 0, cnt = 0;
+  for (let r = r1; r <= r2; r++) for (let c = c1; c <= c2; c++) { const v = cellValue(sh, c, r); if (v != null && v !== "") cnt++; if (typeof v === "number") { sum += v; n++; } }
+  const modes = n ? [["合計", fmtValue(sum, "num")], ["平均", fmtValue(sum / n, "num")], ["カウント", String(cnt)]] : [["カウント", String(cnt)]];
+  const i = (renderStat.mode || 0) % modes.length;
+  el.textContent = `${modes[i][0]}: ${modes[i][1]}`;
+}
+$("stat").onclick = () => { renderStat.mode = (renderStat.mode || 0) + 1; renderStat(); };
+
+function scrollIntoCell(c, r) {
+  const rc = cellRect(c, r); if (!rc) return;
+  const headH = gridEl.tHead.offsetHeight, headW = 46;
+  if (rc.y - headH < wrap.scrollTop) wrap.scrollTop = rc.y - headH;
+  else if (rc.y + rc.h > wrap.scrollTop + wrap.clientHeight) wrap.scrollTop = rc.y + rc.h - wrap.clientHeight;
+  if (rc.x - headW < wrap.scrollLeft) wrap.scrollLeft = rc.x - headW;
+  else if (rc.x + rc.w > wrap.scrollLeft + wrap.clientWidth) wrap.scrollLeft = rc.x + rc.w - wrap.clientWidth;
+}
+
+function select(c, r, extend) {
+  const sh = sheet();
+  c = Math.max(0, Math.min(sh.cols - 1, c)); r = Math.max(0, Math.min(sh.rows - 1, r));
+  if (extend) { selEnd = { c, r }; }
+  else { act = { c, r }; anchor = { c, r }; selEnd = { c, r }; }
+  renderSel(); scrollIntoCell(c, r);
+}
+
+// ═══════════════════════════════════════════════
+//  ツールバー
+// ═══════════════════════════════════════════════
+const COLORS = ["#000000", "#434343", "#666666", "#999999", "#cccccc", "#efefef", "#f3f3f3", "#ffffff",
+  "#980000", "#ff0000", "#ff9900", "#ffff00", "#00ff00", "#00ffff", "#4a86e8", "#0000ff",
+  "#e6b8af", "#f4cccc", "#fce5cd", "#fff2cc", "#d9ead3", "#d0e0e3", "#c9daf8", "#cfe2f3",
+  "#cc4125", "#e06666", "#f6b26b", "#ffd966", "#93c47d", "#76a5af", "#6d9eeb", "#6fa8dc"];
+const AL_ICONS = { "": "format_align_left", left: "format_align_left", center: "format_align_center", right: "format_align_right" };
+
+function curStyle() { const c = sheet().cells[key(act.c, act.r)]; return (c && c.s) || {}; }
+function updateToolbar() {
+  const s = curStyle();
+  const tb = $("toolbar");
+  tb.querySelector('[data-act="b"]').classList.toggle("on", !!s.b);
+  tb.querySelector('[data-act="i"]').classList.toggle("on", !!s.i);
+  tb.querySelector('[data-act="s"]').classList.toggle("on", !!s.st);
+  tb.querySelector('[data-act="fmt-yen"]').classList.toggle("on", s.fmt === "yen");
+  tb.querySelector('[data-act="fmt-pct"]').classList.toggle("on", s.fmt === "pct");
+  tb.querySelector('[data-act="undo"]').disabled = !undoStack.length;
+  tb.querySelector('[data-act="redo"]').disabled = !redoStack.length;
+  $("alIcon").textContent = AL_ICONS[s.al || ""];
+}
+
+$("toolbar").addEventListener("click", (e) => {
+  const btn = e.target.closest("[data-act]"); if (!btn) return;
+  if (editing) commitEdit();
+  const a = btn.dataset.act;
+  const s = curStyle();
+  if (a === "undo") undo();
+  else if (a === "redo") redo();
+  else if (a === "b") { const v = !s.b; setStyle((x) => (x.b = v)); }
+  else if (a === "i") { const v = !s.i; setStyle((x) => (x.i = v)); }
+  else if (a === "s") { const v = !s.st; setStyle((x) => (x.st = v)); }
+  else if (a === "fmt-yen") { const v = s.fmt === "yen" ? "" : "yen"; setStyle((x) => (x.fmt = v)); }
+  else if (a === "fmt-pct") { const v = s.fmt === "pct" ? "" : "pct"; setStyle((x) => (x.fmt = v)); }
+  else if (a === "clear") setStyle((x) => { for (const p in x) delete x[p]; });
+  else if (a === "fmt") openMenu(btn, FORMATS.map((f) => ({ label: f.name, sub: f.ex, cur: (s.fmt || "") === f.id, fn: () => setStyle((x) => (x.fmt = f.id)) })));
+  else if (a === "al") openMenu(btn, [["left", "左揃え"], ["center", "中央揃え"], ["right", "右揃え"]].map(([v, l]) => ({ icon: AL_ICONS[v], label: l, cur: s.al === v, fn: () => setStyle((x) => (x.al = v)) })));
+  else if (a === "fc" || a === "bg") openColorMenu(btn, a);
+  else if (a === "sum") openMenu(btn, ["SUM", "AVERAGE", "COUNT", "MAX", "MIN", "IF", "ROUND", "SUMIF", "VLOOKUP", "CONCATENATE"].map((f) => ({ label: f, fn: () => insertFunc(f) })));
+});
+function openColorMenu(btn, prop) {
+  const m = openMenu(btn, []);
+  m.innerHTML = `<div class="mlabel">${prop === "fc" ? "文字の色" : "塗りつぶしの色"}</div><div class="swatches">` +
+    `<div class="sw none" data-col=""></div>` + COLORS.map((c) => `<div class="sw" data-col="${c}" style="background:${c}"></div>`).join("") + `</div>`;
+  m.onclick = (e) => {
+    const sw = e.target.closest(".sw"); if (!sw) return;
+    const col = sw.dataset.col; closeMenu();
+    setStyle((x) => (x[prop] = col));
+    const bar = $(prop + "Bar"); bar.style.background = col || (prop === "fc" ? "#1f1f1f" : "#fff");
+  };
+}
+function insertFunc(f) {
+  const { c1, r1, c2, r2 } = selRect();
+  const sh = sheet();
+  if (["SUM", "AVERAGE", "COUNT", "MAX", "MIN"].includes(f)) {
+    // 範囲が選択されていれば、その下 (横長なら右) に結果を入れる (Σ ボタン的な動き)
+    if (c1 !== c2 || r1 !== r2) {
+      pushUndo();
+      if (r1 !== r2 || c1 === c2) { for (let c = c1; c <= c2; c++) setRaw(sh, c, Math.min(r2 + 1, sh.rows - 1), `=${f}(${key(c, r1)}:${key(c, r2)})`); select(c1, Math.min(r2 + 1, sh.rows - 1)); }
+      else { setRaw(sh, Math.min(c2 + 1, sh.cols - 1), r1, `=${f}(${key(c1, r1)}:${key(c2, r1)})`); select(Math.min(c2 + 1, sh.cols - 1), r1); }
+      save(); renderCells(); return;
+    }
+    // 単一セル: 上に連続した数値があれば自動で範囲を推測
+    let r = act.r - 1; while (r >= 0 && typeof cellValue(sh, act.c, r) === "number") r--;
+    if (r < act.r - 1) { startEdit(`=${f}(${key(act.c, r + 1)}:${key(act.c, act.r - 1)})`); return; }
+  }
+  startEdit(`=${f}(`);
+}
+
+// ═══════════════════════════════════════════════
+//  メニュー
+// ═══════════════════════════════════════════════
+function openMenu(anchorEl, items, pos) {
+  const m = $("menu");
+  m.onclick = null;
+  m.innerHTML = items.map((it, i) => it === "-" ? "<hr>" : it.label === undefined ? "" :
+    `<button class="mi${it.danger ? " danger" : ""}${it.cur ? " cur" : ""}" data-i="${i}">${it.icon ? `<span class="icon">${it.icon}</span>` : ""}<span>${esc(it.label)}</span>${it.sub ? `<span class="sub">${esc(it.sub)}</span>` : ""}</button>`).join("");
+  m.onclick = (e) => { const b = e.target.closest(".mi"); if (!b) return; const it = items[+b.dataset.i]; closeMenu(); it.fn && it.fn(); };
+  m.classList.add("open"); $("menuBack").classList.add("open");
+  const vw = innerWidth, vh = innerHeight;
+  let x, y;
+  if (pos) { x = pos.x; y = pos.y; }
+  else { const r = anchorEl.getBoundingClientRect(); x = r.left; y = r.bottom + 4; }
+  const mw = m.offsetWidth, mh = m.offsetHeight;
+  if (x + mw > vw - 8) x = vw - mw - 8;
+  if (y + mh > vh - 8) y = Math.max(8, (pos ? pos.y : anchorEl.getBoundingClientRect().top) - mh - 4);
+  m.style.left = Math.max(8, x) + "px"; m.style.top = y + "px";
+  return m;
+}
+function closeMenu() { $("menu").classList.remove("open"); $("menuBack").classList.remove("open"); }
+$("menuBack").addEventListener("pointerdown", (e) => { e.preventDefault(); closeMenu(); });
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+// セルの右クリック / 長押しメニュー
+function openCellMenu(x, y) {
+  const { c1, r1, c2, r2 } = selRect();
+  const nr = r2 - r1 + 1, nc = c2 - c1 + 1;
+  openMenu(null, [
+    { icon: "content_cut", label: "切り取り", fn: () => doCopy(true) },
+    { icon: "content_copy", label: "コピー", fn: () => doCopy(false) },
+    { icon: "content_paste", label: "貼り付け", fn: () => pasteFromMenu() },
+    "-",
+    { icon: "add", label: `上に ${nr} 行挿入`, fn: () => insertRows(r1, nr) },
+    { icon: "add", label: `下に ${nr} 行挿入`, fn: () => insertRows(r2 + 1, nr) },
+    { icon: "add", label: `左に ${nc} 列挿入`, fn: () => insertCols(c1, nc) },
+    { icon: "add", label: `右に ${nc} 列挿入`, fn: () => insertCols(c2 + 1, nc) },
+    "-",
+    { icon: "delete", label: `行 ${r1 + 1}${nr > 1 ? "-" + (r2 + 1) : ""} を削除`, danger: true, fn: () => deleteRows(r1, nr) },
+    { icon: "delete", label: `列 ${colName(c1)}${nc > 1 ? "-" + colName(c2) : ""} を削除`, danger: true, fn: () => deleteCols(c1, nc) },
+    { icon: "backspace", label: "値を削除", fn: () => clearValues() },
+    "-",
+    { icon: "sort", label: "A → Z で並べ替え (選択範囲)", fn: () => sortSel(1) },
+    { icon: "sort", label: "Z → A で並べ替え (選択範囲)", fn: () => sortSel(-1) },
+  ], { x, y });
+}
+
+// ═══════════════════════════════════════════════
+//  編集
+// ═══════════════════════════════════════════════
+const ed = $("cellEditor"), fin = $("fInput");
+
+function positionHiddenEditor() {
+  // 非編集時もデスクトップでは隠しエディタにフォーカスを置き、日本語入力 (IME) をそのまま受ける
+  const rc = cellRect(act.c, act.r); if (!rc) return;
+  ed.classList.add("hidden");
+  ed.style.left = rc.x + "px"; ed.style.top = rc.y + "px";
+  if (!isTouch() && document.activeElement !== fin && document.activeElement !== $("nameBox") && document.activeElement !== $("bookName") && !$("menu").classList.contains("open")) {
+    if (ed.value !== "") ed.value = "";
+    ed.focus({ preventScroll: true });
+  }
+}
+function showEditor() {
+  const rc = cellRect(act.c, act.r); if (!rc) return;
+  ed.classList.remove("hidden");
+  ed.style.left = rc.x - 1 + "px"; ed.style.top = rc.y - 1 + "px";
+  ed.style.minWidth = rc.w + 1 + "px"; ed.style.height = rc.h + 1 + "px";
+  autosizeEditor();
+  $("fillHandle").style.display = "none";
+}
+function autosizeEditor() {
+  ed.style.width = "0px";
+  const lines = ed.value.split("\n").length;
+  ed.style.width = Math.max(parseFloat(ed.style.minWidth) || 0, Math.min(ed.scrollWidth + 8, 600)) + "px";
+  ed.style.height = Math.max(24, lines * 19 + 4) + "px";
+}
+
+function startEdit(initial, fromBar) {
+  if (editing) return;
+  const cell = sheet().cells[key(act.c, act.r)];
+  editOrig = cell && cell.v != null ? String(cell.v) : "";
+  editing = true; editFromBar = !!fromBar;
+  const val = initial !== undefined ? initial : editOrig;
+  ed.value = val; fin.value = val;
+  showEditor();
+  if (fromBar) { fin.focus(); }
+  else { ed.focus({ preventScroll: true }); const n = ed.value.length; ed.setSelectionRange(n, n); }
+  refInsert = null;
+}
+function commitEdit(moveDc = 0, moveDr = 0) {
+  if (!editing) return;
+  lastTap.t = 0;
+  const val = editFromBar ? fin.value : ed.value;
+  editing = false; editFromBar = false; refInsert = null; $("refBox").style.display = "none";
+  ed.classList.add("hidden"); ed.value = "";
+  if (val !== editOrig) {
+    pushUndo();
+    let v = val;
+    if (v[0] === "=") v = autoCloseParens(v);
+    setRaw(sheet(), act.c, act.r, v);
+    save();
+  }
+  renderCells();
+  if (moveDc || moveDr) select(act.c + moveDc, act.r + moveDr); else renderSel();
+}
+function cancelEdit() {
+  if (!editing) return;
+  editing = false; editFromBar = false; refInsert = null; $("refBox").style.display = "none";
+  ed.classList.add("hidden"); ed.value = "";
+  renderSel();
+}
+function autoCloseParens(v) {
+  let d = 0, inStr = false;
+  for (const ch of v) { if (ch === '"') inStr = !inStr; else if (!inStr) { if (ch === "(") d++; else if (ch === ")") d--; } }
+  return d > 0 ? v + ")".repeat(d) : v;
+}
+
+// 隠しエディタへの入力 = 編集開始 (IME 対応)
+let composing = false;
+ed.addEventListener("compositionstart", () => { composing = true; if (!editing) { const cell = sheet().cells[key(act.c, act.r)]; editOrig = cell && cell.v != null ? String(cell.v) : ""; editing = true; editFromBar = false; showEditor(); } });
+ed.addEventListener("compositionend", () => { composing = false; autosizeEditor(); fin.value = ed.value; });
+ed.addEventListener("input", () => {
+  if (!editing) { const v = ed.value; const cell = sheet().cells[key(act.c, act.r)]; editOrig = cell && cell.v != null ? String(cell.v) : ""; editing = true; editFromBar = false; showEditor(); ed.value = v; refInsert = null; }
+  fin.value = ed.value; autosizeEditor(); refInsert = null;
+});
+fin.addEventListener("focus", () => { if (!editing) startEdit(undefined, true); else if (!editFromBar) { editFromBar = true; fin.value = ed.value; } });
+fin.addEventListener("input", () => { if (!editing) startEdit(fin.value, true); ed.value = fin.value; autosizeEditor(); refInsert = null; });
+fin.addEventListener("keydown", (e) => {
+  if (e.isComposing || e.keyCode === 229) return;
+  if (e.key === "Enter") { e.preventDefault(); commitEdit(0, 1); if (isTouch()) fin.blur(); else ed.focus({ preventScroll: true }); }
+  else if (e.key === "Escape") { e.preventDefault(); cancelEdit(); fin.blur(); }
+  else if (e.key === "Tab") { e.preventDefault(); commitEdit(e.shiftKey ? -1 : 1, 0); }
+});
+
+// ── キーボード ──
+ed.addEventListener("keydown", (e) => {
+  if (e.isComposing || composing || e.keyCode === 229) return;
+  const mod = e.ctrlKey || e.metaKey;
+  if (editing) {
+    if (e.key === "Enter" && e.altKey) { e.preventDefault(); insertAtCaret("\n"); return; }
+    if (e.key === "Enter") { e.preventDefault(); commitEdit(0, e.shiftKey ? -1 : 1); return; }
+    if (e.key === "Tab") { e.preventDefault(); commitEdit(e.shiftKey ? -1 : 1, 0); return; }
+    if (e.key === "Escape") { e.preventDefault(); cancelEdit(); return; }
+    // 数式入力中に矢印でセル参照を挿入
+    if (e.key.startsWith("Arrow") && isRefInsertPoint()) {
+      e.preventDefault();
+      const d = { ArrowUp: [0, -1], ArrowDown: [0, 1], ArrowLeft: [-1, 0], ArrowRight: [1, 0] }[e.key];
+      const base = refInsert ? (e.shiftKey ? refInsert.end : refInsert.end) : { ...act };
+      const end = { c: Math.max(0, base.c + d[0]), r: Math.max(0, base.r + d[1]) };
+      insertRef(e.shiftKey && refInsert ? refInsert.start : end, end);
+      return;
+    }
+    return;
+  }
+  lastTap.t = 0;
+  if (mod && e.key.toLowerCase() === "z") { e.preventDefault(); e.shiftKey ? redo() : undo(); return; }
+  if (mod && e.key.toLowerCase() === "y") { e.preventDefault(); redo(); return; }
+  if (mod && e.key.toLowerCase() === "b") { e.preventDefault(); const v = !curStyle().b; setStyle((x) => (x.b = v)); return; }
+  if (mod && e.key.toLowerCase() === "i") { e.preventDefault(); const v = !curStyle().i; setStyle((x) => (x.i = v)); return; }
+  if (mod && e.key.toLowerCase() === "a") { e.preventDefault(); anchor = { c: 0, r: 0 }; selEnd = { c: sheet().cols - 1, r: sheet().rows - 1 }; renderSel(); return; }
+  if (mod) return; // コピー/貼り付けは copy/paste イベントで
+  const arrows = { ArrowUp: [0, -1], ArrowDown: [0, 1], ArrowLeft: [-1, 0], ArrowRight: [1, 0] };
+  if (arrows[e.key]) {
+    e.preventDefault(); const [dc, dr] = arrows[e.key];
+    if (e.shiftKey) select(selEnd.c + dc, selEnd.r + dr, true); else select(act.c + dc, act.r + dr);
+    return;
+  }
+  if (e.key === "Enter") { e.preventDefault(); if (e.shiftKey) select(act.c, act.r - 1); else startEdit(); return; }
+  if (e.key === "Tab") { e.preventDefault(); select(act.c + (e.shiftKey ? -1 : 1), act.r); return; }
+  if (e.key === "F2") { e.preventDefault(); startEdit(); return; }
+  if (e.key === "Delete" || e.key === "Backspace") { e.preventDefault(); clearValues(); return; }
+  if (e.key === "PageDown") { e.preventDefault(); select(act.c, act.r + 20); return; }
+  if (e.key === "PageUp") { e.preventDefault(); select(act.c, act.r - 20); return; }
+  if (e.key === "Home") { e.preventDefault(); select(0, act.r); return; }
+});
+function insertAtCaret(s) { const a = ed.selectionStart, b = ed.selectionEnd; ed.value = ed.value.slice(0, a) + s + ed.value.slice(b); ed.setSelectionRange(a + s.length, a + s.length); fin.value = ed.value; autosizeEditor(); }
+
+// ── 数式入力中のセル参照挿入 (クリック / ドラッグ / 矢印) ──
+let refInsert = null; // { pos, len, start, end }
+function editText() { return editFromBar ? fin.value : ed.value; }
+function setEditText(v, caret) { ed.value = v; fin.value = v; const el = editFromBar ? fin : ed; el.setSelectionRange(caret, caret); autosizeEditor(); }
+function isRefInsertPoint() {
+  const v = editText(); if (v[0] !== "=") return false;
+  if (refInsert) return true;
+  const el = editFromBar ? fin : ed;
+  const before = v.slice(0, el.selectionStart);
+  return /[=(,+\-*/&<>^:;]\s*$/.test(before);
+}
+function insertRef(start, end) {
+  const s = { c: Math.min(start.c, end.c), r: Math.min(start.r, end.r) }, e2 = { c: Math.max(start.c, end.c), r: Math.max(start.r, end.r) };
+  const txt = s.c === e2.c && s.r === e2.r ? key(s.c, s.r) : `${key(s.c, s.r)}:${key(e2.c, e2.r)}`;
+  const v = editText(); const el = editFromBar ? fin : ed;
+  let pos, len;
+  if (refInsert) { pos = refInsert.pos; len = refInsert.len; } else { pos = el.selectionStart; len = 0; }
+  setEditText(v.slice(0, pos) + txt + v.slice(pos + len), pos + txt.length);
+  refInsert = { pos, len: txt.length, start, end };
+  place($("refBox"), boxRect(s.c, s.r, e2.c, e2.r));
+}
+
+// ═══════════════════════════════════════════════
+//  ポインタ操作 (クリック / ドラッグ選択 / 長押し / ダブルタップ)
+// ═══════════════════════════════════════════════
+function cellFromPoint(x, y) {
+  const el = document.elementFromPoint(x, y);
+  const td = el && el.closest && el.closest("td[data-c]");
+  if (td) return { c: +td.dataset.c, r: +td.dataset.r };
+  return null;
+}
+let drag = null, lastTap = { t: 0, c: -1, r: -1 }, longTimer = null;
+
+wrap.addEventListener("pointerdown", (e) => {
+  if (e.target.closest(".col-resize") || e.target.closest("#fillHandle") || e.target.closest(".more-rows") || e.target === ed) return;
+  const th = e.target.closest("th");
+  if (th && th.dataset.c !== undefined) { // 列見出し
+    if (editing) commitEdit();
+    const c = +th.dataset.c;
+    if (e.shiftKey) { selEnd = { c, r: sheet().rows - 1 }; anchor.r = 0; } else { act = { c, r: 0 }; anchor = { c, r: 0 }; selEnd = { c, r: sheet().rows - 1 }; }
+    renderSel(); drag = { mode: "col", startC: c, id: e.pointerId, touch: e.pointerType === "touch" }; return;
+  }
+  if (th && th.dataset.r !== undefined) { // 行見出し
+    if (editing) commitEdit();
+    const r = +th.dataset.r;
+    if (e.shiftKey) { selEnd = { c: sheet().cols - 1, r }; anchor.c = 0; } else { act = { c: 0, r }; anchor = { c: 0, r }; selEnd = { c: sheet().cols - 1, r }; }
+    renderSel(); drag = { mode: "row", startR: r, id: e.pointerId, touch: e.pointerType === "touch" }; return;
+  }
+  const td = e.target.closest("td[data-c]"); if (!td) return;
+  const c = +td.dataset.c, r = +td.dataset.r;
+  if (e.button === 2) { // 右クリック: 選択範囲内ならそのまま
+    const s = selRect(); if (!(c >= s.c1 && c <= s.c2 && r >= s.r1 && r <= s.r2)) { if (editing) commitEdit(); select(c, r); }
+    return;
+  }
+  // 数式入力中ならクリックで参照を挿入
+  if (editing && isRefInsertPoint() && !(c === act.c && r === act.r)) {
+    e.preventDefault();
+    insertRef({ c, r }, { c, r });
+    drag = { mode: "ref", start: { c, r }, id: e.pointerId };
+    return;
+  }
+  const touch = e.pointerType === "touch";
+  if (touch) {
+    // タッチ: スクロールと区別するため、ここでは選択だけして、ドラッグ範囲選択は長押し後
+    drag = { mode: "touch", c, r, x: e.clientX, y: e.clientY, moved: false, id: e.pointerId };
+    clearTimeout(longTimer);
+    // 長押し → そのまま指を動かすと範囲選択、離すとメニュー
+    longTimer = setTimeout(() => {
+      if (!drag || drag.moved || drag.mode !== "touch") return;
+      if (editing) commitEdit();
+      const s = selRect(); const inside = c >= s.c1 && c <= s.c2 && r >= s.r1 && r <= s.r2;
+      if (!inside) select(c, r);
+      if (navigator.vibrate) navigator.vibrate(10);
+      drag = { ...drag, mode: "touchsel", extended: false, keep: inside };
+    }, 450);
+    return;
+  }
+  e.preventDefault();
+  if (editing) { if (c === act.c && r === act.r) return; commitEdit(); }
+  if (e.shiftKey) select(c, r, true);
+  else {
+    const now = Date.now();
+    if (now - lastTap.t < 350 && lastTap.c === c && lastTap.r === r) { startEdit(); lastTap.t = 0; return; }
+    lastTap = { t: now, c, r };
+    select(c, r);
+  }
+  drag = { mode: "sel", id: e.pointerId };
+  ed.focus({ preventScroll: true });
+});
+wrap.addEventListener("contextmenu", (e) => { if (e.target.closest("td[data-c]") || e.target.closest("th")) { e.preventDefault(); if (!isTouch()) openCellMenu(e.clientX, e.clientY); } });
+
+window.addEventListener("pointermove", (e) => {
+  if (!drag || (drag.id !== undefined && drag.id !== e.pointerId)) return;
+  if (drag.mode === "touch") { if (Math.hypot(e.clientX - drag.x, e.clientY - drag.y) > 8) { drag.moved = true; clearTimeout(longTimer); } return; }
+  if (drag.mode === "touchsel") {
+    const p = cellFromPoint(e.clientX, e.clientY);
+    if (p && (p.c !== selEnd.c || p.r !== selEnd.r)) { if (!drag.extended && drag.keep) { act = { c: drag.c, r: drag.r }; anchor = { ...act }; } drag.extended = true; selEnd = p; renderSel(); }
+    autoScroll(e); return;
+  }
+  if (drag.mode === "resize") {
+    const w = Math.max(30, drag.w0 + e.clientX - drag.x0);
+    sheet().colW[drag.c] = w; gridEl.querySelectorAll("col")[drag.c + 1].style.width = w + "px";
+    gridEl.style.width = (46 + Array.from({ length: sheet().cols }, (_, c) => sheet().colW[c] || DEF_W).reduce((a, b) => a + b, 0)) + "px";
+    renderSel(); return;
+  }
+  if (drag.mode === "fill") { updateFill(e.clientX, e.clientY); autoScroll(e); return; }
+  if (drag.mode === "col") { const p = cellFromPoint(e.clientX, Math.max(e.clientY, wrap.getBoundingClientRect().top + 30)); if (p) { selEnd = { c: p.c, r: sheet().rows - 1 }; renderSel(); } return; }
+  if (drag.mode === "row") { const p = cellFromPoint(Math.max(e.clientX, wrap.getBoundingClientRect().left + 50), e.clientY); if (p) { selEnd = { c: sheet().cols - 1, r: p.r }; renderSel(); } return; }
+  const p = cellFromPoint(e.clientX, e.clientY);
+  if (drag.mode === "sel" && p && (p.c !== selEnd.c || p.r !== selEnd.r)) { selEnd = p; renderSel(); }
+  if (drag.mode === "ref" && p) insertRef(drag.start, p);
+  autoScroll(e);
+});
+window.addEventListener("pointerup", (e) => {
+  clearTimeout(longTimer);
+  if (!drag) return;
+  if (drag.mode === "touch" && !drag.moved) {
+    const { c, r } = drag;
+    if (editing) {
+      if (isRefInsertPoint() && !(c === act.c && r === act.r)) { insertRef({ c, r }, { c, r }); drag = null; return; }
+      if (c === act.c && r === act.r) { drag = null; return; }
+      commitEdit();
+    }
+    // 選択中のセルをもう一度タップ → 編集
+    if (c === act.c && r === act.r && anchor.c === selEnd.c && anchor.r === selEnd.r) startEdit();
+    else select(c, r);
+  }
+  if (drag.mode === "touchsel" && !drag.extended) openCellMenu(drag.x, drag.y);
+  if (drag.mode === "fill") finishFill();
+  if (drag.mode === "resize") save();
+  drag = null;
+});
+window.addEventListener("pointercancel", () => { clearTimeout(longTimer); if (drag && drag.mode === "fill") { $("fillBox").style.display = "none"; fillTarget = null; } if (drag && drag.mode !== "touchsel") drag = null; });
+// 長押し範囲選択・オートフィル中はスクロールさせない
+wrap.addEventListener("touchmove", (e) => { if (drag && (drag.mode === "touchsel" || drag.mode === "fill" || drag.mode === "resize")) e.preventDefault(); }, { passive: false });
+function autoScroll(e) {
+  const r = wrap.getBoundingClientRect(); const m = 30;
+  let dx = 0, dy = 0;
+  if (e.clientX > r.right - m) dx = 12; else if (e.clientX < r.left + 46 + 10) dx = -12;
+  if (e.clientY > r.bottom - m) dy = 12; else if (e.clientY < r.top + 30) dy = -12;
+  wrap.scrollLeft += dx; wrap.scrollTop += dy;
+}
+
+// 列幅変更
+wrap.addEventListener("pointerdown", (e) => {
+  const h = e.target.closest(".col-resize"); if (!h) return;
+  e.preventDefault(); e.stopPropagation();
+  const c = +h.dataset.c;
+  pushUndo();
+  drag = { mode: "resize", c, x0: e.clientX, w0: sheet().colW[c] || DEF_W, id: e.pointerId };
+}, true);
+wrap.addEventListener("dblclick", (e) => {
+  const h = e.target.closest(".col-resize"); if (!h) return;
+  // ダブルクリックで中身に合わせる
+  const c = +h.dataset.c; const sh = sheet();
+  const meas = document.createElement("span"); meas.style.cssText = "position:absolute;visibility:hidden;white-space:pre;font-size:13px;font-family:Outfit,sans-serif"; document.body.appendChild(meas);
+  let w = 40; for (let r = 0; r < sh.rows; r++) { const t = tdMap[r][c].textContent; if (t) { meas.textContent = t; w = Math.max(w, meas.offsetWidth + 14); } }
+  meas.remove(); sh.colW[c] = Math.min(w, 500); save(); buildGrid();
+});
+
+// ── オートフィル (右下の■をドラッグ) ──
+let fillTarget = null;
+$("fillHandle").addEventListener("pointerdown", (e) => {
+  e.preventDefault(); e.stopPropagation();
+  drag = { mode: "fill", id: e.pointerId }; fillTarget = null;
+  $("fillHandle").setPointerCapture(e.pointerId);
+});
+$("fillHandle").addEventListener("pointermove", (e) => { if (drag && drag.mode === "fill") { updateFill(e.clientX, e.clientY); autoScroll(e); } });
+$("fillHandle").addEventListener("pointerup", () => { if (drag && drag.mode === "fill") { finishFill(); drag = null; } });
+function updateFill(x, y) {
+  const p = cellFromPoint(x, y); if (!p) return;
+  const s = selRect();
+  // 縦横どちらに伸ばすかは、はみ出し量が大きい方
+  const dDown = p.r > s.r2 ? p.r - s.r2 : p.r < s.r1 ? p.r - s.r1 : 0;
+  const dRight = p.c > s.c2 ? p.c - s.c2 : p.c < s.c1 ? p.c - s.c1 : 0;
+  let t = null;
+  if (Math.abs(dDown) >= Math.abs(dRight) && dDown) t = dDown > 0 ? { c1: s.c1, r1: s.r1, c2: s.c2, r2: p.r, dir: "down" } : { c1: s.c1, r1: p.r, c2: s.c2, r2: s.r2, dir: "up" };
+  else if (dRight) t = dRight > 0 ? { c1: s.c1, r1: s.r1, c2: p.c, r2: s.r2, dir: "right" } : { c1: p.c, r1: s.r1, c2: s.c2, r2: s.r2, dir: "left" };
+  fillTarget = t;
+  place($("fillBox"), t ? boxRect(t.c1, t.r1, t.c2, t.r2) : null);
+}
+function finishFill() {
+  $("fillBox").style.display = "none";
+  const t = fillTarget; fillTarget = null; if (!t) return;
+  const s = selRect(), sh = sheet();
+  pushUndo();
+  const vertical = t.dir === "down" || t.dir === "up";
+  const lines = vertical ? range(s.c1, s.c2) : range(s.r1, s.r2);
+  for (const ln of lines) {
+    // 元の並び
+    const src = vertical ? range(s.r1, s.r2).map((r) => ({ c: ln, r })) : range(s.c1, s.c2).map((c) => ({ c, r: ln }));
+    const raws = src.map((p) => sh.cells[key(p.c, p.r)]);
+    // 数値が 2 つ以上並んでいれば等差で伸ばす
+    const vals = raws.map((x) => (x && x.v != null && x.v[0] !== "=" ? parseLiteral(x.v).v : null));
+    const series = src.length >= 2 && vals.every((v) => typeof v === "number");
+    const step = series ? (vals[vals.length - 1] - vals[0]) / (vals.length - 1) : 0;
+    const dests = vertical
+      ? (t.dir === "down" ? range(s.r2 + 1, t.r2) : range(t.r1, s.r1 - 1).reverse()).map((r) => ({ c: ln, r }))
+      : (t.dir === "right" ? range(s.c2 + 1, t.c2) : range(t.c1, s.c1 - 1).reverse()).map((c) => ({ c, r: ln }));
+    const back = t.dir === "up" || t.dir === "left";
+    dests.forEach((d, i) => {
+      const si = back ? (src.length - 1 - (i % src.length)) : i % src.length;
+      const from = src[si], cell = raws[si];
+      const k = key(d.c, d.r);
+      if (series) {
+        const n = back ? vals[0] - step * (i + 1) : vals[vals.length - 1] + step * (i + 1);
+        sh.cells[k] = { v: String(+n.toPrecision(12)), ...(cell.s ? { s: clone(cell.s) } : {}) };
+        return;
+      }
+      if (!cell) { delete sh.cells[k]; return; }
+      const nc = clone(cell);
+      if (typeof nc.v === "string" && nc.v[0] === "=") nc.v = shiftFormula(nc.v, d.c - from.c, d.r - from.r);
+      else if (src.length === 1 && typeof nc.v === "string") {
+        // 「1日目」「No.3」みたいな末尾数字付き文字列は連番に (Sheets と同じ)
+        const m = /^(.*?)(\d+)(\D*)$/.exec(nc.v);
+        if (m && typeof parseLiteral(nc.v).v !== "number") nc.v = m[1] + String(+m[2] + (back ? -(i + 1) : i + 1)).padStart(m[2].length, "0") + m[3];
+      }
+      sh.cells[k] = nc;
+    });
+  }
+  anchor = { c: t.c1, r: t.r1 }; selEnd = { c: t.c2, r: t.r2 };
+  save(); renderCells();
+}
+const range = (a, b) => { const o = []; for (let i = a; i <= b; i++) o.push(i); return o; };
+
+// ═══════════════════════════════════════════════
+//  コピー / 貼り付け
+// ═══════════════════════════════════════════════
+function selToTSV() {
+  const { c1, r1, c2, r2 } = selRect(), sh = sheet();
+  const rows = [];
+  for (let r = r1; r <= r2; r++) { const row = []; for (let c = c1; c <= c2; c++) { const cell = sh.cells[key(c, r)]; let t = cell ? fmtValue(cellValue(sh, c, r), cell.s && cell.s.fmt) : ""; if (/[\t\n"]/.test(t)) t = '"' + t.replace(/"/g, '""') + '"'; row.push(t); } rows.push(row.join("\t")); }
+  return rows.join("\n");
+}
+function grabClip(cut) {
+  const s = selRect(), sh = sheet(); const cells = [];
+  for (let r = s.r1; r <= s.r2; r++) { const row = []; for (let c = s.c1; c <= s.c2; c++) row.push(sh.cells[key(c, r)] ? clone(sh.cells[key(c, r)]) : null); cells.push(row); }
+  clip = { cells, origin: { c: s.c1, r: s.r1 }, tsv: selToTSV(), cut, sheetId: sh.id, rect: s };
+  return clip;
+}
+function doCopy(cut) {
+  const c = grabClip(cut);
+  if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(c.tsv).catch(() => {});
+  toast(cut ? "切り取りました" : "コピーしました");
+}
+async function pasteFromMenu() {
+  let text = null;
+  try { if (navigator.clipboard && navigator.clipboard.readText) text = await navigator.clipboard.readText(); } catch (e) {}
+  pasteText(text);
+}
+function parseTSV(text) {
+  const rows = []; let row = [], cur = "", q = false;
+  const sep = text.includes("\t") ? "\t" : (/^[^\n]*,/.test(text) && !text.includes("\t") ? null : "\t");
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (q) { if (ch === '"') { if (text[i + 1] === '"') { cur += '"'; i++; } else q = false; } else cur += ch; }
+    else if (ch === '"' && cur === "") q = true;
+    else if (ch === (sep || "\t")) { row.push(cur); cur = ""; }
+    else if (ch === "\n" || ch === "\r") { if (ch === "\r" && text[i + 1] === "\n") i++; row.push(cur); rows.push(row); row = []; cur = ""; }
+    else cur += ch;
+  }
+  if (cur !== "" || row.length) { row.push(cur); rows.push(row); }
+  return rows;
+}
+function pasteText(text) {
+  const sh = sheet();
+  const internal = clip && (text == null || text.replace(/\r/g, "") === clip.tsv);
+  if (!internal && !text) { toast("貼り付けるものがありません"); return; }
+  pushUndo();
+  const s = selRect();
+  if (internal) {
+    const h = clip.cells.length, w = clip.cells[0].length;
+    // 選択範囲がコピー元の整数倍なら繰り返して埋める
+    const selH = s.r2 - s.r1 + 1, selW = s.c2 - s.c1 + 1;
+    const rh = selH % h === 0 ? selH : h, rw = selW % w === 0 ? selW : w;
+    if (clip.cut) { const src = book().sheets.find((x) => x.id === clip.sheetId); if (src) for (let r = clip.rect.r1; r <= clip.rect.r2; r++) for (let c = clip.rect.c1; c <= clip.rect.c2; c++) delete src.cells[key(c, r)]; }
+    for (let i = 0; i < rh; i++) for (let j = 0; j < rw; j++) {
+      const c = s.c1 + j, r = s.r1 + i; if (c >= sh.cols || r >= sh.rows) continue;
+      const cell = clip.cells[i % h][j % w]; const k = key(c, r);
+      if (!cell) { delete sh.cells[k]; continue; }
+      const nc = clone(cell);
+      if (!clip.cut && typeof nc.v === "string" && nc.v[0] === "=") nc.v = shiftFormula(nc.v, c - (clip.origin.c + (j % w)), r - (clip.origin.r + (i % h)));
+      sh.cells[k] = nc;
+    }
+    anchor = { c: s.c1, r: s.r1 }; selEnd = { c: Math.min(sh.cols - 1, s.c1 + rw - 1), r: Math.min(sh.rows - 1, s.r1 + rh - 1) };
+    if (clip.cut) clip = null;
+  } else {
+    const rows = parseTSV(text.replace(/\n$/, ""));
+    ensureSize(s.r1 + rows.length, s.c1 + Math.max(...rows.map((r) => r.length)));
+    rows.forEach((row, i) => row.forEach((v, j) => setRaw(sh, s.c1 + j, s.r1 + i, v)));
+    anchor = { c: s.c1, r: s.r1 }; selEnd = { c: s.c1 + Math.max(...rows.map((r) => r.length)) - 1, r: s.r1 + rows.length - 1 };
+    buildGrid();
+  }
+  save(); renderCells();
+}
+function ensureSize(rows, cols) { const sh = sheet(); let ch = false; if (rows > sh.rows) { sh.rows = rows; ch = true; } if (cols > sh.cols) { sh.cols = cols; ch = true; } if (ch) buildGrid(); }
+
+document.addEventListener("copy", (e) => { if (editing || isFieldFocused()) return; e.preventDefault(); const c = grabClip(false); e.clipboardData.setData("text/plain", c.tsv); });
+document.addEventListener("cut", (e) => { if (editing || isFieldFocused()) return; e.preventDefault(); const c = grabClip(true); e.clipboardData.setData("text/plain", c.tsv); });
+document.addEventListener("paste", (e) => { if (editing || isFieldFocused()) return; e.preventDefault(); pasteText(e.clipboardData.getData("text/plain")); });
+function isFieldFocused() { const a = document.activeElement; return a === fin || a === $("nameBox") || a === $("bookName"); }
+
+function clearValues() {
+  pushUndo();
+  const { c1, r1, c2, r2 } = selRect(), sh = sheet();
+  for (let r = r1; r <= r2; r++) for (let c = c1; c <= c2; c++) setRaw(sh, c, r, "");
+  save(); renderCells();
+}
+
+// ═══════════════════════════════════════════════
+//  行・列の挿入 / 削除 (数式の参照もずらす)
+// ═══════════════════════════════════════════════
+function remapSheet(sh, mapCell) {
+  const out = {};
+  for (const k in sh.cells) { const p = parseKey(k); const n = mapCell(p.c, p.r); if (n) out[key(n.c, n.r)] = sh.cells[k]; }
+  sh.cells = out;
+}
+function fixAllFormulas(targetSheet, mapRef) {
+  for (const s of book().sheets) for (const k in s.cells) {
+    const cell = s.cells[k];
+    if (typeof cell.v === "string" && cell.v[0] === "=") {
+      cell.v = rewriteRefs(cell.v, (sname, c, r) => {
+        const refSheet = sname ? findSheetByName(sname) : s;
+        if (refSheet !== targetSheet) return { c, r };
+        return mapRef(c, r);
+      });
+    }
+  }
+}
+function insertRows(at, n) {
+  pushUndo(); const sh = sheet();
+  fixAllFormulas(sh, (c, r) => ({ c, r: r >= at ? r + n : r }));
+  remapSheet(sh, (c, r) => ({ c, r: r >= at ? r + n : r }));
+  sh.rows += n; save(); buildGrid();
+}
+function deleteRows(at, n) {
+  pushUndo(); const sh = sheet();
+  fixAllFormulas(sh, (c, r) => (r >= at && r < at + n ? null : { c, r: r >= at + n ? r - n : r }));
+  remapSheet(sh, (c, r) => (r >= at && r < at + n ? null : { c, r: r >= at + n ? r - n : r }));
+  sh.rows = Math.max(1, sh.rows - n); select(act.c, at); save(); buildGrid();
+}
+function insertCols(at, n) {
+  pushUndo(); const sh = sheet();
+  fixAllFormulas(sh, (c, r) => ({ c: c >= at ? c + n : c, r }));
+  remapSheet(sh, (c, r) => ({ c: c >= at ? c + n : c, r }));
+  const w = {}; for (const c in sh.colW) w[+c >= at ? +c + n : c] = sh.colW[c]; sh.colW = w;
+  sh.cols += n; save(); buildGrid();
+}
+function deleteCols(at, n) {
+  pushUndo(); const sh = sheet();
+  fixAllFormulas(sh, (c, r) => (c >= at && c < at + n ? null : { c: c >= at + n ? c - n : c, r }));
+  remapSheet(sh, (c, r) => (c >= at && c < at + n ? null : { c: c >= at + n ? c - n : c, r }));
+  const w = {}; for (const c in sh.colW) { if (+c >= at && +c < at + n) continue; w[+c >= at + n ? +c - n : c] = sh.colW[c]; } sh.colW = w;
+  sh.cols = Math.max(1, sh.cols - n); select(at, act.r); save(); buildGrid();
+}
+function sortSel(dir) {
+  const { c1, r1, c2, r2 } = selRect(), sh = sheet();
+  if (r1 === r2) return;
+  pushUndo();
+  const rows = [];
+  for (let r = r1; r <= r2; r++) { const row = []; for (let c = c1; c <= c2; c++) row.push(sh.cells[key(c, r)] || null); rows.push({ key: cellValue(sh, act.c, r), row }); }
+  rows.sort((a, b) => { const x = a.key, y = b.key; if (x == null || x === "") return 1; if (y == null || y === "") return -1; return (cmp(x, y, "<") ? -1 : cmp(x, y, ">") ? 1 : 0) * dir; });
+  rows.forEach((o, i) => o.row.forEach((cell, j) => { const k = key(c1 + j, r1 + i); if (cell) sh.cells[k] = cell; else delete sh.cells[k]; }));
+  save(); renderCells();
+}
+
+$("btnMoreRows").onclick = () => { pushUndo(); sheet().rows += 50; save(); buildGrid(); };
+
+// ═══════════════════════════════════════════════
+//  名前ボックス (A1 や B2:D5 を入れるとジャンプ)
+// ═══════════════════════════════════════════════
+$("nameBox").addEventListener("focus", (e) => e.target.select());
+$("nameBox").addEventListener("keydown", (e) => {
+  if (e.key !== "Enter") return;
+  e.preventDefault();
+  const m = /^\s*([A-Za-z]{1,3})(\d+)(?::([A-Za-z]{1,3})(\d+))?\s*$/.exec(e.target.value);
+  if (m) {
+    const a = { c: colIndex(m[1]), r: +m[2] - 1 };
+    ensureSize(a.r + 1, a.c + 1);
+    select(a.c, a.r);
+    if (m[3]) { const b = { c: colIndex(m[3]), r: +m[4] - 1 }; ensureSize(b.r + 1, b.c + 1); selEnd = b; renderSel(); }
+  }
+  e.target.blur(); if (!isTouch()) ed.focus({ preventScroll: true });
+});
+
+// ═══════════════════════════════════════════════
+//  シートタブ
+// ═══════════════════════════════════════════════
+function renderTabs() {
+  const b = book();
+  $("tabs").innerHTML = b.sheets.map((s) => `<button class="tab${s.id === b.active ? " on" : ""}" data-id="${s.id}">${esc(s.name)}${s.id === b.active ? '<span class="icon">arrow_drop_down</span>' : ""}</button>`).join("");
+}
+$("tabs").addEventListener("click", (e) => {
+  const t = e.target.closest(".tab"); if (!t) return;
+  if (editing) commitEdit();
+  const b = book();
+  if (t.dataset.id === b.active) { openSheetMenu(t); return; }
+  b.active = t.dataset.id; act = { c: 0, r: 0 }; anchor = { ...act }; selEnd = { ...act };
+  save(); buildGrid(); renderTabs(); wrap.scrollTo(0, 0);
+});
+$("btnAddSheet").onclick = () => {
+  if (editing) commitEdit();
+  const b = book(); let n = b.sheets.length + 1; while (b.sheets.some((s) => s.name === "シート" + n)) n++;
+  const s = newSheet("シート" + n); b.sheets.push(s); b.active = s.id;
+  act = { c: 0, r: 0 }; anchor = { ...act }; selEnd = { ...act };
+  save(); buildGrid(); renderTabs();
+};
+function openSheetMenu(tab) {
+  const b = book(), sh = sheet(), i = b.sheets.indexOf(sh);
+  openMenu(tab, [
+    { icon: "edit", label: "名前を変更", fn: () => {
+      const n = prompt("シート名", sh.name); if (!n || n === sh.name) return;
+      if (findSheetByName(n)) { toast("同じ名前のシートがあります"); return; }
+      const old = sh.name;
+      // 他シートの数式内のシート名も置き換え
+      for (const s of b.sheets) for (const k in s.cells) { const c = s.cells[k]; if (typeof c.v === "string" && c.v[0] === "=") c.v = renameSheetInFormula(c.v, old, n); }
+      sh.name = n; save(); renderTabs(); renderCells();
+    } },
+    { icon: "content_copy", label: "コピーを作成", fn: () => { const c = clone(sh); c.id = uid(); let nm = sh.name + " のコピー", j = 2; while (findSheetByName(nm)) nm = sh.name + " のコピー " + j++; c.name = nm; b.sheets.splice(i + 1, 0, c); b.active = c.id; save(); buildGrid(); renderTabs(); } },
+    { icon: "arrow_back", label: "左に移動", fn: () => { if (i > 0) { b.sheets.splice(i, 1); b.sheets.splice(i - 1, 0, sh); save(); renderTabs(); } } },
+    { icon: "arrow_forward", label: "右に移動", fn: () => { if (i < b.sheets.length - 1) { b.sheets.splice(i, 1); b.sheets.splice(i + 1, 0, sh); save(); renderTabs(); } } },
+    "-",
+    { icon: "delete", label: "削除", danger: true, fn: () => {
+      if (b.sheets.length <= 1) { toast("最後のシートは削除できません"); return; }
+      if (!confirm(`「${sh.name}」を削除しますか？`)) return;
+      b.sheets.splice(i, 1); b.active = b.sheets[Math.max(0, i - 1)].id; undoStack = []; redoStack = [];
+      save(); buildGrid(); renderTabs();
+    } },
+  ]);
+}
+function renameSheetInFormula(f, oldN, newN) {
+  const q = (n) => (/^[A-Za-z0-9_぀-ヿ㐀-鿿＀-￯]+$/.test(n) ? n : "'" + n.replace(/'/g, "''") + "'");
+  const parts = f.split(/("(?:[^"]|"")*")/);
+  const reEsc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const re = new RegExp("(^|[^A-Za-z0-9_.$'!])(?:'" + reEsc(oldN.replace(/'/g, "''")) + "'|" + reEsc(oldN) + ")!", "gi");
+  return parts.map((p, i) => (i % 2 ? p : p.replace(re, (all, pre) => pre + q(newN) + "!"))).join("");
+}
+
+// ═══════════════════════════════════════════════
+//  ファイル (スプレッドシートの切替・新規・CSV)
+// ═══════════════════════════════════════════════
+$("bookName").addEventListener("change", (e) => { const n = e.target.value.trim() || "無題のスプレッドシート"; book().name = n; e.target.value = n; document.title = n; save(); });
+$("bookName").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); e.target.blur(); } });
+$("bookName").addEventListener("blur", () => { if (!isTouch()) setTimeout(() => positionHiddenEditor(), 0); });
+
+$("btnFile").onclick = (e) => {
+  if (editing) commitEdit();
+  const books = [...store.books].sort((a, b) => (b.updated || 0) - (a.updated || 0));
+  const d = (t) => { const x = new Date(t || 0); return `${x.getMonth() + 1}/${x.getDate()}`; };
+  openMenu($("btnFile"), [
+    { icon: "add", label: "新しいスプレッドシート", fn: () => { const b = newBook("無題のスプレッドシート"); store.books.push(b); openBook(b.id); setTimeout(() => $("bookName").select(), 50); } },
+    { icon: "upload_file", label: "CSV を読み込む (新しいシート)", fn: () => $("csvFile").click() },
+    { icon: "download", label: "このシートを CSV で保存", fn: exportCSV },
+    { icon: "content_copy", label: "このファイルのコピーを作成", fn: () => { const b = clone(book()); b.id = uid(); b.name += " のコピー"; store.books.push(b); openBook(b.id); } },
+    { icon: "delete", label: "このファイルを削除", danger: true, fn: () => {
+      if (!confirm(`「${book().name}」を削除しますか？元に戻せません。`)) return;
+      store.books = store.books.filter((b) => b.id !== store.current);
+      if (!store.books.length) store.books.push(newBook("無題のスプレッドシート"));
+      openBook(store.books[0].id);
+    } },
+    "-",
+    ...books.map((b) => ({ icon: "table_view", label: b.name, sub: d(b.updated), cur: b.id === store.current, fn: () => openBook(b.id) })),
+  ]);
+};
+function openBook(id) {
+  store.current = id; undoStack = []; redoStack = [];
+  act = { c: 0, r: 0 }; anchor = { ...act }; selEnd = { ...act };
+  $("bookName").value = book().name; document.title = book().name;
+  save(); buildGrid(); renderTabs(); wrap.scrollTo(0, 0);
+}
+function exportCSV() {
+  const sh = sheet(); let maxR = -1, maxC = -1;
+  for (const k in sh.cells) { if (sh.cells[k].v === undefined) continue; const p = parseKey(k); maxR = Math.max(maxR, p.r); maxC = Math.max(maxC, p.c); }
+  const lines = [];
+  for (let r = 0; r <= maxR; r++) { const row = []; for (let c = 0; c <= maxC; c++) { const cell = sh.cells[key(c, r)]; let t = cell && cell.v !== undefined ? fmtValue(cellValue(sh, c, r), cell.s && cell.s.fmt === "yen" ? "" : cell.s && cell.s.fmt) : ""; if (/[",\n]/.test(t)) t = '"' + t.replace(/"/g, '""') + '"'; row.push(t); } lines.push(row.join(",")); }
+  const blob = new Blob(["﻿" + lines.join("\r\n")], { type: "text/csv" });
+  const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = `${book().name}_${sh.name}.csv`; a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+$("csvFile").addEventListener("change", async (e) => {
+  const f = e.target.files[0]; if (!f) return; e.target.value = "";
+  const buf = await f.arrayBuffer();
+  let text = new TextDecoder("utf-8").decode(buf);
+  if (text.includes("�")) { try { text = new TextDecoder("shift_jis").decode(buf); } catch (err) {} } // Excel の Shift_JIS CSV
+  text = text.replace(/^﻿/, "");
+  const isTsv = /\.tsv$/i.test(f.name) || (text.includes("\t") && !text.split("\n")[0].includes(","));
+  const rows = isTsv ? parseTSV(text) : parseCSV(text);
+  const b = book(); let name = f.name.replace(/\.(csv|tsv|txt)$/i, ""), j = 2; while (findSheetByName(name)) name = f.name.replace(/\.(csv|tsv|txt)$/i, "") + " " + j++;
+  const sh = newSheet(name);
+  sh.rows = Math.max(DEF_ROWS, rows.length + 20); sh.cols = Math.max(DEF_COLS, ...rows.map((r) => r.length));
+  b.sheets.push(sh); b.active = sh.id;
+  rows.forEach((row, r) => row.forEach((v, c) => setRaw(sh, c, r, v)));
+  act = { c: 0, r: 0 }; anchor = { ...act }; selEnd = { ...act };
+  save(); buildGrid(); renderTabs();
+  toast(`${rows.length} 行を読み込みました`);
+});
+function parseCSV(text) {
+  const rows = []; let row = [], cur = "", q = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (q) { if (ch === '"') { if (text[i + 1] === '"') { cur += '"'; i++; } else q = false; } else cur += ch; }
+    else if (ch === '"') q = true;
+    else if (ch === ",") { row.push(cur); cur = ""; }
+    else if (ch === "\n" || ch === "\r") { if (ch === "\r" && text[i + 1] === "\n") i++; row.push(cur); rows.push(row); row = []; cur = ""; }
+    else cur += ch;
+  }
+  if (cur !== "" || row.length) { row.push(cur); rows.push(row); }
+  return rows;
+}
+
+// ═══════════════════════════════════════════════
+//  起動
+// ═══════════════════════════════════════════════
+window.addEventListener("resize", () => renderSel());
+document.addEventListener("keydown", (e) => { if (e.key === "Escape" && $("menu").classList.contains("open")) closeMenu(); });
+// メニュー・フィールド外をクリックしたらデスクトップでは隠しエディタへフォーカスを戻す
+document.addEventListener("pointerup", () => { if (!isTouch() && !editing && !isFieldFocused() && !$("menu").classList.contains("open")) setTimeout(() => { if (!isFieldFocused()) ed.focus({ preventScroll: true }); }, 0); });
+
+$("bookName").value = book().name; document.title = book().name;
+buildGrid(); renderTabs();
+window.__sheet = { evaluate, shiftFormula, store, sheet }; // デバッグ用
+</script>
+</body>
+</html>
