@@ -88,8 +88,32 @@ export function vacantRanges(bookings, from, to) {
   return out;
 }
 
-export function createYado({ getPool, ensureSchema, getMeta }) {
+export function createYado({ getPool, ensureSchema, getMeta, refresh = null, refreshTimeoutMs = 25000 }) {
   const pool = () => { const p = getPool(); if (!p) throw new Error("DB not configured"); return p; };
+
+  // 読むときの取り直し: 最後の同期が STALE_HOURS より古いときだけ、Beds24 から取り直して (refresh = 画面の 🔄 と同じ処理) から答える。
+  // 書くのは自分の DB のキャッシュだけで、Beds24 の予約は一切変えない (だから readOnlyHint のまま)。
+  // 取り直しは RETRY_MS に 1 回まで・同時に 1 本・REFRESH_TIMEOUT_MS を超えたら待たずに今ある分で答える (失敗しても答えは返る)
+  const STALE_HOURS = 6, RETRY_MS = 30 * 60000;
+  let lastAttempt = 0, running = null;
+  async function refreshIfStale() {
+    if (!refresh) return null;
+    const f = await freshness();
+    if (f.bookings_in_db > 0 && f.hours_since_sync != null && f.hours_since_sync < STALE_HOURS) return null;
+    if (!running) {
+      if (Date.now() - lastAttempt < RETRY_MS) return { ran: false, reason: "30 分以内に取り直したばかりなので待っている" };
+      lastAttempt = Date.now();
+      running = Promise.resolve().then(() => refresh()).finally(() => { running = null; });
+      running.catch(() => {}); // タイムアウトで見放したあとの失敗が未処理にならないように
+    }
+    let timer;
+    try {
+      const r = await Promise.race([running, new Promise((_, rej) => { timer = setTimeout(() => rej(new Error(`Beds24 の取り直しが ${Math.round(refreshTimeoutMs / 1000)} 秒で終わらなかった (裏では続く)。今ある分で答える`)), refreshTimeoutMs); })]);
+      if (r && r.ok === false) return { ran: false, error: String(r.error || "取り直せなかった").slice(0, 200) };
+      return { ran: true, fetched: r?.fetched, upserted: r?.upserted, reconciled: r?.reconciled };
+    } catch (e) { return { ran: false, error: String(e?.message || e).slice(0, 200) }; }
+    finally { clearTimeout(timer); }
+  }
 
   async function freshness() {
     await ensureSchema();
@@ -103,7 +127,7 @@ export function createYado({ getPool, ensureSchema, getMeta }) {
       last_synced_at: last ? last.toISOString() : null,
       hours_since_sync: hours,
       note: !r.n ? "予約が DB に無い (まだ Beds24 から取り込んでいない)。/yado/ の 🔄 を人が押すと取り込まれる"
-        : hours != null && hours >= 24 ? `最後に Beds24 と同期したのは ${hours} 時間前。今の予約状況が必要なら人が /yado/ の 🔄 を押す (自動同期は未設定)` : undefined,
+        : hours != null && hours >= 24 ? `最後に Beds24 と同期したのは ${hours} 時間前。${refresh ? "読むときに自動で取り直す設定だが取り直せていない (data.refresh を見る)。" : ""}今の予約状況が必要なら人が /yado/ の 🔄 を押す` : undefined,
       last_sync_modified: meta || undefined,
     };
   }
@@ -119,7 +143,7 @@ export function createYado({ getPool, ensureSchema, getMeta }) {
   const tools = [
     {
       name: "yado_bookings",
-      description: "満竹華庵 (宿) の予約一覧と空き日。from〜to (YYYY-MM-DD、省略で今日から 30 日) にかかる予約を、チェックインの早い順に返す。各予約: 到着・出発・泊数・チャネル (airbnb / booking / direct / other)・人数・国・宿泊者名・金額 (price=総額、commission、net)・予約日・リードタイム。vacant に期間内の空き日 (連続でまとめたもの、泊数つき)。取消は既定で除く (include_cancelled: true で含める)。金額は円。data (最終同期の時刻) を見て古ければ人に同期を頼む",
+      description: "満竹華庵 (宿) の予約一覧と空き日。from〜to (YYYY-MM-DD、省略で今日から 30 日) にかかる予約を、チェックインの早い順に返す。各予約: 到着・出発・泊数・チャネル (airbnb / booking / direct / other)・人数・国・宿泊者名・金額 (price=総額、commission、net)・予約日・リードタイム。vacant に期間内の空き日 (連続でまとめたもの、泊数つき)。取消は既定で除く (include_cancelled: true で含める)。金額は円。data (最終同期の時刻) は 6 時間より古ければ読む前に Beds24 から自動で取り直す (data.refresh)。それでも古ければ人に /yado/ の 🔄 を頼む",
       annotations: READ,
       inputSchema: {
         type: "object",
@@ -139,6 +163,7 @@ export function createYado({ getPool, ensureSchema, getMeta }) {
         if (to < from) throw new Error("to は from 以降の日付");
         if (dayMs(to) - dayMs(from) > 800 * DAY) throw new Error("期間が長すぎる (800 日まで)");
         const limit = Math.min(300, Math.max(1, Number(a.limit) || 100));
+        const rf = await refreshIfStale();
         let list = await rowsOverlapping(from, addDays(to, 1), { cancelled: !!a.include_cancelled });
         if (a.channel) list = list.filter((b) => b.channel === a.channel);
         const live = list.filter((b) => b.status !== "cancelled");
@@ -148,7 +173,7 @@ export function createYado({ getPool, ensureSchema, getMeta }) {
           vacant: vacantRanges(live, from, to),
           bookings: list.slice(0, limit),
           truncated: total > limit ? `全 ${total} 件のうち先頭 ${limit} 件。from / to を絞る` : undefined,
-          data: await freshness(),
+          data: { ...(await freshness()), refresh: rf || undefined },
         };
       },
     },
@@ -175,6 +200,7 @@ export function createYado({ getPool, ensureSchema, getMeta }) {
           if (to < from) throw new Error("to_month は from_month 以降");
           if ((+to.slice(0, 4) * 12 + +to.slice(5, 7)) - (+from.slice(0, 4) * 12 + +from.slice(5, 7)) > 35) throw new Error("期間が長すぎる (36 か月まで)");
         }
+        const rf = await refreshIfStale();
         const list = await rowsOverlapping(monthStart(from), monthStart(nextMonth(to)));
         const months = [];
         for (let m = from; m <= to; m = nextMonth(m)) {
@@ -186,7 +212,7 @@ export function createYado({ getPool, ensureSchema, getMeta }) {
         return {
           currency: "JPY", rooms: NUM_ROOMS, months,
           total: months.length > 1 ? { nights: sum.nights, gross: sum.gross, net: sum.net, occupancy_pct: Math.round((sum.nights / Math.max(1, sum.available)) * 100) } : undefined,
-          data: await freshness(),
+          data: { ...(await freshness()), refresh: rf || undefined },
         };
       },
     },
@@ -197,7 +223,7 @@ export function createYado({ getPool, ensureSchema, getMeta }) {
     "- 「来月の予約状況・空き」→ yado_bookings(from, to)。vacant が空き日、bookings が予約。「今泊まっている人・明日の到着」も from=今日で引く",
     "- 「売上・稼働率」→ yado_sales。月ごとに稼働率・売上・net・ADR・チャネル別。1 か月を詳しく見るときは month、前年比は同じ月を去年で引いて比べる",
     "- 売上は予約の総額を泊数で按分してその月にかかる分を計上する (画面と同じ)。未来の月は今入っている予約だけで、今後増える。取消は含まない",
-    "- 返り値の data.last_synced_at が古い (data.note が出る) ときは、「最後の同期は〇時間前」と添えて答える。最新が要るときは人が /yado/ の 🔄 を押す (自動同期は未設定。ここから同期はできない)",
+    "- データは Beds24 を取り込んだ DB。最後の同期が 6 時間より古ければ、読む前にサーバーが Beds24 から自動で取り直す (返り値 data.refresh。Beds24 側は読むだけで、予約は変えない)。取り直せなかった (data.refresh.error) ときや、data.note が出たときは「最後の同期は〇時間前」と添えて答え、最新が要るときは人が /yado/ の 🔄 を押す",
     "- 宿泊者名は社内向け。お客さん・関係者への文面に引用しない。金額 (売上・手数料) も社内の数字として扱う",
   ].join("\n");
 

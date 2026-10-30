@@ -2848,7 +2848,7 @@ app.all("/api/meeting/mcp/:token", meeting.mcpRoute());
 // ═══════════════════ 宿 (満竹華庵) の予約・売上 MCP (読み取り専用) ═══════════════════
 // /yado/ と同じ yado_bookings (Beds24 のキャッシュ) を AI が読む。書き込み・Beds24 への問い合わせはしない。詳細は yado-lib/index.js。
 // ensureSchema / getYadoMeta は下の方の関数宣言 (巻き上げで先に使える)。単体 URL は無く、下の統合コネクタにだけ載る。
-const yado = createYado({ getPool, ensureSchema: () => ensureSchema(), getMeta: (k) => getYadoMeta(k) });
+const yado = createYado({ getPool, ensureSchema: () => ensureSchema(), getMeta: (k) => getYadoMeta(k), refresh: () => yadoRefreshNow() });
 
 // ═══════════════════ スプレッドシート (/sheet/ + MCP) ═══════════════════
 // 自前の表計算。正本は sheet_books (JSONB)。画面用 REST は認証 middleware の後ろで mountRoutes、MCP は統合コネクタに載る。詳細は sheet-lib/index.js
@@ -5971,6 +5971,16 @@ app.post("/api/yado/backfill", async (req, res) => {
     res.status(500).json({ error: e.message });
   }
 });
+
+// MCP (yado_*) が「最後の同期が古い」と見たときに使う取り直し。/api/yado/refresh の中身と同じ (差分 + 表示範囲の取り直し + 照合)。
+// Beds24 は読むだけ。書くのは yado_bookings のキャッシュだけ
+async function yadoRefreshNow() {
+  if (!BEDS24_API_TOKEN) return { ok: false, error: "MANCHIKAN_BEDS_KEY が未設定" };
+  const lastSync = await getYadoMeta("last_sync_modified");
+  const out = await refreshYadoWindow({ modifiedFrom: lastSync || undefined });
+  if (out.latestModified && (!lastSync || out.latestModified > lastSync)) await setYadoMeta("last_sync_modified", out.latestModified);
+  return { ok: true, ...out };
+}
 
 // /api/yado/refresh: ワンタップ同期 (Firebase auth)。
 // last_sync_modified が無ければ全期間バックフィル、あれば差分同期。フロントの
