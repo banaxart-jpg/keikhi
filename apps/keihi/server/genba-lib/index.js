@@ -8,6 +8,7 @@
 
 import crypto from "node:crypto";
 import { createJudgment } from "./judgment.js"; // 判断ログ (genba_judgment_*)
+import { createAbility, INTERNAL_ONLY as ABILITY_INTERNAL } from "./ability.js"; // 連絡先の能力 (genba_contact_ability_*)
 
 const SUBFOLDERS = {
   "図面": "01_図面", "見積": "02_見積", "業者見積": "02_見積", "写真": "03_写真", "資料": "04_資料", "参考": "05_参考",
@@ -58,6 +59,11 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
   // 起動時に index.js から先に呼んでおく (コールドスタート直後の最初のツール呼び出しを速くする)
   // 判断ログ: 小西の判断の癖を貯めて、当たり続けた種類から確認なしで送れるようにする (judgment.js)
   const judgment = createJudgment({ getPool, ready: () => ensureSchema(), resolveSite: (p, q) => resolveSiteOrNull(p, q) });
+  // 連絡先の能力 (13 項目 0〜5、付けた人ごと): 連絡先の列は増やさず、1 対多の別テーブルに持つ (ability.js)
+  const ability = createAbility({
+    getPool, ready: () => ensureSchema(),
+    resolveContact: (p, ref) => resolveContact(p, ref), loadContacts: (p) => loadContacts(p), contactsOut: (p, rows, o) => contactsOut(p, rows, o),
+  });
   let schemaOk = false, schemaPromise = null;
   async function ensureSchema() {
     if (schemaOk) return;
@@ -291,6 +297,8 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
     await p.query(`CREATE INDEX IF NOT EXISTS genba_notes_subject_idx ON genba_notes (subject_type, subject_id) WHERE retired_at IS NULL`);
     await p.query(`CREATE UNIQUE INDEX IF NOT EXISTS genba_notes_source_ref_uq ON genba_notes (source_ref) WHERE source_ref IS NOT NULL`);
     await p.query(`ALTER TABLE genba_notes ADD COLUMN IF NOT EXISTS title TEXT`);
+    // 連絡先の能力 (genba_contact_abilities): 新規テーブルだけ。genba_contacts は触らない (何度走らせても同じ)
+    await ability.ensureSchema(p);
     // 判断ログ (judgment_log / judgment_policy): 新規テーブルだけ。既存のテーブルは触らない (何度走らせても同じ)
     await judgment.ensureSchema(p);
     schemaOk = true;
@@ -715,7 +723,7 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
     const s = await resolveSite(p, ref); return { type, id: Number(s.id), label: s.name };
   }
 
-  const contactRow = (r, siteMap, notesMap, companyMap) => ({
+  const contactRow = (r, siteMap, notesMap, companyMap, abilityMap) => ({
     id: Number(r.id), name: r.name, company: r.company || null,
     company_detail: r.company_id && companyMap ? companyMap.get(Number(r.company_id)) || undefined : undefined,
     aliases: Array.isArray(r.aliases) ? r.aliases : [],
@@ -725,6 +733,9 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
     sites: (Array.isArray(r.site_ids) ? r.site_ids : []).map((id) => (siteMap && siteMap.get(Number(id))) || { id: Number(id) }),
     phone: r.phone || null, email: r.email || null, memo: r.notes || null,
     notes: (notesMap && notesMap.get(Number(r.id))) || [],
+    // 能力 (社内用): 付けた人ごとの点数 (0 = 未評価は出さない) と、付けた人の平均
+    abilities: (abilityMap && abilityMap.get(Number(r.id))?.abilities) || [],
+    ability_avg: (abilityMap && abilityMap.get(Number(r.id))?.avg) || undefined,
     updated_by: r.updated_by, updated_at: r.updated_at,
   });
   // site_ids → { id, code, name }、会社 (性質・メモ込み)、本人のメモ、recent なら最近のやりとり (genba_log の source.contact_id) も付けて返す
@@ -746,7 +757,8 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
         companyMap.set(Number(k.id), row);
       }
     }
-    const out = rows.map((r) => contactRow(r, siteMap, notesMap, companyMap));
+    const abilityMap = await ability.forContacts(p, rows.map((r) => r.id));
+    const out = rows.map((r) => contactRow(r, siteMap, notesMap, companyMap, abilityMap));
     if (recent) {
       // 直近のやりとりの時刻: この人からのメッセージの記録 (source.at) と、この人のルームの cursor (監視ジョブが最後に読んだメッセージの時刻)
       const roomIds = [...new Set(rows.flatMap((r) => (Array.isArray(r.channels) ? r.channels : []).map((c) => c.room_id).filter(Boolean)))];
@@ -1297,7 +1309,7 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
   // 読むだけのツール (readOnlyHint): claude.ai 側がキャッシュ・watch の可否を判断するのに使う
   const READ_ONLY = new Set(["genba_find", "genba_log_list", "genba_tasks", "genba_status", "genba_rule_get", "genba_audit",
     "genba_contact_find", "genba_contact_list", "genba_company_find", "genba_company_list", "genba_note_list", "genba_file_list", "genba_source_list",
-    "genba_judgment_similar", "genba_judgment_stats", "genba_judgment_policy_get"]);
+    "genba_judgment_similar", "genba_judgment_stats", "genba_judgment_policy_get", "genba_contact_ability_find"]);
   // by = 書いた人 (トークンから決まる)
   function tools(by = "小西") {
     return toolsFor(by).map((t) => (READ_ONLY.has(t.name) ? { ...t, annotations: { readOnlyHint: true } } : t));
@@ -1306,7 +1318,7 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
     return [
       {
         name: "genba_contact_find",
-        description: "人を探す (連絡先・呼び名)。名前・あだ名・会社名・LINE のルーム名・room_id をあいまい検索 (全角半角・空白・「さん」の有無・かな/カナを吸収)。人の名前やあだ名が出たら、送る前・記録する前に必ずこれで引く。送るときは返り値 message_hint (直近のやりとりが近ければ挨拶なしで用件から) に従う。match が入っていれば 1 人に確定。candidates が複数なら推測で決めず人に聞く",
+        description: "人を探す (連絡先・呼び名)。名前・あだ名・会社名・LINE のルーム名・room_id をあいまい検索 (全角半角・空白・「さん」の有無・かな/カナを吸収)。人の名前やあだ名が出たら、送る前・記録する前に必ずこれで引く。送るときは返り値 message_hint (直近のやりとりが近ければ挨拶なしで用件から) に従う。match が入っていれば 1 人に確定。candidates が複数なら推測で決めず人に聞く。返り値の abilities (能力 0〜5・付けた人ごと) / ability_avg は人選びの材料。" + ABILITY_INTERNAL,
         inputSchema: { type: "object", properties: { query: { type: "string", description: "例: バカボン / 菊池 / 大丁工業 / !8YEO…:beeper.local" } }, required: ["query"] },
         handler: async (a) => {
           await ensureSchema();
@@ -1397,7 +1409,7 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
       },
       {
         name: "genba_contact_list",
-        description: "連絡先の一覧。site (現場) / role (職人・業者・元請け・設計・客先・社内) / trade (職種) で絞る。全部省略で全員",
+        description: "連絡先の一覧。site (現場) / role (職人・業者・元請け・設計・客先・社内) / trade (職種) で絞る。全部省略で全員。返り値の abilities (能力 0〜5・付けた人ごと) / ability_avg は人選びの材料 (能力で絞るなら genba_contact_ability_find)。" + ABILITY_INTERNAL,
         inputSchema: { type: "object", properties: { site: { type: "string", description: "案件 ID・現場名・ID" }, role: { type: "string" }, trade: { type: "string" } } },
         handler: async (a) => {
           await ensureSchema();
@@ -2568,6 +2580,7 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
           return { disabled: rowCount > 0 };
         },
       },
+      ...ability.tools(by),
       ...judgment.tools(by),
     ];
   }
@@ -2632,6 +2645,7 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
     "4. Keihi に無い・自信がない → 推測しない。「確認して返します」と返し、小西に聞く (genba_log_add(kind=次やること, title=「名取の質問: …」, who=小西, estimate_min=5) + 小西に報告)。答えが分かったら本人に返して、その行を 解決 で閉じる",
     "5. 問い合わせの中に現場の決定・タスク・完了報告が入っていれば、それは通常どおり記録する (記録と応答は両立する)",
     "6. 答えたら、その質問と自分の返事を genba_source_mark の items に入れて (質問は該当の kind か 雑談、自分の返事は 返信) cursor を進める。文面は相手の tone に合わせ、短く (LINE なので 3〜4 行まで)",
+    ...ability.instructions,
     ...judgment.instructions,
   ].join("\n");
 

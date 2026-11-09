@@ -47,6 +47,8 @@
 | `genba_source_add(channel, room, site?, purpose?) / list / mark / remove` | ルームを現場に固定・用途を決める (普段は要らない)、一覧 (sources / excluded)、「ここまで読んだ」cursor、OFF |
 | `genba_contact_find(query)` | 人を探す (名前・あだ名・会社名・ルーム名・room_id)。1 件なら `match`、複数なら `candidates` だけ (AI は人に聞く) |
 | `genba_contact_upsert({name, company?, aliases?, role?, trade?, channels?, tone?, sites?, …})` | 連絡先の登録・更新。name + company で同一人物。aliases / channels / sites は足すだけ |
+| `genba_contact_ability_set(contact, scores, note?)` | 連絡先に能力を書く (13 項目 0〜5・0 = 未評価、付けた人はトークンから。変えたい項目だけ渡せばよい、0 で未評価に戻る、note = ひとこと 200 字まで)。例 `{"contact":"山田","scores":{"力":4,"信用":5},"note":"頼りになる"}`。**社内用: 本人・相手の会社への文面に引用しない**。監視ジョブのトークンは不可 |
+| `genba_contact_ability_find(min?, trade?, role?, by?, limit?)` | 能力で連絡先を探す。例「信用 4 以上の大工」→ `{"min":{"信用":4},"trade":"大工"}`。min は全部満たす人だけ。点数は付けた人の平均 (0 は数えない)、`by` で一人分に絞る。点数の高い順、各人に `abilities` / `score_used` |
 | `genba_contact_alias_add(contact, alias)` | 「A は B のこと」「覚えといて」→ 呼び名を足す |
 | `genba_contact_list(site?, role?, trade?)` | 現場ごと・役割ごと・職種ごとの顔ぶれ |
 | `genba_contact_remove(contact)` | 1 件消す (小西のトークンからだけ。掃除用) |
@@ -58,6 +60,14 @@
 | `genba_judgment_similar(query?, category?, site?, limit?)` | 【判断ログ】過去の判断の検索 (答え済み)。似ている度 × 新しさ の順。query 省略は新しい順 |
 | `genba_judgment_stats(days?, category?)` | 【判断ログ】種類ごとの件数・一致率・直近の連続一致数・最後の不一致の日・未回答・モード。昇格の目安を満たすと `promotion_candidate` (「昇格候補」) |
 | `genba_judgment_policy_get()` / `genba_judgment_policy_set(category, mode, threshold?)` | 【判断ログ】種類ごとのモード (確認あり / 事後報告) の一覧と切り替え (set は小西のトークンだけ) |
+
+### 連絡先の能力 (`genba_contact_abilities`)
+連絡先 (`genba_contacts`) には列を足さず、付けた人ごとに別の点数を持てるよう 1 対多の別テーブルにする (`genba-lib/ability.js`)。連絡先を消すと能力も消える (`ON DELETE CASCADE`)。
+- 13 項目を各 0〜5 の整数 (0 = 未評価): 力 / 体力 / 現場の正確さ / 現場のスピード / 運転・移動 / 職人の仕切り / 電話・交渉 / 段取り・日程 / 気づき・検討 / 図面・納まり / 数字・書類 / ネット手配 / 信用。DB の列は英語名 (`power` `stamina` `site_accuracy` `site_speed` `driving` `crew_lead` `negotiation` `planning` `insight` `drawings` `numbers_docs` `online_ordering` `trust`)、API は日本語名 (「運転移動」のような表記ゆれは吸収)
+- `genba_contact_abilities`: `(contact_id, rated_by)` が PK。13 項目 (`CHECK 0〜5`、既定 0) + `note` (能力のひとこと) + `rated_at` (付けた日時 = 最後に書き換えた時刻)。小西と名取は別の行
+- `genba_contact_find` / `genba_contact_list` (と upsert / alias_add) の返り値に `abilities` (付けた人ごと `{by, scores, note, at}`、0 の項目は出さない) と `ability_avg` (付けた人の平均) が付く。評価のない人は `abilities: []`
+- 見えるのは全員のトークン (社内用)。**本人・相手の会社への文面には点数もひとこともその言い換えも書かない** (ツールの説明と手順書に明記)。社内の人への返答でも点数やひとことの原文は貼らない (評価メモと同じ扱い)
+- マイグレーションは `ensureSchemaOnce` の `CREATE TABLE IF NOT EXISTS` (新規 1 テーブルだけ、既存は触らない)。テスト `genba-lib/ability.test.mjs` (pglite、実行手順はファイル先頭)
 
 ### 連絡先・呼び名 (`genba_contacts`)
 人をあだ名や下の名前で呼ぶ (例: バカボンさん = ㈱大丁工業 菊池) ので、「誰か / どの LINE ルームに送るか / どんな言葉遣いか」を
