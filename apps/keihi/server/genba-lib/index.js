@@ -59,10 +59,11 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
   // 起動時に index.js から先に呼んでおく (コールドスタート直後の最初のツール呼び出しを速くする)
   // 判断ログ: 小西の判断の癖を貯めて、当たり続けた種類から確認なしで送れるようにする (judgment.js)
   const judgment = createJudgment({ getPool, ready: () => ensureSchema(), resolveSite: (p, q) => resolveSiteOrNull(p, q) });
-  // 連絡先の能力 (13 項目 0〜5、付けた人ごと): 連絡先の列は増やさず、1 対多の別テーブルに持つ (ability.js)
+  // 連絡先の能力 (点数・理由、付けた人ごと) / 条件 / チーム (ability.js)。点数は別テーブル、条件とチームは genba_contacts の追加の列
   const ability = createAbility({
     getPool, ready: () => ensureSchema(),
     resolveContact: (p, ref) => resolveContact(p, ref), loadContacts: (p) => loadContacts(p), contactsOut: (p, rows, o) => contactsOut(p, rows, o),
+    contactScore: (r, q) => contactScore(r, q), normName: (s) => normName(s),
   });
   let schemaOk = false, schemaPromise = null;
   async function ensureSchema() {
@@ -733,9 +734,11 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
     sites: (Array.isArray(r.site_ids) ? r.site_ids : []).map((id) => (siteMap && siteMap.get(Number(id))) || { id: Number(id) }),
     phone: r.phone || null, email: r.email || null, memo: r.notes || null,
     notes: (notesMap && notesMap.get(Number(r.id))) || [],
-    // 能力 (社内用): 付けた人ごとの点数 (0 = 未評価は出さない) と、付けた人の平均
+    // 能力 (社内用): 付けた人ごとの点数・理由 (未入力の項目は出さない) と付けた人の平均。条件 (夜間 OK・人数・車・エリア)。チーム (親方と子方)
     abilities: (abilityMap && abilityMap.get(Number(r.id))?.abilities) || [],
-    ability_avg: (abilityMap && abilityMap.get(Number(r.id))?.avg) || undefined,
+    ability_avg: (abilityMap && abilityMap.get(Number(r.id))?.ability_avg) || undefined,
+    conditions: (abilityMap && abilityMap.get(Number(r.id))?.conditions) || undefined,
+    team: (abilityMap && abilityMap.get(Number(r.id))?.team) || undefined,
     updated_by: r.updated_by, updated_at: r.updated_at,
   });
   // site_ids → { id, code, name }、会社 (性質・メモ込み)、本人のメモ、recent なら最近のやりとり (genba_log の source.contact_id) も付けて返す
@@ -757,7 +760,7 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
         companyMap.set(Number(k.id), row);
       }
     }
-    const abilityMap = await ability.forContacts(p, rows.map((r) => r.id));
+    const abilityMap = await ability.forContacts(p, rows);
     const out = rows.map((r) => contactRow(r, siteMap, notesMap, companyMap, abilityMap));
     if (recent) {
       // 直近のやりとりの時刻: この人からのメッセージの記録 (source.at) と、この人のルームの cursor (監視ジョブが最後に読んだメッセージの時刻)
@@ -1318,7 +1321,7 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
     return [
       {
         name: "genba_contact_find",
-        description: "人を探す (連絡先・呼び名)。名前・あだ名・会社名・LINE のルーム名・room_id をあいまい検索 (全角半角・空白・「さん」の有無・かな/カナを吸収)。人の名前やあだ名が出たら、送る前・記録する前に必ずこれで引く。送るときは返り値 message_hint (直近のやりとりが近ければ挨拶なしで用件から) に従う。match が入っていれば 1 人に確定。candidates が複数なら推測で決めず人に聞く。返り値の abilities (能力 0〜5・付けた人ごと) / ability_avg は人選びの材料。" + ABILITY_INTERNAL,
+        description: "人を探す (連絡先・呼び名)。名前・あだ名・会社名・LINE のルーム名・room_id をあいまい検索 (全角半角・空白・「さん」の有無・かな/カナを吸収)。人の名前やあだ名が出たら、送る前・記録する前に必ずこれで引く。送るときは返り値 message_hint (直近のやりとりが近ければ挨拶なしで用件から) に従う。match が入っていれば 1 人に確定。candidates が複数なら推測で決めず人に聞く。返り値の abilities (能力の点数と理由・付けた人ごと) / ability_avg / conditions (夜間 OK・人数・車・エリア) / team (親方と子方) は人選びの材料。" + ABILITY_INTERNAL,
         inputSchema: { type: "object", properties: { query: { type: "string", description: "例: バカボン / 菊池 / 大丁工業 / !8YEO…:beeper.local" } }, required: ["query"] },
         handler: async (a) => {
           await ensureSchema();
@@ -1330,7 +1333,7 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
       },
       {
         name: "genba_contact_upsert",
-        description: "連絡先を登録・更新する。name + company で同一人物を判定 (company 省略時は同じ名前が 1 人だけならその人)。aliases / channels / sites は既存に足す (消えない)、他の項目は渡したものだけ上書き。channels の room_id は Beeper の変わらない ID (!xxxx:beeper.local) を正本にする。数字の chatID は chat_id に (補助)",
+        description: "連絡先を登録・更新する。name + company で同一人物を判定 (company 省略時は同じ名前が 1 人だけならその人)。aliases / channels / sites は既存に足す (消えない)、他の項目は渡したものだけ上書き。channels の room_id は Beeper の変わらない ID (!xxxx:beeper.local) を正本にする。数字の chatID は chat_id に (補助)。team = どこのチームか (親方の連絡先)",
         inputSchema: {
           type: "object",
           properties: {
@@ -1347,6 +1350,7 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
             tone: { type: "string", description: "言葉遣い (例: 丁寧語・「！」なし / 軽め・「！」可)" },
             sites: { type: "array", items: { type: "string" }, description: "関わっている現場 (案件 ID・現場名・ID)" },
             phone: { type: "string" }, email: { type: "string" }, memo: { type: "string", description: "本人についての自由メモ (1 行)。性質・予定など流れない情報は genba_note_add の方へ" },
+            team: { type: "string", description: "どこのチームか = 親方の連絡先 (名前・呼び名・ID。登録済みの人)。例: ヒッキー → まちゃ。\"\" で外す、省略で今のまま" },
           },
           required: ["name"],
         },
@@ -1366,6 +1370,14 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
           if (companyKey) cur = same.find((r) => r.company_key === companyKey) || (same.length === 1 && !same[0].company_key ? same[0] : null);
           else if (same.length === 1) cur = same[0];
           else if (same.length > 1) throw new Error(`同じ名前が複数: ${same.map((r) => `#${r.id} ${r.name} (${r.company || "会社なし"})`).join(" / ")}。company で区別する`);
+          // チーム (親方): undefined = 今のまま / null = 外す / 行 = 親方。自分自身や、自分の子方は親方にできない (ぐるぐる回る)
+          let teamLead;
+          if (a.team === null || (a.team !== undefined && String(a.team).trim() === "")) teamLead = null;
+          else if (a.team !== undefined) {
+            teamLead = await resolveContact(p, a.team);
+            if (cur && Number(teamLead.id) === Number(cur.id)) throw new Error("自分自身は親方にできない");
+            if (cur && teamLead.team_lead_id != null && Number(teamLead.team_lead_id) === Number(cur.id)) throw new Error(`${teamLead.name} はこの人の子方なので親方にできない`);
+          }
           const aliases = uniqBy([...(cur && Array.isArray(cur.aliases) ? cur.aliases : []), ...toList(a.aliases)], normName);
           const channels = mergeChannels(cur ? cur.channels : [], (Array.isArray(a.channels) ? a.channels : [a.channels]).map(cleanChannel).filter(Boolean));
           const siteIds = [...new Set([...(cur && Array.isArray(cur.site_ids) ? cur.site_ids.map(Number) : []), ...(await resolveSiteIds(p, toList(a.sites ?? a.site), warnings))])];
@@ -1379,13 +1391,14 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
           const vals = [cur ? cur.name : name, nameKey, companyName, cur?.company_key || (company ? companyKey : ""),
             JSON.stringify(aliases), role, pick("trade"), JSON.stringify(channels), pick("tone"), JSON.stringify(siteIds),
             pick("phone"), pick("email"), pick("notes"), by, companyId];
-          const { rows } = cur
+          let { rows } = cur
             ? await p.query(
               `UPDATE genba_contacts SET name=$2, name_key=$3, company=$4, company_key=$5, aliases=$6, role=$7, trade=$8, channels=$9, tone=$10,
                       site_ids=$11, phone=$12, email=$13, notes=$14, updated_by=$15, company_id=$16, updated_at=now() WHERE id=$1 RETURNING *`, [cur.id, ...vals])
             : await p.query(
               `INSERT INTO genba_contacts (name, name_key, company, company_key, aliases, role, trade, channels, tone, site_ids, phone, email, notes, updated_by, company_id)
                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING *`, vals);
+          if (teamLead !== undefined) rows = (await p.query(`UPDATE genba_contacts SET team_lead_id=$2 WHERE id=$1 RETURNING *`, [rows[0].id, teamLead ? teamLead.id : null])).rows;
           const [out] = await contactsOut(p, rows);
           return { ...out, created: !cur, warnings: warnings.length ? warnings : undefined };
         },
@@ -1409,7 +1422,7 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
       },
       {
         name: "genba_contact_list",
-        description: "連絡先の一覧。site (現場) / role (職人・業者・元請け・設計・客先・社内) / trade (職種) で絞る。全部省略で全員。返り値の abilities (能力 0〜5・付けた人ごと) / ability_avg は人選びの材料 (能力で絞るなら genba_contact_ability_find)。" + ABILITY_INTERNAL,
+        description: "連絡先の一覧。site (現場) / role (職人・業者・元請け・設計・客先・社内) / trade (職種) で絞る。全部省略で全員。返り値の abilities (能力の点数と理由・付けた人ごと) / ability_avg / conditions / team は人選びの材料 (点数や条件で絞るなら genba_contact_ability_find)。" + ABILITY_INTERNAL,
         inputSchema: { type: "object", properties: { site: { type: "string", description: "案件 ID・現場名・ID" }, role: { type: "string" }, trade: { type: "string" } } },
         handler: async (a) => {
           await ensureSchema();

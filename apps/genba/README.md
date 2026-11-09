@@ -47,8 +47,9 @@
 | `genba_source_add(channel, room, site?, purpose?) / list / mark / remove` | ルームを現場に固定・用途を決める (普段は要らない)、一覧 (sources / excluded)、「ここまで読んだ」cursor、OFF |
 | `genba_contact_find(query)` | 人を探す (名前・あだ名・会社名・ルーム名・room_id)。1 件なら `match`、複数なら `candidates` だけ (AI は人に聞く) |
 | `genba_contact_upsert({name, company?, aliases?, role?, trade?, channels?, tone?, sites?, …})` | 連絡先の登録・更新。name + company で同一人物。aliases / channels / sites は足すだけ |
-| `genba_contact_ability_set(contact, scores, note?)` | 連絡先に能力を書く (13 項目 0〜5・0 = 未評価、付けた人はトークンから。変えたい項目だけ渡せばよい、0 で未評価に戻る、note = ひとこと 200 字まで)。例 `{"contact":"山田","scores":{"力":4,"信用":5},"note":"頼りになる"}`。**社内用: 本人・相手の会社への文面に引用しない**。監視ジョブのトークンは不可 |
-| `genba_contact_ability_find(min?, trade?, role?, by?, limit?)` | 能力で連絡先を探す。例「信用 4 以上の大工」→ `{"min":{"信用":4},"trade":"大工"}`。min は全部満たす人だけ。点数は付けた人の平均 (0 は数えない)、`by` で一人分に絞る。点数の高い順、各人に `abilities` / `score_used` |
+| `genba_contact_ability_set(contact, scores?, reasons?, note?, unknown_person?, team?, trade?)` | 連絡先に能力 (19 項目、各 1〜5 / `"unknown"` = 不明 / `null` = 未入力に戻す) を書く。付けた人はトークンから (小西と名取は別の点数)。変えたい項目だけ渡せばよい。reasons = 項目ごとの理由 (120 字まで)、note = ひとこと (200 字まで)、unknown_person = 「この人は知らない」(自分の点数・理由を消す)。contact が見つからなければ team (親方の名前) と trade を付けて職人として新規作成 (既存の連絡先の team / trade は変えない)。例 `{"contact":"ヒッキー","scores":{"力":4,"体力":"unknown"},"reasons":{"力":"米袋を担いでいた"},"team":"まちゃ","trade":"クロス"}`。**能力・理由は社内用: 本人・社外への文面に引用しない**。監視ジョブのトークンは不可 |
+| `genba_contact_condition_set(contact, night_ok?, crew_size?, has_car?, area?)` | 連絡先に条件 (点数ではない事実) を書く。night_ok = 夜間 OK (`true` / `false` / `"unknown"`)、crew_size = 連れて来られる人数 (整数)、has_car = 車あり・資材を積める (同上)、area = 対応エリア。渡した項目だけ変わる、`null` で未入力。連絡先に 1 つ (付けた人ごとではない)。見つからない連絡先は作らない |
+| `genba_contact_ability_find(min?, night_ok?, has_car?, crew_min?, area?, trade?, role?, team?, by?, limit?)` | 能力と条件で連絡先を探す (手配の候補探し)。例「力 4 以上で夜 OK」→ `{"min":{"力":4},"night_ok":true}`、「信用 4 以上かつ大工」→ `{"min":{"信用":4},"trade":"大工"}`、「まちゃのチーム」→ `{"team":"まちゃ"}`。全部満たす人だけ。min の点数は付けた人の平均 (数値だけ)、`by` で一人分に絞る。点数の高い順。各人に `abilities` (付けた人ごと) / `ability_avg` (平均) / `conditions` / `team` / `score_used` |
 | `genba_contact_alias_add(contact, alias)` | 「A は B のこと」「覚えといて」→ 呼び名を足す |
 | `genba_contact_list(site?, role?, trade?)` | 現場ごと・役割ごと・職種ごとの顔ぶれ |
 | `genba_contact_remove(contact)` | 1 件消す (小西のトークンからだけ。掃除用) |
@@ -61,13 +62,19 @@
 | `genba_judgment_stats(days?, category?)` | 【判断ログ】種類ごとの件数・一致率・直近の連続一致数・最後の不一致の日・未回答・モード。昇格の目安を満たすと `promotion_candidate` (「昇格候補」) |
 | `genba_judgment_policy_get()` / `genba_judgment_policy_set(category, mode, threshold?)` | 【判断ログ】種類ごとのモード (確認あり / 事後報告) の一覧と切り替え (set は小西のトークンだけ) |
 
-### 連絡先の能力 (`genba_contact_abilities`)
-連絡先 (`genba_contacts`) には列を足さず、付けた人ごとに別の点数を持てるよう 1 対多の別テーブルにする (`genba-lib/ability.js`)。連絡先を消すと能力も消える (`ON DELETE CASCADE`)。
-- 13 項目を各 0〜5 の整数 (0 = 未評価): 力 / 体力 / 現場の正確さ / 現場のスピード / 運転・移動 / 職人の仕切り / 電話・交渉 / 段取り・日程 / 気づき・検討 / 図面・納まり / 数字・書類 / ネット手配 / 信用。DB の列は英語名 (`power` `stamina` `site_accuracy` `site_speed` `driving` `crew_lead` `negotiation` `planning` `insight` `drawings` `numbers_docs` `online_ordering` `trust`)、API は日本語名 (「運転移動」のような表記ゆれは吸収)
-- `genba_contact_abilities`: `(contact_id, rated_by)` が PK。13 項目 (`CHECK 0〜5`、既定 0) + `note` (能力のひとこと) + `rated_at` (付けた日時 = 最後に書き換えた時刻)。小西と名取は別の行
-- `genba_contact_find` / `genba_contact_list` (と upsert / alias_add) の返り値に `abilities` (付けた人ごと `{by, scores, note, at}`、0 の項目は出さない) と `ability_avg` (付けた人の平均) が付く。評価のない人は `abilities: []`
-- 見えるのは全員のトークン (社内用)。**本人・相手の会社への文面には点数もひとこともその言い換えも書かない** (ツールの説明と手順書に明記)。社内の人への返答でも点数やひとことの原文は貼らない (評価メモと同じ扱い)
-- マイグレーションは `ensureSchemaOnce` の `CREATE TABLE IF NOT EXISTS` (新規 1 テーブルだけ、既存は触らない)。テスト `genba-lib/ability.test.mjs` (pglite、実行手順はファイル先頭)
+### 連絡先の能力・条件・チーム (`genba_contact_ratings` / `genba_contacts` の列)
+職人さんと社内の人の得意を点数で持ち、「力 4 以上で夜 OK の人」のように手配の候補を探す。入力は claude.ai のアーティファクト (能力カード) から、閲覧者の自社 MCP コネクタ経由 (`genba-lib/ability.js`)。
+- **能力 (点数)**: 19 項目 (力 / 体力 / 現場の正確さ / 現場のスピード / 運転・移動 / 職人の仕切り / 電話・交渉 / 段取り・日程 / 気づき・検討 / 図面・納まり / 数字・書類 / ネット手配 / 信用 / 理解力 / 説明力 / 腕の幅 / 急ぎ・融通 / 現場のきれいさ / 単価 (5＝安い))。各 1〜5 の整数。**付けていない = null (キーが無い)、「不明」= 明示的に `"unknown"`**。項目ごとに理由 (短い文字列)。人ごとにひとこと (`note`) と「この人は知らない」(`unknown_person`)
+- **付けた人ごと**: `genba_contact_ratings` は `(contact_id, rated_by)` が PK。`rated_by` はトークンの名前 (小西 / 名取)。点数と理由は `scores` (JSONB) `{ 項目名: { score?, unknown?, reason? } }`。同時に書かれても消し合わないよう `rev` で楽観ロック (版が変わっていたら読み直して最大 5 回)
+- **項目は 1 か所**: `ability.js` の `ABILITY_ITEMS` (項目名と説明)。ツールの引数・検証・出力・手順書は全部ここから作る。**項目を足す = そこに 1 行足すだけ** (点数は JSONB なので DB の変更は要らない)。名前を変える・消すときだけ、保存済みの `scores` のキーも直す
+- **条件**: `genba_contacts` の列 (NULL 可) `night_ok` (yes / no / unknown) / `crew_size` (0 以上の整数) / `has_car` (yes / no / unknown) / `area`。点数ではない事実なので連絡先に 1 つ。API は `true` / `false` / `"unknown"` / `null`
+- **チーム**: `genba_contacts.team_lead_id` (親方の連絡先。親方を消すと NULL)。付ける: `genba_contact_upsert(name, team=親方の名前)` ("" で外す。自分自身・自分の子方は親方にできない)、または `genba_contact_ability_set` で新規作成するとき。例: ヒッキー・ギヌ → まちゃ / 鍋ちゃん・フジヤマ → 小林 / 山中・丸田 → 浦部 / 加藤くん・加藤くんの息子・阿部 → 上地 / 武田 → 仁瓶 / ゆうさく → 酒井
+- 返り値: `genba_contact_find` / `genba_contact_list` (と upsert / alias_add) に `abilities` (付けた人ごと `{by, scores, reasons, note, unknown_person, at}`、未入力の項目は出さない)・`ability_avg` (付けた人の平均。数値だけ、不明・未入力は数えない)・`conditions`・`team` (`{lead, members}`) が付く
+- 連絡先の探し方 (書き込み用): ID か、名前・呼び名の一致 / 前方一致だけを確定とする。検索語のほうが長い弱い一致は確定しない (「加藤くんの息子」が「加藤くん」に化けない。近い名前は `warnings` で知らせる)。同名が複数なら team・trade で絞り、決まらなければ止まる
+- **見えるのは全員のトークン (社内用)。本人・相手の会社・社外への文面には、点数も理由もひとことも言い換えも書かない** (ツールの説明 5 つと手順書に明記)。社内の人への返答でも、点数・理由・ひとことの原文は貼らない
+- **付けた人の注意**: 統合コネクタ (`/api/mcp/<token>`) は全員が「小西」扱い。名取の点数を名取として残すには、名取の人ごとの URL (`/api/genba/mcp/<名取のトークン>`、`GET /api/mcp-connector` の `genba.名取`) 経由で呼ぶ
+- 前の版 (13 項目・0〜5 の `genba_contact_abilities`) のデータは、起動時に新しい形へ写し (0 は未入力)、テーブルは `genba_contact_abilities_v1` に名前を変えて残す。マイグレーションは `ensureSchemaOnce` の `CREATE TABLE IF NOT EXISTS` と `ADD COLUMN IF NOT EXISTS` (全部 NULL 可・既存の行に影響しない)
+- テスト `genba-lib/ability.test.mjs` (pglite の本物の Postgres。実行手順はファイル先頭)
 
 ### 連絡先・呼び名 (`genba_contacts`)
 人をあだ名や下の名前で呼ぶ (例: バカボンさん = ㈱大丁工業 菊池) ので、「誰か / どの LINE ルームに送るか / どんな言葉遣いか」を
