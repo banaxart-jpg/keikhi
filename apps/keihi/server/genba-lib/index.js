@@ -7,6 +7,7 @@
 // 書いた人は MCP のトークンから決める (AI が名前を書く余地を作らない)。
 
 import crypto from "node:crypto";
+import { createJudgment } from "./judgment.js"; // 判断ログ (genba_judgment_*)
 
 const SUBFOLDERS = {
   "図面": "01_図面", "見積": "02_見積", "業者見積": "02_見積", "写真": "03_写真", "資料": "04_資料", "参考": "05_参考",
@@ -55,6 +56,8 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
   // ingest(by) = 取り込み時の仕分け (by が持ち主のときだけ API を返す。それ以外は null)。何をどう仕分けるかは genba の外に置く
   // 1 プロセスで 1 回だけ。同時に来た最初の数リクエストは同じ promise を待つ (DDL を重ねて走らせない)。
   // 起動時に index.js から先に呼んでおく (コールドスタート直後の最初のツール呼び出しを速くする)
+  // 判断ログ: 小西の判断の癖を貯めて、当たり続けた種類から確認なしで送れるようにする (judgment.js)
+  const judgment = createJudgment({ getPool, ready: () => ensureSchema(), resolveSite: (p, q) => resolveSiteOrNull(p, q) });
   let schemaOk = false, schemaPromise = null;
   async function ensureSchema() {
     if (schemaOk) return;
@@ -288,6 +291,8 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
     await p.query(`CREATE INDEX IF NOT EXISTS genba_notes_subject_idx ON genba_notes (subject_type, subject_id) WHERE retired_at IS NULL`);
     await p.query(`CREATE UNIQUE INDEX IF NOT EXISTS genba_notes_source_ref_uq ON genba_notes (source_ref) WHERE source_ref IS NOT NULL`);
     await p.query(`ALTER TABLE genba_notes ADD COLUMN IF NOT EXISTS title TEXT`);
+    // 判断ログ (judgment_log / judgment_policy): 新規テーブルだけ。既存のテーブルは触らない (何度走らせても同じ)
+    await judgment.ensureSchema(p);
     schemaOk = true;
   }
 
@@ -1291,7 +1296,8 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
   }
   // 読むだけのツール (readOnlyHint): claude.ai 側がキャッシュ・watch の可否を判断するのに使う
   const READ_ONLY = new Set(["genba_find", "genba_log_list", "genba_tasks", "genba_status", "genba_rule_get", "genba_audit",
-    "genba_contact_find", "genba_contact_list", "genba_company_find", "genba_company_list", "genba_note_list", "genba_file_list", "genba_source_list"]);
+    "genba_contact_find", "genba_contact_list", "genba_company_find", "genba_company_list", "genba_note_list", "genba_file_list", "genba_source_list",
+    "genba_judgment_similar", "genba_judgment_stats", "genba_judgment_policy_get"]);
   // by = 書いた人 (トークンから決まる)
   function tools(by = "小西") {
     return toolsFor(by).map((t) => (READ_ONLY.has(t.name) ? { ...t, annotations: { readOnlyHint: true } } : t));
@@ -1960,7 +1966,7 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
       },
       {
         name: "genba_audit",
-        description: "抜け漏れチェック。期限切れのタスク / 期限の無いタスク / 「返事待ち・確認中」と書いたのに次やることが無い行 / 日程があるのにカレンダー未登録の行 / 監視ジョブの停止 (genba_room_sync が 30 分以上来ていない) / 監視の目録で 雑談 扱いされた社外からの長文 (要確認) / 関係者から連絡が来ているのに触られていないタスク (動きがあるのに未更新) / 相手待ちの言葉が title に入った次やること / title が似ている未解決の組 を機械的に洗い出す。監視ジョブは 1 時間に 1 回、会話の終わりにも 1 回呼んで、出たものを片付ける (タスクを立てる・カレンダーに入れて calendar_event を付ける・終わっていれば 解決)。site 省略で全現場",
+        description: "抜け漏れチェック。期限切れのタスク / 期限の無いタスク / 「返事待ち・確認中」と書いたのに次やることが無い行 / 日程があるのにカレンダー未登録の行 / 監視ジョブの停止 (genba_room_sync が 30 分以上来ていない) / 監視の目録で 雑談 扱いされた社外からの長文 (要確認) / 関係者から連絡が来ているのに触られていないタスク (動きがあるのに未更新) / 相手待ちの言葉が title に入った次やること / title が似ている未解決の組 / 24 時間以上 未回答 の判断ログ を機械的に洗い出す。監視ジョブは 1 時間に 1 回、会話の終わりにも 1 回呼んで、出たものを片付ける (タスクを立てる・カレンダーに入れて calendar_event を付ける・終わっていれば 解決)。site 省略で全現場",
         inputSchema: { type: "object", properties: { site: { type: "string", description: "省略で全現場" }, days: { type: "number", description: "直近何日の行を見るか (既定 7)" } } },
         handler: async (a) => {
           await ensureSchema();
@@ -2014,6 +2020,9 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
               staleTasks = staleTasks.slice(0, 20);
             }
           } catch (e) { console.warn("[genba] audit stale", e.message); }
+          // 判断ログ: 24 時間以上 未回答 のまま (小西以外のトークンには is_private を出さない)
+          let judgmentOpen = [];
+          try { judgmentOpen = await judgment.unanswered(p, by, 24); } catch (e) { console.warn("[genba] audit judgment", e.message); }
           const overdue = tasks.filter((r) => r.due_on && ymd(r.due_on) < today);
           const threeDaysAgo = new Date(Date.now() - 3 * 86400000);
           const noDue = tasks.filter((r) => !r.due_on && new Date(r.created_at) < threeDaysAgo);
@@ -2031,6 +2040,7 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
           if (monitor.status === "stalled") parts.push(`監視ジョブ停止 ${monitor.minutes_ago} 分`);
           if (chatReview.length) parts.push(`雑談扱いの長文 ${chatReview.length} (要確認)`);
           if (staleTasks.length) parts.push(`動きがあるのに未更新 ${staleTasks.length}`);
+          if (judgmentOpen.length) parts.push(`判断が未回答 ${judgmentOpen.length}`);
           // 相手待ちの言葉が title に入った 次やること / 課題 (自動変換の前に入ったもの) と、title が似ている未解決の組
           const waitingAsTask = tasks.filter((r) => STRONG_WAIT_RE.test(r.title || autoTitle(r.body)));
           const similar = [];
@@ -2048,6 +2058,7 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
             seen_24h: Object.keys(seen24).length ? seen24 : undefined,
             chat_review: chatReview.length ? chatReview : undefined,
             stale_tasks: staleTasks.length ? staleTasks : undefined,
+            judgment_unanswered: judgmentOpen.length ? judgmentOpen : undefined,
             waiting_as_task: waitingAsTask.length ? waitingAsTask.map(brief) : undefined,
             similar_tasks: similar.length ? similar : undefined,
             overdue: overdue.map(brief),
@@ -2066,6 +2077,7 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
               "相手待ちが次やること → genba_log_fix(id, kind=待ち, who=相手, then=来たらやること)",
               "似たタスク → 同じ件なら片方を genba_log_void(reason=重複 #id) (期限・担当は残す方に寄せる)、別件なら title を言い分ける",
               "動きがあるのに未更新 → message の連絡を読んで、終わっていれば 解決、相手待ちになっていれば genba_log_fix(id, kind=待ち, who=相手, then=来たらやること)、期限・担当が変わったら genba_log_fix、今のままで正しければ genba_log_fix(id, confirm=true)",
+              "判断が未回答 → 事後報告で送ったものは小西に「問題なかった？」とまとめて 1 回聞いて genba_judgment_resolve。確認ありで止まっているものは小西に OK を取る。もう要らない判断は小西に聞いて resolve (result=不一致 にしない・decision に「不要」)",
               "雑談扱いの長文 → LINE で中身を見て、記録すべきなら genba_log_add(source_ref=channel:room:id) で入れる (目録に log_id が付いて要確認から消える)。雑談でよければそのまま",
               "監視ジョブ停止 → 自分が監視ジョブなら genba_room_sync を今すぐ呼ぶ。そうでなければ小西に『監視ジョブ (5 分ごとの LINE 読み) が止まっている。Cowork のスケジュールを設定し直して』と報告",
             ] : undefined,
@@ -2182,9 +2194,11 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
             return { topic: r.topic, version: r.version, body: r.body, updated_by: r.updated_by, at: r.created_at };
           }
           // 会社の決まり (社内メモ) も一緒に返す: 会話の最初に 1 回で読めるように
+          // 判断ログの運用モード (確認あり / 事後報告) も付ける: 連絡を送る前に、その種類を確認なしで送ってよいか分かる
           return {
             rules: rows.map((r) => ({ topic: r.topic, version: r.version, body: r.body, updated_by: r.updated_by, at: r.created_at })),
             general_notes: await generalNotes(p),
+            judgment_modes: await judgment.policyList(p),
           };
         },
       },
@@ -2554,6 +2568,7 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
           return { disabled: rowCount > 0 };
         },
       },
+      ...judgment.tools(by),
     ];
   }
 
@@ -2617,6 +2632,7 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
     "4. Keihi に無い・自信がない → 推測しない。「確認して返します」と返し、小西に聞く (genba_log_add(kind=次やること, title=「名取の質問: …」, who=小西, estimate_min=5) + 小西に報告)。答えが分かったら本人に返して、その行を 解決 で閉じる",
     "5. 問い合わせの中に現場の決定・タスク・完了報告が入っていれば、それは通常どおり記録する (記録と応答は両立する)",
     "6. 答えたら、その質問と自分の返事を genba_source_mark の items に入れて (質問は該当の kind か 雑談、自分の返事は 返信) cursor を進める。文面は相手の tone に合わせ、短く (LINE なので 3〜4 行まで)",
+    ...judgment.instructions,
   ].join("\n");
 
   // 人ごとのトークン: { token: 名前 }。URL の token で書いた人を決める

@@ -53,6 +53,11 @@
 | `genba_company_find(query)` / `genba_company_upsert({name, aliases?, role?, trades?, …})` / `genba_company_list(role?, trade?)` / `genba_company_remove` | 会社 (連絡先の `company` の本体)。価格感・得意工事は会社に付ける。返り値に所属の連絡先とメモ |
 | `genba_note_add(subject_type, subject?, kind?, body, valid_from?, valid_until?)` | 流れない情報を 人 / 会社 / 現場 / 社内 にぶら下げる (性質 / 予定 / 評価 / ルール / メモ)。期限付き |
 | `genba_note_list(subject_type?, subject?, kind?, on?, include_expired?)` / `genba_note_retire(id)` | メモの一覧 (日付時点の有効分) と引退 (消さない) |
+| `genba_judgment_add(category, situation, ai_prediction, ai_confidence, basis_ids?, site?, source_ref?, is_private?, auto_sent?, related_log_id?)` | 【判断ログ】小西の判断が要る場面を送る前に登録。返り値 `id` / `mode` (その種類の今のモード) / `similar` (同じ種類で似た過去の判断、答え済み、新しい順に最大 5 件)。同じ source_ref は `duplicate` |
+| `genba_judgment_resolve(id, decision, result, reason?)` | 【判断ログ】小西の答えを記録 (小西のトークンだけ)。result = 一致 / 部分一致 / 不一致。事後報告の種類で 不一致 → 自動で 確認あり に戻る (返り値 `demoted`) |
+| `genba_judgment_similar(query?, category?, site?, limit?)` | 【判断ログ】過去の判断の検索 (答え済み)。似ている度 × 新しさ の順。query 省略は新しい順 |
+| `genba_judgment_stats(days?, category?)` | 【判断ログ】種類ごとの件数・一致率・直近の連続一致数・最後の不一致の日・未回答・モード。昇格の目安を満たすと `promotion_candidate` (「昇格候補」) |
+| `genba_judgment_policy_get()` / `genba_judgment_policy_set(category, mode, threshold?)` | 【判断ログ】種類ごとのモード (確認あり / 事後報告) の一覧と切り替え (set は小西のトークンだけ) |
 
 ### 連絡先・呼び名 (`genba_contacts`)
 人をあだ名や下の名前で呼ぶ (例: バカボンさん = ㈱大丁工業 菊池) ので、「誰か / どの LINE ルームに送るか / どんな言葉遣いか」を
@@ -64,6 +69,17 @@
 - `genba_room_sync` が同期したルーム名が contact の `room_name` と合えば `room_id` を自動で埋める (逆に room_id だけなら room_name を埋める)。どの連絡先にも結ばれていないルームで、名前が 1 人の連絡先の名前・呼び名と完全一致すれば、その人の個人ルームとして足す。返り値 `contactsLinked`
 - `genba_log_add` の `source.sender` が連絡先に一意に解決できたら `source.contact_id` / `source.contact_name` を足す (sender が曖昧でも `source.room` を持つ人に絞れればそれ)
 - `genba_rule_get` の一覧は topic `連絡先` を先頭に返す
+
+### 判断ログ (`judgment_log` / `judgment_policy`)
+小西の判断の癖をデータとして貯め、AI が「小西ならこう判断する」と予想して答え合わせし、当たり続けた種類の連絡から順に確認なしで送れるようにする。**機械学習はしない**。過去の判断を検索して似た例を並べるだけ (`genba-lib/judgment.js`)。
+- 流れ: 連絡が来る → `genba_judgment_add` (予想 + 確信度。返り値の `similar` を読んで予想を直す) → モードに従う (確認あり = 小西に見せて OK / 事後報告 = 確認なしで送って 1 行で報告、`auto_sent: true`) → 小西が答えたら `genba_judgment_resolve`
+- `judgment_log`: 1 判断 = 1 行。`category` (日程の返事 / お礼・了解 / 社内への伝言 / 業者への依頼 / 金額・支払い / 仕様・範囲 / 書類 / その他。新しい種類も入れてよい) / `situation` / `source_ref` (同じものは重複登録しない) / `ai_prediction` / `ai_confidence` (0〜1) / `basis_ids` (根拠にした過去の id) / `decision` (回答前 null) / `result` (一致 / 部分一致 / 不一致 / 未回答) / `reason` / `related_log_id` (genba_log) / `auto_sent` / `is_private` / `by` (トークンから)
+- `judgment_policy`: 種類ごとの `mode` (確認あり = 既定 / 事後報告) と `threshold` (一致率の目安、既定 0.95)。`genba_rule_get` (topic 省略) の `judgment_modes` にも同じ一覧が付く
+- 昇格 (確認あり → 事後報告): 直近 30 日の一致率 ≥ threshold **かつ** 連続 20 件一致 (連続は全期間の新しい答えから数える) で `genba_judgment_stats` が `promotion_candidate` を出す。**勝手には切り替えない**。小西の OK が取れたら `genba_judgment_policy_set`
+- 降格 (事後報告 → 確認あり): 事後報告の種類で 不一致 が 1 件出たら `genba_judgment_resolve` が自動で戻す (`judgment_policy.note` に理由の判断 id)
+- `genba_audit` に 24 時間以上 未回答 の判断 (`judgment_unanswered`)
+- `is_private = true` (小西だけが見られる判断) は小西以外のトークンの `add` の `similar` / `similar` / `stats` / `audit` に出ない。登録も小西のトークンだけ
+- テスト: `genba-lib/judgment.test.mjs` (pglite の本物の Postgres。実行手順はファイル先頭)。マイグレーションは `ensureSchemaOnce` の `CREATE TABLE IF NOT EXISTS` (新規 2 テーブルだけ、既存は触らない)
 
 ### 抜け漏れを機械的に拾う (followups / genba_audit)
 AI が「次やることを立てる」「カレンダーに入れる」を忘れるのを、記憶ではなくサーバーの返り値で止める。
