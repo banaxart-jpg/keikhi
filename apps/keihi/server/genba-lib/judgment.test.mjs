@@ -53,7 +53,7 @@ ok(["id", "created_at", "site_id", "category", "situation", "source_ref", "ai_pr
 
 // ───────────────────────── 2. genba_rule_get のモード一覧 (既存の返り値は変わらない)
 let rg = await call(S, "genba_rule_get");
-ok(Array.isArray(rg.rules) && "general_notes" in rg && Array.isArray(rg.judgment_modes), "rule_get (topic 省略): rules / general_notes はそのまま、judgment_modes が増える", Object.keys(rg));
+ok(Array.isArray(rg.index) && "basic" in rg && "general_notes" in rg && Array.isArray(rg.judgment_modes), "rule_get (topic 省略): 基本 + 目次。general_notes はそのまま、judgment_modes が付く (運用ルールの目次化は rules.test.mjs)", Object.keys(rg));
 ok(rg.judgment_modes.length === 8 && rg.judgment_modes.every((m) => m.mode === "確認あり") && rg.judgment_modes[0].category === "日程の返事", "標準の 8 種類が全部 確認あり", rg.judgment_modes.map((m) => m.category + ":" + m.mode));
 rg = await call(S, "genba_rule_get", { topic: "存在しない" });
 ok(rg.body === null && !("judgment_modes" in rg), "topic 指定の返り値は今まで通り");

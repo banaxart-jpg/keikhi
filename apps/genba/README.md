@@ -36,7 +36,8 @@
 | `genba_file_upload_url(site?, filename, content_type?, kind?, source_ref?)` | 画像・PDF を GCS に上げる一時 URL (2 時間)。返ってくる `curl` を PC 側で実行して PUT する。同じ source_ref は duplicate |
 | `genba_file_list(site?, days?, kind?)` / `genba_file_void(id)` | 現場の写真・ファイル一覧 (7 日有効の署名 URL) と、一覧から外す |
 | `genba_status(site)` | 最終更新・直近の進捗・未解決の課題・次やること・今生きている決定 (`changes` 回数と `previous` 付き)・現場のメモ・関わる人・最近の写真 |
-| `genba_rule_get(topic?)` / `genba_rule_set(topic, body)` | 運用ルール (版を積む。消えない) |
+| `genba_rule_get(topic?)` | 運用ルールを読む。topic 省略 = 「基本」の本文 + 全 topic の目次 (topic 名・1 行説明・版・更新日・scope) だけ (全文は返さない)。topic 指定でその本文。返るのは共通ルール + 呼び出した人の個人ルールだけ。同じ topic に共通と個人があれば、個人を後ろに付けて「個人を優先」と明記 |
+| `genba_rule_set(topic, body, scope?, summary?)` | 運用ルールを書く (新しい版を積む。消えない)。scope = 共通 (既定) / 個人 (呼び出したトークンの持ち主だけに効く)。summary = 目次の 1 行説明 (60 字まで) |
 | `genba_log_add_many(site?, items[])` | まとめて追記 (監視ジョブ・会話から一度に抽出したとき)。各行に `duplicate` |
 | `genba_source_mark(channel, room, cursor, items[])` | 監視ジョブの「ここまで読んだ」+ 読んだメッセージの目録。items は 1 件 1 要素 `{id, sender, at, kind, gist(40 字), len, …}`。kind が 決定 / 課題 / 次やること / 待ち / 進捗 なら title・body を付ければサーバーが genba_log に入れる (source_ref 自動)。メモ=note_id、画像=file_id、返信=AI の発言、雑談 / 私的 (gist 保存なし) / 既存。**cursor は items 無しでは進まない**、入らない item があれば cursor を進めずに error。目録は `genba_seen` (本文は持たない) に残る |
 | `related_tasks` / `related_say` (genba_log_add / add_many / genba_source_mark の返り値) | 連絡の送り主 (連絡先に解決できた人・会社) の名前・呼び名・会社名が title / body / who に出ている未解決タスク。「この連絡で状態は変わった？」を AI に見直させる (終わった → 解決、相手待ち → `genba_log_fix(kind=待ち, who, then)`、変わらない → `genba_log_fix(id, confirm=true)`)。社内の人からの連絡では出ない |
@@ -76,6 +77,15 @@
 - 前の版 (13 項目・0〜5 の `genba_contact_abilities`) のデータは、起動時に新しい形へ写し (0 は未入力)、テーブルは `genba_contact_abilities_v1` に名前を変えて残す。マイグレーションは `ensureSchemaOnce` の `CREATE TABLE IF NOT EXISTS` と `ADD COLUMN IF NOT EXISTS` (全部 NULL 可・既存の行に影響しない)
 - テスト `genba-lib/ability.test.mjs` (pglite の本物の Postgres。実行手順はファイル先頭)
 
+### 運用ルールと個人ルール (`genba_rules`)
+- **共通 / 個人**: `genba_rules.owner` が NULL = 共通 (全員と全 AI に効く)、値 = 個人 (その人だけ。値はトークンの名前 = 小西 / 名取…)。`genba_rule_set(scope=個人)` で、呼び出したトークンの持ち主を owner にする。既存の行は全部 owner なし = 共通のまま
+- **版は消さずに積む**: 共通と個人で別々に数える (同じ topic に共通 v6 と個人 v1 が並ぶ)。そのため旧い `UNIQUE (topic, version)` を `(topic, COALESCE(owner,''), version)` の一意に付け替えた (起動時のマイグレーション、何度走らせても同じ)
+- **読む**: `genba_rule_get` は 共通 + 呼び出した人の個人ルールだけ。他の人の個人ルールは返さない (topic 名も出ない。小西 = 管理者にも既定では返さない。他人の個人ルールを見る口は作っていない)。同じ topic に共通と個人があるときは、共通の本文の後ろに個人を付け、「個人を優先」と明記 (`scope` = 共通 / 個人 / 共通+個人、`priority`)
+- **topic 省略 = 目次**: 全文ではなく `basic` (「基本」の本文) と `index` (topic 名・`summary` 1 行説明・版・更新日・scope) だけ。本文は topic を指定して読む (最初に読む量を減らすため)。`general_notes` (会社の決まり) と `judgment_modes` (判断ログの運用モード) は今まで通り付く
+- **1 行説明 (summary)**: `genba_rule_set(summary=…)` で指定 (60 字まで)。省略すると前の版のものを引き継ぎ、無ければ本文の最初の行 (「# 」を外す)
+- **注意**: 統合コネクタ (`/api/mcp/<token>`) は全員が「小西」扱いなので、そこから書いた個人ルールは小西の個人ルールになり、同じコネクタを使う人には読める。個人ルールを本人だけに効かせるには、人ごとの URL (`/api/genba/mcp/<トークン>`) を使う
+- テスト `genba-lib/rules.test.mjs` (pglite、旧スキーマの既存データから移るところまで。実行手順はファイル先頭)
+
 ### 連絡先・呼び名 (`genba_contacts`)
 人をあだ名や下の名前で呼ぶ (例: バカボンさん = ㈱大丁工業 菊池) ので、「誰か / どの LINE ルームに送るか / どんな言葉遣いか」を
 どの AI・どのスレッド・監視ジョブからでも同じ答えで引けるように Keihi 側に持つ。
@@ -85,7 +95,7 @@
 - 完全一致があっても「菊池 → 菊池 輝」のような前方一致は候補に残す。**候補が複数なら AI は自動で決めない** (`match` が null)
 - `genba_room_sync` が同期したルーム名が contact の `room_name` と合えば `room_id` を自動で埋める (逆に room_id だけなら room_name を埋める)。どの連絡先にも結ばれていないルームで、名前が 1 人の連絡先の名前・呼び名と完全一致すれば、その人の個人ルームとして足す。返り値 `contactsLinked`
 - `genba_log_add` の `source.sender` が連絡先に一意に解決できたら `source.contact_id` / `source.contact_name` を足す (sender が曖昧でも `source.room` を持つ人に絞れればそれ)
-- `genba_rule_get` の一覧は topic `連絡先` を先頭に返す
+- `genba_rule_get` の目次は topic `基本` → `連絡先` を先頭に返す (詳しくは下の「運用ルールと個人ルール」)
 
 ### 判断ログ (`judgment_log` / `judgment_policy`)
 小西の判断の癖をデータとして貯め、AI が「小西ならこう判断する」と予想して答え合わせし、当たり続けた種類の連絡から順に確認なしで送れるようにする。**機械学習はしない**。過去の判断を検索して似た例を並べるだけ (`genba-lib/judgment.js`)。

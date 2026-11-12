@@ -51,6 +51,33 @@ const folderUrl = (id) => `https://drive.google.com/drive/folders/${id}`;
 const ymd = (v) => (v == null ? null : v instanceof Date ? v.toISOString().slice(0, 10) : String(v).slice(0, 10));
 const todayJst = () => new Date(Date.now() + 9 * 3600 * 1000).toISOString().slice(0, 10);
 
+// ── 運用ルール (genba_rules): 共通 (owner なし) と個人 (owner = トークンの持ち主の名前) を、同じ topic でも別々の版で積む。消さない
+function ruleScopeOf(v) {
+  const t = String(v ?? "共通").trim().toLowerCase();
+  if (t === "" || ["共通", "common", "shared"].includes(t)) return "共通";
+  if (["個人", "personal", "private", "mine"].includes(t)) return "個人";
+  throw new Error('scope は "共通" か "個人"');
+}
+const RULE_SUMMARY_MAX = 60;
+const clipRuleSummary = (s) => { const t = [...String(s)]; return t.length > RULE_SUMMARY_MAX ? t.slice(0, RULE_SUMMARY_MAX).join("") + "…" : t.join(""); };
+// 目次の 1 行説明: 指定があればそれ、無ければ本文の最初の行 (「# 」は外す)
+const ruleSummary = (r) => r.summary || clipRuleSummary((String(r.body).split("\n").map((l) => l.trim()).find(Boolean) || "").replace(/^#+\s*/, ""));
+// 同じ topic の 共通 (c) と 個人 (per) の見え方。個人を後ろに付けて「個人を優先」と明記する (本文なし = 目次用)
+function ruleMeta(c, per) {
+  const base = c || per;
+  return {
+    topic: base.topic, version: base.version, updated_by: base.updated_by, at: base.created_at,
+    scope: c && per ? "共通+個人" : c ? "共通" : "個人",
+    personal: c && per ? { version: per.version, updated_by: per.updated_by, at: per.created_at } : undefined,
+    priority: c && per ? "個人を優先" : undefined,
+  };
+}
+function ruleView(c, per, by) {
+  const body = c && per ? `${c.body}\n\n――――――――――\n【個人ルール (${by})】共通ルールと食い違うときは、この個人ルールを優先する\n${per.body}`
+    : per ? `【個人ルール (${by})】\n${per.body}` : c.body;
+  return { ...ruleMeta(c, per), body };
+}
+
 // gcs = { bucket, getStorage, publicUrl, secret }: LINE 等から来た画像を PC 側 (Cowork) が PUT で流し込む口と、その署名 URL
 // getCalendarApi = Google Calendar API (SA 認証)。タスク専用カレンダーとの双方向同期に使う (無ければ同期機能は出ない)
 export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null, getCalendarApi = null, ingest = null }) {
@@ -225,6 +252,18 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
         created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
         UNIQUE (topic, version)
       )`);
+    // 個人ルール: owner (NULL = 共通 / 値 = その人だけ。トークンの名前)。版は共通と個人で別々に数えるので、(topic, version) の一意を (topic, owner, version) に付け替える。
+    // 目次の 1 行説明 summary。どれも追加だけで、既存の行 (= 共通) の版・本文は変わらない
+    await p.query(`ALTER TABLE genba_rules ADD COLUMN IF NOT EXISTS owner TEXT`);
+    await p.query(`ALTER TABLE genba_rules ADD COLUMN IF NOT EXISTS summary TEXT`);
+    await p.query(`CREATE UNIQUE INDEX IF NOT EXISTS genba_rules_scope_ver_uq ON genba_rules (topic, COALESCE(owner, ''), version)`);
+    await p.query(`
+      DO $$ DECLARE c text; BEGIN
+        FOR c IN SELECT conname FROM pg_constraint WHERE conrelid = 'genba_rules'::regclass AND contype = 'u'
+                    AND (SELECT array_agg(attname::text ORDER BY attname::text) FROM pg_attribute WHERE attrelid = conrelid AND attnum = ANY(conkey)) = ARRAY['topic','version']
+        LOOP EXECUTE format('ALTER TABLE genba_rules DROP CONSTRAINT %I', c); END LOOP;
+      END $$`);
+    await p.query(`CREATE INDEX IF NOT EXISTS genba_rules_owner_idx ON genba_rules (owner) WHERE owner IS NOT NULL`);
     // 連絡先・呼び名: 人をあだ名や下の名前で呼ぶので「誰か / どのルームに送るか / どんな言葉遣いか」を全 AI で同じ答えにする。
     // 同一人物の判定は name + company (正規化した鍵)。aliases / channels / site_ids は JSONB の配列
     await p.query(`
@@ -2201,27 +2240,32 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
       },
       {
         name: "genba_rule_get",
-        description: "運用ルールを読む (最新版)。会話の最初に topic 省略で一覧を読む。topic 指定でその本文。例: 写真 / 進捗 / 見積 / フォルダ",
-        inputSchema: { type: "object", properties: { topic: { type: "string" } } },
+        description: "運用ルールを読む (最新版)。topic 省略 = 「基本」の本文 + 全 topic の目次 (topic 名・1 行説明・版・更新日) だけ。全文は返さない。目次を見て、今の作業に関係する topic (連絡文を書くなら 連絡文、見積なら 見積 …) は topic を指定して本文を読む。返るのは共通ルール + 呼び出した人の個人ルールだけ (他の人の個人ルールは topic 名も返さない)。同じ topic に共通と個人の両方があれば、個人を後ろに付けて「個人を優先」と明記する (scope = 共通 / 個人 / 共通+個人)。例: 写真 / 見積 / 連絡文 / 判断",
+        inputSchema: { type: "object", properties: { topic: { type: "string", description: "省略で 基本 + 目次。指定でその topic の本文" } } },
         handler: async (a) => {
           await ensureSchema();
           const p = getPool();
-          // 一覧は「連絡先」を先頭に (人の名前が出たら最初に引く約束を最初に読ませる)
+          const topic = a.topic ? String(a.topic).trim() : "";
+          // 共通 (owner なし) + 自分の個人だけ。他人の個人ルールは条件の外 (管理者でも既定では読まない)
           const { rows } = await p.query(
-            `SELECT * FROM (
-               SELECT DISTINCT ON (topic) topic, version, body, updated_by, created_at
-                 FROM genba_rules ${a.topic ? "WHERE topic=$1" : ""}
-                ORDER BY topic, version DESC) t
-              ORDER BY (topic <> '連絡先'), topic`, a.topic ? [String(a.topic)] : []);
-          if (a.topic) {
-            if (!rows.length) return { topic: a.topic, body: null, note: "このトピックのルールはまだ無い" };
-            const r = rows[0];
-            return { topic: r.topic, version: r.version, body: r.body, updated_by: r.updated_by, at: r.created_at };
+            `SELECT DISTINCT ON (topic, COALESCE(owner, '')) topic, owner, version, body, summary, updated_by, created_at
+               FROM genba_rules WHERE (owner IS NULL OR owner = $1) ${topic ? "AND topic = $2" : ""}
+              ORDER BY topic, COALESCE(owner, ''), version DESC`, topic ? [by, topic] : [by]);
+          const groups = new Map();
+          for (const r of rows) { const g = groups.get(r.topic) || { c: null, per: null }; if (r.owner == null) g.c = r; else g.per = r; groups.set(r.topic, g); }
+          if (topic) {
+            const g = groups.get(topic);
+            if (!g) return { topic, body: null, note: "このトピックのルールはまだ無い" };
+            return ruleView(g.c, g.per, by);
           }
-          // 会社の決まり (社内メモ) も一緒に返す: 会話の最初に 1 回で読めるように
-          // 判断ログの運用モード (確認あり / 事後報告) も付ける: 連絡を送る前に、その種類を確認なしで送ってよいか分かる
+          const rank = (t) => (t === "基本" ? 0 : t === "連絡先" ? 1 : 2);   // 基本 → 連絡先 (人の名前が出たら最初に引く約束) → ほか
+          const list = [...groups.entries()].sort((x, y) => rank(x[0]) - rank(y[0]) || x[0].localeCompare(y[0], "ja"));
+          const basic = groups.get("基本");
+          // 会社の決まり (社内メモ) と判断ログの運用モードも一緒に返す: 会話の最初に 1 回で読めるように
           return {
-            rules: rows.map((r) => ({ topic: r.topic, version: r.version, body: r.body, updated_by: r.updated_by, at: r.created_at })),
+            basic: basic ? ruleView(basic.c, basic.per, by) : null,
+            index: list.map(([t, g]) => { const m = ruleMeta(g.c, g.per); return { topic: t, summary: ruleSummary(g.c || g.per), version: m.version, at: m.at, scope: m.scope, personal: m.personal }; }),
+            note: `全文は返さない。基本の本文のほか、今の作業に関係する topic は genba_rule_get(topic) で本文を読む (index の summary が目安)。scope が 共通+個人 の topic は個人ルールが後ろに付いて「個人を優先」${basic ? "" : "。基本のルールはまだ無い"}`,
             general_notes: await generalNotes(p),
             judgment_modes: await judgment.policyList(p),
           };
@@ -2229,19 +2273,38 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
       },
       {
         name: "genba_rule_set",
-        description: "運用ルールを書き換える (新しい版を積む。前の版は消えない)。topic 単位で本文を丸ごと渡す。変更前に genba_rule_get で現行を見せて OK をもらってから",
-        inputSchema: { type: "object", properties: { topic: { type: "string" }, body: { type: "string" } }, required: ["topic", "body"] },
+        description: "運用ルールを書き換える (新しい版を積む。前の版は消えない)。topic 単位で本文を丸ごと渡す。scope = 共通 (既定。全員と全 AI に効く) / 個人 (呼び出したトークンの持ち主だけに効く。他の人には見えず、共通ルールと食い違うときは個人を優先)。版は共通と個人で別々に数える。summary = 目次に出る 1 行説明 (60 字まで。省略すると前の版のもの、無ければ本文の最初の行)。共通ルールの変更前は genba_rule_get で現行を見せて OK をもらってから",
+        inputSchema: {
+          type: "object", required: ["topic", "body"],
+          properties: {
+            topic: { type: "string" }, body: { type: "string" },
+            scope: { type: "string", enum: ["共通", "個人"], description: "既定 共通。個人 = 呼び出したトークンの持ち主だけに効く" },
+            summary: { type: "string", description: "目次に出る 1 行説明 (60 字まで)" },
+          },
+        },
         handler: async (a) => {
           await ensureSchema();
           const p = getPool();
           const topic = String(a.topic || "").trim(), body = String(a.body || "").trim();
           if (!topic || !body) throw new Error("topic と body が必要");
+          const scope = ruleScopeOf(a.scope);
+          let summary = null;
+          if (a.summary !== undefined && a.summary !== null && String(a.summary).trim()) {
+            summary = String(a.summary).trim().replace(/\s*\n\s*/g, " ");
+            if ([...summary].length > RULE_SUMMARY_MAX) throw new Error(`summary は ${RULE_SUMMARY_MAX} 字まで (${[...summary].length} 字)`);
+          }
+          const owner = scope === "個人" ? by : null;
           const { rows } = await p.query(
-            `INSERT INTO genba_rules (topic, version, body, updated_by)
-             VALUES ($1, COALESCE((SELECT MAX(version) FROM genba_rules WHERE topic=$1), 0) + 1, $2, $3)
-             RETURNING topic, version, updated_by, created_at`,
-            [topic, body, by]);
-          return { ...rows[0], note: `版 ${rows[0].version} として保存。次の会話から全 AI に効く` };
+            `INSERT INTO genba_rules (topic, owner, version, body, summary, updated_by)
+             VALUES ($1, $2, COALESCE((SELECT MAX(version) FROM genba_rules WHERE topic=$1 AND COALESCE(owner,'')=COALESCE($2,'')), 0) + 1, $3,
+                     COALESCE($4, (SELECT summary FROM genba_rules WHERE topic=$1 AND COALESCE(owner,'')=COALESCE($2,'') AND summary IS NOT NULL ORDER BY version DESC LIMIT 1)), $5)
+             RETURNING topic, owner, version, summary, updated_by, created_at`,
+            [topic, owner, body, summary, by]);
+          const r = rows[0];
+          return {
+            topic: r.topic, version: r.version, scope, owner: r.owner || undefined, summary: r.summary || undefined, updated_by: r.updated_by, created_at: r.created_at,
+            note: scope === "個人" ? `個人ルール (${by}) の版 ${r.version} として保存。${by} のトークンで読むときだけ共通ルールの後ろに付き、共通と食い違うときは個人を優先する` : `共通ルールの版 ${r.version} として保存。次の会話から全 AI に効く`,
+          };
         },
       },
       {
@@ -2600,8 +2663,8 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
 
   const INSTRUCTIONS = [
     "現場 (genba_*): 1 現場 1 チャットで使う。データとルールは Keihi 側にあるので、どの AI からでも同じ。",
-    "■ 新しいチャットの最初に (毎回、聞かれる前に): 1. genba_rule_get (topic 省略) で運用ルールを読む 2. genba_audit で抜け漏れと監視ジョブの状態を見る 3. genba_tasks(who=AI) で自分の分を引く。前のチャットの内容は読み返さない。今の状態は Keihi が正本 (genba_status / genba_tasks) で、チャットは作業の場所にすぎない",
-    "- 会話の最初に genba_rule_get (topic 省略) で運用ルールを読む (無ければ空のまま進める)",
+    "■ 新しいチャットの最初に (毎回、聞かれる前に): 1. genba_rule_get (topic 省略) で「基本」と運用ルールの目次を読む (全文は返らない。今の作業に関係する topic は genba_rule_get(topic) で本文を読む) 2. genba_audit で抜け漏れと監視ジョブの状態を見る 3. genba_tasks(who=AI) で自分の分を引く。前のチャットの内容は読み返さない。今の状態は Keihi が正本 (genba_status / genba_tasks) で、チャットは作業の場所にすぎない",
+    "- 会話の最初に genba_rule_get (topic 省略) で「基本」の本文と運用ルールの目次 (topic 名・1 行説明・版・更新日) を読む。全文は返らないので、連絡文を書くなら 連絡文、見積なら 見積 のように、必要な topic は topic を指定して本文を読む (無ければ空のまま進める)",
     "- 人の名前・あだ名が出たら、送る前・記録する前に必ず genba_contact_find で引く (下の ■ 連絡先)",
     "- 現場の特定: チャットの指示文に案件 ID があればそれ。無ければ genba_find(現場名)。候補が複数なら人に聞く",
     "- 「写真 (図面) 上げたい」→ genba_folder(現場, 種類) の url を渡す。人はそこに Drive アプリで上げる。何枚入ったかは list_site_photos",
@@ -2621,6 +2684,7 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
     "- AI 自身の作業 (別の AI への返事・ルールやコネクタの設定・方針の相談) はタスクにしない。入ってしまったら genba_log_void。ただし「人の代わりに AI が実行する仕事」(データが届いたら書類を作って送る、返事が来たら関係者に連絡する等) は who=AI の 次やること にしてよい。who=AI のタスクは人のタスクカレンダーには出ない。genba_tasks(who=AI) で自分の分を引いて、条件が揃ったら実行して 解決",
     "- タスクには estimate_min (分) を付ける。「5 分で終わるタスクある？」「手が空いた」→ genba_tasks(max_minutes) から 1〜3 件を提案し、やったら kind=解決 で閉じる",
     "- ルールの変更は genba_rule_set (版が増えるだけ。消えない)。書く前に現行を見せて OK をもらう",
+    "- 自分だけに効かせたいルールは genba_rule_set(scope=個人)。呼び出したトークンの持ち主だけに効き、他の人・他の AI には見えない。同じ topic に共通と個人がある topic は、genba_rule_get が個人を後ろに付けて「個人を優先」と明記して返す。版は共通と個人で別々に積む",
     "- 書いた人はトークンから自動で入る。AI が名前を書かない",
     "■ 連絡文 (LINE・メールを人に送るとき)。毎回「お疲れ様です！」から始めない",
     "- 送る直前にそのルームの直近 5 件を読んで、会話の続きとして書く。genba_contact_find の返り値 message_hint に従う: 3 時間以内 (または今日) にやりとりがあれば挨拶を付けず用件から書く。挨拶はその日の最初の 1 通だけ、相手が挨拶してきても返さない",
