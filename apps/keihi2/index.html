@@ -849,9 +849,14 @@ function createSwipeCard(r, isBack) {
   del.type = "button"; del.className = "sw-site danger"; del.textContent = "🗑 削除";
   del.addEventListener("click", async (e) => {
     e.stopPropagation();
+    if (card.dataset.busy) return;       // 連打で確認ダイアログや削除を重ねない
     if (!confirm(`¥${(r.total||0).toLocaleString()} を削除？`)) return;
-    try { await deleteRecord(r); swipeOutNext(card); }
-    catch (err) { toast("削除失敗: " + err.message, true); }
+    if (card.dataset.busy) return;
+    card.dataset.busy = "1";
+    sitesRow.querySelectorAll("button").forEach((x) => { x.disabled = true; });
+    if (await deleteRecord(r)) { swipeOutNext(card); return; }
+    delete card.dataset.busy;            // 消せなかった: カードはそのまま、もう一度押せるようにする
+    sitesRow.querySelectorAll("button").forEach((x) => { x.disabled = false; });
   });
   sitesRow.appendChild(del);
   card.appendChild(sitesRow);
@@ -995,7 +1000,8 @@ async function deleteRecord(r) {
     renderSort();
     refreshUnsortedCount();
     showUndoToast();
-  } catch (e) { toast("削除失敗: " + e.message, true); }
+    return true;
+  } catch (e) { toast("削除失敗: " + e.message, true); return false; }   // 返り値: 消せたら true
 }
 
 function showUndoToast() {
@@ -1157,10 +1163,13 @@ $("editDeleteBtn").addEventListener("click", async () => {
   closeEdit();
   await deleteRecord(r);
 });
+let savingEdit = false;   // 保存中の連打で何度も送らない (1 回押したら、終わるまで次は無視)
 $("editSaveBtn").addEventListener("click", async () => {
-  if (editingRecordId == null) return;
+  if (editingRecordId == null || savingEdit) return;
   const r = records.find((x) => x.id === editingRecordId);
   if (!r) { closeEdit(); return; }
+  savingEdit = true;
+  $("editSaveBtn").disabled = true;
   const patch = {
     total: Number($("eTotal").value) || 0,
     site: $("eSite").value,
@@ -1188,6 +1197,7 @@ $("editSaveBtn").addEventListener("click", async () => {
     if ($("sortScreen").style.display === "flex") renderSort();
     refreshUnsortedCount();
   } catch (e) { toast("保存失敗: " + e.message, true); }
+  finally { savingEdit = false; $("editSaveBtn").disabled = false; }
 });
 
 // ───────── Data ─────────

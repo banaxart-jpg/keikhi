@@ -86,7 +86,8 @@ export const EXPENSE_INSTRUCTIONS = [
   "- 写真の渡し方 (領収書 1 枚 = 1 件につき 1 枚): 外に出られる環境なら keihi_receipt_upload_url(count=枚数) で URL をもらい、返ってきた curl で画像を PUT して photo_ref を receipts に入れる。外に出られない環境なら photo_base64 (1 枚数 MB まで。サーバーが縮小する) で直接渡す。写真なしでも登録はできるが、証憑なので付ける",
   "- 現場は表記ゆれを吸収する (「入谷」「共通」「会社」も可)。候補が複数・見つからないときはエラーで返るので、keihi_sites で一覧を見て人に聞く。購入者は呼び出したトークンの持ち主で自動で入る (自分で書かない)",
   "- 同じ日付・店舗・金額が既にあれば、入れずに duplicate: true と既存の id が返る (同じ領収書を 2 回貼られても 1 件)。別の買い物なら force=true",
-  "- 修正は keihi_receipt_update、削除は keihi_receipt_delete (人に確認してから confirm=true)。一覧・検索は keihi_receipt_list、集計は keihi_receipt_summary、写真は keihi_receipt_photo、CSV は keihi_receipt_export_csv、シートへの書き出し直しは keihi_receipt_sheet_sync",
+  "- 修正は keihi_receipt_update、削除は keihi_receipt_delete (人に確認してから confirm=true)。一覧・検索は keihi_receipt_list、集計は keihi_receipt_summary、写真は keihi_receipt_photo、CSV は keihi_receipt_export_csv、シートへの書き出し直しは keihi_receipt_sheet_sync、シートに同じ記録の行が重複しているときは keihi_receipt_sheet_dedupe (まず探すだけ → 人に見せて OK → apply=true)",
+  "- シートは 1 記録 = 1 行: 同じ記録を何度保存・編集しても行は増えない (記録の ID で今ある行を書き換える)",
   "- 現場の追加・編集は経費アプリでなく現場アプリ側 (genba_register)。keihi_sites は経費で選べる現場の一覧",
 ];
 
@@ -100,7 +101,7 @@ const GUIDE_TEXT = [
 
 export function createExpense({
   getPool, getStorage, bucket, publicUrl = "", secret = "", appUrl = "https://keihi-496002.web.app",
-  findSites, appendRecordToSheet = null, syncSheets = null, today = null,
+  findSites, appendRecordToSheet = null, syncSheets = null, dedupeSheets = null, today = null,
 }) {
   const todayStr = () => (today ? today() : new Date().toISOString().slice(0, 10));
   const viewUrl = (id) => `${appUrl}/keihi/?view=${id}`;
@@ -116,7 +117,16 @@ export function createExpense({
     const { rows } = await pool().query(`${LIST_SQL}\n        ORDER BY date DESC, id DESC LIMIT 1000`);
     return rows;
   }
-  async function insertRecord(r) {
+  // 登録。同じ写真 (image_url) で 日付・店舗・金額・購入者 まで同じ記録がすでにあれば、新しい行は作らずその記録を返す (existed: true)。
+  // 登録ボタンの連打・通信の再送で記録が増えない。1 枚の写真に別々の領収書が写っているとき (店舗や金額が違う) は、普通に別の記録になる。
+  // allowDuplicate = true (MCP の force) のときは、そのまま作る
+  async function insertRecord(r, { allowDuplicate = false } = {}) {
+    if (r.imageUrl && !allowDuplicate) {
+      const { rows: ex } = await pool().query(
+        `SELECT id, created_at FROM records WHERE image_url=$1 AND date=$2 AND store=$3 AND total=$4 AND buyer=$5 ORDER BY id LIMIT 1`,
+        [r.imageUrl, r.date, r.store, r.total, r.buyer]);
+      if (ex.length) return { ...ex[0], existed: true };
+    }
     const { rows } = await pool().query(
       `INSERT INTO records (date, store, total, category, work_type, payment, buyer, site, memo, image_url, drive_url)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
@@ -133,6 +143,11 @@ export function createExpense({
        WHERE id=$11`,
       [r.date, r.store, r.total, r.category, r.workType, r.payment, r.buyer, r.site, r.memo || "", r.driveUrl || null, id]);
     return rowCount;
+  }
+  // 編集前の購入日と Drive の URL (編集でシートの行を書き換えるときに使う)
+  async function getRecordMeta(id) {
+    const { rows } = await pool().query(`SELECT date::text AS date, drive_url AS "driveUrl" FROM records WHERE id=$1`, [id]);
+    return rows[0] || null;
   }
   async function deleteRecordRow(id) {
     await pool().query("DELETE FROM records WHERE id = $1", [id]);
@@ -284,7 +299,7 @@ export function createExpense({
     const imageUrl = await resolvePhoto(p, it, cache, forceThis);
     if (!imageUrl) warnings.push("写真が付いていない (証憑なので付けるのが望ましい)");
     const rec = { date, store: storeName, total, category, workType, payment, buyer, site, memo, imageUrl, driveUrl: null };
-    const saved = await insertRecord(rec);
+    const saved = await insertRecord(rec, { allowDuplicate: forceThis });
     const id = Number(saved.id);
     let st = null;
     if (appendRecordToSheet) st = await appendRecordToSheet({ ...rec, id }).catch((e) => ({ monthly: { ok: false, error: e.message }, tx: { ok: false, error: e.message } }));
@@ -523,7 +538,7 @@ export function createExpense({
       {
         name: "keihi_receipt_update",
         description: [
-          "経費の記録を直す (経費アプリの「記録を編集」と同じ処理。DB を更新して、シートにも追記し直す = アプリの編集と同じで、月別タブには新しい行が増える。古い行は手で消す)。変えたい項目だけ渡せばいい (渡さなかった項目はそのまま)。",
+          "経費の記録を直す (経費アプリの「記録を編集」と同じ処理。DB を更新して、シート (月別タブ・取引シート) の同じ記録の行を書き換える。行は増えない)。変えたい項目だけ渡せばいい (渡さなかった項目はそのまま)。",
           `項目と選択肢は keihi_receipt_add と同じ (${CHOICES_TEXT})。写真を付け替えるときは photo_ref か photo_base64 (画面では写真は差し替えられない。AI 経由の追加機能)。`,
           "削除は keihi_receipt_delete。",
         ].join("\n"),
@@ -564,10 +579,10 @@ export function createExpense({
           if (!n) throw new Error(`記録が見つからない: #${id}`);
           if (newImage) await p.query(`UPDATE records SET image_url=$1 WHERE id=$2`, [newImage, id]);
           let st = null;
-          if (appendRecordToSheet) st = await appendRecordToSheet({ ...next, id, imageUrl: newImage || cur.imageUrl || null }).catch((e) => ({ monthly: { ok: false, error: e.message }, tx: { ok: false, error: e.message } }));
+          if (appendRecordToSheet) st = await appendRecordToSheet({ ...next, id, imageUrl: newImage || cur.imageUrl || null }, { prevDate: cur.date }).catch((e) => ({ monthly: { ok: false, error: e.message }, tx: { ok: false, error: e.message } }));
           const { rows: after } = await p.query(`${LIST_SQL} WHERE id=$1`, [id]);
           const sheet = sheetOut(next.date, st);
-          return { ok: true, record: recOut(after[0]), sheet, note: "シートには追記された (アプリの編集と同じ)。月別タブの古い行は手で消す。取引シートは元 ID で同じ行を 2 回入れない" + (sheet.ok ? "" : "。シートへの反映に失敗 → keihi_receipt_sheet_sync(ids=[…])") };
+          return { ok: true, record: recOut(after[0]), sheet, note: "シートの同じ行を書き換えた (行は増えない。購入日の月を変えたら、前の月のタブの行は新しい月に移る)" + (sheet.ok ? "" : "。シートへの反映に失敗 → keihi_receipt_sheet_sync(ids=[…])") };
         },
       },
       {
@@ -623,7 +638,7 @@ export function createExpense({
       },
       {
         name: "keihi_receipt_sheet_sync",
-        description: "経費の記録をスプレッドシート (経費記録の月別タブ + 取引シート) に書き出し直す。登録のときに失敗した記録や、シートに無い古い記録を入れる用。シートに既にある行 (写真セルの view=ID / 取引シートの元 ID) は飛ばして、無いものだけ追記する (二重に入らない)。ids か month で対象を決める。dry_run=true で、どれが足りないかを見るだけ。",
+        description: "経費の記録をスプレッドシート (経費記録の月別タブ + 取引シート) に書き出し直す。登録のときに失敗した記録や、シートに無い古い記録を入れる用。シートに無い記録だけ足す (写真セルの ?view=ID / 取引シートの元 ID で探す。あれば行を今の内容に合わせるだけで、行は増えない)。ids か month で対象を決める。dry_run=true で、どれが足りないかを見るだけ。シートに同じ記録の行が重複して入ってしまっている分は keihi_receipt_sheet_dedupe。",
         inputSchema: {
           type: "object",
           properties: { ids: { type: "array", items: { type: "integer" } }, month: { type: "string", description: "YYYY-MM" }, dry_run: { type: "boolean" } },
@@ -637,6 +652,21 @@ export function createExpense({
           if (!rows.length) return { checked: 0, results: [], note: "対象の記録が無い" };
           const results = await syncSheets(rows, { dryRun: a.dry_run === true });
           return { checked: rows.length, dry_run: a.dry_run === true || undefined, appended: results.filter((r) => r.monthly === "appended" || r.tx === "appended").length, results };
+        },
+      },
+      {
+        name: "keihi_receipt_sheet_dedupe",
+        description: [
+          "スプレッドシート (経費記録の月別タブ・取引シート) に、同じ記録の行が重複して入ってしまっている所を探す (これまで、現場ボタンや保存の連打・再保存のたびに行が増えていた分)。同じ記録かどうかは、写真セルの ?view=ID (Drive の写真は Drive の URL) / 取引シートの元 ID で見る。宿など領収書以外の行は対象外。",
+          "既定は探すだけで 1 行も消さない (dry_run)。返り値の monthly / tx に、どのタブの何行目が重複かが出る。人に見せて OK をもらってから apply=true で呼ぶと、各記録で一番下 (最後に書かれた = 一番新しい) の行を残して、ほかの行を消す。消したあと、残した行は DB の今の内容に合わせる。取り消せないので、必ず先に探すだけで呼んで人に見せる。",
+          "month (YYYY-MM) で月別タブを 1 つに絞れる (省略 = 全部の月別タブ + 取引シート)。",
+        ].join("\n"),
+        inputSchema: { type: "object", properties: { month: { type: "string", description: "YYYY-MM" }, apply: { type: "boolean", description: "人に確認したら true。省略 = 探すだけ" } } },
+        handler: async (a) => {
+          if (!dedupeSheets) throw new Error("シートの重複整理が設定されていない");
+          if (a.month != null && !/^\d{4}-\d{2}$/.test(String(a.month))) throw new Error("month は YYYY-MM");
+          const out = await dedupeSheets({ month: a.month || undefined, apply: a.apply === true });
+          return a.apply === true ? out : { ...out, note: out.extra_rows ? "探しただけで、消していない。人に見せて OK をもらったら apply=true で呼ぶ" : "重複は無い" };
         },
       },
       {
@@ -657,7 +687,7 @@ export function createExpense({
   return {
     tools, instructions: EXPENSE_INSTRUCTIONS, uploadRoute,
     // 画面 (REST) と共通の処理
-    listAll, insertRecord, updateRecordRow, deleteRecordRow, getImageGsUrl, signedReadUrl, putReceiptObject,
+    listAll, insertRecord, updateRecordRow, deleteRecordRow, getRecordMeta, getImageGsUrl, signedReadUrl, putReceiptObject,
     viewUrl,
   };
 }

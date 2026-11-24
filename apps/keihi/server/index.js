@@ -39,6 +39,7 @@ import { splitGridImage as dramaSplitGridImage } from "./drama-lib/gridsplit.js"
 import { createMcpHandler as dramaCreateMcpHandler, recentMcpCalls } from "./drama-lib/mcp.js";
 import { createGenba, normName as genbaNormName, normCompany as genbaNormCompany } from "./genba-lib/index.js";
 import { createExpense, EXPENSE_INSTRUCTIONS } from "./expense-lib/index.js";
+import { createRecordSheets } from "./expense-lib/sheets.js";
 import { createPrivate } from "./private-lib/index.js";
 import { createSns } from "./sns-lib/index.js";
 import { createMeeting } from "./meeting-lib/index.js";
@@ -2885,8 +2886,9 @@ const expense = createExpense({
   publicUrl: DRAMA_API_BASE, secret: (process.env.INTERNAL_TICK_SECRET || "").trim(),
   appUrl: "https://keihi-496002.web.app",
   findSites: (p, q, limit) => genba.findSites(p, q, limit),
-  appendRecordToSheet: (r) => appendRecordToSheet(r),
+  appendRecordToSheet: (r, o) => appendRecordToSheet(r, o),
   syncSheets: (rows, o) => syncRecordsToSheets(rows, o),
+  dedupeSheets: (o) => dedupeRecordSheets(o),
 });
 app.all("/api/genba/mcp/:token", genba.mcpRoute(GENBA_MCP_TOKENS));
 // 直近の MCP 呼び出し (全コネクタ分、引数の中身なし)。Cloud Logging を開かずに「どのツールが何 ms で失敗したか」を見る用
@@ -3431,13 +3433,11 @@ function recordPhotoCell(r) {
     || (r.id ? `https://keihi-496002.web.app/keihi/?view=${r.id}` : "");
   return photoLinkUrl ? `=HYPERLINK("${String(photoLinkUrl).replace(/"/g, '""')}","🧾")` : "";
 }
-// 新「取引」シートに append (1 行 1 取引の統一フォーマット)。返り値 = appendTx と同じ { ok | skipped | error }
-// ★ 現場が決まってから書き込む。経費2 のソート前 (site="") は書かない。
+// 新「取引」シート (1 行 1 取引の統一フォーマット) に入れる内容 (appendTx に渡す形)。
+// ★ 現場が決まってから書き込む (expense-lib/sheets.js が site が空なら書かない)。経費2 のソート前 (site="") は書かない。
 // ソート完了時 PUT /api/records → 再度 appendRecordToSheet が呼ばれ、site 入りで初めて記載される。
-// (refId による二重投入防止キャッシュがあるので、PUT で何度書き換えても 1 行のみ)
-async function appendRecordTx(r) {
-  if (!r.site) return { skipped: true, reason: "現場が空" };
-  return appendTx({
+function recordTxFields(r) {
+  return {
     date: r.date || "",
     type: "支出",
     category: r.site === "満竹華庵" ? "旅館" : "工事",
@@ -3453,95 +3453,78 @@ async function appendRecordTx(r) {
     photoCell: recordPhotoCell(r),
     source: "領収書",
     refId: r.id || "",
-  }).catch((e) => ({ ok: false, error: e.message }));
+  };
 }
-// 旧フォーマットの月別タブ (経費記録スプレッドシート。バックアップ・互換)
-async function appendRecordMonthly(r) {
-  const ym = String(r.date || "").slice(0, 7) || "unknown";
-  if (!SHEET_ID) return { skipped: true, reason: "SHEET_ID 未設定", tab: ym };
-  if (!r.site) return { skipped: true, reason: "現場が空", tab: ym };
-  try {
-    const sheets = await getSheetsApi();
-    await ensureSheetTab(sheets, ym);
-    await sheets.spreadsheets.values.append({
+// 旧フォーマットの月別タブ (経費記録スプレッドシート。バックアップ・互換) の 1 行 (A〜J)
+function recordMonthlyRow(r) {
+  return [
+    r.date || "", r.buyer || "", r.site || "", r.store || "",
+    Number(r.total) || 0, r.category || "", r.workType || "",
+    r.payment || "", r.memo || "", recordPhotoCell(r),
+  ];
+}
+// 経費の記録 ⇄ シートの行 (1 記録 = 1 行。同じ記録を何度保存しても行が増えない)。詳細は expense-lib/sheets.js
+// (SHEET_ID / TX_SHEET_ID などは下の方の定義なので、最初に使うときに作る)
+let _recordSheets = null;
+function recordSheets() {
+  return (_recordSheets ||= createRecordSheets({
+    getSheetsApi, sheetId: SHEET_ID, txSheetId: TX_SHEET_ID, txTab: TX_TAB,
+    ensureMonthlyTab: (sheets, ym) => ensureSheetTab(sheets, ym),
+    monthlyRow: recordMonthlyRow,
+    appendMonthly: (sheets, r) => sheets.spreadsheets.values.append({
       spreadsheetId: SHEET_ID,
-      range: `${ym}!A:J`,
+      range: `${String(r.date || "").slice(0, 7) || "unknown"}!A:J`,
       valueInputOption: "USER_ENTERED",
       insertDataOption: "INSERT_ROWS",
-      requestBody: {
-        values: [[
-          r.date || "", r.buyer || "", r.site || "", r.store || "",
-          Number(r.total) || 0, r.category || "", r.workType || "",
-          r.payment || "", r.memo || "", recordPhotoCell(r),
-        ]],
-      },
-    });
-    console.log(`[sheets] appended id=${r.id} ym=${ym} site=${r.site}`);
-    return { ok: true, tab: ym };
-  } catch (e) {
-    console.warn(`[sheets] append FAILED id=${r.id}: ${e.message}`);
-    return { ok: false, error: e.message, tab: ym };
-  }
+      requestBody: { values: [recordMonthlyRow(r)] },
+    }),
+    txFields: recordTxFields, txRow: txRowValues, appendTx,
+    forgetTx: (key) => txSeenRefIds.delete(key),
+    onTxChanged: () => { keiriCache.fetchedAt = 0; keiriCache.rows = []; },   // keiri ダッシュボードのキャッシュを捨てる (appendTx と同じ)
+  }));
 }
-// 登録・編集のたびに呼ばれる (画面の /api/records も MCP の keihi_* も同じ)。取引シートと月別タブは並行に書く。
-// 画面は結果を待たない (.catch(() => {}))。MCP は返り値 { tab, monthly, tx } で、どこに反映されたかを返す
-async function appendRecordToSheet(r) {
-  const txP = appendRecordTx(r);
-  const monthly = await appendRecordMonthly(r);
-  const tx = await txP;
-  return { tab: monthly.tab, monthly, tx };
+// 登録・編集のたびに呼ばれる (画面の /api/records も MCP の keihi_* も同じ)。取引シートと月別タブに「この記録の行」を作る / 書き換える。
+// opts.prevDate = 編集前の購入日 (月が変わったら前の月のタブの行を外す)。
+// 画面は結果を待たない (.catch(() => {}))。MCP は返り値 { tab, monthly, tx } で、どこに反映されたか (action = appended / updated / moved) を返す
+async function appendRecordToSheet(r, opts = {}) {
+  return recordSheets().upsert(r, opts);
 }
-// シートの書き出し直し (keihi_receipt_sheet_sync): シートに既にある行は飛ばして、無いものだけ追記する。
-//   月別タブ = 写真セル (J 列) の式に view=<id> (か Drive の URL) がある行 / 取引シート = ソース「領収書」で 元ID (M 列) が同じ行
+// シートの書き出し直し (keihi_receipt_sheet_sync): シートに無い行だけ足す (あれば行を DB の今の内容に合わせる。行は増やさない)。
+//   月別タブ = 写真セル (J 列) の式に ?view=<id> (か Drive の URL) がある行 / 取引シート = ソース「領収書」で 元ID (M 列) が同じ行
 async function syncRecordsToSheets(rows, { dryRun = false } = {}) {
-  const sheets = await getSheetsApi();
-  let txHave = null;
-  if (TX_SHEET_ID) {
-    try {
-      const v = await sheets.spreadsheets.values.get({ spreadsheetId: TX_SHEET_ID, range: `${TX_TAB}!L2:M` });
-      txHave = new Set((v.data.values || []).filter((x) => x[0] === "領収書" && x[1]).map((x) => String(x[1])));
-    } catch (e) { txHave = new Set(); console.warn(`[sheets] sync: 取引シートを読めない: ${e.message}`); }
-  }
-  const monthlyCache = new Map(); // ym → 写真セルの式の配列 (タブが無ければ空)
-  const monthlyFormulas = async (ym) => {
-    if (monthlyCache.has(ym)) return monthlyCache.get(ym);
-    let f = [];
-    try {
-      const v = await sheets.spreadsheets.values.get({ spreadsheetId: SHEET_ID, range: `${ym}!J2:J`, valueRenderOption: "FORMULA" });
-      f = (v.data.values || []).map((x) => String(x[0] || ""));
-    } catch { f = []; }
-    monthlyCache.set(ym, f);
-    return f;
-  };
+  const rsx = recordSheets();
+  const st = await rsx.status(rows);
   const out = [];
   for (const r of rows) {
-    const rec = { ...r, id: r.id, site: r.site, date: r.date };
-    const ym = String(r.date || "").slice(0, 7) || "unknown";
-    const res = { id: Number(r.id), tab: ym, monthly: "skipped", tx: "skipped" };
+    const s = st.get(Number(r.id)) || { monthly: "skipped", tx: "skipped" };
+    const res = { id: Number(r.id), tab: String(r.date || "").slice(0, 7) || "unknown", monthly: s.monthly, tx: s.tx };
     if (!r.site) { res.monthly = res.tx = "skipped (現場が空)"; out.push(res); continue; }
-    if (TX_SHEET_ID) {
-      if (txHave.has(String(r.id))) res.tx = "exists";
-      else if (dryRun) res.tx = "missing";
-      else {
-        txSeenRefIds.delete(`領収書:${r.id}`);  // 取引シートに無いと分かったので、キャッシュの二重投入防止は外す
-        const t = await appendRecordTx(rec);
-        res.tx = t.ok ? "appended" : `error: ${t.error || "?"}`;
-      }
-    }
-    if (SHEET_ID) {
-      const f = await monthlyFormulas(ym);
-      const has = f.some((x) => x.includes(`view=${r.id}`) || (r.driveUrl && x.includes(r.driveUrl)));
-      if (has) res.monthly = "exists";
-      else if (dryRun) res.monthly = "missing";
-      else {
-        const m = await appendRecordMonthly(rec);
-        res.monthly = m.ok ? "appended" : `error: ${m.error || "?"}`;
-        if (m.ok) f.push(recordPhotoCell(rec));
-      }
+    if (!dryRun && (s.monthly === "missing" || s.tx === "missing")) {
+      const u = await rsx.upsert(r);
+      res.monthly = s.monthly === "missing" ? (u.monthly && u.monthly.ok ? "appended" : `error: ${(u.monthly && u.monthly.error) || "?"}`) : s.monthly;
+      res.tx = s.tx === "missing" ? (u.tx && u.tx.ok ? "appended" : `error: ${(u.tx && u.tx.error) || "?"}`) : s.tx;
     }
     out.push(res);
   }
   return out;
+}
+// 同じ記録の行が 2 つ以上ある所 (これまでの連打・再保存で増えた分) を探す。apply=true のときだけ、一番下 (最後に書かれた) の行を残して消す。
+// 消したあと、残した行を DB の今の内容に合わせる。探すだけなら 1 行も消さない
+async function dedupeRecordSheets({ month, apply = false } = {}) {
+  const rsx = recordSheets();
+  const found = await rsx.findDuplicates({ month });
+  const extra = found.monthly.reduce((n, g) => n + g.count - 1, 0) + found.tx.reduce((n, g) => n + g.count - 1, 0);
+  if (!apply || !extra) return { applied: false, extra_rows: extra, ...found };
+  const removed = await rsx.removeDuplicates(found);
+  const ids = [...new Set([...found.monthly.map((g) => g.id), ...found.tx.map((g) => g.id)].filter((x) => x != null))];
+  let refreshed = 0;
+  if (ids.length) {
+    const { rows } = await getPool().query(
+      `SELECT id, date::text AS date, store, total, category, work_type AS "workType", payment, buyer, site, memo, drive_url AS "driveUrl"
+         FROM records WHERE id = ANY($1::bigint[])`, [ids]);
+    for (const r of rows) { const u = await rsx.upsert(r); if ((u.monthly && u.monthly.ok) || (u.tx && u.tx.ok)) refreshed++; }
+  }
+  return { applied: true, removed, refreshed, extra_rows: extra, monthly: found.monthly, tx: found.tx, checked: found.checked };
 }
 
 // ───── 請求書 (seikyu) 用 Sheets append ─────
@@ -3642,6 +3625,18 @@ const txSeenRefIds = new Set();
 // dashboard セットアップを cold start 後 1 回だけ走らせるためのフラグ。
 let txDashboardsInit = false;
 
+// 取引シートの 1 行 (A〜P の 16 個)。追記 (appendTx) と、経費の記録の行の書き換え (expense-lib/sheets.js) で同じ並びを使う
+function txRowValues(r) {
+  return [
+    r.date || "", r.type || "", r.category || "", r.subcategory || "",
+    Number(r.amount) || 0, r.counterparty || "", r.site || "",
+    r.status || "確定", r.paymentMethod || "", r.memo || "",
+    r.photoCell || "", r.source || "", r.refId || "",
+    r.registeredAt || jstTodayStr(),    // 登録日 (JST)
+    r.buyer || "", r.workType || "",     // 購入者 / 工種 (メモから分離)
+  ];
+}
+
 async function appendTx(r) {
   if (!TX_SHEET_ID) return { skipped: true };
   // 元ID で de-dup (短時間の二重投入対策)。
@@ -3677,16 +3672,7 @@ async function appendTx(r) {
       range: `${TX_TAB}!A:P`,
       valueInputOption: "USER_ENTERED",
       insertDataOption: "INSERT_ROWS",
-      requestBody: {
-        values: [[
-          r.date || "", r.type || "", r.category || "", r.subcategory || "",
-          Number(r.amount) || 0, r.counterparty || "", r.site || "",
-          r.status || "確定", r.paymentMethod || "", r.memo || "",
-          r.photoCell || "", r.source || "", r.refId || "",
-          r.registeredAt || jstTodayStr(),    // 登録日 (JST)
-          r.buyer || "", r.workType || "",     // 購入者 / 工種 (メモから分離)
-        ]],
-      },
+      requestBody: { values: [txRowValues(r)] },
     });
     if (r.refId) txSeenRefIds.add(`${r.source}:${r.refId}`);
     // keiri ダッシュボードのキャッシュを無効化 (次の summary/year 呼び出しで再取得)
@@ -11296,8 +11282,9 @@ app.post("/api/records", async (req, res) => {
   try {
     const r = req.body || {};
     console.log(`[records] POST imageUrl=${r.imageUrl ? r.imageUrl.slice(0, 80) : "(none)"} store="${r.store}" total=${r.total}`);
+    // 同じ写真・日付・店舗・金額・購入者がすでにあれば、新しい行は作らずその記録を返す (登録ボタンの連打・再送で増えない)
     const saved = await expense.insertRecord(r);
-    // 現場が設定されてればシートにも追記 (空なら未 SORT で送らない)
+    // 現場が設定されてればシートに反映 (空なら未 SORT で送らない)。同じ記録の行があれば書き換えるだけ
     appendRecordToSheet({ ...r, id: saved.id }).catch(() => {});
     res.status(201).json(saved);
   } catch (err) {
@@ -11311,10 +11298,11 @@ app.put("/api/records/:id", async (req, res) => {
   if (!p) return res.status(503).json({ error: "DB not configured" });
   try {
     const r = req.body || {};
+    const prev = await expense.getRecordMeta(req.params.id);   // 編集前の購入日・Drive の URL (月が変わったとき・写真セルの式に使う)
     const rowCount = await expense.updateRecordRow(req.params.id, r);
     if (!rowCount) return res.status(404).json({ error: "not found" });
-    // 編集後もシートに append (現場が空なら送らない)。重複は当面手動で削除
-    appendRecordToSheet({ ...r, id: req.params.id }).catch(() => {});
+    // 編集後もシートに反映 (現場が空なら送らない)。同じ記録の行があれば書き換える = 保存を何度押しても行は増えない
+    appendRecordToSheet({ ...r, id: req.params.id, driveUrl: r.driveUrl || (prev && prev.driveUrl) || null }, { prevDate: prev && prev.date }).catch(() => {});
     res.json({ ok: true });
   } catch (err) {
     console.error("update error", err);

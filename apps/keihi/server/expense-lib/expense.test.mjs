@@ -40,14 +40,15 @@ const storage = {
     }),
   }),
 };
-const sheetCalls = [], syncCalls = [];
+const sheetCalls = [], sheetOpts = [], syncCalls = [], dedupeCalls = [];
 let sheetFail = false;
-const appendRecordToSheet = async (r) => {
-  sheetCalls.push(r);
+const appendRecordToSheet = async (r, o) => {
+  sheetCalls.push(r); sheetOpts.push(o);
   const tab = String(r.date || "").slice(0, 7) || "unknown";
   if (sheetFail) return { tab, monthly: { ok: false, error: "boom", tab }, tx: { ok: true } };
   return { tab, monthly: { ok: true, tab }, tx: { ok: true } };
 };
+const dedupeSheets = async (o) => { dedupeCalls.push(o); return { applied: o.apply === true, extra_rows: 3, monthly: [{ tab: "2026-11", id: 5, rows: [4, 5, 6], count: 3 }], tx: [], checked: { tabs: 1, rows: 10 } }; };
 const syncSheets = async (rs, o) => { syncCalls.push({ ids: rs.map((r) => Number(r.id)), ...o }); return rs.map((r) => ({ id: Number(r.id), tab: r.date.slice(0, 7), monthly: o.dryRun ? "missing" : "appended", tx: "exists" })); };
 
 const BUCKET = "test-receipts", SECRET = "test-secret", PUBLIC = "https://api.example";
@@ -59,7 +60,7 @@ const genba = createGenba({
 });
 expense = createExpense({
   getPool: () => pool, getStorage: () => storage, bucket: BUCKET, publicUrl: PUBLIC, secret: SECRET, appUrl: "https://keihi-496002.web.app",
-  findSites: (p, q, l) => genba.findSites(p, q, l), appendRecordToSheet, syncSheets, today: () => clock,
+  findSites: (p, q, l) => genba.findSites(p, q, l), appendRecordToSheet, syncSheets, dedupeSheets, today: () => clock,
 });
 await genba.ensureSchema();
 const call = (by, name, args = {}) => { const t = expense.tools(by).find((x) => x.name === name); if (!t) throw new Error("tool なし: " + name); return t.handler(args); };
@@ -253,7 +254,7 @@ const target = (await rows(`SELECT id FROM records WHERE store='コメリ'`))[0]
 let u = await call(S, "keihi_receipt_update", { id: target, total: 13000, memo: "合板 + 角材", category: "工具", site: "入谷" });
 const after = (await rows(`SELECT * FROM records WHERE id=$1`, [target]))[0];
 ok(u.ok && after.total === 13000 && after.memo === "合板 + 角材" && after.category === "工具・備品" && after.site === "入谷" && after.store === "コメリ" && after.payment === "カード" && after.buyer === "名取" && after.work_type === "木工" && u.record.total === 13000, "update: 渡した項目だけ変わる (言い換えも寄せる)。ほかはそのまま", after);
-ok(sheetCalls.length === 1 && sheetCalls[0].id === target && sheetCalls[0].total === 13000 && sheetCalls[0].site === "入谷" && /アプリの編集と同じ/.test(u.note), "update: 画面の編集と同じく、シートにも追記し直す (note で案内)", sheetCalls[0]);
+ok(sheetCalls.length === 1 && sheetCalls[0].id === target && sheetCalls[0].total === 13000 && sheetCalls[0].site === "入谷" && sheetOpts.at(-1)?.prevDate === "2026-11-05" && /行は増えない/.test(u.note) && !/手で消す/.test(u.note), "update: シートの同じ行を書き換える (編集前の購入日を渡す = 月が変わったら前の月の行が移る)。note は「行は増えない」", { call: sheetCalls[0], opts: sheetOpts.at(-1), note: u.note });
 u = await call(S, "keihi_receipt_update", { id: target, photo_base64: b64(jpegTall) });
 ok((await rows(`SELECT image_url FROM records WHERE id=$1`, [target]))[0].image_url?.startsWith("gs://test-receipts/2026-11-24/") && u.record.has_photo === true, "update: 写真を付け替えられる (追加機能)");
 await throws(() => call(S, "keihi_receipt_update", { id: 999999, memo: "x" }), /見つからない/, "update: 無い id はエラー");
@@ -290,11 +291,36 @@ ok((await rows(`SELECT 1 FROM records WHERE id=$1`, [ins.id])).length === 0, "RE
 const put0 = await expense.putReceiptObject(Buffer.from("x"), "image/jpeg"); const put1 = await expense.putReceiptObject(Buffer.from("x"), "application/pdf");
 ok(/^gs:\/\/test-receipts\/2026-11-24\/[0-9a-f-]{36}\.jpg$/.test(put0.imageUrl) && put0.key.endsWith(".jpg") && put1.key.endsWith(".pdf"), "/api/scan と共通の置き場 (jpg / pdf)");
 
+// ───────── 12b. 画面の登録ボタンの連打・再送で記録が増えない (REST の insertRecord)
+const base = { date: "2026-09-20", store: "連打 店", total: 777, category: "材料費", workType: "木工", payment: "現金", buyer: "小西", site: "入谷", memo: "", imageUrl: "gs://x/dup.jpg", driveUrl: null };
+const i1 = await expense.insertRecord(base);
+const i2 = await expense.insertRecord({ ...base });
+const i3 = await expense.insertRecord({ ...base });
+ok(i1.existed === undefined && i2.existed === true && i3.existed === true && i2.id === i1.id && i3.id === i1.id && (await rows(`SELECT count(*)::int AS n FROM records WHERE image_url='gs://x/dup.jpg'`))[0].n === 1, "同じ写真・日付・店舗・金額・購入者の登録を 3 回送っても、記録は 1 件 (2 回目以降は最初の記録を返す)", { i1, i2, i3 });
+const i4 = await expense.insertRecord({ ...base, total: 778 });
+const i5 = await expense.insertRecord({ ...base, store: "別の店" });
+ok(i4.id !== i1.id && i5.id !== i1.id && i4.existed === undefined && i5.existed === undefined, "1 枚の写真に別々の領収書 (金額や店舗が違う) なら、別の記録として入る");
+const i6 = await expense.insertRecord({ ...base, imageUrl: null }), i7 = await expense.insertRecord({ ...base, imageUrl: null });
+ok(i6.id !== i7.id, "写真が無い登録は、今まで通り (そのまま入る。同じ写真かどうかを見られない)");
+const i8 = await expense.insertRecord({ ...base }, { allowDuplicate: true });
+ok(i8.id !== i1.id, "allowDuplicate (MCP の force) なら、同じ内容でも作る");
+const meta = await expense.getRecordMeta(i1.id);
+ok(meta.date === "2026-09-20" && meta.driveUrl === null && await expense.getRecordMeta(999999) === null, "getRecordMeta: 編集前の購入日・Drive の URL (無い id は null)");
+await db.query(`DELETE FROM records WHERE store IN ('連打 店', '別の店')`);
+
+// ───────── 12c. シートの重複整理ツール (探すだけが既定。消すのは apply=true)
+const dd0 = await call(S, "keihi_receipt_sheet_dedupe", {});
+ok(dedupeCalls.at(-1).apply === false && dd0.applied === false && dd0.extra_rows === 3 && /消していない/.test(dd0.note) && dd0.monthly[0].rows.join() === "4,5,6", "dedupe: 既定は探すだけ (apply=false)。消していないと明記して、重複の場所を返す", dd0);
+const dd1 = await call(S, "keihi_receipt_sheet_dedupe", { month: "2026-11", apply: true });
+ok(dedupeCalls.at(-1).apply === true && dedupeCalls.at(-1).month === "2026-11" && dd1.applied === true, "dedupe: apply=true と month を渡して整理する");
+await throws(() => call(S, "keihi_receipt_sheet_dedupe", { month: "11月" }), /YYYY-MM/, "dedupe: month の形が違えばエラー");
+ok(/人に見せて/.test(def.keihi_receipt_sheet_dedupe.description) && /apply=true/.test(def.keihi_receipt_sheet_dedupe.description) && /一番下/.test(def.keihi_receipt_sheet_dedupe.description) && /1 記録 = 1 行/.test(EXPENSE_INSTRUCTIONS.join("\n")), "dedupe の説明: まず探すだけ → 人に見せて OK → apply=true。どの行を残すか。手順書に「1 記録 = 1 行」");
+
 // ───────── 13. ツールの定義・説明文・手順書 (どの AI が読んでも同じように使える)
 const names = tl.map((t) => t.name);
-ok(["keihi_receipt_add", "keihi_receipt_upload_url", "keihi_receipt_hints", "keihi_receipt_list", "keihi_receipt_get", "keihi_receipt_summary", "keihi_receipt_update", "keihi_receipt_delete", "keihi_receipt_photo", "keihi_receipt_export_csv", "keihi_receipt_sheet_sync", "keihi_sites"].every((n) => names.includes(n)) && new Set(names).size === names.length, "ツール 12 個: 登録・アップロード URL・ヒント・一覧・詳細・集計・編集・削除・写真・CSV・シート書き出し・現場一覧", names);
+ok(["keihi_receipt_add", "keihi_receipt_upload_url", "keihi_receipt_hints", "keihi_receipt_list", "keihi_receipt_get", "keihi_receipt_summary", "keihi_receipt_update", "keihi_receipt_delete", "keihi_receipt_photo", "keihi_receipt_export_csv", "keihi_receipt_sheet_sync", "keihi_receipt_sheet_dedupe", "keihi_sites"].every((n) => names.includes(n)) && new Set(names).size === names.length && names.length === 13, "ツール 13 個: 登録・アップロード URL・ヒント・一覧・詳細・集計・編集・削除・写真・CSV・シート書き出し・シート重複整理・現場一覧", names);
 const RO = ["keihi_receipt_hints", "keihi_receipt_list", "keihi_receipt_get", "keihi_receipt_summary", "keihi_receipt_photo", "keihi_receipt_export_csv", "keihi_sites"];
-ok(RO.every((n) => def[n].annotations?.readOnlyHint === true) && ["keihi_receipt_add", "keihi_receipt_update", "keihi_receipt_delete", "keihi_receipt_sheet_sync", "keihi_receipt_upload_url"].every((n) => !def[n].annotations?.readOnlyHint), "読むだけのツールだけ readOnlyHint (書くツールには付けない)");
+ok(RO.every((n) => def[n].annotations?.readOnlyHint === true) && ["keihi_receipt_add", "keihi_receipt_update", "keihi_receipt_delete", "keihi_receipt_sheet_sync", "keihi_receipt_sheet_dedupe", "keihi_receipt_upload_url"].every((n) => !def[n].annotations?.readOnlyHint), "読むだけのツールだけ readOnlyHint (書くツールには付けない)");
 ok(["keihi_receipt_add", "keihi_receipt_upload_url", "keihi_receipt_hints"].every((n) => /チャットに領収書の画像が貼られたら/.test(def[n].description)), "登録まわりの説明に「チャットに領収書の画像が貼られたら…」が入る (add / upload_url / hints)");
 ok(["keihi_receipt_add", "keihi_receipt_hints"].every((n) => /費目の選び方/.test(def[n].description) && /工種の選び方/.test(def[n].description) && /過去の登録に合わせる|同じ店の過去の登録/.test(def[n].description)), "説明に 費目・工種の選び方と「過去の登録の傾向に合わせる」が入る");
 ok(/photo_ref/.test(def.keihi_receipt_add.description) && /photo_base64/.test(def.keihi_receipt_add.description) && /重複/.test(def.keihi_receipt_add.description) && /OCR はサーバーでしない/.test(def.keihi_receipt_add.description), "add の説明: 写真の 2 通りの渡し方・重複防止・OCR はサーバーでしない");
