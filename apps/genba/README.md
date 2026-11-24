@@ -89,7 +89,7 @@
 - **`entity_states`**: `kind` = 不在 / 繁忙 / NG日 / 注意 / その他、`starts_on` / `ends_on` (ends_on を過ぎたものは返さない。これから始まるものは `upcoming: true` で出す)、`source_ref` (同じ点・同じものは 2 回入らない)。取り消しは `voided_at` (消さない)
 - **使われ方**: `genba_contact_find` の返り値に `active_states` と `linked_open` (つながっている未解決の記録。本文に名前が出るものも含む)。状態があれば `message_hint` の先頭に「注意: 横山さんは 11/24〜11/29 繁忙（今週は動けない）。この期間に動く依頼は送らず、小西に出す。」。`genba_status(site)` に、その現場の `active_states` と関わる人の `people_states` (あるときだけ)。`genba_contact_list` は変えない
 - **能力評価は含めない**: `genba_graph` / `genba_graph_all` / `genba_status` の返り値に `abilities` は出ない (`genba_contact_find` は今まで通り)
-- **バックフィル**: 新しい版を最初に使ったとき、既存の全ログに自動リンクを `auto=true` で 1 度だけかける (印は `genba_settings` の `links_backfill_v1`。複数のインスタンスが来ても 1 つだけ)。結果 (ログ数・新しく張った数・人・現場・会社ごとのリンク件数) は Cloud Logging と `genba_links_backfill` で見られる
+- **バックフィル**: 既存の全ログに自動リンクを `auto=true` で 1 度だけかける。**起動時の先読みでは走らせない** (Cloud Run は CPU がリクエストの間だけなので、背景で走らせると途中で止まる)。つながりを使う最初のリクエスト (`genba_graph*` / `genba_state_*` / `genba_contact_find` / `genba_status` / 記録の追加) の中で走る。印は `genba_settings` の `links_backfill_v1` (複数のインスタンスが来ても 1 つだけが走る)。実行中は更新時刻を進めていて、3 分止まっていたら次のリクエストが引き継ぐ (失敗の印も同じ。やり直しても同じリンクは 2 回入らない)。結果 (ログ数・新しく張った数・人・現場・会社ごとのリンク件数) は Cloud Logging と `genba_links_backfill` で見られる
 - **日付の差し替え (テスト用)**: `createGenba({ today: () => "2026-11-30" })`。状態の期限と期間の計算にだけ使う
 - テスト `genba-lib/links.test.mjs` (pglite。実行手順はファイル先頭)
 

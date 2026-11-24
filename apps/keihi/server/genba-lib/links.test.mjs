@@ -286,6 +286,25 @@ ok(bf1.status === "done" && bf1.inserted === 0 && (await rows(`SELECT count(*)::
 g = mk(); cache = {};
 await call(S, "genba_links_backfill", {});
 ok((await rows(`SELECT count(*)::int AS n FROM log_links`))[0].n === snap2.length + manualRows.length, "新しいプロセスが何度来ても、印があるので走り直さない");
+// 他のインスタンスが実行中の印は引き継がない / 3 分以上止まった印は次のリクエストが引き継ぐ (Cloud Run は背景で走らせると途中で止まるため)
+await db.query(`DELETE FROM log_links WHERE auto=true`);
+await db.query(`UPDATE genba_settings SET value='{"status":"running"}'::jsonb, updated_at=now() WHERE key='links_backfill_v1'`);
+g = mk(); cache = {};
+const busy = await call(N, "genba_links_backfill", {});
+ok(busy.status === "running" && (await rows(`SELECT count(*)::int AS n FROM log_links WHERE auto=true`))[0].n === 0, "更新時刻が新しい「実行中」の印は、他のインスタンスが走っているので引き継がない", busy);
+await db.query(`UPDATE genba_settings SET updated_at = now() - interval '4 minutes' WHERE key='links_backfill_v1'`);
+g = mk(); cache = {};
+const took = await call(N, "genba_links_backfill", {});
+ok(took.status === "done" && (await rows(`SELECT count(*)::int AS n FROM log_links WHERE auto=true`))[0].n === snap2.length && (await rows(`SELECT count(*)::int AS n FROM log_links WHERE auto=false`))[0].n === manualRows.length, "3 分以上止まった「実行中」の印は、次のリクエストが引き継いで最後まで走る (手で付けたリンクは残る)", { status: took.status });
+await db.query(`UPDATE genba_settings SET value='{"status":"failed","error":"x"}'::jsonb, updated_at = now() - interval '4 minutes' WHERE key='links_backfill_v1'`);
+g = mk(); cache = {};
+ok((await call(S, "genba_links_backfill", {})).status === "done", "失敗の印も、時間がたてば次のリクエストがやり直す");
+await db.query(`DELETE FROM genba_settings WHERE key='links_backfill_v1'`);
+await mk().ensureSchema();
+ok((await rows(`SELECT count(*)::int AS n FROM genba_settings WHERE key='links_backfill_v1'`))[0].n === 0, "起動時の先読み (ensureSchema だけ) ではバックフィルを走らせない (リクエストの外では CPU が止まるため)");
+g = mk(); cache = {};
+await find("横山");
+ok((await rows(`SELECT value->>'status' AS s FROM genba_settings WHERE key='links_backfill_v1'`))[0]?.s === "done", "つながりを使う最初のリクエスト (genba_contact_find) の中で走る");
 
 // ───────────────────────── 11. ツール定義・手順書・既存ツールの形
 const defs = Object.fromEntries(tools(S).map((t) => [t.name, t]));

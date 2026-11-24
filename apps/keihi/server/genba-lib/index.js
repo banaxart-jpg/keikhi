@@ -346,8 +346,7 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
     // つながり (log_links / entity_states): 新規テーブルだけ。既存のテーブルは触らない (何度走らせても同じ)
     await links.ensureSchema(p);
     schemaOk = true;
-    // 既存の全ログに自動リンクを 1 度かける (印は genba_settings。新しい版を最初に使ったときだけ。失敗しても起動は止めない)
-    try { await links.maybeBackfill(p); } catch (e) { console.warn("[genba] links backfill", e.message); }
+    // (既存の全ログへの自動リンクは、ここでは走らせない: 起動時の先読みはリクエストの外で、Cloud Run では CPU が止まる。つながりを使うリクエストの中で 1 度だけ走る = links.js)
   }
 
   const siteRow = (r) => ({

@@ -143,6 +143,7 @@ export function createLinks(d) {
   }
   // genba_log_add / add_many: 記録したあとに呼ぶ。返り値 = 張ったリンクの一覧 (ctx に鍵の表を持たせて、まとめて入れるときの読み込みを 1 回にする)
   async function link(p, log, { source, manual = [], ctx = {} } = {}) {
+    await maybeBackfill(p);
     const m = ctx.linkMatcher || (ctx.linkMatcher = await buildMatcher(p));
     const list = computeLinks(m, log, { source, manual });
     await writeLinks(p, log.id, list);
@@ -214,6 +215,7 @@ export function createLinks(d) {
   // genba_contact_find の返り値に足す: active_states / linked_open。状態があれば message_hint の先頭に注意を出す。失敗しても find は壊さない
   async function decorateFind(p, out) {
     try {
+      await maybeBackfill(p);
       const ids = out.map((o) => o.id);
       const [st, lo] = await Promise.all([activeStates(p, "contact", ids), linkedOpen(p, ids)]);
       for (const o of out) {
@@ -226,6 +228,7 @@ export function createLinks(d) {
   // genba_status(site) に足す: その現場の状態と、関わる人 (現場に登録された人 + この現場の記録の who / sender) の状態
   async function statusExtras(p, site, people) {
     try {
+      await maybeBackfill(p);
       const sid = Number(site.id);
       const ids = new Set((people || []).map((c) => Number(c.id)));
       const { rows } = await p.query(
@@ -345,7 +348,7 @@ export function createLinks(d) {
           },
         },
         handler: async (a) => {
-          await ready();
+          await warm();
           const p = getPool();
           if (!STATE_KINDS.includes(a.kind)) throw new Error(`kind は ${STATE_KINDS.join(" / ")}`);
           const body = String(a.body || "").trim();
@@ -376,7 +379,7 @@ export function createLinks(d) {
         description: "状態を取り消す (消さずに隠す)。間違って入れたとき、状況が変わって要らなくなったとき用。id は genba_state_set の返り値か genba_contact_find / genba_graph の active_states の id",
         inputSchema: { type: "object", required: ["id"], properties: { id: { type: "number" }, reason: { type: "string" } } },
         handler: async (a) => {
-          await ready();
+          await warm();
           const p = getPool();
           const id = Number(a.id);
           if (!Number.isInteger(id)) throw new Error("id は数値");
@@ -398,7 +401,7 @@ export function createLinks(d) {
           },
         },
         handler: async (a) => {
-          await ready();
+          await warm();
           const p = getPool();
           const ref = a.entity !== undefined && a.entity !== null ? a.entity : a.query;
           if (ref === undefined || ref === null || ref === "") throw new Error("query (名前) か entity が必要");
@@ -449,7 +452,7 @@ export function createLinks(d) {
         description: "グラフ表示用: 全部の点 (人・現場・会社) と線を 1 回で返す。nodes = { key, type, id, name, count (つながる記録の数), state (今有効な状態があるか), sub (人は職種・会社は肩書きなし) }、edges = { a, b, count (2 つの点が一緒に出てくる記録の数) } (a / b は nodes の key)。days = 直近何日の記録を数えるか (既定 60、最大 365)。open_only=true = 未解決の記録だけを数える (期間に関係なく全部の未解決)。点の中身は genba_graph で引く。能力評価は含めない",
         inputSchema: { type: "object", properties: { days: { type: "integer", description: "既定 60、最大 365" }, open_only: { type: "boolean", description: "未解決の記録だけ (既定 false)" } } },
         handler: async (a) => {
-          await ready();
+          await warm();
           const p = getPool();
           const days = clampDays(a.days), openOnly = a.open_only === true || a.open_only === "true";
           const win = openOnly ? { sql: `AND ${openWhere}`, params: [] } : { sql: `AND l.created_at >= $1::timestamptz`, params: [cutoffOf(days)] };
@@ -479,7 +482,7 @@ export function createLinks(d) {
         description: "つながりの自動リンクを、既に入っている全ログにかけた結果を見る・かけ直す (小西のトークンから)。rerun=true でもう一度かける (人が手で付けたリンクは残る。同じものは 2 回入らない)。返り値: 件数と、人・現場・会社ごとのリンク件数。初回は新しい版を最初に使ったときに自動で 1 回走る",
         inputSchema: { type: "object", properties: { rerun: { type: "boolean", description: "true = 全ログにもう一度かける" } } },
         handler: async (a) => {
-          await ready();
+          await warm();
           const p = getPool();
           if (a.rerun === true) {
             if (by !== "小西") throw new Error("かけ直しは小西のトークンからだけ");
@@ -512,6 +515,8 @@ export function createLinks(d) {
            ON CONFLICT (log_id, entity_type, entity_id) DO NOTHING RETURNING id`, [lg, ty, en, ro]);
         inserted += res.rows.length;
       }
+      // 心拍: 実行中の印の更新時刻を進める (止まったら、あとから来た人が引き継げるように)
+      await p.query(`UPDATE genba_settings SET updated_at=now() WHERE key=$1 AND value->>'status'='running'`, [BACKFILL_KEY]);
     }
     const { rows: tot } = await p.query(`SELECT k.entity_type AS t, k.entity_id AS i, COUNT(*)::int AS n FROM log_links k JOIN genba_log l ON l.id = k.log_id WHERE l.voided_at IS NULL GROUP BY k.entity_type, k.entity_id ORDER BY n DESC`);
     const list = (type) => tot.filter((r) => r.t === type).map((r) => ({ id: Number(r.i), name: m.nameOf(type, r.i), links: r.n })).filter((x) => x.name);
@@ -523,6 +528,7 @@ export function createLinks(d) {
       const r = await backfillRun(p);
       const value = { status: "done", started_at: started, finished_at: new Date().toISOString(), ...r };
       await p.query(`INSERT INTO genba_settings (key, value, updated_by) VALUES ($1,$2::jsonb,$3) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value, updated_by=EXCLUDED.updated_by, updated_at=now()`, [BACKFILL_KEY, JSON.stringify(value), by || "system"]);
+      backfillDone = true;
       console.log(`[genba] links backfill: logs=${r.logs} 新しく張ったリンク=${r.inserted} 人=${r.people.length} 現場=${r.sites.length} 会社=${r.companies.length}`);
       console.log(`[genba] links backfill 人ごと: ${r.people.slice(0, 15).map((x) => `${x.name} ${x.links}`).join(" / ")}`);
       console.log(`[genba] links backfill 現場ごと: ${r.sites.slice(0, 15).map((x) => `${x.name} ${x.links}`).join(" / ")}`);
@@ -532,12 +538,33 @@ export function createLinks(d) {
       throw e;
     }
   }
-  // 新しい版を最初に使ったときに 1 回だけ走る (複数のインスタンスが同時に来ても 1 つだけ。印は genba_settings)
+  // 新しい版を最初に使ったときに 1 回だけ走る。起動時の先読み (リクエストの外) では走らせない: Cloud Run は CPU がリクエストの間だけなので、
+  // 背景で走らせると途中で止まる。つながりを使うリクエスト (genba_graph*・genba_contact_find・記録の追加) の中で走らせる。
+  // 印 (genba_settings) は 複数のインスタンスが来ても 1 つだけが走るための鍵。実行中は更新時刻を進めていて、3 分止まっていたら次の人が引き継ぐ (やり直しても同じリンクは 2 回入らない)
+  let backfillDone = false, backfillNext = 0, backfillRunning = null;
   async function maybeBackfill(p) {
-    const { rows } = await p.query(`INSERT INTO genba_settings (key, value, updated_by) VALUES ($1,'{"status":"running"}'::jsonb,'system') ON CONFLICT (key) DO NOTHING RETURNING key`, [BACKFILL_KEY]);
-    if (!rows.length) return null;
-    return runBackfill(p, "system");
+    if (backfillDone) return null;
+    if (backfillRunning) return backfillRunning;
+    if (Date.now() < backfillNext) return null;
+    backfillNext = Date.now() + 45000;                 // 終わるまでは 45 秒おきにだけ見直す
+    backfillRunning = (async () => {
+      try {
+        const { rows } = await p.query(
+          `INSERT INTO genba_settings (key, value, updated_by) VALUES ($1,'{"status":"running"}'::jsonb,'system')
+           ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value, updated_by='system', updated_at=now()
+             WHERE genba_settings.value->>'status' IN ('running','failed') AND genba_settings.updated_at < now() - interval '3 minutes'
+           RETURNING key`, [BACKFILL_KEY]);
+        if (rows.length) return await runBackfill(p, "system");
+        const { rows: cur } = await p.query(`SELECT value FROM genba_settings WHERE key=$1`, [BACKFILL_KEY]);
+        if (cur[0] && cur[0].value && cur[0].value.status === "done") backfillDone = true;
+        return null;
+      } catch (e) { console.warn("[genba] links backfill", e.message); return null; }
+      finally { backfillRunning = null; }
+    })();
+    return backfillRunning;
   }
+  // つながりのツールの入口: スキーマの用意 + (初回だけ) 既存ログへの自動リンク
+  const warm = async () => { await ready(); await maybeBackfill(getPool()); };
 
   const instructions = [
     "■ つながり (genba_graph / genba_state_*): 人・現場・会社の名前で引いたとき、その名前が出てくる記録と今の状態をまとめて見る。記録 (genba_log_add) するとき、現場・who・送り主・本文に出てくる連絡先と現場と会社の名前に自動でリンクが張られる (返り値 links。手で付けるなら links:[{type, id か name}])",
