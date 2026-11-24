@@ -193,8 +193,12 @@ select.edit-input { background: transparent url("data:image/svg+xml,%3Csvg xmlns
 .undo-btn:active { opacity: 0.45; }
 .toast.err { background: var(--err); color: #fff; border-color: var(--err); white-space: pre-wrap; max-width: 86vw; font-size: 12px; font-weight: 700; text-align: left; }
 
-#imgOverlay { display: none; position: fixed; inset: 0; z-index: 300; background: rgba(20,20,18,0.92); align-items: center; justify-content: center; flex-direction: column; gap: 16px; padding: 24px; }
-#imgOverlay img { max-width: 100%; max-height: 80vh; border-radius: 3px; border: 3px solid #fff; object-fit: contain; }
+/* 領収書の拡大表示。「閉じる」は画像の高さに関係なく、画面の右上に固定で出す (暗い背景の上でも見える白いボタン)。
+   画像は上のボタンの下に収める (iOS の vh は URL バー込みで、ボタンが画面の外に出るため、高さは親に任せる) */
+#imgOverlay { display: none; position: fixed; inset: 0; z-index: 300; background: rgba(20,20,18,0.92); align-items: center; justify-content: center; flex-direction: column; padding: calc(env(safe-area-inset-top, 0px) + 68px) 16px calc(env(safe-area-inset-bottom, 0px) + 24px); }
+#imgOverlay img { max-width: 100%; max-height: 100%; min-height: 0; border-radius: 3px; border: 3px solid #fff; object-fit: contain; }
+#imgOverlayClose { position: fixed; top: calc(env(safe-area-inset-top, 0px) + 12px); right: 14px; z-index: 301; min-height: 44px; padding: 0 20px; border: 2px solid #fff; border-radius: 22px; background: #fff; color: #1a1a18; font-size: 14px; font-weight: 900; text-decoration: none; box-shadow: 0 2px 10px rgba(0,0,0,.45); }
+#imgOverlayClose:active { opacity: .7; }
 </style>
 </head>
 <body>
@@ -972,7 +976,11 @@ async function viewImage(id) {
     $("imgOverlay").style.display = "flex";
   } catch (e) { toast("画像取得失敗", true); }
 }
-$("imgOverlayClose").addEventListener("click", () => { $("imgOverlay").style.display = "none"; $("imgOverlayImg").src = ""; });
+function closeImgOverlay() { $("imgOverlay").style.display = "none"; $("imgOverlayImg").src = ""; }
+$("imgOverlayClose").addEventListener("click", closeImgOverlay);
+// 画像の外 (濃い背景) をタップしても、Esc でも閉じる
+$("imgOverlay").addEventListener("click", (e) => { if (e.target.id === "imgOverlay") closeImgOverlay(); });
+document.addEventListener("keydown", (e) => { if (e.key === "Escape" && getComputedStyle($("imgOverlay")).display !== "none") closeImgOverlay(); });
 
 // ───────── 現場の管理画面 ─────────
 $("openSiteMgmtBtn").addEventListener("click", showSiteMgmt);
