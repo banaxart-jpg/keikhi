@@ -61,7 +61,7 @@ await throws(() => db.query(`INSERT INTO log_links (log_id, entity_type, entity_
 await throws(() => db.query(`INSERT INTO log_links (log_id, entity_type, entity_id, role) VALUES ($1,'room',1,'site')`, [l0.log.id]), /check|violat/i, "entity_type は contact / site / company だけ");
 await throws(() => db.query(`INSERT INTO log_links (log_id, entity_type, entity_id, role) VALUES ($1,'contact',1,'boss')`, [l0.log.id]), /check|violat/i, "role は mentioned / sender / who / site だけ");
 await throws(() => db.query(`INSERT INTO entity_states (entity_type, entity_id, kind, body) VALUES ('contact',1,'休み','x')`), /check|violat/i, "kind は 不在 / 繁忙 / NG日 / 注意 / その他 だけ");
-ok((await rows(`SELECT value FROM genba_settings WHERE key='links_backfill_v1'`))[0].value.status === "done", "既存ログへの自動リンクは 1 度走って印が付く (空の DB では 0 件)");
+ok((await rows(`SELECT value FROM genba_settings WHERE key='links_backfill_v2'`))[0].value.status === "done", "既存ログへの自動リンクは 1 度走って印が付く (空の DB では 0 件)");
 await mk().ensureSchema();
 ok(true, "2 回目のマイグレーションも落ちない");
 
@@ -261,11 +261,11 @@ await db.query(`INSERT INTO genba_log (site_id, kind, body, written_by, who, tit
 await db.query(`INSERT INTO genba_log (site_id, kind, body, written_by, source, title) VALUES ($1,'進捗','資料を送った (昔のログ 2)','小西',$2::jsonb,'昔のログ 2')`, [sGinza, JSON.stringify({ sender: "辰巳", room: "rx" })]);
 await db.query(`DELETE FROM log_links`);
 for (const m of manualRows) await db.query(`INSERT INTO log_links (log_id, entity_type, entity_id, role, auto) VALUES ($1,$2,$3,$4,false)`, [m.log_id, m.entity_type, m.entity_id, m.role]);
-await db.query(`DELETE FROM genba_settings WHERE key='links_backfill_v1'`);
+await db.query(`DELETE FROM genba_settings WHERE key='links_backfill_v2'`);
 const nLogs = await logCount();
 g = mk(); cache = {};
 const bf0 = await call(S, "genba_links_backfill", {});                // 新しいプロセスの最初の呼び出し → ensureSchema の中で自動で 1 回走る
-ok(bf0.status === "done" && bf0.logs === nLogs && bf0.inserted > 0 && Array.isArray(bf0.people) && Array.isArray(bf0.sites), "新しい版を最初に使ったとき、全ログに自動リンクが 1 回かかる (印 links_backfill_v1)", { status: bf0.status, logs: bf0.logs, nLogs, inserted: bf0.inserted });
+ok(bf0.status === "done" && bf0.logs === nLogs && bf0.inserted > 0 && Array.isArray(bf0.people) && Array.isArray(bf0.sites), "新しい版を最初に使ったとき、全ログに自動リンクが 1 回かかる (印 links_backfill_v2)", { status: bf0.status, logs: bf0.logs, nLogs, inserted: bf0.inserted });
 const snap2 = (await rows(`SELECT log_id, entity_type, entity_id, role FROM log_links WHERE auto=true ORDER BY log_id, entity_type, entity_id`)).map((x) => `${x.log_id}|${x.entity_type}|${x.entity_id}|${x.role}`);
 const newOnes = snap2.filter((x) => !snap.includes(x)), lostOnes = snap.filter((x) => !snap2.includes(x));
 ok(lostOnes.length === 0 && newOnes.length > 0, "記録のときに張ったリンクは全部、バックフィルでも張られる (取りこぼしなし)・昔のログにも新しく張られる", { lost: lostOnes.slice(0, 5), n: newOnes.length });
@@ -279,7 +279,7 @@ ok(JSON.stringify(await rows(`SELECT id, kind, title, body, who, site_id, source
 const pY = bf0.people.find((x) => x.name === "横山"), sI = bf0.sites.find((x) => x.name === "いちご");
 ok(pY && pY.links >= 6 && sI && sI.links >= 4 && bf0.people.every((x, i, a) => i === 0 || a[i - 1].links >= x.links) && bf0.sites.length === 5, "人・現場ごとのリンク件数が出る (多い順)", { pY, sI, sites: bf0.sites.map((x) => x.name) });
 const bfRead = await call(N, "genba_links_backfill", {});
-ok(bfRead.status === "done" && bfRead.logs === nLogs, "結果は誰のトークンからも読める (印 links_backfill_v1 に残っている)");
+ok(bfRead.status === "done" && bfRead.logs === nLogs, "結果は誰のトークンからも読める (印 links_backfill_v2 に残っている)");
 await throws(() => call(N, "genba_links_backfill", { rerun: true }), /小西のトークン/, "かけ直しは小西のトークンからだけ");
 const bf1 = await call(S, "genba_links_backfill", { rerun: true });
 ok(bf1.status === "done" && bf1.inserted === 0 && (await rows(`SELECT count(*)::int AS n FROM log_links`))[0].n === snap2.length + manualRows.length, "かけ直しても 2 回入らない (inserted=0)");
@@ -288,23 +288,23 @@ await call(S, "genba_links_backfill", {});
 ok((await rows(`SELECT count(*)::int AS n FROM log_links`))[0].n === snap2.length + manualRows.length, "新しいプロセスが何度来ても、印があるので走り直さない");
 // 他のインスタンスが実行中の印は引き継がない / 3 分以上止まった印は次のリクエストが引き継ぐ (Cloud Run は背景で走らせると途中で止まるため)
 await db.query(`DELETE FROM log_links WHERE auto=true`);
-await db.query(`UPDATE genba_settings SET value='{"status":"running"}'::jsonb, updated_at=now() WHERE key='links_backfill_v1'`);
+await db.query(`UPDATE genba_settings SET value='{"status":"running"}'::jsonb, updated_at=now() WHERE key='links_backfill_v2'`);
 g = mk(); cache = {};
 const busy = await call(N, "genba_links_backfill", {});
 ok(busy.status === "running" && (await rows(`SELECT count(*)::int AS n FROM log_links WHERE auto=true`))[0].n === 0, "更新時刻が新しい「実行中」の印は、他のインスタンスが走っているので引き継がない", busy);
-await db.query(`UPDATE genba_settings SET updated_at = now() - interval '4 minutes' WHERE key='links_backfill_v1'`);
+await db.query(`UPDATE genba_settings SET updated_at = now() - interval '4 minutes' WHERE key='links_backfill_v2'`);
 g = mk(); cache = {};
 const took = await call(N, "genba_links_backfill", {});
 ok(took.status === "done" && (await rows(`SELECT count(*)::int AS n FROM log_links WHERE auto=true`))[0].n === snap2.length && (await rows(`SELECT count(*)::int AS n FROM log_links WHERE auto=false`))[0].n === manualRows.length, "3 分以上止まった「実行中」の印は、次のリクエストが引き継いで最後まで走る (手で付けたリンクは残る)", { status: took.status });
-await db.query(`UPDATE genba_settings SET value='{"status":"failed","error":"x"}'::jsonb, updated_at = now() - interval '4 minutes' WHERE key='links_backfill_v1'`);
+await db.query(`UPDATE genba_settings SET value='{"status":"failed","error":"x"}'::jsonb, updated_at = now() - interval '4 minutes' WHERE key='links_backfill_v2'`);
 g = mk(); cache = {};
 ok((await call(S, "genba_links_backfill", {})).status === "done", "失敗の印も、時間がたてば次のリクエストがやり直す");
-await db.query(`DELETE FROM genba_settings WHERE key='links_backfill_v1'`);
+await db.query(`DELETE FROM genba_settings WHERE key='links_backfill_v2'`);
 await mk().ensureSchema();
-ok((await rows(`SELECT count(*)::int AS n FROM genba_settings WHERE key='links_backfill_v1'`))[0].n === 0, "起動時の先読み (ensureSchema だけ) ではバックフィルを走らせない (リクエストの外では CPU が止まるため)");
+ok((await rows(`SELECT count(*)::int AS n FROM genba_settings WHERE key='links_backfill_v2'`))[0].n === 0, "起動時の先読み (ensureSchema だけ) ではバックフィルを走らせない (リクエストの外では CPU が止まるため)");
 g = mk(); cache = {};
 await find("横山");
-ok((await rows(`SELECT value->>'status' AS s FROM genba_settings WHERE key='links_backfill_v1'`))[0]?.s === "done", "つながりを使う最初のリクエスト (genba_contact_find) の中で走る");
+ok((await rows(`SELECT value->>'status' AS s FROM genba_settings WHERE key='links_backfill_v2'`))[0]?.s === "done", "つながりを使う最初のリクエスト (genba_contact_find) の中で走る");
 
 // ───────────────────────── 10b. 確認: 記録の「書く人」(who・送り主) が連絡先に読めているか
 await add({ site: "いちご", kind: "進捗", title: "AI が整理", body: "書類を整理した", who: "AI" });
@@ -345,6 +345,55 @@ ok(!who2.some((x) => x.who === "エアサポ" || x.who.startsWith("横山")) && 
 ok(!chk2.sender.unresolved.some((x) => x.sender.startsWith("横山")), "確認: 補足つきの送り主も読めた扱い", chk2.sender);
 const gaAll = await call(S, "genba_graph_all", {});
 ok(gaAll.nodes.find((n) => n.type === "contact" && n.name === "横山")?.role === "設計" && gaAll.nodes.find((n) => n.type === "contact" && n.name === "名取")?.role === "社内" && gaAll.nodes.filter((n) => n.type !== "contact").every((n) => !("role" in n) || n.role === undefined), "genba_graph_all: 人の点に role (社内など) が付く。現場・会社には付けない");
+
+// ───────────────────────── 10d. 名前の当て方: 別の言葉の一部には当てない (本番で「目黒信金」→大工の目黒さん、「タカケン」→たかさん、「株式会社」→現場「会社」と誤ってつながっていた)
+await db.query(`INSERT INTO sites (name) VALUES ('会社'), ('共通')`);
+await up({ name: "目黒 徹", role: "職人", trade: "大工", aliases: ["目黒さん"] });
+await up({ name: "たかさん", company: "KTERAS", role: "客先", aliases: ["たかさん", "高さん", "TK", "KTERAS社長"] });
+await up({ name: "吉河清人", role: "職人" });
+await up({ name: "清人", role: "職人" });
+await call(S, "genba_company_upsert", { name: "目黒信用金庫", aliases: ["目黒信金"], role: "業者" });
+await call(S, "genba_company_upsert", { name: "貴建", role: "元請け" });
+const mm = async (title, body, extra = {}) => (await add({ site: "銀座博品館", kind: "進捗", title, body, ...extra })).links;
+let L = await mm("目黒信金から振替", "名取 11/9：目黒信金からPayPayへ100万円。上目黒支店のカードを返してもらう。小西は中目黒に戻る。14時以降は目黒なので");
+ok(!has(L, "contact", "目黒 徹") && has(L, "company", "目黒信用金庫"), "「目黒信金」「上目黒」「中目黒」「目黒なので」では、大工の目黒さんにつなげない (会社の目黒信用金庫にはつなぐ)", L);
+L = await mm("大工の目黒さんと電話", "Plaud 小西×目黒さん（目黒工務店・高麗さん紹介）。依頼候補を伝えた");
+ok(has(L, "contact", "目黒 徹", "mentioned"), "「目黒さん」と書いてあれば、大工の目黒さんにつながる", L);
+L = await mm("大工目黒徹さんのLINE", "LINE を共有した");
+ok(has(L, "contact", "目黒 徹"), "フルネーム (目黒徹) は、前が漢字 (大工) でも「さん」付きならつながる", L);
+L = await mm("タカケンさんのフローリング（貴建）", "タカケンさん11/9〜11 OK。入谷のフローリング");
+ok(!has(L, "contact", "たかさん") && has(L, "company", "貴建"), "「タカケンさん」では、KTERAS のたかさんにつなげない。（貴建）は会社の貴建につなぐ", L);
+L = await mm("たかさんと電話", "10/28 たかさんと電話、カメラテストの日を決める");
+ok(has(L, "contact", "たかさん", "mentioned"), "「たかさん」と書いてあればつながる", L);
+L = await mm("弁護士はタカさんに相談", "とりあえずタカさんに聞いてみる");
+ok(has(L, "contact", "たかさん"), "「タカさん」(かな違い) もつながる (助詞のあとでも)", L);
+L = await mm("AIからTKのLINEへ", "候補日を送った。KTERAS と TKB の件");
+ok(!has(L, "contact", "たかさん"), "英字の短い呼び名 (TK) が単独で出ても、「さん」「社長」が付かなければつなげない", L);
+L = await mm("TK社長と電話", "来週会う");
+ok(has(L, "contact", "たかさん"), "「TK社長」は、たかさんにつながる", L);
+L = await mm("株式会社エアサポとの契約", "会社のAI専用PCの設定。株式会社エアサポのグループへ送った");
+ok(!L.some((l) => l.type === "site" && l.name === "会社"), "本文の「会社」「株式会社」では、現場「会社」につなげない", L);
+L = await mm("高橋工業に確認", "高橋工業へ見積を依頼した");
+ok(!has(L, "contact", "高橋") && has(L, "company", "高橋工業"), "「高橋工業」では、人の高橋さんにつなげない (会社の高橋工業にはつなぐ)", L);
+L = await mm("高橋さんに確認", "見積の金額を聞いた");
+ok(has(L, "contact", "高橋", "mentioned"), "「高橋さん」は人の高橋さんにつながる", L);
+L = await mm("吉河清人さんに連絡", "吉河清人さんへ打合せの連絡をした");
+ok(has(L, "contact", "吉河清人") && !has(L, "contact", "清人"), "「吉河清人さん」では、別の連絡先の「清人」にはつなげない (前が漢字)", L);
+L = await mm("清人さんに連絡", "打合せの候補日を送る");
+ok(has(L, "contact", "清人") && !has(L, "contact", "吉河清人"), "「清人さん」は清人につながる", L);
+L = await mm("FLAT横山さんの図面", "BANAX設計部の横山さんから受け取った");
+ok(has(L, "contact", "横山") && has(L, "company", "FLAT"), "「FLAT横山さん」: 英字の会社名のすぐ後ろに続く名前も、会社もつながる", L);
+// 作り直し: 今の照合に当たらないリンクは外れ、手で付けたリンクは残る
+const lBad = (await mm("作り直しの確認", "名取が確認した", { links: [{ type: "contact", name: "辰巳" }] }));
+const badLog = (await rows(`SELECT id FROM genba_log WHERE title='作り直しの確認'`))[0].id;
+await db.query(`INSERT INTO log_links (log_id, entity_type, entity_id, role, auto) SELECT $1,'contact',id,'mentioned',true FROM genba_contacts WHERE name='目黒 徹'`, [badLog]);
+await db.query(`INSERT INTO log_links (log_id, entity_type, entity_id, role, auto) SELECT $1,'contact',id,'mentioned',true FROM genba_contacts WHERE name='吉河清人'`, [badLog]);
+const bfR = await call(S, "genba_links_backfill", { rerun: true });
+const afterBad = (await rows(`SELECT entity_type, entity_id, auto FROM log_links WHERE log_id=$1`, [badLog])).map((x) => `${x.entity_type}:${x.entity_id}:${x.auto}`);
+const idOf = async (n) => Number((await rows(`SELECT id FROM genba_contacts WHERE name=$1`, [n]))[0].id);
+ok(bfR.status === "done" && bfR.removed >= 2 && !afterBad.includes(`contact:${await idOf("目黒 徹")}:true`) && !afterBad.includes(`contact:${await idOf("吉河清人")}:true`) && afterBad.includes(`contact:${Number(tatsumi.id)}:false`), "かけ直し: 今の照合に当たらない自動リンクは外れ、手で付けたリンク (辰巳) は残る", { removed: bfR.removed, afterBad });
+const bfR2 = await call(S, "genba_links_backfill", { rerun: true });
+ok(bfR2.inserted === 0 && bfR2.removed === 0, "もう一度かけても、増えも減りもしない", { inserted: bfR2.inserted, removed: bfR2.removed });
 
 // ───────────────────────── 11. ツール定義・手順書・既存ツールの形
 const defs = Object.fromEntries(tools(S).map((t) => [t.name, t]));

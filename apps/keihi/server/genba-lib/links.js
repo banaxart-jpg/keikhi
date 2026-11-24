@@ -26,6 +26,56 @@ export function cautionText(name, states) {
   return `注意: ${name}さんは ${parts.join(" / ")}。この期間に動く依頼は送らず、小西に出す。`;
 }
 
+// ── 本文から名前を探す ──
+// 部分一致だけだと「目黒信金」「中目黒」の中の「目黒」(大工の目黒さん)、「タカケン」の中の「タカ」(たかさん)、「株式会社」の中の「会社」(現場) まで拾う。
+// そこで前後の文字を見る: 短い名前 (漢字 2 文字・かな 3 文字以下・英字 3 文字以下) は、後ろに「さん」などが付くか、前後が区切りの 1 語のときだけ。
+// 前後に漢字・カタカナ・英字が続いていたら、もっと長い別の言葉の一部とみなす。
+const HON = /^(サン|様|サマ|クン|君|チャン|氏|殿|先生|社長|部長|課長|専務|常務|会長|代表|店長|監督)/;      // かな寄せ (ひらがな → カタカナ) をした文字に当てる
+const DELIM = /[\s　\-_・/()（）「」『』、。.,]/;
+const PARTICLE = "はがをにへでとのもや";
+const kanaFoldL = (s) => s.replace(/[ぁ-ゖ]/g, (ch) => String.fromCharCode(ch.charCodeAt(0) + 0x60));
+// 本文に出てきても名前としては拾わない現場 (「会社」「共通」は仮の置き場で、普通の言葉と区別できない。記録の現場 (site) としては普通に使える)
+const GENERIC_SITES = new Set(["会社", "共通", "社内", "自宅", "事務所", "全体", "その他", "未定", "現場"].map(kanaFoldL));
+const charClass = (ch) => (ch === undefined ? "sep" : /[㐀-鿿々]/.test(ch) ? "kanji" : /[ぁ-ゖ]/.test(ch) ? "hira" : /[ァ-ヺー]/.test(ch) ? "kata" : /[a-z0-9]/.test(ch) ? "alnum" : "sep");
+// 区切り (空白・括弧・点) は名前の照合では無視しつつ、「ここに区切りがあった」という印は残す
+function prepText(text, legal) {
+  let t = String(text || "").normalize("NFKC").toLowerCase();
+  if (legal) t = t.replace(/株式会社|有限会社|合同会社|合資会社|\(株\)|\(有\)|\(同\)/g, " ");
+  const chars = [], gap = [];
+  let g = true;
+  for (const ch of t) { if (DELIM.test(ch)) { g = true; continue; } chars.push(ch.length > 1 ? "�" : ch); gap.push(g); g = false; }
+  gap.push(true);
+  const s = chars.join("");
+  return { chars, gap, f: kanaFoldL(s) };
+}
+const keyKind = (key) => (/^[ァ-ヺー]+$/.test(key) ? "kana" : /^[a-z0-9]+$/.test(key) ? "latin" : "cjk");
+// key (かな寄せ済みの鍵) が本文 P の中に、名前として出てくるか
+function mentioned(P, key, type) {
+  const L = key.length, kind = keyKind(key), bare = kind === "cjk" ? 3 : 4;
+  for (let i = P.f.indexOf(key); i !== -1; i = P.f.indexOf(key, i + 1)) {
+    const j = i + L;
+    const prev = P.gap[i] ? "sep" : charClass(P.chars[i - 1]), next = P.gap[j] ? "sep" : charClass(P.chars[j]);
+    if (type === "site") {
+      // 現場名: 2 文字 (入谷・久地) は、前後に漢字・英字が続いたら別の言葉。3 文字以上は英数がつながるときだけ除く
+      const lastAl = /[a-z0-9]/.test(key[L - 1]), firstAl = /[a-z0-9]/.test(key[0]);
+      const ok = L < 3 ? prev !== "kanji" && prev !== "alnum" && next !== "kanji" : !(firstAl && prev === "alnum") && !(lastAl && next === "alnum");
+      if (ok) return true;
+      continue;
+    }
+    // 人・会社
+    const hon = HON.test(P.f.slice(j, j + 3));
+    let left;
+    if (prev === "sep") left = true;
+    else if (prev === "hira") left = kind !== "kana" || (PARTICLE.includes(P.chars[i - 1]) && charClass(P.chars[i - 2]) !== "hira");   // かなの名前は、前が助詞のときだけ (「ここまさん」の「こま」を拾わない)
+    else if (prev === "alnum") left = kind !== "latin";                                                                                // 「FLAT平居さん」の平居は取る
+    else if (prev === "kata") left = kind !== "kana";
+    else left = L >= 4 || (L === 3 && hon);                                                                                           // 前が漢字 (「中目黒」「吉河清人」の中) は、長い名前か「さん」付きだけ
+    const right = hon || (L >= bare ? next === "sep" || next === "hira" || (kind === "latin" && next !== "alnum") : prev === "sep" && next === "sep");   // 英字の名前 (FLAT) は、すぐ後ろに日本語が続いてもよい (「FLAT平居さん」)
+    if (left && right) return true;
+  }
+  return false;
+}
+
 export function createLinks(d) {
   const { getPool, ready, today, norm, normName, normCompany, kanaFold, ymd, autoTitle, LIVE, NOT_RESOLVED, NOT_SUPERSEDED,
     loadContacts, loadCompanies, resolveContact, resolveCompany, resolveSite, contactScore } = d;
@@ -77,12 +127,16 @@ export function createLinks(d) {
     const exactContact = new Map();            // 人の名前 → id の集合 (who / sender の完全一致に使う。長さの下限なし)
     const owners = { contact: new Map(), site: new Map(), company: new Map() };
     const own = (type, key, id) => { if (!key) return; const m = owners[type]; if (!m.has(key)) m.set(key, new Set()); m.get(key).add(Number(id)); };
+    // 呼び名の末尾が役職 (「KTERAS社長」「○○部長」) のときは、役職までを鍵にする。normName は役職を落とすので、そのままだと
+    // 会社名だけ (KTERAS) が出てきても社長個人につながってしまう
+    const TITLE_END = /(社長|部長|課長|専務|常務|会長|先生|代表|店長|監督)$/;
     for (const c of contacts) {
       names.set(keyOf("contact", c.id), c.name);
       for (const raw of [c.name, ...(Array.isArray(c.aliases) ? c.aliases : [])]) {
         const k = normName(raw); if (!k) continue;
         if (!exactContact.has(k)) exactContact.set(k, new Set()); exactContact.get(k).add(Number(c.id));
-        if ([...k].length >= MIN_KEY) own("contact", k, c.id);
+        const mk = TITLE_END.test(String(raw).normalize("NFKC").trim()) ? kanaFold(norm(raw)) : k;      // 本文の照合に使う鍵
+        if ([...mk].length >= MIN_KEY) own("contact", mk, c.id);
       }
     }
     const fullKeys = new Set();
@@ -111,12 +165,12 @@ export function createLinks(d) {
       ambiguousNames: () => [...exactContact].filter(([, ids]) => ids.size > 1).map(([key, ids]) => ({ name: key, contacts: [...ids].map((id) => names.get(keyOf("contact", id))) })),
       // 本文に名前が出てくる点 (さんの有無・かな/カナ・全角/半角は鍵の側で吸収済み)
       match(text) {
-        const t = kanaFold(norm(text)), tc = normCompany(text), out = [];
+        const P = prepText(text, false), Pk = prepText(text, true), out = [];
         // 同じ種類で、別の点の長い名前に含まれる名前は外す (「行田屋2号店」に出てきた「行田屋」を別の現場と取り違えない)
         const longest = (type, hits) => hits.filter((h) => !hits.some((o) => o.id !== h.id && o.key.length > h.key.length && o.key.includes(h.key))).map((h) => ({ type, id: h.id }));
-        out.push(...longest("contact", E.contact.filter((e) => t.includes(e.key))));
-        out.push(...longest("site", E.site.filter((e) => t.includes(e.key))));
-        out.push(...longest("company", E.company.filter((e) => tc.includes(e.key))));
+        out.push(...longest("contact", E.contact.filter((e) => mentioned(P, e.key, "contact"))));
+        out.push(...longest("site", E.site.filter((e) => !GENERIC_SITES.has(e.key) && mentioned(P, e.key, "site"))));
+        out.push(...longest("company", E.company.filter((e) => mentioned(Pk, e.key, "company"))));
         return out;
       },
     };
@@ -493,7 +547,7 @@ export function createLinks(d) {
       },
       {
         name: "genba_links_backfill",
-        description: "つながりの自動リンクを、既に入っている全ログにかけた結果を見る・かけ直す (小西のトークンから)。rerun=true でもう一度かける (人が手で付けたリンクは残る。同じものは 2 回入らない)。返り値: 件数と、人・現場・会社ごとのリンク件数、check = 「書く人」(who・送り主) が連絡先に読めているかの確認 (種類ごとのリンクの付き具合・読めなかった名前・同名で決められない名前)。初回は新しい版を最初に使ったときに自動で 1 回走る",
+        description: "つながりの自動リンクを、既に入っている全ログにかけた結果を見る・かけ直す (小西のトークンから)。rerun=true で自動のリンクを作り直す (今の名前の当て方に当たらなくなったものは外れる。人が手で付けたリンクは残る。同じものは 2 回入らない)。返り値: 件数と、人・現場・会社ごとのリンク件数、check = 「書く人」(who・送り主) が連絡先に読めているかの確認 (種類ごとのリンクの付き具合・読めなかった名前・同名で決められない名前)。初回は新しい版を最初に使ったときに自動で 1 回走る",
         inputSchema: { type: "object", properties: { rerun: { type: "boolean", description: "true = 全ログにもう一度かける" } } },
         handler: async (a) => {
           await warm();
@@ -503,7 +557,7 @@ export function createLinks(d) {
             const done = await runBackfill(p, by);
             return { ...done, check: await check(p) };
           }
-          const { rows } = await p.query(`SELECT value FROM genba_settings WHERE key='links_backfill_v1'`);
+          const { rows } = await p.query(`SELECT value FROM genba_settings WHERE key=$1`, [BACKFILL_KEY]);
           return rows[0] ? { ...rows[0].value, check: await check(p) } : { status: "まだ走っていない", note: "rerun=true (小西のトークン) でかける" };
         },
       },
@@ -549,31 +603,44 @@ export function createLinks(d) {
   }
 
   // ── バックフィル: 既存の全ログに自動リンク (auto=true) を 1 度かけて、人・現場ごとのリンク件数を残す ──
-  const BACKFILL_KEY = "links_backfill_v1";
+  // v2: 名前の当て方を厳しくした (前後を見る) ので、v1 で張った自動リンクは作り直す。版を上げると、新しい版を最初に使ったリクエストで 1 回走る
+  const BACKFILL_KEY = "links_backfill_v2";
+  // 自動のリンク (auto=true) だけを、今の照合で作り直す: 今の照合に当たらなくなったものは消し、足りないものは足し、役割が変わったものは直す。
+  // 手で付けたリンク (auto=false) は、消しも書き換えもしない。1 件ずつ消してから入れ直すことはしない (途中で止まっても、リンクが丸ごと消えた状態にならない)
   async function backfillRun(p) {
     const m = await buildMatcher(p);
-    let last = 0, logs = 0, inserted = 0;
+    let last = 0, logs = 0, inserted = 0, removed = 0;
     for (;;) {
       const { rows } = await p.query(`SELECT id, site_id, title, body, who, source FROM genba_log WHERE id > $1 ORDER BY id LIMIT 500`, [last]);
       if (!rows.length) break;
-      const lg = [], ty = [], en = [], ro = [];
+      const ids = rows.map((r) => Number(r.id));
+      const { rows: cur } = await p.query(`SELECT id, log_id, entity_type, entity_id, role, auto FROM log_links WHERE log_id = ANY($1::bigint[])`, [ids]);
+      const curKey = new Map(cur.map((c) => [`${c.log_id}|${c.entity_type}|${c.entity_id}`, c]));
+      const lg = [], ty = [], en = [], ro = [], want = new Set();
       for (const r of rows) {
-        for (const l of computeLinks(m, r, {})) { lg.push(Number(r.id)); ty.push(l.type); en.push(l.id); ro.push(l.role); }
+        for (const l of computeLinks(m, r, {})) {
+          const k = `${r.id}|${l.type}|${l.id}`;
+          want.add(k);
+          const c = curKey.get(k);
+          if (c && !c.auto) continue;                                                   // 手で付けたものがあれば、そのまま
+          if (!c || c.role !== l.role) { lg.push(Number(r.id)); ty.push(l.type); en.push(l.id); ro.push(l.role); if (!c) inserted++; }
+        }
         last = Number(r.id); logs++;
       }
+      const gone = cur.filter((c) => c.auto && !want.has(`${c.log_id}|${c.entity_type}|${c.entity_id}`)).map((c) => Number(c.id));
+      if (gone.length) { await p.query(`DELETE FROM log_links WHERE auto = true AND id = ANY($1::bigint[])`, [gone]); removed += gone.length; }
       if (lg.length) {
-        const res = await p.query(
+        await p.query(
           `INSERT INTO log_links (log_id, entity_type, entity_id, role, auto)
            SELECT x.log_id, x.t, x.e, x.r, true FROM unnest($1::bigint[], $2::text[], $3::bigint[], $4::text[]) AS x(log_id, t, e, r)
-           ON CONFLICT (log_id, entity_type, entity_id) DO NOTHING RETURNING id`, [lg, ty, en, ro]);
-        inserted += res.rows.length;
+           ON CONFLICT (log_id, entity_type, entity_id) DO UPDATE SET role = EXCLUDED.role WHERE log_links.auto = true`, [lg, ty, en, ro]);
       }
       // 心拍: 実行中の印の更新時刻を進める (止まったら、あとから来た人が引き継げるように)
       await p.query(`UPDATE genba_settings SET updated_at=now() WHERE key=$1 AND value->>'status'='running'`, [BACKFILL_KEY]);
     }
     const { rows: tot } = await p.query(`SELECT k.entity_type AS t, k.entity_id AS i, COUNT(*)::int AS n FROM log_links k JOIN genba_log l ON l.id = k.log_id WHERE l.voided_at IS NULL GROUP BY k.entity_type, k.entity_id ORDER BY n DESC`);
     const list = (type) => tot.filter((r) => r.t === type).map((r) => ({ id: Number(r.i), name: m.nameOf(type, r.i), links: r.n })).filter((x) => x.name);
-    return { logs, inserted, people: list("contact"), sites: list("site"), companies: list("company").slice(0, 30), links_total: tot.reduce((s, r) => s + r.n, 0) };
+    return { logs, inserted, removed, people: list("contact"), sites: list("site"), companies: list("company").slice(0, 30), links_total: tot.reduce((s, r) => s + r.n, 0) };
   }
   async function runBackfill(p, by) {
     const started = new Date().toISOString();
@@ -582,7 +649,7 @@ export function createLinks(d) {
       const value = { status: "done", started_at: started, finished_at: new Date().toISOString(), ...r };
       await p.query(`INSERT INTO genba_settings (key, value, updated_by) VALUES ($1,$2::jsonb,$3) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value, updated_by=EXCLUDED.updated_by, updated_at=now()`, [BACKFILL_KEY, JSON.stringify(value), by || "system"]);
       backfillDone = true;
-      console.log(`[genba] links backfill: logs=${r.logs} 新しく張ったリンク=${r.inserted} 人=${r.people.length} 現場=${r.sites.length} 会社=${r.companies.length}`);
+      console.log(`[genba] links backfill: logs=${r.logs} 新しく張ったリンク=${r.inserted} 外したリンク=${r.removed} 人=${r.people.length} 現場=${r.sites.length} 会社=${r.companies.length}`);
       console.log(`[genba] links backfill 人ごと: ${r.people.slice(0, 15).map((x) => `${x.name} ${x.links}`).join(" / ")}`);
       console.log(`[genba] links backfill 現場ごと: ${r.sites.slice(0, 15).map((x) => `${x.name} ${x.links}`).join(" / ")}`);
       return value;
