@@ -90,6 +90,7 @@
 - **使われ方**: `genba_contact_find` の返り値に `active_states` と `linked_open` (つながっている未解決の記録。本文に名前が出るものも含む)。状態があれば `message_hint` の先頭に「注意: 横山さんは 11/24〜11/29 繁忙（今週は動けない）。この期間に動く依頼は送らず、小西に出す。」。`genba_status(site)` に、その現場の `active_states` と関わる人の `people_states` (あるときだけ)。`genba_contact_list` は変えない
 - **能力評価は含めない**: `genba_graph` / `genba_graph_all` / `genba_status` の返り値に `abilities` は出ない (`genba_contact_find` は今まで通り)
 - **バックフィル**: 既存の全ログに自動リンクを `auto=true` で 1 度だけかける。**起動時の先読みでは走らせない** (Cloud Run は CPU がリクエストの間だけなので、背景で走らせると途中で止まる)。つながりを使う最初のリクエスト (`genba_graph*` / `genba_state_*` / `genba_contact_find` / `genba_status` / 記録の追加) の中で走る。印は `genba_settings` の `links_backfill_v1` (複数のインスタンスが来ても 1 つだけが走る)。実行中は更新時刻を進めていて、3 分止まっていたら次のリクエストが引き継ぐ (失敗の印も同じ。やり直しても同じリンクは 2 回入らない)。結果 (ログ数・新しく張った数・人・現場・会社ごとのリンク件数) は Cloud Logging と `genba_links_backfill` で見られる
+- **グラフ表示 (claude.ai の Artifact「現場つながりマップ」)**: ソースは `docs/genba-map-artifact.html` (Firebase では公開しない `docs/` に置く)。データは埋め込まず、`mcp` capability でコネクタ「自社MCP」の `genba_graph_all` / `genba_graph` (読み取り専用の 2 つだけを manifest に書く) をその場で呼ぶ。人 = 丸・現場 = 四角・会社 = ひし形、線の太さ = 一緒に出る記録の数 (d3 7.8.5 の force layout)。点を押すか検索するとその点と隣だけを強調して、右に 有効な状態 (一番上)・一緒に出る人と現場・つながる記録 (未解決が先)。エラーはコード別 (needs_reauth / server_not_connected / not_in_manifest / approval_required / server_unavailable / tool_error)。能力評価は出さない。ブラウザでの確認は `docs/genba-map-artifact.check/` (Chromium + 本物の形の返り値の代役。手順はファイル先頭)
 - **日付の差し替え (テスト用)**: `createGenba({ today: () => "2026-11-30" })`。状態の期限と期間の計算にだけ使う
 - テスト `genba-lib/links.test.mjs` (pglite。実行手順はファイル先頭)
 

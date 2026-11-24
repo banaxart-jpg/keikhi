@@ -1,0 +1,440 @@
+<title>現場つながりマップ</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Zen+Kaku+Gothic+New:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+/* 配置: 上に検索と絞り込み / 左に力学配置の図 / 右に選んだ点のパネル。狭い画面では図の下にパネルを縦に並べる */
+:root{
+  --bg:#eef1f3; --panel:#fbfcfd; --ink:#1c2430; --sub:#5a6673; --line:#d2d9df; --soft:#e4e9ed;
+  --person:#1d7487; --site:#3f4fa8; --company:#a9761a;
+  --warn:#c93a22; --warn-bg:#fde9e5; --warn-ink:#8f2412;
+  --open:#7a4d00; --open-bg:#fbefd2;
+  --focus:#2f6fd0;
+  color-scheme:light;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --bg:#12171c; --panel:#1a2128; --ink:#e8edf1; --sub:#9aa7b3; --line:#2c3640; --soft:#232c34;
+  --person:#4cc3d9; --site:#97a3ff; --company:#e2b45d;
+  --warn:#ff7a63; --warn-bg:#3a1d19; --warn-ink:#ffb4a6;
+  --open:#f0c978; --open-bg:#33290f;
+  --focus:#6aa1f0; color-scheme:dark;}}
+:root[data-theme="dark"]{
+  --bg:#12171c; --panel:#1a2128; --ink:#e8edf1; --sub:#9aa7b3; --line:#2c3640; --soft:#232c34;
+  --person:#4cc3d9; --site:#97a3ff; --company:#e2b45d;
+  --warn:#ff7a63; --warn-bg:#3a1d19; --warn-ink:#ffb4a6;
+  --open:#f0c978; --open-bg:#33290f;
+  --focus:#6aa1f0; color-scheme:dark;}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:"Zen Kaku Gothic New","Hiragino Sans","Yu Gothic",sans-serif;font-size:14px;line-height:1.55;font-variant-numeric:tabular-nums}
+body::before{content:"";position:fixed;inset:0 0 auto;height:env(safe-area-inset-top,0px);z-index:30;background:var(--bg)}
+button,input,select{font:inherit;color:inherit}
+:focus-visible{outline:3px solid var(--focus);outline-offset:2px}
+.app{display:flex;flex-direction:column;min-height:100%}
+/* 上の帯 */
+.bar{position:sticky;top:env(safe-area-inset-top,0px);z-index:20;background:var(--bg);border-bottom:1px solid var(--line);
+  padding-block:10px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));
+  display:flex;flex-wrap:wrap;align-items:center;gap:10px 18px}
+.brand{display:flex;align-items:baseline;gap:12px;min-width:0}
+.brand h1{margin:0;font-size:18px;font-weight:700;letter-spacing:.02em;white-space:nowrap}
+.meta{color:var(--sub);font-size:12px}
+.controls{display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;flex:1 1 320px;min-width:0}
+.search{position:relative;flex:1 1 220px;min-width:min(180px,100%);max-width:420px}
+.search input{width:100%;height:38px;padding:0 12px;border:1px solid var(--line);border-radius:8px;background:var(--panel)}
+.sugg{position:absolute;left:0;right:0;top:42px;margin:0;padding:4px;list-style:none;background:var(--panel);border:1px solid var(--line);border-radius:8px;box-shadow:0 6px 20px rgba(0,0,0,.18);z-index:25;max-height:50vh;overflow:auto}
+.sugg li button{display:flex;align-items:center;gap:8px;width:100%;padding:7px 8px;border:0;background:none;text-align:left;border-radius:6px;cursor:pointer}
+.sugg li button:hover,.sugg li button[aria-selected="true"]{background:var(--soft)}
+.sugg .n{margin-left:auto;color:var(--sub);font-size:12px}
+.sugg .none{padding:8px;color:var(--sub)}
+.ctl{display:flex;align-items:center;gap:6px;color:var(--sub);white-space:nowrap}
+.ctl select{height:38px;padding:0 8px;border:1px solid var(--line);border-radius:8px;background:var(--panel);color:var(--ink)}
+.ctl input[type=checkbox]{width:18px;height:18px;accent-color:var(--site)}
+.btn{height:38px;padding:0 14px;border:1px solid var(--line);border-radius:8px;background:var(--panel);cursor:pointer;font-weight:500;white-space:nowrap}
+.btn:hover{background:var(--soft)}
+.btn.primary{background:var(--ink);color:var(--bg);border-color:var(--ink)}
+.btn.primary:hover{background:var(--ink);opacity:.88}
+/* 本体 */
+.main{flex:1;display:grid;grid-template-columns:minmax(0,1fr) 392px;min-height:0}
+.graph{position:relative;min-height:420px;height:calc(100vh - 66px);overflow:hidden;border-right:1px solid var(--line)}
+#svg{display:block;width:100%;height:100%;touch-action:none;cursor:grab}
+#svg:active{cursor:grabbing}
+.link{stroke:var(--sub);stroke-opacity:.38;fill:none;transition:stroke-opacity .15s}
+.link.hot{stroke:var(--ink);stroke-opacity:.85}
+.link.dim{stroke-opacity:.05}
+.node{cursor:pointer;transition:opacity .15s}
+.node.dim{opacity:.13}
+.node .shape{stroke:var(--bg);stroke-width:2}
+.node.t-contact .shape{fill:var(--person)}
+.node.t-site .shape{fill:var(--site)}
+.node.t-company .shape{fill:var(--company)}
+.node .ring{fill:none;stroke:var(--warn);stroke-width:3}
+.node.sel .shape{stroke:var(--ink);stroke-width:3}
+.node:focus-visible .shape{stroke:var(--focus);stroke-width:3}
+.node text{font-size:11px;fill:var(--ink);paint-order:stroke;stroke:var(--bg);stroke-width:3px;stroke-linejoin:round;opacity:0;pointer-events:none;transition:opacity .15s}
+.node.show text,.node:hover text,.node:focus-visible text{opacity:1}
+.gmsg{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;padding:24px;text-align:center;pointer-events:none}
+.gmsg .box{pointer-events:auto;max-width:420px;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px 20px}
+.gmsg h2{margin:0 0 6px;font-size:16px}
+.gmsg p{margin:0 0 12px;color:var(--sub)}
+.gmsg .box>:last-child{margin-bottom:0}
+.zoom{position:absolute;right:12px;top:12px;display:flex;flex-direction:column;gap:6px}
+.zoom .btn{height:34px;min-width:44px;padding:0 8px}
+.legend{position:absolute;left:12px;bottom:12px;display:flex;flex-wrap:wrap;gap:6px 14px;max-width:calc(100% - 24px);padding:8px 10px;background:color-mix(in srgb,var(--panel) 92%,transparent);border:1px solid var(--line);border-radius:8px;font-size:12px;color:var(--sub)}
+.legend span{display:inline-flex;align-items:center;gap:5px}
+.gl{display:inline-block;width:11px;height:11px}
+.gl.p{border-radius:50%;background:var(--person)}
+.gl.s{background:var(--site);border-radius:2px}
+.gl.c{background:var(--company);transform:rotate(45) scale(.85)}
+.gl.w{border-radius:50%;border:2.5px solid var(--warn);width:13px;height:13px}
+.gl.l{height:0;width:20px;border-top:3px solid var(--sub);opacity:.6}
+/* 右のパネル */
+.panel{background:var(--panel);padding-block:16px 40px;padding-left:16px;padding-right:max(16px,env(safe-area-inset-right,0px));overflow:auto;height:calc(100vh - 66px);min-width:0}
+.panel h2{margin:0;font-size:22px;line-height:1.25;font-weight:700;overflow-wrap:anywhere}
+.panel h3{margin:20px 0 8px;font-size:12px;font-weight:700;letter-spacing:.08em;color:var(--sub)}
+.sub{margin:2px 0 0;color:var(--sub);overflow-wrap:anywhere}
+.type{display:inline-flex;align-items:center;gap:6px}
+.states{display:flex;flex-direction:column;gap:8px;margin:14px 0 0}
+.state{background:var(--warn-bg);color:var(--warn-ink);border:1px solid var(--warn);border-radius:10px;padding:10px 12px}
+.state .k{display:inline-block;margin-right:8px;padding:0 8px;border-radius:999px;background:var(--warn);color:var(--bg);font-size:12px;font-weight:700}
+.state .b{font-weight:700;overflow-wrap:anywhere}
+.state .d{display:block;margin-top:2px;font-size:12px}
+.chips{display:flex;flex-wrap:wrap;gap:6px}
+.chip{display:inline-flex;align-items:center;gap:6px;max-width:100%;padding:4px 10px;border:1px solid var(--line);border-radius:999px;background:var(--bg);cursor:pointer}
+.chip:hover{background:var(--soft)}
+.chip .n{color:var(--sub);font-size:12px}
+.chip.warn{border-color:var(--warn);color:var(--warn-ink);background:var(--warn-bg)}
+.recs{list-style:none;margin:0;padding:0;display:flex;flex-direction:column}
+.rec{padding:10px 0;border-top:1px solid var(--line)}
+.rec:first-child{border-top:0}
+.r1{display:flex;flex-wrap:wrap;gap:2px 10px;align-items:center;font-size:12px;color:var(--sub)}
+.kind{padding:0 8px;border-radius:999px;border:1px solid var(--line);color:var(--ink);font-weight:500}
+.rec.open .kind{background:var(--open-bg);color:var(--open);border-color:transparent;font-weight:700}
+.od{color:var(--warn);font-weight:700}
+.r2{margin-top:3px;font-weight:700;overflow-wrap:anywhere}
+.r3{margin-top:1px;color:var(--sub);font-size:13px;overflow-wrap:anywhere;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.empty{color:var(--sub)}
+.errbox{border:1px solid var(--line);border-radius:10px;padding:12px 14px;background:var(--soft)}
+.errbox b{display:block;margin-bottom:2px}
+.errbox p{margin:0 0 10px;color:var(--sub);overflow-wrap:anywhere}
+.errbox .btn{height:34px}
+.skel{color:var(--sub)}
+@media (max-width:860px){
+  .bar{position:static}                                     /* 点を押してパネルまで動くとき、固定の帯がパネルの先頭 (注意の枠) を隠さないように */
+  .main{grid-template-columns:minmax(0,1fr)}
+  .graph{height:58vh;min-height:340px;border-right:0;border-bottom:1px solid var(--line)}
+  .panel{height:auto;overflow:visible;padding-left:max(16px,env(safe-area-inset-left,0px))}
+  .brand h1{font-size:16px}
+}
+@media (prefers-reduced-motion:reduce){.node,.link,.node text{transition:none}}
+</style>
+
+<div class="app">
+  <header class="bar">
+    <div class="brand"><h1>現場つながりマップ</h1><span class="meta" id="meta" aria-live="polite"></span></div>
+    <div class="controls">
+      <div class="search">
+        <input id="q" type="search" placeholder="名前で探す (横山・いちご・高橋工業)" autocomplete="off" aria-label="名前で探す" aria-controls="sugg" aria-expanded="false">
+        <ul class="sugg" id="sugg" role="listbox" hidden></ul>
+      </div>
+      <label class="ctl" for="days">期間
+        <select id="days"><option value="30">30日</option><option value="60" selected>60日</option><option value="120">120日</option></select>
+      </label>
+      <label class="ctl" for="open"><input type="checkbox" id="open">未解決だけ</label>
+      <button class="btn primary" id="reload" type="button">更新</button>
+    </div>
+  </header>
+  <div class="main">
+    <section class="graph" id="graphWrap" aria-label="つながり図">
+      <svg id="svg" role="img" aria-label="人・現場・会社のつながり図。点を押すと右に詳細が出ます"></svg>
+      <div class="gmsg" id="gmsg"><div class="box"><h2>読み込み中</h2><p>自社MCP から、つながりを取っています。</p></div></div>
+      <div class="zoom"><button class="btn" id="zin" type="button" aria-label="拡大">＋</button><button class="btn" id="zout" type="button" aria-label="縮小">－</button><button class="btn" id="zfit" type="button">全体</button></div>
+      <div class="legend" aria-hidden="true"><span><i class="gl p"></i>人</span><span><i class="gl s"></i>現場</span><span><i class="gl c"></i>会社</span><span><i class="gl w"></i>今の状態あり</span><span><i class="gl l"></i>太い線 = 一緒に出る記録が多い</span></div>
+    </section>
+    <aside class="panel" id="panel" aria-live="polite"></aside>
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.8.5/d3.min.js"></script>
+<script>
+(() => {
+  "use strict";
+  const SERVER = "自社MCP", TOOL_ALL = "genba_graph_all", TOOL_ONE = "genba_graph";
+  const TYPE = { contact: "人", site: "現場", company: "会社" };
+  const ROLE = { site: "現場", who: "担当", sender: "送り主", mentioned: "本文に名前" };
+  const S = { days: 60, openOnly: false, data: null, nodes: [], links: [], byKey: new Map(), adj: new Map(), sel: null, sim: null, zoom: null, req: 0, nodeSel: null, linkSel: null, size: { w: 800, h: 600 }, loaded: false };
+  let mcp = null;
+  const $ = (id) => document.getElementById(id);
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  // 値はすべて textContent で入れる (コネクタから来た文字列を HTML として扱わない)
+  function el(tag, props, ...kids) {
+    const e = document.createElement(tag);
+    for (const [k, v] of Object.entries(props || {})) { if (v == null || v === false) continue; if (k === "class") e.className = v; else if (k === "text") e.textContent = v; else if (k.startsWith("on")) e.addEventListener(k.slice(2), v); else e.setAttribute(k, v === true ? "" : v); }
+    for (const c of kids.flat()) if (c != null && c !== false) e.append(c.nodeType ? c : document.createTextNode(String(c)));
+    return e;
+  }
+  const keyOf = (type, id) => `${type}:${id}`;
+  const fold = (s) => String(s || "").normalize("NFKC").toLowerCase().replace(/[\s　・\-_/()（）「」]/g, "").replace(/[ァ-ヶ]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0x60)).replace(/(さん|様|くん|ちゃん)$/, "");
+  const jstDay = (iso) => { const t = new Date(new Date(iso).getTime() + 9 * 3600000); return Number.isNaN(t.getTime()) ? "" : `${t.getUTCMonth() + 1}/${t.getUTCDate()}`; };
+  const md = (ymd) => (ymd ? `${Number(String(ymd).slice(5, 7))}/${Number(String(ymd).slice(8, 10))}` : "");
+  const range = (s) => (s.starts_on && s.ends_on ? `${md(s.starts_on)}〜${md(s.ends_on)}` : s.starts_on ? `${md(s.starts_on)}〜` : s.ends_on ? `〜${md(s.ends_on)}` : "期限なし");
+  const glyph = (type, warn) => el("i", { class: `gl ${type === "contact" ? "p" : type === "site" ? "s" : "c"}${warn ? " w" : ""}`, "aria-hidden": "true" });
+
+  // ───────── コネクタの呼び出し (読み取りだけ) ─────────
+  const payloadOf = (r) => {
+    if (r && r.payload && typeof r.payload === "object") return r.payload;
+    const t = r && r.content && r.content.find((c) => c.type === "text");
+    try { return t ? JSON.parse(t.text) : null; } catch { return null; }
+  };
+  async function callRead(tool, input, refresh) {
+    const opts = refresh ? { cache: { refresh: true } } : undefined;
+    try { return await mcp.callTool(SERVER, tool, input, opts); }
+    catch (e) {
+      if (e && e.retryable) { await sleep((e.retryAfterMs || 800) + Math.random() * 700); return await mcp.callTool(SERVER, tool, input, opts); }   // 読みだけ、1 回だけやり直す
+      throw e;
+    }
+  }
+  // 失敗はコード別に出し分ける (全部「失敗しました」にしない)
+  function errInfo(e) {
+    const code = (e && e.code) || "upstream_error", msg = String((e && e.message) || "").slice(0, 200);
+    switch (code) {
+      case "needs_reauth": return { title: "自社MCP の接続が切れています", text: "claude.ai の 設定 → コネクタ で「自社MCP」をつなぎ直してから、もう一度開いてください。" };
+      case "server_not_connected": return { title: "自社MCP がつながっていません", text: "claude.ai の 設定 → コネクタ で「自社MCP」を追加してから、もう一度開いてください。" };
+      case "not_in_manifest": return { title: "このページでは 自社MCP を使えません", text: "この画面で自社MCP の利用を許可していません。ページの権限メニューから許可してください。" };
+      case "approval_required": return { title: "承認が必要です", text: "「許可して読み込む」を押すと、claude.ai が確認を出します。", button: "許可して読み込む" };
+      case "server_unavailable": return { title: "自社MCP につながりません", text: "一時的に応答がありません。少し待ってから、もう一度。", button: "もう一度" };
+      case "tool_error": return { title: "ツールがエラーを返しました", text: msg || "自社MCP のツールが失敗しました。", button: "もう一度" };
+      case "selection_required": return { title: "自社MCP が複数あります", text: "claude.ai の 設定 → コネクタ で、使う「自社MCP」を 1 つ選んでください。" };
+      case "blocked_by_policy": return { title: "組織の設定で使えません", text: "このツールは組織の設定で止められています。管理者に確認してください。" };
+      default: return { title: "読み込めませんでした", text: msg || `エラー (${code})`, button: "もう一度" };
+    }
+  }
+  function errBox(info, retry) {
+    return el("div", { class: "errbox", role: "alert" }, el("b", { text: info.title }), el("p", { text: info.text }), info.button && retry ? el("button", { class: "btn", type: "button", text: info.button, onclick: retry }) : null);
+  }
+
+  // ───────── 全体のグラフ ─────────
+  function showGraphMsg(node) { const m = $("gmsg"); m.replaceChildren(); if (node) { m.append(el("div", { class: "box" }, node)); m.hidden = false; } else m.hidden = true; }
+  async function loadAll(refresh) {
+    if (!mcp) return;
+    showGraphMsg([el("h2", { text: "読み込み中" }), el("p", { text: "自社MCP から、つながりを取っています。" })]);
+    try {
+      const r = await callRead(TOOL_ALL, { days: S.days, open_only: S.openOnly }, refresh);
+      const d = payloadOf(r);
+      if (!d || !Array.isArray(d.nodes) || !Array.isArray(d.edges)) throw { code: "tool_error", message: "つながりのデータの形が想定と違います" };
+      S.data = d; S.loaded = true;
+      const at = (r.cache && r.cache.storedAt) || Date.now();
+      const t = new Date(at);
+      $("meta").textContent = `更新 ${t.getHours()}:${String(t.getMinutes()).padStart(2, "0")}${r.cache && r.cache.revalidating ? " (更新中)" : ""}`;
+      build(); draw();
+      if (!S.nodes.length) showGraphMsg([el("h2", { text: "つながる記録がありません" }), el("p", { text: S.openOnly ? "未解決の記録がありません。「未解決だけ」を外してみてください。" : `この ${S.days} 日には、人・現場・会社に結びついた記録がありません。期間を長くしてみてください。` })]);
+      else showGraphMsg(null);
+      if (S.sel && S.byKey.has(S.sel)) { updateHighlight(); loadPanel(S.sel); } else { S.sel = null; renderIdle(); }
+    } catch (e) {
+      const info = errInfo(e);
+      showGraphMsg([errBox(info, () => loadAll(true))]);
+      if (!S.loaded) renderPanel(el("p", { class: "empty", text: "つながりを読み込めると、ここに詳細が出ます。" }));
+    }
+  }
+  function build() {
+    const d = S.data;
+    S.byKey = new Map(d.nodes.map((n) => [n.key, n]));
+    const shown = d.nodes.filter((n) => n.count > 0 || n.state);
+    const keep = new Set(shown.map((n) => n.key));
+    const top = new Set([...shown].sort((a, b) => b.count - a.count).slice(0, 36).map((n) => n.key));
+    S.nodes = shown.map((n) => ({ ...n, top: top.has(n.key) || n.state }));
+    S.links = d.edges.filter((e) => keep.has(e.a) && keep.has(e.b)).map((e) => ({ source: e.a, target: e.b, count: e.count }));
+    S.adj = new Map();
+    for (const e of d.edges) { if (!S.adj.has(e.a)) S.adj.set(e.a, new Set()); if (!S.adj.has(e.b)) S.adj.set(e.b, new Set()); S.adj.get(e.a).add(e.b); S.adj.get(e.b).add(e.a); }
+  }
+  const radius = (d) => Math.min(22, 5 + 2.4 * Math.sqrt(d.count || 0));
+  const endKey = (x) => (typeof x === "object" ? x.key : x);
+  function draw() {
+    const svg = d3.select("#svg");
+    if (S.sim) S.sim.stop();
+    svg.selectAll("*").remove();
+    const root = svg.append("g");
+    const maxC = d3.max(S.links, (l) => l.count) || 1;
+    const wScale = d3.scaleSqrt().domain([1, Math.max(2, maxC)]).range([1, 9]).clamp(true);
+    S.linkSel = root.append("g").selectAll("line").data(S.links).join("line").attr("class", "link").attr("stroke-width", (d) => wScale(d.count));
+    const g = root.append("g").selectAll("g").data(S.nodes, (d) => d.key).join("g")
+      .attr("class", (d) => `node t-${d.type}${d.top ? " show" : ""}`).attr("tabindex", 0).attr("role", "button")
+      .attr("aria-label", (d) => `${TYPE[d.type]} ${d.name}、記録 ${d.count} 件${d.state ? "、今の状態あり" : ""}`);
+    g.each(function (d) {
+      const n = d3.select(this), r = radius(d);
+      if (d.state) n.append("circle").attr("class", "ring").attr("r", r + 6);
+      if (d.type === "contact") n.append("circle").attr("class", "shape").attr("r", r);
+      else if (d.type === "site") n.append("rect").attr("class", "shape").attr("x", -r).attr("y", -r).attr("width", r * 2).attr("height", r * 2).attr("rx", 3);
+      else n.append("rect").attr("class", "shape").attr("x", -r * 0.85).attr("y", -r * 0.85).attr("width", r * 1.7).attr("height", r * 1.7).attr("rx", 2).attr("transform", "rotate(45)");
+      n.append("text").attr("x", r + 6).attr("y", 4).text(d.name);
+    });
+    S.nodeSel = g;
+    g.on("click", (ev, d) => { ev.stopPropagation(); select(d.key, false); })
+      .on("keydown", (ev, d) => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); select(d.key, false); } });
+    g.call(d3.drag().clickDistance(4)
+      .on("start", (ev, d) => { if (!ev.active) S.sim.alphaTarget(0.25).restart(); d.fx = d.x; d.fy = d.y; })
+      .on("drag", (ev, d) => { d.fx = ev.x; d.fy = ev.y; })
+      .on("end", (ev, d) => { if (!ev.active) S.sim.alphaTarget(0); d.fx = null; d.fy = null; }));
+    S.zoom = d3.zoom().scaleExtent([0.25, 4]).on("zoom", (ev) => root.attr("transform", ev.transform));
+    svg.call(S.zoom).on("dblclick.zoom", null).on("click", () => { if (S.sel) clearSel(); });
+    measure();
+    const { w, h } = S.size;
+    S.sim = d3.forceSimulation(S.nodes)
+      .force("link", d3.forceLink(S.links).id((d) => d.key).distance((l) => 60 + 46 / Math.sqrt(l.count)).strength((l) => Math.min(0.85, 0.12 + 0.1 * Math.sqrt(l.count))))
+      .force("charge", d3.forceManyBody().strength(-170))
+      .force("center", d3.forceCenter(w / 2, h / 2))
+      .force("x", d3.forceX(w / 2).strength(0.045)).force("y", d3.forceY(h / 2).strength(0.045))
+      .force("collide", d3.forceCollide().radius((d) => radius(d) + 7))
+      .on("tick", () => {
+        S.linkSel.attr("x1", (d) => d.source.x).attr("y1", (d) => d.source.y).attr("x2", (d) => d.target.x).attr("y2", (d) => d.target.y);
+        S.nodeSel.attr("transform", (d) => `translate(${d.x},${d.y})`);
+      });
+    updateHighlight();
+  }
+  function measure() { const r = $("graphWrap").getBoundingClientRect(); S.size = { w: Math.max(240, r.width), h: Math.max(240, r.height) }; }
+  // 選んだ点とその隣だけを強調し、ほかは薄くする
+  function updateHighlight() {
+    if (!S.nodeSel) return;
+    const nb = S.sel ? new Set([S.sel, ...(S.adj.get(S.sel) || [])]) : null;
+    S.nodeSel.classed("dim", (d) => !!nb && !nb.has(d.key)).classed("sel", (d) => d.key === S.sel).classed("show", (d) => d.top || (!!nb && nb.has(d.key)));
+    S.linkSel.classed("dim", (l) => !!S.sel && endKey(l.source) !== S.sel && endKey(l.target) !== S.sel).classed("hot", (l) => !!S.sel && (endKey(l.source) === S.sel || endKey(l.target) === S.sel));
+  }
+  function panTo(key) {
+    const n = S.nodes.find((x) => x.key === key);
+    if (!n || n.x == null || !S.zoom) return;
+    const svg = d3.select("#svg"), reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
+    (reduce ? svg : svg.transition().duration(450)).call(S.zoom.translateTo, n.x, n.y);
+  }
+  function select(key, pan) { S.sel = key; updateHighlight(); if (pan) panTo(key); loadPanel(key); const p = $("panel"); if (matchMedia("(max-width: 860px)").matches) p.scrollIntoView({ behavior: "smooth", block: "start" }); }
+  function clearSel() { S.sel = null; S.req++; updateHighlight(); renderIdle(); }
+
+  // ───────── 右のパネル ─────────
+  const panelEl = () => $("panel");
+  function renderPanel(...kids) { const p = panelEl(); p.replaceChildren(...kids.flat()); p.scrollTop = 0; }
+  function renderIdle() {
+    const d = S.data;
+    if (!d) { renderPanel(el("p", { class: "empty", text: "つながりを読み込めると、ここに詳細が出ます。" })); return; }
+    const withState = S.nodes.filter((n) => n.state);
+    renderPanel(
+      el("h2", { text: "点を押すか、名前で探す" }),
+      el("p", { class: "sub", text: `点 ${S.nodes.length}・線 ${S.links.length}・直近 ${S.openOnly ? "未解決すべて" : S.days + " 日"}` }),
+      el("h3", { text: "今の状態が出ている点" }),
+      withState.length
+        ? el("div", { class: "chips" }, withState.map((n) => el("button", { class: "chip warn", type: "button", onclick: () => select(n.key, true) }, glyph(n.type, false), n.name)))
+        : el("p", { class: "empty", text: "不在・繁忙・NG日・注意が入っている点はありません。" }),
+    );
+  }
+  async function loadPanel(key) {
+    const my = ++S.req;
+    const n = S.byKey.get(key), [type, id] = key.split(":");
+    renderPanel(el("h2", { text: n ? n.name : "…" }), el("p", { class: "skel", text: "読み込み中…" }));
+    try {
+      const r = await callRead(TOOL_ONE, { entity: { type, id: Number(id) }, days: S.days, depth: 1 });
+      if (my !== S.req) return;
+      const g = payloadOf(r);
+      if (!g || !g.entity) throw { code: "tool_error", message: "詳細のデータの形が想定と違います" };
+      renderEntity(g);
+    } catch (e) {
+      if (my !== S.req) return;
+      renderPanel(el("h2", { text: n ? n.name : "" }), errBox(errInfo(e), () => loadPanel(key)));
+    }
+  }
+  function subLine(e) {
+    const parts = [TYPE[e.type]];
+    if (e.type === "contact") parts.push(e.company, e.role, e.trade);
+    else if (e.type === "site") parts.push(e.code, e.client, e.done ? "完了" : null);
+    else parts.push(e.role, (e.trades || []).join("・"));
+    return parts.filter(Boolean).join(" · ");
+  }
+  function recItem(r, open, today) {
+    const overdue = open && r.due_on && today && r.due_on < today;
+    return el("li", { class: `rec${open ? " open" : ""}` },
+      el("div", { class: "r1" },
+        el("span", { class: "kind", text: open ? `未解決 ${r.kind}` : r.kind }),
+        el("span", { text: r.site ? r.site.name : "現場なし" }),
+        el("span", { text: jstDay(r.at) }),
+        r.due_on ? el("span", { class: overdue ? "od" : "", text: `${overdue ? "期限切れ " : "期限 "}${md(r.due_on)}` }) : null,
+        r.who ? el("span", { text: `担当 ${r.who}` }) : null,
+        r.role && r.role !== "who" ? el("span", { text: ROLE[r.role] || r.role }) : null),   // who は「担当 ○○」が既に出ている
+      el("div", { class: "r2", text: r.title }),
+      r.body && r.body !== r.title ? el("div", { class: "r3", text: r.body }) : null);
+  }
+  function renderEntity(g) {
+    const e = g.entity, nb = g.neighbors || {}, states = g.active_states || [];
+    const near = [
+      ...(nb.people || []).map((x) => ({ type: "contact", ...x })),
+      ...(nb.sites || []).map((x) => ({ type: "site", ...x })),
+      ...(nb.companies || []).map((x) => ({ type: "company", ...x })),
+    ].sort((a, b) => b.count - a.count).slice(0, 14);
+    const open = g.open_logs || [], recent = g.recent_logs || [];
+    renderPanel(
+      el("h2", { text: e.name }),
+      el("p", { class: "sub", text: subLine(e) }),
+      states.length ? el("div", { class: "states", role: "group", "aria-label": "今有効な状態" }, states.map((s) => el("div", { class: "state" },
+        el("span", { class: "k", text: s.kind }), el("span", { class: "b", text: s.body }),
+        el("span", { class: "d", text: `${range(s)}${s.upcoming ? " (これから)" : ""}` })))) : null,
+      el("h3", { text: "よく一緒に出る人・現場" }),
+      near.length
+        ? el("div", { class: "chips" }, near.map((x) => { const k = keyOf(x.type, x.id), nd = S.byKey.get(k); return el("button", { class: `chip${nd && nd.state ? " warn" : ""}`, type: "button", onclick: () => select(k, true) }, glyph(x.type, false), x.name, el("span", { class: "n", text: `${x.count}件` })); }))
+        : el("p", { class: "empty", text: "一緒に出る点はありません。" }),
+      el("h3", { text: `つながる記録 (未解決 ${open.length}・直近 ${g.days} 日 ${recent.length})` }),
+      open.length || recent.length
+        ? el("ul", { class: "recs" }, open.map((r) => recItem(r, true, g.today)), recent.map((r) => recItem(r, false, g.today)))
+        : el("p", { class: "empty", text: "この期間につながる記録はありません。" }),
+    );
+  }
+
+  // ───────── 検索 ─────────
+  let suggItems = [], suggIdx = -1;
+  function matches(q) {
+    const f = fold(q);
+    if (!f || !S.data) return [];
+    const rank = (n) => { const k = fold(n.name); return k === f ? 0 : k.startsWith(f) ? 1 : k.includes(f) ? 2 : 9; };
+    return S.data.nodes.map((n) => ({ n, r: rank(n) })).filter((x) => x.r < 9).sort((a, b) => a.r - b.r || b.n.count - a.n.count || a.n.name.localeCompare(b.n.name, "ja")).slice(0, 8).map((x) => x.n);
+  }
+  function renderSugg() {
+    const ul = $("sugg"), q = $("q").value;
+    suggItems = matches(q); suggIdx = suggItems.length ? 0 : -1;
+    ul.replaceChildren();
+    if (!q.trim()) { ul.hidden = true; $("q").setAttribute("aria-expanded", "false"); return; }
+    if (!suggItems.length) ul.append(el("li", { class: "none", text: S.data ? "見つかりません" : "つながりを読み込み中です" }));
+    suggItems.forEach((n, i) => ul.append(el("li", { role: "option" }, el("button", { type: "button", "aria-selected": i === suggIdx ? "true" : "false", onclick: () => pick(n) }, glyph(n.type, false), n.name, n.state ? el("span", { class: "od", text: "状態あり" }) : null, el("span", { class: "n", text: `${n.count}件` })))));
+    ul.hidden = false; $("q").setAttribute("aria-expanded", "true");
+  }
+  function pick(n) { $("sugg").hidden = true; $("q").setAttribute("aria-expanded", "false"); $("q").value = n.name; select(n.key, true); }
+  function moveSugg(d) { if (!suggItems.length) return; suggIdx = (suggIdx + d + suggItems.length) % suggItems.length; [...$("sugg").querySelectorAll("button")].forEach((b, i) => b.setAttribute("aria-selected", i === suggIdx ? "true" : "false")); }
+
+  // ───────── 起動 ─────────
+  function bind() {
+    const q = $("q");
+    q.addEventListener("input", renderSugg);
+    q.addEventListener("keydown", (e) => {
+      if (e.isComposing) return;                                         // 日本語入力の変換確定の Enter では動かさない
+      if (e.key === "Enter") { e.preventDefault(); if (suggItems[suggIdx]) pick(suggItems[suggIdx]); }
+      else if (e.key === "ArrowDown") { e.preventDefault(); moveSugg(1); } else if (e.key === "ArrowUp") { e.preventDefault(); moveSugg(-1); }
+      else if (e.key === "Escape") { $("sugg").hidden = true; }
+    });
+    document.addEventListener("click", (e) => { if (!e.target.closest(".search")) $("sugg").hidden = true; });
+    $("days").addEventListener("change", (e) => { S.days = Number(e.target.value); loadAll(false); });
+    $("open").addEventListener("change", (e) => { S.openOnly = e.target.checked; loadAll(false); });
+    $("reload").addEventListener("click", () => loadAll(true));
+    const zoomBy = (k) => d3.select("#svg").transition().duration(200).call(S.zoom.scaleBy, k);
+    $("zin").addEventListener("click", () => S.zoom && zoomBy(1.4));
+    $("zout").addEventListener("click", () => S.zoom && zoomBy(1 / 1.4));
+    $("zfit").addEventListener("click", () => S.zoom && d3.select("#svg").transition().duration(250).call(S.zoom.transform, d3.zoomIdentity));
+    let t = null;
+    new ResizeObserver(() => { clearTimeout(t); t = setTimeout(() => { measure(); if (S.sim) { S.sim.force("center", d3.forceCenter(S.size.w / 2, S.size.h / 2)).force("x", d3.forceX(S.size.w / 2).strength(0.045)).force("y", d3.forceY(S.size.h / 2).strength(0.045)).alpha(0.3).restart(); } }, 200); }).observe($("graphWrap"));
+  }
+  async function start() {
+    bind();
+    renderPanel(el("p", { class: "empty", text: "つながりを読み込めると、ここに詳細が出ます。" }));
+    try { mcp = window.claude && window.claude.use ? await window.claude.use("mcp") : null; } catch { mcp = null; }
+    if (!mcp) {
+      showGraphMsg([el("h2", { text: "この表示ではコネクタを呼べません" }), el("p", { text: "claude.ai でこのページを開き、自社MCP の利用を許可してください。" })]);
+      return;
+    }
+    loadAll(false);
+  }
+  start();
+})();
+</script>
