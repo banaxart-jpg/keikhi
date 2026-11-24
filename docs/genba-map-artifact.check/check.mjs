@@ -69,10 +69,15 @@ await page.waitForSelector(".node");
 await page.waitForTimeout(1800);
 const allFx = JSON.parse(fixture).all["60:false"];
 const expectNodes = allFx.nodes.filter((n) => n.count > 0 || n.state).length;
-ok((await page.$$(".node")).length === expectNodes && expectNodes === 20, `点 ${expectNodes} 個 (記録がある点 + 状態がある点) を描く`);
+const drawn0 = (await page.$$(".node")).length, hubNote = await page.$eval("#note", (e) => e.textContent);
+ok(expectNodes === 20 && drawn0 > 0 && drawn0 < expectNodes && /隠しています/.test(hubNote), `既定ではつなぎ役 (ほとんどの記録に出る点) を隠す: ${drawn0}/${expectNodes} 個`, { drawn0, hubNote });
+ok(!/null|undefined/.test(await page.$eval("#panel", (e) => e.innerText)), "パネルに「null」「undefined」の文字が出ない (最初)");
 ok((await page.$$(".link")).length > 0 && await page.$eval("#gmsg", (e) => e.hidden), "線を描き、読み込み中の表示は消える");
 ok((await page.$$(".node.t-contact circle.shape")).length > 0 && (await page.$$(".node.t-site rect.shape")).length > 0 && (await page.$$(".node.t-company rect.shape")).length > 0, "人は丸 (circle)・現場は四角 (rect)・会社はひし形");
-ok((await page.$$(".node .ring")).length === allFx.nodes.filter((n) => n.state).length, "今の状態がある点は赤いリングで囲む");
+ok((await page.$$(".node .ring")).length === allFx.nodes.filter((n) => n.state).length, "今の状態がある点は (つなぎ役でも) 必ず出て、赤いリングで囲む");
+await page.check("#hubs"); await page.waitForTimeout(600);
+ok((await page.$$(".node")).length === expectNodes, `「つなぎ役も出す」で全部 (${expectNodes} 個) が出る`);
+await page.uncheck("#hubs"); await page.waitForTimeout(600);
 const c0 = await calls(page);
 ok(c0.length === 1 && c0[0].server === "自社MCP" && c0[0].tool === "genba_graph_all" && c0[0].input.days === 60 && c0[0].input.open_only === false, "最初の呼び出しは 自社MCP の genba_graph_all だけ (days=60, open_only=false)", c0);
 await page.screenshot({ path: `${HERE}/01-idle-light.png` });
@@ -191,10 +196,11 @@ for (const [code, snippet, btn] of codes) {
 { // パネルのエラーはパネルだけ
   const o = await open();
   await o.page.waitForSelector(".node"); await o.page.waitForTimeout(800);
+  const nBefore = (await o.page.$$(".node")).length;
   await o.page.evaluate(() => { window.__inject = { tool: "genba_graph", code: "tool_error" }; });
   await o.page.fill("#q", "横山"); await o.page.press("#q", "Enter");
   await o.page.waitForSelector("#panel .errbox");
-  ok((await o.page.$$(".node")).length === 20 && (await o.page.$eval("#gmsg", (e) => e.hidden)), "パネルの読み込みが失敗しても、図はそのまま (失敗はパネルの中だけ)");
+  ok((await o.page.$$(".node")).length === nBefore &&(await o.page.$eval("#gmsg", (e) => e.hidden)), "パネルの読み込みが失敗しても、図はそのまま (失敗はパネルの中だけ)");
   await o.page.evaluate(() => { window.__inject = null; });
   await o.page.click("#panel .errbox button"); await o.page.waitForSelector("#panel .state");
   ok(true, "パネルのボタンで読み直せる");
@@ -230,6 +236,21 @@ for (const [code, snippet, btn] of codes) {
   await o.page.screenshot({ path: `${HERE}/05-dark.png` });
   const bg = await o.page.evaluate(() => getComputedStyle(document.body).backgroundColor);
   ok(bg === "rgb(18, 23, 28)", "ダーク: 背景はトークンの暗い色", bg);
+  await o.ctx.close();
+}
+{ // 全部の点のパネルに「null」「undefined」が出ない (本番で「null」と出たため)。つなぎ役も含めて全部の点を順に選ぶ
+  const o = await open();
+  await o.page.waitForSelector(".node"); await o.page.waitForTimeout(800);
+  const names = allFx.nodes.filter((n) => n.count > 0 || n.state).map((n) => n.name);
+  const bad = [];
+  for (const nm of names) {
+    await o.page.fill("#q", nm); await o.page.press("#q", "Enter");
+    await o.page.waitForSelector("#panel .sub, #panel .errbox"); await o.page.waitForTimeout(150);
+    const t = await o.page.$eval("#panel", (e) => e.innerText);
+    if (/null|undefined/.test(t)) bad.push(nm);
+  }
+  ok(names.length === 20 && bad.length === 0, `${names.length} 点すべてのパネルに「null」「undefined」が出ない`, bad);
+  ok(o.errors.length === 0, "全部の点を選んでもブラウザのエラーなし", o.errors);
   await o.ctx.close();
 }
 await browser.close();

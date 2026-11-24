@@ -48,10 +48,11 @@ button,input,select{font:inherit;color:inherit}
 .sugg .n{margin-left:auto;color:var(--sub);font-size:12px}
 .sugg .none{padding:8px;color:var(--sub)}
 .ctl{display:flex;align-items:center;gap:6px;color:var(--sub);white-space:nowrap}
-.ctl select{height:38px;padding:0 8px;border:1px solid var(--line);border-radius:8px;background:var(--panel);color:var(--ink)}
+.sel{height:38px;padding:0 8px;border:1px solid var(--line);border-radius:8px;background:var(--panel);color:var(--ink)}
 .ctl input[type=checkbox]{width:18px;height:18px;accent-color:var(--site)}
 .btn{height:38px;padding:0 14px;border:1px solid var(--line);border-radius:8px;background:var(--panel);cursor:pointer;font-weight:500;white-space:nowrap}
 .btn:hover{background:var(--soft)}
+.tolist{display:none}
 .btn.primary{background:var(--ink);color:var(--bg);border-color:var(--ink)}
 .btn.primary:hover{background:var(--ink);opacity:.88}
 /* 本体 */
@@ -59,11 +60,13 @@ button,input,select{font:inherit;color:inherit}
 .graph{position:relative;min-height:420px;height:calc(100vh - 66px);overflow:hidden;border-right:1px solid var(--line)}
 #svg{display:block;width:100%;height:100%;touch-action:none;cursor:grab}
 #svg:active{cursor:grabbing}
-.link{stroke:var(--sub);stroke-opacity:.38;fill:none;transition:stroke-opacity .15s}
-.link.hot{stroke:var(--ink);stroke-opacity:.85}
-.link.dim{stroke-opacity:.05}
+.link{stroke:var(--sub);stroke-opacity:.3;fill:none;transition:stroke-opacity .15s}
+.link.weak{display:none}                                      /* 1 件だけの弱い線は、選んだ点につながるときだけ出す */
+.link.weak.hot{display:inline}
+.link.hot{stroke:var(--ink);stroke-opacity:.9}
+.link.dim{stroke-opacity:.04}
 .node{cursor:pointer;transition:opacity .15s}
-.node.dim{opacity:.13}
+.node.dim{opacity:.09}
 .node .shape{stroke:var(--bg);stroke-width:2}
 .node.t-contact .shape{fill:var(--person)}
 .node.t-site .shape{fill:var(--site)}
@@ -80,7 +83,9 @@ button,input,select{font:inherit;color:inherit}
 .gmsg .box>:last-child{margin-bottom:0}
 .zoom{position:absolute;right:12px;top:12px;display:flex;flex-direction:column;gap:6px}
 .zoom .btn{height:34px;min-width:44px;padding:0 8px}
-.legend{position:absolute;left:12px;bottom:12px;display:flex;flex-wrap:wrap;gap:6px 14px;max-width:calc(100% - 24px);padding:8px 10px;background:color-mix(in srgb,var(--panel) 92%,transparent);border:1px solid var(--line);border-radius:8px;font-size:12px;color:var(--sub)}
+.note{position:absolute;left:12px;top:12px;max-width:calc(100% - 96px);padding:5px 9px;background:color-mix(in srgb,var(--panel) 92%,transparent);border:1px solid var(--line);border-radius:8px;font-size:12px;color:var(--sub)}
+.note:empty{display:none}
+.legend{position:absolute;left:12px;bottom:12px;display:flex;flex-wrap:wrap;gap:4px 14px;max-width:calc(100% - 24px);padding:6px 10px;background:color-mix(in srgb,var(--panel) 92%,transparent);border:1px solid var(--line);border-radius:8px;font-size:12px;color:var(--sub)}
 .legend span{display:inline-flex;align-items:center;gap:5px}
 .gl{display:inline-block;width:11px;height:11px}
 .gl.p{border-radius:50%;background:var(--person)}
@@ -125,6 +130,10 @@ button,input,select{font:inherit;color:inherit}
   .graph{height:58vh;min-height:340px;border-right:0;border-bottom:1px solid var(--line)}
   .panel{height:auto;overflow:visible;padding-left:max(16px,env(safe-area-inset-left,0px))}
   .brand h1{font-size:16px}
+  .legend{font-size:11px;gap:2px 10px;padding:4px 8px}
+  .legend span:last-child{display:none}
+  .node text{font-size:10px}
+  .search{flex-basis:100%;max-width:none}
 }
 @media (prefers-reduced-motion:reduce){.node,.link,.node text{transition:none}}
 </style>
@@ -137,10 +146,10 @@ button,input,select{font:inherit;color:inherit}
         <input id="q" type="search" placeholder="名前で探す (横山・いちご・高橋工業)" autocomplete="off" aria-label="名前で探す" aria-controls="sugg" aria-expanded="false">
         <ul class="sugg" id="sugg" role="listbox" hidden></ul>
       </div>
-      <label class="ctl" for="days">期間
-        <select id="days"><option value="30">30日</option><option value="60" selected>60日</option><option value="120">120日</option></select>
-      </label>
+      <select id="days" class="sel" aria-label="期間"><option value="30">直近 30 日</option><option value="60" selected>直近 60 日</option><option value="120">直近 120 日</option></select>
+      <select id="limit" class="sel" aria-label="出す点の数"><option value="main">点: 主要</option><option value="more">点: 多め</option><option value="all">点: すべて</option></select>
       <label class="ctl" for="open"><input type="checkbox" id="open">未解決だけ</label>
+      <label class="ctl" for="hubs" title="ほとんどの記録に出る点 (社内の人など) は、線が集まって図が見えなくなるので、既定では隠しています"><input type="checkbox" id="hubs">つなぎ役も出す</label>
       <button class="btn primary" id="reload" type="button">更新</button>
     </div>
   </header>
@@ -148,6 +157,7 @@ button,input,select{font:inherit;color:inherit}
     <section class="graph" id="graphWrap" aria-label="つながり図">
       <svg id="svg" role="img" aria-label="人・現場・会社のつながり図。点を押すと右に詳細が出ます"></svg>
       <div class="gmsg" id="gmsg"><div class="box"><h2>読み込み中</h2><p>自社MCP から、つながりを取っています。</p></div></div>
+      <div class="note" id="note" aria-live="polite"></div>
       <div class="zoom"><button class="btn" id="zin" type="button" aria-label="拡大">＋</button><button class="btn" id="zout" type="button" aria-label="縮小">－</button><button class="btn" id="zfit" type="button">全体</button></div>
       <div class="legend" aria-hidden="true"><span><i class="gl p"></i>人</span><span><i class="gl s"></i>現場</span><span><i class="gl c"></i>会社</span><span><i class="gl w"></i>今の状態あり</span><span><i class="gl l"></i>太い線 = 一緒に出る記録が多い</span></div>
     </section>
@@ -162,7 +172,8 @@ button,input,select{font:inherit;color:inherit}
   const SERVER = "自社MCP", TOOL_ALL = "genba_graph_all", TOOL_ONE = "genba_graph";
   const TYPE = { contact: "人", site: "現場", company: "会社" };
   const ROLE = { site: "現場", who: "担当", sender: "送り主", mentioned: "本文に名前" };
-  const S = { days: 60, openOnly: false, data: null, nodes: [], links: [], byKey: new Map(), adj: new Map(), sel: null, sim: null, zoom: null, req: 0, nodeSel: null, linkSel: null, size: { w: 800, h: 600 }, loaded: false };
+  const S = { days: 60, openOnly: false, showHubs: false, limit: "main", data: null, nodes: [], links: [], weak: [], hubs: new Set(), hidden: { nodes: 0, edges: 0, hubs: 0 }, byKey: new Map(), adj: new Map(), sel: null, sim: null, zoom: null, req: 0, nodeSel: null, linkSel: null, size: { w: 800, h: 600 }, loaded: false, touched: false, fitTimers: [] };
+  const isPhone = () => matchMedia("(max-width: 860px)").matches;
   let mcp = null;
   const $ = (id) => document.getElementById(id);
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -225,7 +236,7 @@ button,input,select{font:inherit;color:inherit}
       S.data = d; S.loaded = true;
       const at = (r.cache && r.cache.storedAt) || Date.now();
       const t = new Date(at);
-      $("meta").textContent = `更新 ${t.getHours()}:${String(t.getMinutes()).padStart(2, "0")}${r.cache && r.cache.revalidating ? " (更新中)" : ""}`;
+      S.stamp = `更新 ${t.getHours()}:${String(t.getMinutes()).padStart(2, "0")}${r.cache && r.cache.revalidating ? " (更新中)" : ""}`;
       build(); draw();
       if (!S.nodes.length) showGraphMsg([el("h2", { text: "つながる記録がありません" }), el("p", { text: S.openOnly ? "未解決の記録がありません。「未解決だけ」を外してみてください。" : `この ${S.days} 日には、人・現場・会社に結びついた記録がありません。期間を長くしてみてください。` })]);
       else showGraphMsg(null);
@@ -236,37 +247,56 @@ button,input,select{font:inherit;color:inherit}
       if (!S.loaded) renderPanel(el("p", { class: "empty", text: "つながりを読み込めると、ここに詳細が出ます。" }));
     }
   }
+  // 図に出す点と線を決める。全部出すと線の束になって読めないので、減らす:
+  //  ・ほとんどの記録に出る点 (つなぎ役: 社内の人など) は既定で隠す
+  //  ・点は件数の多い主要なものだけ (多め / すべて に切り替え)。状態がある点と選んだ点は必ず出す
+  //  ・弱い線 (件数が少ない線) は点の数の 2.5 倍までに絞り、残りは選んだ点につながるときだけ出す
   function build() {
     const d = S.data;
     S.byKey = new Map(d.nodes.map((n) => [n.key, n]));
-    const shown = d.nodes.filter((n) => n.count > 0 || n.state);
-    const keep = new Set(shown.map((n) => n.key));
-    const top = new Set([...shown].sort((a, b) => b.count - a.count).slice(0, 36).map((n) => n.key));
-    S.nodes = shown.map((n) => ({ ...n, top: top.has(n.key) || n.state }));
-    S.links = d.edges.filter((e) => keep.has(e.a) && keep.has(e.b)).map((e) => ({ source: e.a, target: e.b, count: e.count }));
     S.adj = new Map();
     for (const e of d.edges) { if (!S.adj.has(e.a)) S.adj.set(e.a, new Set()); if (!S.adj.has(e.b)) S.adj.set(e.b, new Set()); S.adj.get(e.a).add(e.b); S.adj.get(e.b).add(e.a); }
+    const linked = d.nodes.filter((n) => n.count > 0 || n.state);
+    const N = linked.length, deg = (k) => (S.adj.get(k) ? S.adj.get(k).size : 0);
+    S.hubs = new Set(linked.filter((n) => n.type === "contact" && (n.role === "社内" || (N > 12 && deg(n.key) >= 0.45 * (N - 1)))).map((n) => n.key));   // 人だけ。現場・会社は人をつなぐ中心なので隠さない
+    const pool = linked.filter((n) => S.showHubs || !S.hubs.has(n.key) || n.key === S.sel || n.state).sort((x, y) => y.count - x.count);
+    const cap = S.limit === "all" ? Infinity : S.limit === "more" ? 90 : (isPhone() ? 32 : 48);
+    const keep = new Set(pool.slice(0, cap).map((n) => n.key));
+    for (const n of pool) if (n.state || n.key === S.sel) keep.add(n.key);
+    S.nodes = pool.filter((n) => keep.has(n.key)).map((n) => ({ ...n }));
+    const byK = new Map(S.nodes.map((n) => [n.key, n]));
+    const es = d.edges.filter((e) => byK.has(e.a) && byK.has(e.b)).map((e) => ({ source: byK.get(e.a), target: byK.get(e.b), count: e.count })).sort((x, y) => y.count - x.count);
+    const maxEdges = Math.max(16, Math.round(1.5 * S.nodes.length));
+    const cut = es.length > maxEdges ? Math.max(2, es[maxEdges - 1].count) : 1;       // この件数以上の線を「強い線」にする
+    S.links = es.filter((e) => e.count >= cut); S.weak = es.filter((e) => e.count < cut);
+    S.hidden = { nodes: linked.length - S.nodes.length - (S.showHubs ? 0 : [...S.hubs].filter((k) => !byK.has(k)).length), edges: S.weak.length, hubs: S.showHubs ? 0 : [...S.hubs].filter((k) => !byK.has(k)).length };
+    S.total = linked.length;
+    const hubNames = [...S.hubs].map((k) => S.byKey.get(k)).filter(Boolean).sort((x, y) => y.count - x.count).slice(0, 2).map((n) => n.name);
+    $("note").textContent = S.hidden.hubs ? `つなぎ役 (${hubNames.join("・")}${S.hubs.size > 2 ? "ほか" : ""}) は隠しています` : "";
+    $("hubs").checked = S.showHubs; $("limit").value = S.limit;
   }
-  const radius = (d) => Math.min(22, 5 + 2.4 * Math.sqrt(d.count || 0));
+  const radius = (d) => Math.min(13, 4 + 1.3 * Math.sqrt(d.count || 0));
   const endKey = (x) => (typeof x === "object" ? x.key : x);
   function draw() {
     const svg = d3.select("#svg");
     if (S.sim) S.sim.stop();
+    S.fitTimers.forEach(clearTimeout); S.fitTimers = []; S.touched = false;
     svg.selectAll("*").remove();
     const root = svg.append("g");
-    const maxC = d3.max(S.links, (l) => l.count) || 1;
-    const wScale = d3.scaleSqrt().domain([1, Math.max(2, maxC)]).range([1, 9]).clamp(true);
-    S.linkSel = root.append("g").selectAll("line").data(S.links).join("line").attr("class", "link").attr("stroke-width", (d) => wScale(d.count));
+    const all = [...S.links, ...S.weak], weakSet = new Set(S.weak);
+    const maxC = d3.max(all, (l) => l.count) || 1;
+    const wScale = d3.scaleSqrt().domain([1, Math.max(2, maxC)]).range([0.8, 4.5]).clamp(true);
+    S.linkSel = root.append("g").selectAll("line").data(all).join("line").attr("class", (d) => `link${weakSet.has(d) ? " weak" : ""}`).attr("stroke-width", (d) => wScale(d.count));
     const g = root.append("g").selectAll("g").data(S.nodes, (d) => d.key).join("g")
-      .attr("class", (d) => `node t-${d.type}${d.top ? " show" : ""}`).attr("tabindex", 0).attr("role", "button")
+      .attr("class", (d) => `node t-${d.type}`).attr("tabindex", 0).attr("role", "button")
       .attr("aria-label", (d) => `${TYPE[d.type]} ${d.name}、記録 ${d.count} 件${d.state ? "、今の状態あり" : ""}`);
     g.each(function (d) {
       const n = d3.select(this), r = radius(d);
-      if (d.state) n.append("circle").attr("class", "ring").attr("r", r + 6);
+      if (d.state) n.append("circle").attr("class", "ring").attr("r", r + 5);
       if (d.type === "contact") n.append("circle").attr("class", "shape").attr("r", r);
-      else if (d.type === "site") n.append("rect").attr("class", "shape").attr("x", -r).attr("y", -r).attr("width", r * 2).attr("height", r * 2).attr("rx", 3);
+      else if (d.type === "site") n.append("rect").attr("class", "shape").attr("x", -r).attr("y", -r).attr("width", r * 2).attr("height", r * 2).attr("rx", 2.5);
       else n.append("rect").attr("class", "shape").attr("x", -r * 0.85).attr("y", -r * 0.85).attr("width", r * 1.7).attr("height", r * 1.7).attr("rx", 2).attr("transform", "rotate(45)");
-      n.append("text").attr("x", r + 6).attr("y", 4).text(d.name);
+      n.append("text").attr("x", r + 4).attr("dy", "0.35em").text(d.name);
     });
     S.nodeSel = g;
     g.on("click", (ev, d) => { ev.stopPropagation(); select(d.key, false); })
@@ -275,29 +305,75 @@ button,input,select{font:inherit;color:inherit}
       .on("start", (ev, d) => { if (!ev.active) S.sim.alphaTarget(0.25).restart(); d.fx = d.x; d.fy = d.y; })
       .on("drag", (ev, d) => { d.fx = ev.x; d.fy = ev.y; })
       .on("end", (ev, d) => { if (!ev.active) S.sim.alphaTarget(0); d.fx = null; d.fy = null; }));
-    S.zoom = d3.zoom().scaleExtent([0.25, 4]).on("zoom", (ev) => root.attr("transform", ev.transform));
+    const labelPx = isPhone() ? 11 : 12;
+    S.zoom = d3.zoom().scaleExtent([0.2, 5]).on("zoom", (ev) => {
+      root.attr("transform", ev.transform); if (ev.sourceEvent) S.touched = true;
+      S.nodeSel.select("text").style("font-size", `${labelPx / Math.max(0.3, ev.transform.k)}px`).style("stroke-width", `${3 / Math.max(0.3, ev.transform.k)}px`);   // 縮小しても読める大きさに
+      scheduleDeclutter();
+    });
     svg.call(S.zoom).on("dblclick.zoom", null).on("click", () => { if (S.sel) clearSel(); });
     measure();
     const { w, h } = S.size;
     S.sim = d3.forceSimulation(S.nodes)
-      .force("link", d3.forceLink(S.links).id((d) => d.key).distance((l) => 60 + 46 / Math.sqrt(l.count)).strength((l) => Math.min(0.85, 0.12 + 0.1 * Math.sqrt(l.count))))
-      .force("charge", d3.forceManyBody().strength(-170))
+      .force("link", d3.forceLink(all).distance((l) => (weakSet.has(l) ? 110 : 46 + 64 / Math.sqrt(l.count))).strength((l) => (weakSet.has(l) ? 0.03 : Math.min(0.7, 0.07 + 0.07 * Math.sqrt(l.count)))))   // 見えない弱い線にも弱い引力をかけて、孤立した点が図の外に浮かないようにする
+      .force("charge", d3.forceManyBody().strength(-230))
       .force("center", d3.forceCenter(w / 2, h / 2))
-      .force("x", d3.forceX(w / 2).strength(0.045)).force("y", d3.forceY(h / 2).strength(0.045))
-      .force("collide", d3.forceCollide().radius((d) => radius(d) + 7))
+      .force("x", d3.forceX(w / 2).strength(0.05)).force("y", d3.forceY(h / 2).strength(0.05))
+      .force("collide", d3.forceCollide().radius((d) => radius(d) + 10))
       .on("tick", () => {
         S.linkSel.attr("x1", (d) => d.source.x).attr("y1", (d) => d.source.y).attr("x2", (d) => d.target.x).attr("y2", (d) => d.target.y);
         S.nodeSel.attr("transform", (d) => `translate(${d.x},${d.y})`);
-      });
-    updateHighlight();
+        S.ticks = (S.ticks || 0) + 1; if (S.ticks % 15 === 0) scheduleDeclutter();
+      })
+      .on("end", () => { if (!S.touched) fit(false); });
+    S.fitTimers = [setTimeout(() => { if (!S.touched) fit(false); }, 500), setTimeout(() => { if (!S.touched) fit(false); }, 1400)];   // 動いている途中でも、全部が画面に入るようにしておく
+    updateHighlight(); updateMeta();
   }
+  const updateMeta = () => { $("meta").textContent = `${S.stamp || ""}${S.stamp ? " · " : ""}点 ${S.nodes.length}${S.total > S.nodes.length ? "/" + S.total : ""}・線 ${S.links.length}`; };
   function measure() { const r = $("graphWrap").getBoundingClientRect(); S.size = { w: Math.max(240, r.width), h: Math.max(240, r.height) }; }
+  // 全部の点が画面に収まるように拡大・縮小して寄せる
+  function fit(animate) {
+    if (!S.nodes.length || !S.zoom || S.nodes.some((n) => n.x == null)) return;
+    const pad = 44, xs = S.nodes.map((n) => n.x), ys = S.nodes.map((n) => n.y);
+    const x0 = Math.min(...xs) - pad, x1 = Math.max(...xs) + pad, y0 = Math.min(...ys) - pad, y1 = Math.max(...ys) + pad;
+    const bw = Math.max(1, x1 - x0), bh = Math.max(1, y1 - y0), k = Math.min(S.size.w / bw, S.size.h / bh, 1.5);
+    const t = d3.zoomIdentity.translate(S.size.w / 2 - k * (x0 + bw / 2), S.size.h / 2 - k * (y0 + bh / 2)).scale(k);
+    const svg = d3.select("#svg"), reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
+    (animate && !reduce ? svg.transition().duration(350) : svg).call(S.zoom.transform, t);
+  }
   // 選んだ点とその隣だけを強調し、ほかは薄くする
   function updateHighlight() {
     if (!S.nodeSel) return;
     const nb = S.sel ? new Set([S.sel, ...(S.adj.get(S.sel) || [])]) : null;
-    S.nodeSel.classed("dim", (d) => !!nb && !nb.has(d.key)).classed("sel", (d) => d.key === S.sel).classed("show", (d) => d.top || (!!nb && nb.has(d.key)));
-    S.linkSel.classed("dim", (l) => !!S.sel && endKey(l.source) !== S.sel && endKey(l.target) !== S.sel).classed("hot", (l) => !!S.sel && (endKey(l.source) === S.sel || endKey(l.target) === S.sel));
+    S.nodeSel.classed("dim", (d) => !!nb && !nb.has(d.key)).classed("sel", (d) => d.key === S.sel);
+    const touch = (l) => !!S.sel && (endKey(l.source) === S.sel || endKey(l.target) === S.sel);
+    S.linkSel.classed("dim", (l) => !!S.sel && !touch(l)).classed("hot", touch);
+    declutter();
+  }
+  // 名前を出す点を決める。件数の多い順 (状態あり・選んだ点とその隣が先) に、ほかの名前や点に重ならないものだけ出す
+  const textW = (s, px) => [...String(s)].reduce((a, c) => a + (c.charCodeAt(0) > 0x2e80 ? 1 : 0.58), 0) * px;
+  let dcT = 0;
+  function scheduleDeclutter() { if (dcT) return; dcT = requestAnimationFrame(() => { dcT = 0; declutter(); }); }
+  function declutter() {
+    if (!S.nodeSel) return;
+    const t = d3.zoomTransform($("svg")), k = t.k, px = isPhone() ? 11 : 12;
+    const nb = S.sel ? new Set([S.sel, ...(S.adj.get(S.sel) || [])]) : null;
+    const rank = (n) => (n.key === S.sel ? 0 : nb ? (nb.has(n.key) ? 2 : 9) : n.state ? 1 : 3);
+    const ready = S.nodes.filter((n) => n.x != null);
+    const dots = ready.map((n) => ({ n, x: t.applyX(n.x), y: t.applyY(n.y), r: radius(n) * k + (n.state ? 5 : 0) }));
+    const obst = nb ? dots.filter((o) => nb.has(o.n.key)) : dots;   // 選んでいる間は、薄くなった点は障害物に数えない
+    const order = [...dots].sort((a, b) => rank(a.n) - rank(b.n) || (b.n.state ? 1 : 0) - (a.n.state ? 1 : 0) || b.n.count - a.n.count);
+    const maxL = isPhone() ? 14 : 26, boxes = [], shown = new Set();
+    for (const d of order) {
+      const rk = rank(d.n);
+      if (rk === 9) continue;
+      if (shown.size >= maxL && rk > 1) continue;
+      const w = textW(d.n.name, px), h = px * 1.45, x0 = d.x + d.r + 3, y0 = d.y - h / 2, x1 = x0 + w, y1 = y0 + h;
+      if (boxes.some((b) => x1 > b.x0 && x0 < b.x1 && y1 > b.y0 && y0 < b.y1)) continue;
+      if (obst.some((o) => o !== d && x1 > o.x - o.r && x0 < o.x + o.r && y1 > o.y - o.r && y0 < o.y + o.r)) continue;
+      boxes.push({ x0, y0, x1, y1 }); shown.add(d.n.key);
+    }
+    S.nodeSel.classed("show", (n) => shown.has(n.key));
   }
   function panTo(key) {
     const n = S.nodes.find((x) => x.key === key);
@@ -305,12 +381,28 @@ button,input,select{font:inherit;color:inherit}
     const svg = d3.select("#svg"), reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
     (reduce ? svg : svg.transition().duration(450)).call(S.zoom.translateTo, n.x, n.y);
   }
-  function select(key, pan) { S.sel = key; updateHighlight(); if (pan) panTo(key); loadPanel(key); const p = $("panel"); if (matchMedia("(max-width: 860px)").matches) p.scrollIntoView({ behavior: "smooth", block: "start" }); }
+  // 隠れている点 (つなぎ役・少ない点) を選んだら、その点が出るように切り替えてから選ぶ
+  function ensureVisible(key) {
+    if (S.nodes.some((n) => n.key === key)) return false;
+    const n = S.byKey.get(key);
+    if (!n || !(n.count > 0 || n.state)) return false;
+    if (S.hubs.has(key)) S.showHubs = true;
+    S.sel = key; S.limit = "all";
+    build(); draw();
+    return true;
+  }
+  function select(key, pan) {
+    const rebuilt = ensureVisible(key);
+    S.sel = key; updateHighlight();
+    if (pan || rebuilt) setTimeout(() => panTo(key), rebuilt ? 700 : 0);
+    loadPanel(key);
+    if (isPhone()) $("panel").scrollIntoView({ behavior: "smooth", block: "start" });
+  }
   function clearSel() { S.sel = null; S.req++; updateHighlight(); renderIdle(); }
 
   // ───────── 右のパネル ─────────
   const panelEl = () => $("panel");
-  function renderPanel(...kids) { const p = panelEl(); p.replaceChildren(...kids.flat()); p.scrollTop = 0; }
+  function renderPanel(...kids) { const p = panelEl(); p.replaceChildren(...kids.flat().filter((c) => c != null && c !== false)); p.scrollTop = 0; }   // null を渡すと「null」という文字が出るので外す
   function renderIdle() {
     const d = S.data;
     if (!d) { renderPanel(el("p", { class: "empty", text: "つながりを読み込めると、ここに詳細が出ます。" })); return; }
@@ -421,7 +513,9 @@ button,input,select{font:inherit;color:inherit}
     const zoomBy = (k) => d3.select("#svg").transition().duration(200).call(S.zoom.scaleBy, k);
     $("zin").addEventListener("click", () => S.zoom && zoomBy(1.4));
     $("zout").addEventListener("click", () => S.zoom && zoomBy(1 / 1.4));
-    $("zfit").addEventListener("click", () => S.zoom && d3.select("#svg").transition().duration(250).call(S.zoom.transform, d3.zoomIdentity));
+    $("zfit").addEventListener("click", () => { S.touched = false; fit(true); });
+    $("hubs").addEventListener("change", (e) => { S.showHubs = e.target.checked; if (S.data) { build(); draw(); } });
+    $("limit").addEventListener("change", (e) => { S.limit = e.target.value; if (S.data) { build(); draw(); } });
     let t = null;
     new ResizeObserver(() => { clearTimeout(t); t = setTimeout(() => { measure(); if (S.sim) { S.sim.force("center", d3.forceCenter(S.size.w / 2, S.size.h / 2)).force("x", d3.forceX(S.size.w / 2).strength(0.045)).force("y", d3.forceY(S.size.h / 2).strength(0.045)).alpha(0.3).restart(); } }, 200); }).observe($("graphWrap"));
   }
