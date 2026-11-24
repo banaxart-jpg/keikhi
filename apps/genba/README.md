@@ -24,12 +24,12 @@
 | `genba_find(query)` | 案件 ID・名前・名前の一部で現場を探す (表記ゆれ吸収) |
 | `genba_register(name, code?, drive_folder_url?, client?)` | 現場に案件 ID / Drive の案件フォルダ / 客先を紐付け (無ければ作る) |
 | `genba_folder(site, kind)` | 写真 / 図面 / 見積 / 資料 / 参考 を上げる Drive フォルダの URL (無ければ案件フォルダ下に `03_写真` 等を作る) |
-| `genba_log_add(site?, kind, title, body, who?, estimate_min?, due_on?, resolves_id?, topic?, supersedes_id?)` | 進捗ログに追記。種類に `待ち` (相手の返事・物・データ待ち。who=相手。タスク一覧・カレンダーには出ない。返事が来たら 解決)。`then` = 来たらやること (例「シートをギさんへ転送 (AI、確認なしで)」)。待ちは『誰を待つ (who)』+『来たら何をする (then)』で 1 件のジョブ。監視ジョブが待っている相手からのメッセージを記録すると返り値 `waiting_hits` でその待ち (then 付き) が返り、AI が then を実行する (自動発火)。title = 一覧用 (20 字前後、40 字まで、「何を・どうする」、決定は結論)、body = 詳細 (経緯・数量・型番・金額・出どころ)。title が無い行は返すときだけ body の先頭 28 字 (`title_auto: true`)。種類 = 進捗 (やったこと) / 課題 / 決定 / 次やること (タスク) / 解決。site 省略 = 現場に紐づかない雑務。who = やった人/担当、estimate_min = 所要時間 (分)。決定には topic (床材 / 巾木 …)。同じ現場・同じ topic の生きている決定があれば自動で置き換える (返り値 `superseded`)、明示するなら supersedes_id |
+| `genba_log_add(site?, kind, title, body, who?, estimate_min?, due_on?, due_source?, resolves_id?, topic?, supersedes_id?)` | 進捗ログに追記。種類に `待ち` (相手の返事・物・データ待ち。who=相手。タスク一覧・カレンダーには出ない。返事が来たら 解決)。`then` = 来たらやること (例「シートをギさんへ転送 (AI、確認なしで)」)。待ちは『誰を待つ (who)』+『来たら何をする (then)』で 1 件のジョブ。監視ジョブが待っている相手からのメッセージを記録すると返り値 `waiting_hits` でその待ち (then 付き) が返り、AI が then を実行する (自動発火)。title = 一覧用 (20 字前後、40 字まで、「何を・どうする」、決定は結論)、body = 詳細 (経緯・数量・型番・金額・出どころ)。title が無い行は返すときだけ body の先頭 28 字 (`title_auto: true`)。種類 = 進捗 (やったこと) / 課題 / 決定 / 次やること (タスク) / 解決。site 省略 = 現場に紐づかない雑務。who = やった人/担当、estimate_min = 所要時間 (分)。**期限 `due_on` は、相手か小西が言った日・決まっている日程があるときだけ**付け、出どころ `due_source` (`stated` = 言った日 / `schedule` = 決まった日程 / `ai_guess` = AI の目安) を必ず添える (省くとエラー)。決まっていなければ空 (= なるはや。正式な状態で、警告ではない)。`due_on` に「なるはや」を渡されたら空として保存する。AI が目安の日付を作らない (下の「期限の扱い」)。決定には topic (床材 / 巾木 …)。同じ現場・同じ topic の生きている決定があれば自動で置き換える (返り値 `superseded`)、明示するなら supersedes_id |
 | `genba_log_title_set_many(items[{id, title}])` | 【移行用・あとで消す】既存行に title だけを付ける (最大 200 件)。返り値 updated / missing |
 | `genba_calendar_setup(calendar_id, colors?, dry_run?)` / `genba_calendar_sync()` / `genba_calendar_status()` | タスク専用カレンダーとの双方向同期 (下の「タスクカレンダー同期」) |
 | `genba_contact_find(query)` の `message_hint` / `last_contact` | 送る相手との直近のやりとり (この人からの記録の `source.at` と、そのルームの cursor の `last_at` の新しい方)。3 時間以内・今日なら「挨拶なしで用件から」、無ければ「最初の 1 通だけ挨拶 OK」。毎回「お疲れ様です！」から始めないため |
-| `genba_audit(site?, days?)` | 抜け漏れチェック: 相手待ちの言葉が title の次やること (`waiting_as_task`) / title が似ている未解決の組 (`similar_tasks`, score ≥ 0.45) / 期限切れ / 期限なし / 「返事待ち・確認中」なのに次やることが無い / 日程があるのにカレンダー未登録 (`calendar_event` 無し) / 監視ジョブの停止 (`monitor`: `genba_room_sync` が 30 分以上来ていなければ stalled)。会話の終わりと監視ジョブの 1 時間に 1 回 |
-| `genba_log_fix(id, {title, body, site, due_on, who, estimate_min, topic, calendar_event})` | 行を直す。前の値は `edits` に残る (誰がいつ)。kind は変えない |
+| `genba_audit(site?, days?)` | 抜け漏れチェック: 相手待ちの言葉が title の次やること (`waiting_as_task`) / title が似ている未解決の組 (`similar_tasks`, score ≥ 0.45) / 期限切れ / 「返事待ち・確認中」なのに次やることが無い / 日程があるのにカレンダー未登録 (`calendar_event` 無し) / 監視ジョブの停止 (`monitor`: `genba_room_sync` が 30 分以上来ていなければ stalled)。期限が無いタスクは警告ではなく「なるはや一覧」(`asap` / `asap_count` / `asap_note`) で返す。会話の終わりと監視ジョブの 1 時間に 1 回 |
+| `genba_log_fix(id, {title, body, site, due_on, due_source, who, estimate_min, topic, calendar_event})` | 行を直す。前の値は `edits` に残る (誰がいつ)。kind は変えない。`due_on` を入れるときは `due_source` 必須。`due_on` を空文字か「なるはや」にすると期限を消す (出どころも消える)。`due_source` だけ直すこともできる |
 | `genba_log_void(id, reason?)` | 行を取り消す (隠すだけ、消えない)。解決を void すると元のタスクが戻る、変更の決定を void すると前の決定が生き返る |
 | `genba_tasks(max_minutes?, who?, site?, kind?, include_waiting?)` | 未解決タスクを全現場横断で (所要時間が短い順)。「5 分で終わるタスクある？」用。待ち は既定で含まない。返り値 `monitor` に監視ジョブの生存状態 (画面に「監視が止まっている」を出す用) |
 | `genba_log_list(site, days?, kind?, who?, topic?, chain?, include_voided?)` | ログ一覧。`chain=行 ID` で変更の履歴 (置き換えの連鎖) を古い順に、`current` が今生きている行 |
@@ -130,15 +130,24 @@
 
 ### 抜け漏れを機械的に拾う (followups / genba_audit)
 AI が「次やることを立てる」「カレンダーに入れる」を忘れるのを、記憶ではなくサーバーの返り値で止める。
-- `genba_log_add` / `add_many` の返り値に `followups[]`: 本文に「返事待ち・確認中・依頼・送付」があれば「次やることを立てる」、「搬入 / 打ち合わせ / 現調 / 作業 … + 日付」があれば「カレンダーに登録して `genba_log_fix(calendar_event)`」、決定に topic が無い / タスクに due_on が無い、を返す。`add_many` で同じ呼び出しに 次やること が入っていれば返事待ちの注意は出ない。現場に期限切れがあれば `site_overdue` も付く
+- `genba_log_add` / `add_many` の返り値に `followups[]`: 本文に「返事待ち・確認中・依頼・送付」があれば「次やることを立てる」、「搬入 / 打ち合わせ / 現調 / 作業 … + 日付」があれば「カレンダーに登録して `genba_log_fix(calendar_event)`」、決定に topic が無い、を返す (タスクに期限が無いことは言わない = なるはや)。`add_many` で同じ呼び出しに 次やること が入っていれば返事待ちの注意は出ない。現場に期限切れがあれば `site_overdue` も付く
 - `calendar_event` 列: カレンダーに入れたら event ID (か `done`) を行に残す。これが無い「日程あり」の行を `genba_audit` が拾う (Keihi はカレンダー自体には触らない)
-- `genba_audit`: 期限切れ / 期限なし (作成 3 日超) / 返事待ちでタスク無し (〇〇さん・〇〇待ち の手がかりを含む未解決タスクが 2 日以内に無い) / 日程あり未登録 を返す。`summary` と `how_to_fix` 付き。監視ジョブが 1 時間に 1 回回し、会話の終わりにも 1 回
+- `genba_audit`: 期限切れ / 返事待ちでタスク無し (〇〇さん・〇〇待ち の手がかりを含む未解決タスクが 2 日以内に無い) / 日程あり未登録 を返す。期限なしのタスクは「なるはや一覧」(`asap`。警告ではない) として別に返す。`summary` と `how_to_fix` 付き。監視ジョブが 1 時間に 1 回回し、会話の終わりにも 1 回
+
+### 期限の扱い (due_on / due_source): 「決まっている日だけ・なければ なるはや」
+AI がタスクに目安の期限を勝手に付けてしまう (例: 誰も決めていない 11/27) のを止める。**期限なし = なるはや を正式な状態**として扱う。
+- `due_on` は、相手か小西が言った日・決まっている日程があるときだけ。決まっていなければ空 (= なるはや。タスクカレンダーの今日に【なるはや】で出続ける)。説明文 (`instructions` と各ツールの description) にも「必ず付ける」とは書かない
+- `due_source` (進捗ログの列): `stated` = 相手・小西が言った日 / `schedule` = 決まった日程 / `ai_guess` = AI の目安 / `unknown` = 以前から入っていた期限 (出どころ不明。移行専用で、新しく入れるときは使えない)。期限なしの行は NULL。`genba_log_add` / `add_many` / `genba_log_fix` は `due_on` を入れて `due_source` を省くとエラー (`due_on` が無ければ `due_source` は無視)。`ai_guess` はカレンダーに【目安】付きで出る
+- 監視ジョブの目録 (`genba_source_mark`) だけは、`due_source` が無い item も止めずに `unknown` で入れる (目録の 1 件で `cursor` が進まなくなるのを避ける)。返り値の `followups` で知らせる
+- 既存データは一度だけ移行 (印 = `genba_settings` の `due_source_v1`): 期限があって出どころが空の行は `unknown` にする。期限は消さない・書き換えない。`unknown` はカレンダーで【目安】にしない (勝手に目安扱いしない)
+- `genba_audit` の「期限なし」は警告ではなく「なるはや一覧」(`asap`)。`genba_tasks` は期限なしの行に `asap: true`
+- テスト: `genba-lib/due.test.mjs`
 
 ### タスクカレンダー同期 (Keihi が正本、カレンダーは見る窓)
 出先ではスマホのカレンダーしか見ないので、Keihi の未解決タスクを **タスク専用カレンダー「BANAX タスク」** に Keihi が自動で出す。AI は関与しない (拾い漏れを仕組みで無くす)。
 - 登録: カレンダーをサービスアカウント `keihi-run@…` に変更権限で共有 → `genba_calendar_setup(calendar_id, dry_run: true)` で確認 → `dry_run` を外して登録。以後 `genba_tasks` / `genba_audit` / `genba_status` / `genba_room_sync` が読まれたときに 5 分に 1 回同期 (`POST /api/internal/genba/calendar-sync` を Cloud Scheduler で叩いてもよい)。手動は `genba_calendar_sync`、状態は `genba_calendar_status`
-- Keihi → カレンダー: 未解決タスク 1 件 = 終日予定 1 件 (件名 = title、色 = who、説明に現場・本文・Keihi の ID)。期限切れは今日の日付に【期限切れ M/D】、期限なしは今日に【なるはや】で出続ける (期限そのものは書き換えない)。解決・取り消しで予定を消す
-- カレンダー → Keihi: 人が予定を動かす = 期限変更、件名を変える = title 変更、消す = 解決 (本文「カレンダーで予定が消された」)。人が直接作った予定 = 次やること として取り込む (色 → 担当、件名に現場名があれば現場)。繰り返し予定は無視
+- Keihi → カレンダー: 未解決タスク 1 件 = 終日予定 1 件 (件名 = title、色 = who、説明に現場・本文・Keihi の ID)。期限切れは今日の日付に【期限切れ M/D】、期限なしは今日に【なるはや】で出続ける (期限そのものは書き換えない)。`due_source = ai_guess` の期限には【目安】が付く (本当の期限と見分ける。過ぎた目安は【期限切れ M/D】【目安】)。解決・取り消しで予定を消す
+- カレンダー → Keihi: 人が予定を動かす = 期限変更 (人が決めた期限なので `due_source = stated` になり、【目安】は外れる)、件名を変える = title 変更、消す = 解決 (本文「カレンダーで予定が消された」)。人が直接作った予定 = 次やること として取り込む (`due_source = stated`。色 → 担当、件名に現場名があれば現場)。繰り返し予定は無視
 - 仕組み: `genba_log.calendar_event` (予定 ID) と `cal_snapshot` (最後に書いた {date, summary, colorId})。予定の今が snapshot と違えば人が触った、Keihi の望む状態と違えば Keihi から書く。予定の `extendedProperties.private.keihiTaskId` でも結ぶ
 - 設定は `genba_settings` (key `task_calendar`)。予定用の BANAX カレンダーを登録しないこと (中の予定が全部タスクになる)。決定・進捗に含まれる日程 (搬入・打ち合わせ) は今まで通り AI が BANAX カレンダーに入れて `calendar_event` を付ける
 

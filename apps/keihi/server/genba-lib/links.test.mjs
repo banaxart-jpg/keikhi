@@ -67,7 +67,7 @@ ok(true, "2 回目のマイグレーションも落ちない");
 
 // ───────────────────────── 2. 記録したら自動でリンクが張られる
 // (合格条件 4)「純一さんと横山さんの日程調整」を記録 → 純一・横山・いちご に自動でつながる
-let r = await add({ site: "いちご", kind: "次やること", title: "純一さんと横山さんの日程調整", body: "いちごの受付カウンターの打ち合わせ日を 2 人で決める", due_on: "2026-11-27", who: "名取" });
+let r = await add({ site: "いちご", kind: "次やること", title: "純一さんと横山さんの日程調整", body: "いちごの受付カウンターの打ち合わせ日を 2 人で決める", due_on: "2026-11-27", due_source: "stated", who: "名取" });
 ok(has(r.links, "contact", "純一", "mentioned") && has(r.links, "contact", "横山", "mentioned") && has(r.links, "site", "いちご", "site") && has(r.links, "contact", "名取", "who"), "「純一さんと横山さんの日程調整」→ 純一・横山 (mentioned)・いちご (site)・名取 (who) に自動でつながる", r.links);
 ok(r.links.every((l) => l.auto === true) && r.log.title === "純一さんと横山さんの日程調整" && r.log.id && r.site.name === "いちご" && r.duplicate === false, "返り値の links は auto=true。ログ・現場・duplicate は今まで通り", Object.keys(r));
 const db1 = await rows(`SELECT entity_type, entity_id, role, auto FROM log_links WHERE log_id=$1 ORDER BY entity_type, entity_id`, [r.log.id]);
@@ -84,7 +84,7 @@ ok(has(r.links, "contact", "横山", "sender") && r.links.filter((l) => l.name =
 const dup = await add({ site: "いちご", kind: "進捗", title: "いちごの受付カウンター提案", body: "重複", source_ref: "LINE:r1:m1" });
 ok(dup.duplicate === true && dup.links === undefined && (await rows(`SELECT count(*)::int AS n FROM log_links WHERE log_id=$1`, [r.log.id]))[0].n === r.links.length, "同じ source_ref の記録 (duplicate) は何も足さず、リンクも増えない");
 // 現場: 行田屋2号店 と 行田屋 (最長一致)
-r = await add({ site: "行田屋2号店", kind: "次やること", title: "行田屋2号店の看板を決める", body: "行田屋2号店の看板 A/B を横山さんに聞く", who: "横山", due_on: "2026-11-28" });
+r = await add({ site: "行田屋2号店", kind: "次やること", title: "行田屋2号店の看板を決める", body: "行田屋2号店の看板 A/B を横山さんに聞く", who: "横山", due_on: "2026-11-28", due_source: "stated" });
 ok(has(r.links, "contact", "横山", "who") && has(r.links, "site", "行田屋2号店", "site") && !has(r.links, "site", "行田屋"), "「行田屋2号店」と書いて「行田屋」の現場と取り違えない (最長一致)", r.links);
 r = await add({ site: "行田屋", kind: "進捗", title: "行田屋の件", body: "行田屋の下見" });
 ok(has(r.links, "site", "行田屋", "site") && !has(r.links, "site", "行田屋2号店"), "「行田屋」だけなら行田屋 (2 号店には結ばない)");
@@ -101,7 +101,7 @@ const manualLog = r.log.id;
 r = await add({ site: "銀座博品館", kind: "進捗", title: "横山さんに連絡", body: "横山さんに電話した", links: [{ type: "contact", id: iY, role: "who" }] });
 ok(r.links.filter((l) => l.name === "横山").length === 1 && has(r.links, "contact", "横山", "who") && r.links.find((l) => l.name === "横山").auto === false, "自動で張れるものを手で付けたら、手のほうが優先 (auto=false)・1 本だけ", r.links);
 // 既存の動き: 相手待ちの自動変換・重複ブロック・解決
-r = await add({ site: "恵比寿ファーマーズチキン", kind: "次やること", title: "高橋工業の返事待ち", body: "室外機の置き場の返事が来たら横山さんに伝える", who: "高橋", due_on: "2026-11-27" });
+r = await add({ site: "恵比寿ファーマーズチキン", kind: "次やること", title: "高橋工業の返事待ち", body: "室外機の置き場の返事が来たら横山さんに伝える", who: "高橋", due_on: "2026-11-27", due_source: "stated" });
 ok(r.auto?.kind === "待ち" && r.log.kind === "待ち" && has(r.links, "contact", "高橋", "who") && has(r.links, "company", "高橋工業", "mentioned") && has(r.links, "contact", "横山", "mentioned"), "既存の動きは今まで通り (相手待ちの自動変換 auto=待ち)・リンクも付く", { auto: r.auto, links: r.links });
 const waitId = r.log.id;
 await throws(() => add({ site: "恵比寿ファーマーズチキン", kind: "次やること", title: "高橋工業の返事待ち", body: "同じ件" }), /重複かも/, "既存の「重複かも」のエラーも今まで通り");
@@ -127,7 +127,7 @@ ok(autoPeople.includes(Number(kikuchi.id)) && !autoPeople.includes(Number(tatsum
 
 // ───────────────────────── 3. 横山の記録を 4 つの現場に (合格条件 2 の下ごしらえ)
 await add({ site: "恵比寿ファーマーズチキン", kind: "進捗", title: "室外機の置き場", body: "横山さんと屋上の置き場を確認した" });
-await add({ site: "いちご", kind: "課題", title: "受付カウンターの納まり", body: "横山さんの図面と現場が合わない", who: "名取", due_on: "2026-11-26" });
+await add({ site: "いちご", kind: "課題", title: "受付カウンターの納まり", body: "横山さんの図面と現場が合わない", who: "名取", due_on: "2026-11-26", due_source: "stated" });
 const old = await add({ site: "銀座博品館", kind: "進捗", title: "昔の打ち合わせ", body: "横山さんと什器の打ち合わせ (古い)" });
 await db.query(`UPDATE genba_log SET created_at = TIMESTAMP '2026-05-01 00:00:00+09' WHERE id=$1`, [old.log.id]);   // 200 日ほど前
 
