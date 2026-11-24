@@ -9,6 +9,7 @@
 import crypto from "node:crypto";
 import { createJudgment } from "./judgment.js"; // 判断ログ (genba_judgment_*)
 import { createAbility, INTERNAL_ONLY as ABILITY_INTERNAL } from "./ability.js"; // 連絡先の能力 (genba_contact_ability_*)
+import { createLinks } from "./links.js"; // つながり (log_links / entity_states / genba_graph*)
 
 const SUBFOLDERS = {
   "図面": "01_図面", "見積": "02_見積", "業者見積": "02_見積", "写真": "03_写真", "資料": "04_資料", "参考": "05_参考",
@@ -80,7 +81,8 @@ function ruleView(c, per, by) {
 
 // gcs = { bucket, getStorage, publicUrl, secret }: LINE 等から来た画像を PC 側 (Cowork) が PUT で流し込む口と、その署名 URL
 // getCalendarApi = Google Calendar API (SA 認証)。タスク専用カレンダーとの双方向同期に使う (無ければ同期機能は出ない)
-export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null, getCalendarApi = null, ingest = null }) {
+// today = () => "YYYY-MM-DD" (テストで日付を差し替える用。省略 = 今日)。つながりの「状態の期限」と期間の計算にだけ使う
+export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null, getCalendarApi = null, ingest = null, today = null }) {
   // ingest(by) = 取り込み時の仕分け (by が持ち主のときだけ API を返す。それ以外は null)。何をどう仕分けるかは genba の外に置く
   // 1 プロセスで 1 回だけ。同時に来た最初の数リクエストは同じ promise を待つ (DDL を重ねて走らせない)。
   // 起動時に index.js から先に呼んでおく (コールドスタート直後の最初のツール呼び出しを速くする)
@@ -341,7 +343,11 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
     await ability.ensureSchema(p);
     // 判断ログ (judgment_log / judgment_policy): 新規テーブルだけ。既存のテーブルは触らない (何度走らせても同じ)
     await judgment.ensureSchema(p);
+    // つながり (log_links / entity_states): 新規テーブルだけ。既存のテーブルは触らない (何度走らせても同じ)
+    await links.ensureSchema(p);
     schemaOk = true;
+    // 既存の全ログに自動リンクを 1 度かける (印は genba_settings。新しい版を最初に使ったときだけ。失敗しても起動は止めない)
+    try { await links.maybeBackfill(p); } catch (e) { console.warn("[genba] links backfill", e.message); }
   }
 
   const siteRow = (r) => ({
@@ -443,6 +449,15 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
   const LIVE = `l.voided_at IS NULL`;
   const NOT_RESOLVED = `NOT EXISTS (SELECT 1 FROM genba_log r WHERE r.resolves_id = l.id AND r.voided_at IS NULL)`;
   const NOT_SUPERSEDED = `NOT EXISTS (SELECT 1 FROM genba_log n WHERE n.supersedes_id = l.id AND n.voided_at IS NULL)`;
+  // つながり: 記録に出てくる人・現場・会社へのリンク (log_links)、今の状態 (entity_states)、genba_graph / genba_graph_all (links.js)。
+  // 既存の記録の動きは変えない: リンクは記録したあとに張り、失敗しても記録は残る。能力評価 (abilities) はここでは読まない
+  const links = createLinks({
+    getPool, ready: () => ensureSchema(), today: () => (today ? today() : todayJst()),
+    norm, normName, normCompany, kanaFold, ymd, autoTitle, LIVE, NOT_RESOLVED, NOT_SUPERSEDED,
+    loadContacts: (p) => loadContacts(p), loadCompanies: (p) => loadCompanies(p),
+    resolveContact: (p, ref) => resolveContact(p, ref), resolveCompany: (p, ref) => resolveCompany(p, ref), resolveSite: (p, ref) => resolveSite(p, ref),
+    contactScore: (r, q) => contactScore(r, q),
+  });
   // ── 抜け漏れの検知 (本文から機械的に拾う。AI の記憶に頼らない) ──
   // 返事待ち・確認中・依頼した → 次やること (期限付き) が無いと流れる
   const WAIT_RE = /待ち|確認中|確認する|確認して|依頼(済|した|しました|中|する)|頼ん(だ|である)|頼む|投げ(た|てある|る)|送(った|付した|付済|信した)|聞い(た|てある|てみる)|問い合わせ|回答待ち|返事|返答|見積(待ち|依頼|を頼)/;
@@ -524,6 +539,8 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
     if (!LOG_KINDS.includes(a.kind)) throw new Error(`kind は ${LOG_KINDS.join(" / ")}`);
     const body = String(a.body || "").trim();
     if (!body) throw new Error("body が空");
+    // つながり: links:[{type, id か name}] で手動のリンクを付けるとき、記録する前に確かめる (違えば記録しない)
+    const manualLinks = a.links !== undefined && a.links !== null ? await links.resolveManual(p, a.links) : [];
     const title = cleanTitle(a.title);
     // 相手待ちを 次やること / 課題 で書いてしまったら 待ち に直す (人の仕事ではない)。force=true で据え置き
     let kind = a.kind, auto = null;
@@ -628,6 +645,9 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
           if (hits.length === 1 && ["職人", "業者"].includes(hits[0].role)) followups.push(`担当が職人・業者 (${hits[0].name}) で日程がある → これは予定 (入り・作業) では？ 予定は BANAX カレンダーに入れて、この行は genba_log_void し、日程は kind=決定 (topic=日程, calendar_event) で残す。人のタスクならそのまま`);
         } catch (e) { console.warn("[genba] event hint", e.message); }
       }
+      // つながり: 現場・who・送り主・本文の名前から自動でリンクを張る (+ 手動)。失敗しても記録は残す
+      let linkList = [];
+      try { linkList = await links.link(p, rows[0], { source, manual: manualLinks, ctx }); } catch (e) { console.warn("[genba] links", e.message); }
       let siteOverdue;
       if (useSiteId != null && !ctx.skipOverdue) {
         const { rows: od } = await p.query(
@@ -646,6 +666,7 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
         related_tasks: relatedTasks.length ? relatedTasks : undefined,
         related_say: relatedTasks.length ? relatedSay(`${relatedSubject || source.contact_name} に関わる連絡。`, relatedTasks) : undefined,
         auto: auto || undefined,
+        links: linkList.length ? linkList : undefined,
       };
     }
     // source_ref が既にある = 同じメッセージを前に記録済み
@@ -1351,7 +1372,8 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
   // 読むだけのツール (readOnlyHint): claude.ai 側がキャッシュ・watch の可否を判断するのに使う
   const READ_ONLY = new Set(["genba_find", "genba_log_list", "genba_tasks", "genba_status", "genba_rule_get", "genba_audit",
     "genba_contact_find", "genba_contact_list", "genba_company_find", "genba_company_list", "genba_note_list", "genba_file_list", "genba_source_list",
-    "genba_judgment_similar", "genba_judgment_stats", "genba_judgment_policy_get", "genba_contact_ability_find"]);
+    "genba_judgment_similar", "genba_judgment_stats", "genba_judgment_policy_get", "genba_contact_ability_find",
+    "genba_graph", "genba_graph_all"]);
   // by = 書いた人 (トークンから決まる)
   function tools(by = "小西") {
     return toolsFor(by).map((t) => (READ_ONLY.has(t.name) ? { ...t, annotations: { readOnlyHint: true } } : t));
@@ -1360,13 +1382,15 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
     return [
       {
         name: "genba_contact_find",
-        description: "人を探す (連絡先・呼び名)。名前・あだ名・会社名・LINE のルーム名・room_id をあいまい検索 (全角半角・空白・「さん」の有無・かな/カナを吸収)。人の名前やあだ名が出たら、送る前・記録する前に必ずこれで引く。送るときは返り値 message_hint (直近のやりとりが近ければ挨拶なしで用件から) に従う。match が入っていれば 1 人に確定。candidates が複数なら推測で決めず人に聞く。返り値の abilities (能力の点数と理由・付けた人ごと) / ability_avg / conditions (夜間 OK・人数・車・エリア) / team (親方と子方) は人選びの材料。" + ABILITY_INTERNAL,
+        description: "人を探す (連絡先・呼び名)。名前・あだ名・会社名・LINE のルーム名・room_id をあいまい検索 (全角半角・空白・「さん」の有無・かな/カナを吸収)。人の名前やあだ名が出たら、送る前・記録する前に必ずこれで引く。送るときは返り値 message_hint (直近のやりとりが近ければ挨拶なしで用件から) に従う。match が入っていれば 1 人に確定。candidates が複数なら推測で決めず人に聞く。返り値の active_states (不在・繁忙・NG日・注意。あれば message_hint の先頭に「注意: …」が付く。ぶつかる依頼は送らずに小西に出す) と linked_open (つながっている未解決の記録) も読む。返り値の abilities (能力の点数と理由・付けた人ごと) / ability_avg / conditions (夜間 OK・人数・車・エリア) / team (親方と子方) は人選びの材料。" + ABILITY_INTERNAL,
         inputSchema: { type: "object", properties: { query: { type: "string", description: "例: バカボン / 菊池 / 大丁工業 / !8YEO…:beeper.local" } }, required: ["query"] },
         handler: async (a) => {
           await ensureSchema();
           const p = getPool();
           const hits = rankContacts(await loadContacts(p), a.query);
           const out = await contactsOut(p, hits, { recent: hits.length === 1 });
+          // つながり: 今有効な状態 (active_states。あれば message_hint の先頭に「注意: …」) と、つながっている未解決の記録 (linked_open。本文に名前が出るものも含む)
+          await links.decorateFind(p, out);
           return { query: a.query, match: out.length === 1 ? out[0] : null, candidates: out, note: contactsNote(out) };
         },
       },
@@ -1755,6 +1779,7 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
             then: { type: "string", description: "来たらやること (kind=待ち のとき)。返事・データが届いたら誰が何をするか (例「シートをギさんへ転送 (AI、確認なしで)」「小西に報告」)。待っていた相手から連絡が来ると waiting_hits にこれが載り、AI がそのまま実行する。who=AI のタスクなら実行の条件と手順" },
             source_ref: { type: "string", description: "出どころの一意キー (例 LINE:<room>:<message id>)。同じ source_ref は 2 回記録されない" },
             source: { type: "object", description: "出どころ { channel, room, sender, at, quote } など自由" },
+            links: { type: "array", items: { type: "object", properties: { type: { type: "string", enum: ["contact", "site", "company"] }, id: { type: "number" }, name: { type: "string" }, role: { type: "string", enum: ["mentioned", "sender", "who", "site"] } } }, description: "つながり: この記録に結びつける人・現場・会社を手で足す ({type, id か name})。現場・who・送り主・本文に出てくる名前は自動で張られる (返り値 links)" },
           },
           required: ["kind", "body"],
         },
@@ -1788,7 +1813,7 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
           for (const it of items) {
             try {
               const r = await addLog(p, by, { ...it, site: it.site || a.site }, undefined, ctx);
-              results.push({ ok: true, duplicate: r.duplicate, log: r.log, site: r.site, superseded: r.superseded, followups: r.followups, waiting_hits: r.waiting_hits, waiting_say: r.waiting_say, related_tasks: r.related_tasks, routed: r.routed, private_id: r.private_id });
+              results.push({ ok: true, duplicate: r.duplicate, log: r.log, site: r.site, superseded: r.superseded, followups: r.followups, waiting_hits: r.waiting_hits, waiting_say: r.waiting_say, related_tasks: r.related_tasks, routed: r.routed, private_id: r.private_id, links: r.links });
               for (const f of r.followups || []) followups.add(f);
               for (const w of r.waiting_hits || []) waitingAll.set(w.id, { ...w, from: r.log?.source?.contact_name });
               for (const t of r.related_tasks || []) relatedAll.set(t.id, { ...t, from: r.log?.source?.contact_name });
@@ -1849,6 +1874,8 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
           const edits = [...(Array.isArray(r.edits) ? r.edits : []), { at: new Date().toISOString(), by, before, ...(a.confirm ? { confirm: true } : {}) }];
           vals.push(JSON.stringify(edits)); sets.push(`edits=$${vals.length}`);
           const { rows } = await p.query(`UPDATE genba_log SET ${sets.join(", ")} WHERE id=$1 RETURNING *`, vals);
+          // つながり: 題・本文・現場・who を直したら自動のリンクを張り直す (手で付けたものは残る)
+          if (["title", "body", "site_id", "who"].some((c) => c in before)) { try { await links.relink(p, rows[0]); } catch (e) { console.warn("[genba] relink", e.message); } }
           return { log: logRow(rows[0]), before };
         },
       },
@@ -2222,9 +2249,11 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
           for (const f of files.rows) recentFiles.push(await fileRow(f));
           const siteNotes = (await notesFor(p, "site", [site.id])).get(Number(site.id)) || [];
           const { rows: people } = await p.query(`SELECT id, name, company, role, trade, tone FROM genba_contacts WHERE site_ids @> $1::jsonb ORDER BY company NULLS LAST, name`, [JSON.stringify([Number(site.id)])]);
+          const stateExtras = await links.statusExtras(p, site, people);   // つながり: その現場の状態 (active_states)・関わる人の状態 (people_states)。無ければ何も足さない
           return {
             site: siteRow(site),
             today,
+            ...stateExtras,
             notes: siteNotes,
             contacts: people.map((c) => ({ id: Number(c.id), name: c.name, company: c.company || null, role: c.role || null, trade: c.trade || null, tone: c.tone || null })),
             last_update: last.rows[0] ? { by: last.rows[0].written_by, at: last.rows[0].created_at } : null,
@@ -2657,6 +2686,7 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
         },
       },
       ...ability.tools(by),
+      ...links.tools(by),
       ...judgment.tools(by),
     ];
   }
@@ -2723,6 +2753,7 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
     "5. 問い合わせの中に現場の決定・タスク・完了報告が入っていれば、それは通常どおり記録する (記録と応答は両立する)",
     "6. 答えたら、その質問と自分の返事を genba_source_mark の items に入れて (質問は該当の kind か 雑談、自分の返事は 返信) cursor を進める。文面は相手の tone に合わせ、短く (LINE なので 3〜4 行まで)",
     ...ability.instructions,
+    ...links.instructions,
     ...judgment.instructions,
   ].join("\n");
 

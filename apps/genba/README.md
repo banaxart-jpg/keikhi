@@ -57,6 +57,10 @@
 | `genba_company_find(query)` / `genba_company_upsert({name, aliases?, role?, trades?, …})` / `genba_company_list(role?, trade?)` / `genba_company_remove` | 会社 (連絡先の `company` の本体)。価格感・得意工事は会社に付ける。返り値に所属の連絡先とメモ |
 | `genba_note_add(subject_type, subject?, kind?, body, valid_from?, valid_until?)` | 流れない情報を 人 / 会社 / 現場 / 社内 にぶら下げる (性質 / 予定 / 評価 / ルール / メモ)。期限付き |
 | `genba_note_list(subject_type?, subject?, kind?, on?, include_expired?)` / `genba_note_retire(id)` | メモの一覧 (日付時点の有効分) と引退 (消さない) |
+| `genba_state_set(entity, kind, body, starts_on?, ends_on?, source_ref?)` / `genba_state_void(id)` | 【つながり】人・現場・会社の「今の状態」(不在 / 繁忙 / NG日 / 注意 / その他) を入れる・取り消す。ends_on を過ぎたものは返さない。電話や会話で「いつまで無理」が出たら入れる。例 `{"entity":"横山","kind":"繁忙","body":"今週は動けない","starts_on":"2026-11-24","ends_on":"2026-11-29"}` |
+| `genba_graph(query? / entity?, depth?, days?)` | 【つながり・読み取り専用】名前で引くと、今有効な状態 (`active_states`、一番上)・基本情報・つながっている未解決の記録 (`open_logs`)・直近の記録 (`recent_logs`)・一緒に出てくる人・現場・会社と件数 (`neighbors`、depth=2 で 2 段先) をまとめて返す。能力評価は含めない |
+| `genba_graph_all(days?, open_only?)` | 【つながり・読み取り専用】グラフ表示用。`nodes` (key / type / id / name / count / state) と `edges` (a / b / count) を 1 回で返す |
+| `genba_links_backfill(rerun?)` | 【つながり】既存の全ログへの自動リンクの結果 (人・現場ごとのリンク件数) を見る。`rerun=true` (小西のトークン) でかけ直す |
 | `genba_judgment_add(category, situation, ai_prediction, ai_confidence, basis_ids?, site?, source_ref?, is_private?, auto_sent?, related_log_id?)` | 【判断ログ】小西の判断が要る場面を送る前に登録。返り値 `id` / `mode` (その種類の今のモード) / `similar` (同じ種類で似た過去の判断、答え済み、新しい順に最大 5 件)。同じ source_ref は `duplicate` |
 | `genba_judgment_resolve(id, decision, result, reason?)` | 【判断ログ】小西の答えを記録 (小西のトークンだけ)。result = 一致 / 部分一致 / 不一致。事後報告の種類で 不一致 → 自動で 確認あり に戻る (返り値 `demoted`) |
 | `genba_judgment_similar(query?, category?, site?, limit?)` | 【判断ログ】過去の判断の検索 (答え済み)。似ている度 × 新しさ の順。query 省略は新しい順 |
@@ -76,6 +80,18 @@
 - **付けた人の注意**: 統合コネクタ (`/api/mcp/<token>`) は全員が「小西」扱い。名取の点数を名取として残すには、名取の人ごとの URL (`/api/genba/mcp/<名取のトークン>`、`GET /api/mcp-connector` の `genba.名取`) 経由で呼ぶ
 - 前の版 (13 項目・0〜5 の `genba_contact_abilities`) のデータは、起動時に新しい形へ写し (0 は未入力)、テーブルは `genba_contact_abilities_v1` に名前を変えて残す。マイグレーションは `ensureSchemaOnce` の `CREATE TABLE IF NOT EXISTS` と `ADD COLUMN IF NOT EXISTS` (全部 NULL 可・既存の行に影響しない)
 - テスト `genba-lib/ability.test.mjs` (pglite の本物の Postgres。実行手順はファイル先頭)
+
+### つながり (`log_links` / `entity_states`)
+人・現場・会社の名前で引いたとき、その名前が出てくる記録と今の状態をまとめて出す (`genba-lib/links.js`)。例: 横山さんが電話で「今週は動けない」と言っていたのに、AI がそれを知らずに依頼を送ってしまう、を防ぐ。既存の記録 (ログ・タスク・待ち・カレンダー連携) の動きは変えない: リンクは記録したあとに張り、失敗しても記録は残る。
+- **`log_links`**: 記録 (`genba_log`) と 人 (`contact`) / 現場 (`site`) / 会社 (`company`) の線。`role` = `site` (記録の現場) / `who` (担当) / `sender` (出どころの送り主) / `mentioned` (題・本文に名前が出る)、`auto` = 自動で張った (true) / 手で付けた (false)。`(log_id, entity_type, entity_id)` はユニーク (同じ点が何通りかで出たら強い役割を 1 本に。手で付けたものが自動より優先)
+- **自動リンク** (`genba_log_add` / `add_many` / 監視の目録 `genba_source_mark` の共通の `addLog`): 現場 → site、`who` → who、`source.contact_id` / `sender` → sender、題と本文に出てくる連絡先の名前・呼び名 (`aliases`)・現場名・会社名 (`aliases`) → mentioned。「さん」の有無・かな/カナ・全角/半角を吸収。2 文字未満の名前は対象外。同じ名前が 2 人以上にあるときは結ばない。同じ種類で長い名前に含まれる名前は外す (「行田屋2号店」の中の「行田屋」)。現場には aliases が無いので、現場名とその短縮形 (邸・店などを除いたもの。3 文字以上で、人・会社の名前とぶつからないものだけ) を使う
+- **手動**: `genba_log_add(links=[{type, id か name, role?}])`。記録する前に確かめる (違えば記録しない)。返り値 `links` に張ったリンクの一覧。記録を `genba_log_fix` で直したら、自動のリンクだけ張り直す (手で付けたものは残る)
+- **`entity_states`**: `kind` = 不在 / 繁忙 / NG日 / 注意 / その他、`starts_on` / `ends_on` (ends_on を過ぎたものは返さない。これから始まるものは `upcoming: true` で出す)、`source_ref` (同じ点・同じものは 2 回入らない)。取り消しは `voided_at` (消さない)
+- **使われ方**: `genba_contact_find` の返り値に `active_states` と `linked_open` (つながっている未解決の記録。本文に名前が出るものも含む)。状態があれば `message_hint` の先頭に「注意: 横山さんは 11/24〜11/29 繁忙（今週は動けない）。この期間に動く依頼は送らず、小西に出す。」。`genba_status(site)` に、その現場の `active_states` と関わる人の `people_states` (あるときだけ)。`genba_contact_list` は変えない
+- **能力評価は含めない**: `genba_graph` / `genba_graph_all` / `genba_status` の返り値に `abilities` は出ない (`genba_contact_find` は今まで通り)
+- **バックフィル**: 新しい版を最初に使ったとき、既存の全ログに自動リンクを `auto=true` で 1 度だけかける (印は `genba_settings` の `links_backfill_v1`。複数のインスタンスが来ても 1 つだけ)。結果 (ログ数・新しく張った数・人・現場・会社ごとのリンク件数) は Cloud Logging と `genba_links_backfill` で見られる
+- **日付の差し替え (テスト用)**: `createGenba({ today: () => "2026-11-30" })`。状態の期限と期間の計算にだけ使う
+- テスト `genba-lib/links.test.mjs` (pglite。実行手順はファイル先頭)
 
 ### 運用ルールと個人ルール (`genba_rules`)
 - **共通 / 個人**: `genba_rules.owner` が NULL = 共通 (全員と全 AI に効く)、値 = 個人 (その人だけ。値はトークンの名前 = 小西 / 名取…)。`genba_rule_set(scope=個人)` で、呼び出したトークンの持ち主を owner にする。既存の行は全部 owner なし = 共通のまま
