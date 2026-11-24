@@ -38,6 +38,7 @@ import { searchWebImages as dramaSearchWebImages } from "./drama-lib/websearch.j
 import { splitGridImage as dramaSplitGridImage } from "./drama-lib/gridsplit.js";
 import { createMcpHandler as dramaCreateMcpHandler, recentMcpCalls } from "./drama-lib/mcp.js";
 import { createGenba, normName as genbaNormName, normCompany as genbaNormCompany } from "./genba-lib/index.js";
+import { createExpense, EXPENSE_INSTRUCTIONS } from "./expense-lib/index.js";
 import { createPrivate } from "./private-lib/index.js";
 import { createSns } from "./sns-lib/index.js";
 import { createMeeting } from "./meeting-lib/index.js";
@@ -2874,6 +2875,18 @@ const genba = createGenba({
   gcs: RECEIPTS_BUCKET ? { bucket: RECEIPTS_BUCKET, getStorage: () => storage, publicUrl: DRAMA_API_BASE, secret: (process.env.INTERNAL_TICK_SECRET || "").trim() } : null,
   getCalendarApi: () => getCalendarApi(), // タスク専用カレンダーとの双方向同期 (SA にカレンダーを共有してもらう)
   ingest: (by) => priv.ingestFor(by), // 取り込み時の仕分け (持ち主のアカウントのときだけ働く)。priv は下で作る (呼ばれるのはリクエスト時)
+  // 経費 (keihi_*) のツールを、人ごとの URL と統合コネクタに一緒に載せる (購入者 = トークンの持ち主)。expense は下で作る (呼ばれるのはリクエスト時)
+  extra: { tools: (by) => expense.tools(by), instructions: EXPENSE_INSTRUCTIONS },
+});
+// 経費: 画面 (/api/records*, /api/scan) と MCP (keihi_*) が同じ保存処理を通る。詳細は expense-lib/index.js
+// storage / appendRecordToSheet / syncRecordsToSheets は下の方の定義 (const は遅延参照、function 宣言は巻き上げ)
+const expense = createExpense({
+  getPool, getStorage: () => storage, bucket: RECEIPTS_BUCKET,
+  publicUrl: DRAMA_API_BASE, secret: (process.env.INTERNAL_TICK_SECRET || "").trim(),
+  appUrl: "https://keihi-496002.web.app",
+  findSites: (p, q, limit) => genba.findSites(p, q, limit),
+  appendRecordToSheet: (r) => appendRecordToSheet(r),
+  syncSheets: (rows, o) => syncRecordsToSheets(rows, o),
 });
 app.all("/api/genba/mcp/:token", genba.mcpRoute(GENBA_MCP_TOKENS));
 // 直近の MCP 呼び出し (全コネクタ分、引数の中身なし)。Cloud Logging を開かずに「どのツールが何 ms で失敗したか」を見る用
@@ -2884,6 +2897,8 @@ app.get("/api/genba/mcp/:token/recent", (req, res) => {
 });
 // 画像の PUT (認証なし・署名トークンで守る)。中身は JSON ではないので express.raw でそのまま受ける
 app.put("/api/genba/upload/:token", express.raw({ type: () => true, limit: "30mb" }), genba.uploadRoute());
+// 領収書の写真の PUT (keihi_receipt_upload_url の curl の行き先。認証なし・署名トークンで守る。縮小して GCS に置く)
+app.put("/api/keihi/upload/:token", express.raw({ type: () => true, limit: "30mb" }), expense.uploadRoute());
 
 // ═══════════════════ 統合コネクタ (claude.ai に登録する URL を 1 本にする) ═══════════════════
 // 接続 URL: https://<keihi-api の Cloud Run URL>/api/mcp/<token>
@@ -2903,6 +2918,7 @@ const UNIFIED_MCP_INSTRUCTIONS = [
   "- drama_*: ドラマ/アニメ制作",
   "- x_* / note_* / sns_*: SNS 発信 (投稿は課金あり・取り消し不可に近いので、必ず本文を見せて OK をもらってから)",
   "- genba_*: 現場の案件・進捗ログ・運用ルール (写真の置き場 URL もここ)",
+  "- keihi_*: 経費 (領収書の写真から登録・一覧・集計・写真・シート反映。経費アプリの全操作)",
   "- yado_*: 満竹華庵 (宿) の予約・売上・稼働率 (読み取り専用)",
   "- sheet_*: 自前のスプレッドシート (/sheet/ アプリ)。Google スプレッドシートの操作は sheet_ の付かないツール",
   "- それ以外: Google スプレッドシート / Drive / 現場写真",
@@ -3409,42 +3425,43 @@ async function ensureSheetTabGeneric(sheets, spreadsheetId, ym, header, dateCols
 async function ensureSheetTab(sheets, ym) {
   return ensureSheetTabGeneric(sheets, SHEET_ID, ym, SHEET_HEADER, [0]);
 }
-async function appendRecordToSheet(r) {
-  // 「写真」セル: Drive URL (アプリ不要で見られる) を優先、無ければアプリ内ビューア
+// 「写真」セル: Drive URL (アプリ不要で見られる) を優先、無ければアプリ内ビューア
+function recordPhotoCell(r) {
   const photoLinkUrl = r.driveUrl
     || (r.id ? `https://keihi-496002.web.app/keihi/?view=${r.id}` : "");
-  const photoCell = photoLinkUrl ? `=HYPERLINK("${String(photoLinkUrl).replace(/"/g, '""')}","🧾")` : "";
-
-  // 新「取引」シートに append (1 行 1 取引の統一フォーマット)。
-  // ★ 現場が決まってから書き込む。経費2 のソート前 (site="") は書かない。
-  // ソート完了時 PUT /api/records → 再度この関数が呼ばれ、site 入りで初めて記載される。
-  // (refId による二重投入防止キャッシュがあるので、PUT で何度書き換えても 1 行のみ)
-  if (r.site) {
-    appendTx({
-      date: r.date || "",
-      type: "支出",
-      category: r.site === "満竹華庵" ? "旅館" : "工事",
-      subcategory: r.category || "",
-      amount: Number(r.total) || 0,
-      counterparty: r.store || "",
-      site: r.site,
-      status: "確定",
-      paymentMethod: r.payment || "",
-      memo: r.memo || "",              // メモは本文だけ (購入者/工種は専用列へ分離)
-      buyer: r.buyer || "",            // → 「購入者」列
-      workType: r.workType || "",      // → 「工種」列
-      photoCell,
-      source: "領収書",
-      refId: r.id || "",
-    }).catch(() => {});
-  }
-
-  // 旧フォーマットの月別タブにも引き続き書き込む (バックアップ・互換)
-  if (!SHEET_ID) return;
-  if (!r.site) return;
+  return photoLinkUrl ? `=HYPERLINK("${String(photoLinkUrl).replace(/"/g, '""')}","🧾")` : "";
+}
+// 新「取引」シートに append (1 行 1 取引の統一フォーマット)。返り値 = appendTx と同じ { ok | skipped | error }
+// ★ 現場が決まってから書き込む。経費2 のソート前 (site="") は書かない。
+// ソート完了時 PUT /api/records → 再度 appendRecordToSheet が呼ばれ、site 入りで初めて記載される。
+// (refId による二重投入防止キャッシュがあるので、PUT で何度書き換えても 1 行のみ)
+async function appendRecordTx(r) {
+  if (!r.site) return { skipped: true, reason: "現場が空" };
+  return appendTx({
+    date: r.date || "",
+    type: "支出",
+    category: r.site === "満竹華庵" ? "旅館" : "工事",
+    subcategory: r.category || "",
+    amount: Number(r.total) || 0,
+    counterparty: r.store || "",
+    site: r.site,
+    status: "確定",
+    paymentMethod: r.payment || "",
+    memo: r.memo || "",              // メモは本文だけ (購入者/工種は専用列へ分離)
+    buyer: r.buyer || "",            // → 「購入者」列
+    workType: r.workType || "",      // → 「工種」列
+    photoCell: recordPhotoCell(r),
+    source: "領収書",
+    refId: r.id || "",
+  }).catch((e) => ({ ok: false, error: e.message }));
+}
+// 旧フォーマットの月別タブ (経費記録スプレッドシート。バックアップ・互換)
+async function appendRecordMonthly(r) {
+  const ym = String(r.date || "").slice(0, 7) || "unknown";
+  if (!SHEET_ID) return { skipped: true, reason: "SHEET_ID 未設定", tab: ym };
+  if (!r.site) return { skipped: true, reason: "現場が空", tab: ym };
   try {
     const sheets = await getSheetsApi();
-    const ym = String(r.date || "").slice(0, 7) || "unknown";
     await ensureSheetTab(sheets, ym);
     await sheets.spreadsheets.values.append({
       spreadsheetId: SHEET_ID,
@@ -3455,14 +3472,76 @@ async function appendRecordToSheet(r) {
         values: [[
           r.date || "", r.buyer || "", r.site || "", r.store || "",
           Number(r.total) || 0, r.category || "", r.workType || "",
-          r.payment || "", r.memo || "", photoCell,
+          r.payment || "", r.memo || "", recordPhotoCell(r),
         ]],
       },
     });
     console.log(`[sheets] appended id=${r.id} ym=${ym} site=${r.site}`);
+    return { ok: true, tab: ym };
   } catch (e) {
     console.warn(`[sheets] append FAILED id=${r.id}: ${e.message}`);
+    return { ok: false, error: e.message, tab: ym };
   }
+}
+// 登録・編集のたびに呼ばれる (画面の /api/records も MCP の keihi_* も同じ)。取引シートと月別タブは並行に書く。
+// 画面は結果を待たない (.catch(() => {}))。MCP は返り値 { tab, monthly, tx } で、どこに反映されたかを返す
+async function appendRecordToSheet(r) {
+  const txP = appendRecordTx(r);
+  const monthly = await appendRecordMonthly(r);
+  const tx = await txP;
+  return { tab: monthly.tab, monthly, tx };
+}
+// シートの書き出し直し (keihi_receipt_sheet_sync): シートに既にある行は飛ばして、無いものだけ追記する。
+//   月別タブ = 写真セル (J 列) の式に view=<id> (か Drive の URL) がある行 / 取引シート = ソース「領収書」で 元ID (M 列) が同じ行
+async function syncRecordsToSheets(rows, { dryRun = false } = {}) {
+  const sheets = await getSheetsApi();
+  let txHave = null;
+  if (TX_SHEET_ID) {
+    try {
+      const v = await sheets.spreadsheets.values.get({ spreadsheetId: TX_SHEET_ID, range: `${TX_TAB}!L2:M` });
+      txHave = new Set((v.data.values || []).filter((x) => x[0] === "領収書" && x[1]).map((x) => String(x[1])));
+    } catch (e) { txHave = new Set(); console.warn(`[sheets] sync: 取引シートを読めない: ${e.message}`); }
+  }
+  const monthlyCache = new Map(); // ym → 写真セルの式の配列 (タブが無ければ空)
+  const monthlyFormulas = async (ym) => {
+    if (monthlyCache.has(ym)) return monthlyCache.get(ym);
+    let f = [];
+    try {
+      const v = await sheets.spreadsheets.values.get({ spreadsheetId: SHEET_ID, range: `${ym}!J2:J`, valueRenderOption: "FORMULA" });
+      f = (v.data.values || []).map((x) => String(x[0] || ""));
+    } catch { f = []; }
+    monthlyCache.set(ym, f);
+    return f;
+  };
+  const out = [];
+  for (const r of rows) {
+    const rec = { ...r, id: r.id, site: r.site, date: r.date };
+    const ym = String(r.date || "").slice(0, 7) || "unknown";
+    const res = { id: Number(r.id), tab: ym, monthly: "skipped", tx: "skipped" };
+    if (!r.site) { res.monthly = res.tx = "skipped (現場が空)"; out.push(res); continue; }
+    if (TX_SHEET_ID) {
+      if (txHave.has(String(r.id))) res.tx = "exists";
+      else if (dryRun) res.tx = "missing";
+      else {
+        txSeenRefIds.delete(`領収書:${r.id}`);  // 取引シートに無いと分かったので、キャッシュの二重投入防止は外す
+        const t = await appendRecordTx(rec);
+        res.tx = t.ok ? "appended" : `error: ${t.error || "?"}`;
+      }
+    }
+    if (SHEET_ID) {
+      const f = await monthlyFormulas(ym);
+      const has = f.some((x) => x.includes(`view=${r.id}`) || (r.driveUrl && x.includes(r.driveUrl)));
+      if (has) res.monthly = "exists";
+      else if (dryRun) res.monthly = "missing";
+      else {
+        const m = await appendRecordMonthly(rec);
+        res.monthly = m.ok ? "appended" : `error: ${m.error || "?"}`;
+        if (m.ok) f.push(recordPhotoCell(rec));
+      }
+    }
+    out.push(res);
+  }
+  return out;
 }
 
 // ───── 請求書 (seikyu) 用 Sheets append ─────
@@ -6306,15 +6385,13 @@ app.post("/api/scan", async (req, res) => {
     const ext = mimeType === "application/pdf" ? "pdf" : "jpg";
     const today = new Date().toISOString().slice(0, 10);
     const currentYm = today.slice(0, 7);
-    const key = `${today}/${crypto.randomUUID()}.${ext}`;
-    // GCS にアップロード (本体ストレージ。失敗しても AI 読取は続行)
+    let key = `${today}/${crypto.randomUUID()}.${ext}`;
+    // GCS にアップロード (本体ストレージ。失敗しても AI 読取は続行)。置き場の形は expense-lib と共通 (MCP の keihi_receipt_add も同じ場所に置く)
     if (storage && RECEIPTS_BUCKET) {
       try {
-        await storage
-          .bucket(RECEIPTS_BUCKET)
-          .file(key)
-          .save(buf, { contentType: mimeType, resumable: false });
-        imageUrl = `gs://${RECEIPTS_BUCKET}/${key}`;
+        const put = await expense.putReceiptObject(buf, mimeType);
+        key = put.key;
+        imageUrl = put.imageUrl;
         console.log(`[scan] uploaded ${imageUrl} (${buf.length} bytes, ${mimeType}, source=${source})`);
       } catch (e) {
         console.warn(`[scan] GCS upload FAILED (bucket=${RECEIPTS_BUCKET}, key=${key}): ${e.code || ""} ${e.message}`);
@@ -11203,13 +11280,7 @@ app.get("/api/records", async (req, res) => {
   const p = getPool();
   if (!p) return res.status(503).json({ error: "DB not configured" });
   try {
-    const { rows } = await p.query(
-      `SELECT id, date::text AS date, store, total, category,
-              work_type AS "workType", payment, buyer, site, memo,
-              image_url AS "imageUrl", drive_url AS "driveUrl", created_at AS "createdAt"
-         FROM records
-        ORDER BY date DESC, id DESC LIMIT 1000`
-    );
+    const rows = await expense.listAll();   // 経費の保存処理は expense-lib (MCP の keihi_* と共通)
     const withImage = rows.filter((r) => r.imageUrl).length;
     console.log(`[records] GET returned ${rows.length} records, ${withImage} with imageUrl (latest 3: ${rows.slice(0, 3).map((r) => `id=${r.id} img=${r.imageUrl ? "yes" : "NO"}`).join(", ")})`);
     res.json(rows);
@@ -11225,15 +11296,10 @@ app.post("/api/records", async (req, res) => {
   try {
     const r = req.body || {};
     console.log(`[records] POST imageUrl=${r.imageUrl ? r.imageUrl.slice(0, 80) : "(none)"} store="${r.store}" total=${r.total}`);
-    const { rows } = await p.query(
-      `INSERT INTO records (date, store, total, category, work_type, payment, buyer, site, memo, image_url, drive_url)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
-       RETURNING id, created_at`,
-      [r.date, r.store, r.total, r.category, r.workType, r.payment, r.buyer, r.site, r.memo || "", r.imageUrl || null, r.driveUrl || null]
-    );
+    const saved = await expense.insertRecord(r);
     // 現場が設定されてればシートにも追記 (空なら未 SORT で送らない)
-    appendRecordToSheet({ ...r, id: rows[0].id }).catch(() => {});
-    res.status(201).json(rows[0]);
+    appendRecordToSheet({ ...r, id: saved.id }).catch(() => {});
+    res.status(201).json(saved);
   } catch (err) {
     console.error("insert error", err);
     res.status(500).json({ error: err.message });
@@ -11245,14 +11311,7 @@ app.put("/api/records/:id", async (req, res) => {
   if (!p) return res.status(503).json({ error: "DB not configured" });
   try {
     const r = req.body || {};
-    const { rowCount } = await p.query(
-      `UPDATE records SET
-         date=$1, store=$2, total=$3, category=$4, work_type=$5,
-         payment=$6, buyer=$7, site=$8, memo=$9,
-         drive_url=COALESCE($10, drive_url)
-       WHERE id=$11`,
-      [r.date, r.store, r.total, r.category, r.workType, r.payment, r.buyer, r.site, r.memo || "", r.driveUrl || null, req.params.id]
-    );
+    const rowCount = await expense.updateRecordRow(req.params.id, r);
     if (!rowCount) return res.status(404).json({ error: "not found" });
     // 編集後もシートに append (現場が空なら送らない)。重複は当面手動で削除
     appendRecordToSheet({ ...r, id: req.params.id }).catch(() => {});
@@ -11267,7 +11326,7 @@ app.delete("/api/records/:id", async (req, res) => {
   const p = getPool();
   if (!p) return res.status(503).json({ error: "DB not configured" });
   try {
-    await p.query("DELETE FROM records WHERE id = $1", [req.params.id]);
+    await expense.deleteRecordRow(req.params.id);
     res.status(204).end();
   } catch (err) {
     console.error("delete error", err);
@@ -11281,15 +11340,9 @@ app.get("/api/records/:id/image", async (req, res) => {
   if (!p) return res.status(503).json({ error: "DB not configured" });
   if (!storage) return res.status(503).json({ error: "Storage not configured" });
   try {
-    const { rows } = await p.query("SELECT image_url FROM records WHERE id=$1", [req.params.id]);
-    const gs = rows[0]?.image_url;
+    const gs = await expense.getImageGsUrl(req.params.id);
     if (!gs || !gs.startsWith("gs://")) return res.status(404).json({ error: "no image" });
-    const [, , bucket, ...rest] = gs.split("/");
-    const objectPath = rest.join("/");
-    const [url] = await storage
-      .bucket(bucket)
-      .file(objectPath)
-      .getSignedUrl({ action: "read", expires: Date.now() + 10 * 60 * 1000 });
+    const url = await expense.signedReadUrl(gs);
     res.json({ url });
   } catch (err) {
     console.error("image url error", err);

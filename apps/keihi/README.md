@@ -47,6 +47,33 @@ Express の `admin.auth().verifyIdToken()` が認証ゲートを担う。
 `/api/*` 全部 `Authorization: Bearer <Firebase ID Token>` 必須（`DEV=1` 時のみバイパス）。
 `ALLOWED_EMAILS` env で許可メールを絞れる（空なら全認証済みユーザー許可）。
 
+## MCP (`keihi_*`): 画面を開かずにチャットで経費を済ませる
+
+チャットに領収書の画像を貼れば、AI が読んで登録まで終わらせる。統合コネクタ (`/api/mcp/<token>`) と、人ごとの genba の URL (`/api/genba/mcp/<token>`) の両方に載る。**購入者は呼び出したトークンの持ち主**で自動で入る (統合コネクタ = 小西。名取は名取用の URL)。実装は `server/expense-lib/index.js`、テストは `server/expense-lib/expense.test.mjs`。
+
+**新しい登録の仕組みは作っていない。画面が通る処理をそのまま通す**: DB は `records` への同じ INSERT / UPDATE / DELETE、写真は GCS の `<今日>/<uuid>.jpg` (長辺 1200px・JPEG 品質 70 に縮小。`/api/scan` と同じ場所と形)、シートは `appendRecordToSheet` (経費記録スプレッドシートの月別タブ + 取引シート。写真セルは 🧾 → `?view=ID`)。`/api/records*` と `/api/scan` の GCS 保存も `expense-lib` の同じ関数を呼ぶ。OCR はサーバーでしない (AI が画像を読んで項目を埋めて渡す。Gemini を通さない)。
+
+| ツール | 画面でできること |
+|---|---|
+| `keihi_receipt_add` | 撮影 → 確認 → 登録 (最大 30 件を 1 回で。重複は `duplicate: true` + 既存 ID、`force=true` で強制。返り値 = ID・閲覧 URL・シートのタブ名) |
+| `keihi_receipt_upload_url` | 写真の渡し方 ①: 署名付き URL に `curl -X PUT` → `photo_ref` (6 時間有効。`PUT /api/keihi/upload/:token`、認証なし・署名で守る) |
+| (`keihi_receipt_add` の `photo_base64`) | 写真の渡し方 ②: 外の URL に出られない環境の予備 (1 枚数 MB まで) |
+| `keihi_receipt_hints` | 同じ店の過去の登録の傾向 (費目・工種・現場・支払方法) と選択肢・現場の一覧 |
+| `keihi_receipt_list` / `keihi_receipt_get` | 「記録」画面 (現場・月などで絞った合計と件数つき) |
+| `keihi_receipt_summary` | 合計・件数を 月 / 現場 / 費目 / 工種 / 支払方法 / 購入者 / 店舗 で集計 |
+| `keihi_receipt_update` | 「記録を編集」 (渡した項目だけ変わる。写真の付け替えは AI 経由の追加機能) |
+| `keihi_receipt_delete` | 「×」 (DB の行だけ消える。人に確認して `confirm=true`) |
+| `keihi_receipt_photo` | 🧾 (10 分有効の閲覧 URL + 画像そのもの) |
+| `keihi_receipt_export_csv` | 「CSV」 (同じ列・BOM つき) |
+| `keihi_receipt_sheet_sync` | シートへの書き出し直し (シートに既にある行は飛ばして、無いものだけ追記。`dry_run` 可) |
+| `keihi_sites` | 現場ボタンの一覧 (進行中が先。「共通」「会社」も現場) |
+
+- 選択肢 (費目・工種・支払方法・購入者) は `index.html` の `<select>` / ボタンと同じ (テストで画面の HTML と突き合わせている)。「工具」「交際費」「PayPay」などの言い換えは画面の選択肢に寄せる
+- 現場名は `genba_find` と同じ検索 (表記ゆれ・一部でも可)。見つからない / 複数ならエラーで返る
+- 画面と同じ挙動 (そのまま): 編集 (`update`) は月別タブに新しい行を足す (古い行は手で消す)。削除はシートの行と写真を消さない
+- 現場の追加・編集は経費アプリでなく現場アプリ (`genba_register`)。経費アプリの「スプレッドシート連携」(Apps Script の URL を端末に保存) は端末ごとの旧機能で、サーバーが同じことを常にやるので MCP には無い
+- テスト: `ln -s <scratch>/node_modules apps/keihi/server/node_modules` (sharp) してから `PGLITE_PATH=… node apps/keihi/server/expense-lib/expense.test.mjs`
+
 ## ファイル構成
 
 ```

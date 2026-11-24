@@ -82,7 +82,9 @@ function ruleView(c, per, by) {
 // gcs = { bucket, getStorage, publicUrl, secret }: LINE 等から来た画像を PC 側 (Cowork) が PUT で流し込む口と、その署名 URL
 // getCalendarApi = Google Calendar API (SA 認証)。タスク専用カレンダーとの双方向同期に使う (無ければ同期機能は出ない)
 // today = () => "YYYY-MM-DD" (テストで日付を差し替える用。省略 = 今日)。つながりの「状態の期限」と期間の計算にだけ使う
-export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null, getCalendarApi = null, ingest = null, today = null }) {
+// extra = { tools: (by) => [...], instructions: [...] }: 人ごとの URL と統合コネクタに一緒に載せる、genba の外のツール (経費 = expense-lib)。
+//   tools は呼ばれたとき (リクエスト時) に作るので、genba より後で作るものを参照してよい
+export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null, getCalendarApi = null, ingest = null, today = null, extra = null }) {
   // ingest(by) = 取り込み時の仕分け (by が持ち主のときだけ API を返す。それ以外は null)。何をどう仕分けるかは genba の外に置く
   // 1 プロセスで 1 回だけ。同時に来た最初の数リクエストは同じ promise を待つ (DDL を重ねて走らせない)。
   // 起動時に index.js から先に呼んでおく (コールドスタート直後の最初のツール呼び出しを速くする)
@@ -2690,6 +2692,7 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
       ...ability.tools(by),
       ...links.tools(by),
       ...judgment.tools(by),
+      ...(extra && extra.tools ? extra.tools(by) : []),
     ];
   }
 
@@ -2757,6 +2760,7 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
     ...ability.instructions,
     ...links.instructions,
     ...judgment.instructions,
+    ...(extra && extra.instructions ? extra.instructions : []),
   ].join("\n");
 
   // 人ごとのトークン: { token: 名前 }。URL の token で書いた人を決める
@@ -2771,5 +2775,5 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
     };
   }
 
-  return { tools, instructions: INSTRUCTIONS, mcpRoute, ensureSchema, uploadRoute, syncTaskCalendar };
+  return { tools, instructions: INSTRUCTIONS, mcpRoute, ensureSchema, uploadRoute, syncTaskCalendar, findSites, siteRow };
 }
