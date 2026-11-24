@@ -95,12 +95,19 @@ export function createLinks(d) {
     }
     const entries = (type) => [...owners[type]].filter(([, ids]) => ids.size === 1).map(([key, ids]) => ({ key, id: [...ids][0] }));
     const E = { contact: entries("contact"), site: entries("site"), company: entries("company") };
+    // 「山田（ミリネグローバル）」「横山（辰巳さん転送）」「平居 靖弘／FLAT」のように、名前のあとに補足が付いた書き方は、補足を外した形でも当てる。
+    // 名字だけ・前方一致のような推測はしない (同じ名字の別人 = 平居さんが 2 人いるとき取り違えるため。決められない名前は連絡先の呼び名 aliases に足してもらう)
+    const variants = (raw) => { const s = String(raw || "").normalize("NFKC").trim(); return [...new Set([s, s.split(/[(/]/)[0].trim()].filter(Boolean))]; };
+    const contactSet = (raw) => { for (const v of variants(raw)) { const s = exactContact.get(normName(v)); if (s) return s; } return null; };
+    const companyId = (raw) => { for (const v of variants(raw)) { const s = owners.company.get(normCompany(v)); if (s && s.size === 1) return [...s][0]; } return null; };
     return {
       names,
       nameOf: (type, id) => names.get(keyOf(type, id)) || null,
-      lookupContact: (raw) => { const s = exactContact.get(normName(raw)); return s && s.size === 1 ? [...s][0] : null; },
-      // who / 送り主の 1 語が連絡先に当たるか: ok = 1 人に決まる / ambiguous = 同じ名前が 2 人以上 / none = 当たらない
-      nameStatus: (raw) => { const s = exactContact.get(normName(raw)); return !s ? "none" : s.size === 1 ? "ok" : "ambiguous"; },
+      lookupContact: (raw) => { const s = contactSet(raw); return s && s.size === 1 ? [...s][0] : null; },
+      // who に会社の名前 (エアサポ・アズサポート) が書いてあるとき、その会社
+      lookupCompany: (raw) => companyId(raw),
+      // who / 送り主の 1 語が連絡先に当たるか: ok = 1 人に決まる / ambiguous = 同じ名前が 2 人以上 / company = 会社の名前 (会社につなぐ) / none = 当たらない
+      nameStatus: (raw) => { const s = contactSet(raw); return s ? (s.size === 1 ? "ok" : "ambiguous") : companyId(raw) != null ? "company" : "none"; },
       ambiguousNames: () => [...exactContact].filter(([, ids]) => ids.size > 1).map(([key, ids]) => ({ name: key, contacts: [...ids].map((id) => names.get(keyOf("contact", id))) })),
       // 本文に名前が出てくる点 (さんの有無・かな/カナ・全角/半角は鍵の側で吸収済み)
       match(text) {
@@ -126,7 +133,11 @@ export function createLinks(d) {
       if (wins) found.set(k, { type, id: Number(id), role, auto });
     };
     if (log.site_id != null) put("site", log.site_id, "site");
-    for (const w of String(log.who || "").split(/[,、/／・&＆\s]+/).filter(Boolean)) put("contact", m.lookupContact(w), "who");
+    for (const w of String(log.who || "").split(/[,、/／・&＆\s]+/).filter(Boolean)) {
+      const c = m.lookupContact(w);
+      if (c != null) put("contact", c, "who");
+      else if (m.nameStatus(w) === "company") put("company", m.lookupCompany(w), "who");      // 人に当たらず、会社の名前なら会社につなぐ
+    }
     const src = source && typeof source === "object" ? source : (log.source && typeof log.source === "object" ? log.source : null);
     if (src) {
       if (src.contact_id != null && Number.isInteger(Number(src.contact_id))) put("contact", Number(src.contact_id), "sender");
@@ -452,7 +463,7 @@ export function createLinks(d) {
       },
       {
         name: "genba_graph_all",
-        description: "グラフ表示用: 全部の点 (人・現場・会社) と線を 1 回で返す。nodes = { key, type, id, name, count (つながる記録の数), state (今有効な状態があるか), sub (人は職種・会社は肩書きなし) }、edges = { a, b, count (2 つの点が一緒に出てくる記録の数) } (a / b は nodes の key)。days = 直近何日の記録を数えるか (既定 60、最大 365)。open_only=true = 未解決の記録だけを数える (期間に関係なく全部の未解決)。点の中身は genba_graph で引く。能力評価は含めない",
+        description: "グラフ表示用: 全部の点 (人・現場・会社) と線を 1 回で返す。nodes = { key, type, id, name, count (つながる記録の数), state (今有効な状態があるか), sub (人は職種・会社は肩書きなし), role (人だけ。社内・業者など) }、edges = { a, b, count (2 つの点が一緒に出てくる記録の数) } (a / b は nodes の key)。days = 直近何日の記録を数えるか (既定 60、最大 365)。open_only=true = 未解決の記録だけを数える (期間に関係なく全部の未解決)。点の中身は genba_graph で引く。能力評価は含めない",
         inputSchema: { type: "object", properties: { days: { type: "integer", description: "既定 60、最大 365" }, open_only: { type: "boolean", description: "未解決の記録だけ (既定 false)" } } },
         handler: async (a) => {
           await warm();
@@ -473,7 +484,7 @@ export function createLinks(d) {
           const nodes = [];
           for (const type of LINK_TYPES) for (const [id, r] of maps[type]) {
             const key = keyOf(type, id);
-            nodes.push({ key, type, id, name: r.name, count: counts.get(key) || 0, state: withState.has(key), sub: type === "contact" ? r.trade || undefined : undefined });
+            nodes.push({ key, type, id, name: r.name, count: counts.get(key) || 0, state: withState.has(key), sub: type === "contact" ? r.trade || undefined : undefined, role: type === "contact" ? r.role || undefined : undefined });
           }
           const have = new Set(nodes.map((n) => n.key));
           const edges = edg.rows.map((r) => ({ a: keyOf(r.at, r.ai), b: keyOf(r.bt, r.bi), count: r.n })).filter((e) => have.has(e.a) && have.has(e.b));
@@ -514,7 +525,7 @@ export function createLinks(d) {
     for (const r of logs) {
       if (r.who) {
         whoLogs++; let all = true;
-        for (const t of splitWho(r.who)) { const st = m.nameStatus(t); if (st !== "ok") { all = false; const k = `${t}|${st}`; who.set(k, (who.get(k) || 0) + 1); } }
+        for (const t of splitWho(r.who)) { const st = m.nameStatus(t); if (st !== "ok" && st !== "company") { all = false; const k = `${t}|${st}`; who.set(k, (who.get(k) || 0) + 1); } }
         if (all) whoOk++;
       }
       const src = r.source && typeof r.source === "object" ? r.source : null;
@@ -533,7 +544,7 @@ export function createLinks(d) {
       sender: { logs: sendLogs, resolved: sendOk, unresolved: top(sender, 15, (k, n) => ({ sender: k, logs: n })) },
       ambiguous_names: m.ambiguousNames().slice(0, 20),
       backfill: v ? { status: v.status, started_at: v.started_at, finished_at: v.finished_at, logs: v.logs, inserted: v.inserted, links_total: v.links_total, people: (v.people || []).slice(0, 20), sites: (v.sites || []).slice(0, 20), error: v.error } : null,
-      note: "who.unresolved: none = 連絡先に無い名前 (AI・会社・「現場」など。人でなければ正常) / ambiguous = 同じ名前が 2 人以上いて決められない。sender.unresolved = 送り主が連絡先に当たらない (contact_id も付いていない)",
+      note: "who.unresolved: none = 連絡先にも会社にも無い名前 (AI・「現場」など。人でなければ正常。人なら連絡先に足すか、呼び名 aliases に足す) / ambiguous = 同じ名前が 2 人以上いて決められない。who に会社の名前が書いてあれば会社につなぐ (読めた扱い)。sender.unresolved = 送り主が連絡先に当たらない (contact_id も付いていない)。名字だけ・前方一致の推測はしない",
     };
   }
 

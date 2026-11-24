@@ -325,6 +325,27 @@ ok(!("links_check" in au3), "genba_audit は、指定しなければ今まで通
 const au4 = await call(S, "genba_audit", { links_check: true });
 ok(au4.links_check?.coverage?.by_kind?.["決定"] && au4.links_check.who && au4.summary !== undefined && "open_tasks" in au4, "genba_audit(links_check=true): つながりの確認が付く。元の項目はそのまま", Object.keys(au4));
 
+// ───────────────────────── 10c. 書く人の読み取り: 補足つきの名前・会社名の who (本番の読めなかった名前から)
+await call(S, "genba_company_upsert", { name: "株式会社エアサポ", role: "業者" });
+await up({ name: "平居史也", company: "FLAT", role: "職人" });
+const w1 = await add({ site: "銀座博品館", kind: "進捗", title: "補足つきの担当 A", body: "転送された資料を確認した", who: "横山（辰巳さん転送）" });
+ok(has(w1.links, "contact", "横山", "who"), "who「横山（辰巳さん転送）」は、補足を外して横山に読める", w1.links);
+const w2 = await add({ site: "銀座博品館", kind: "進捗", title: "補足つきの送り主 B", body: "資料が届いた", source_ref: "LINE:rw:m1", source: { channel: "LINE", room: "rw", sender: "横山（辰巳さん転送）" } });
+ok(has(w2.links, "contact", "横山", "sender"), "送り主「横山（辰巳さん転送）」も横山 (sender) に読める", w2.links);
+const w3 = await add({ site: "銀座博品館", kind: "進捗", title: "同名の担当 C", body: "連絡した", who: "山田（ミリネグローバル）" });
+ok(!(w3.links || []).some((l) => l.type === "contact" && l.name === "山田"), "同じ名前が 2 人いる山田は、補足つきでも決めつけない (リンクを張らない)", w3.links);
+const w4 = await add({ site: "銀座博品館", kind: "進捗", title: "会社が担当 D", body: "見解を待っている", who: "エアサポ" });
+ok(has(w4.links, "company", "株式会社エアサポ", "who"), "who が会社の名前 (エアサポ) なら、会社に who でつなぐ", w4.links);
+const w5 = await add({ site: "銀座博品館", kind: "進捗", title: "名字だけの担当 E", body: "確認した", who: "平居" });
+ok(!(w5.links || []).some((l) => l.name === "平居史也"), "名字だけ (平居) は、同じ名字の別人がいるかもしれないので推測しない", w5.links);
+g = mk(); cache = {};
+const chk2 = (await call(S, "genba_links_backfill", {})).check;
+const who2 = chk2.who.unresolved;
+ok(!who2.some((x) => x.who === "エアサポ" || x.who.startsWith("横山")) && who2.some((x) => x.who === "山田（ミリネグローバル）" && x.status === "ambiguous") && who2.some((x) => x.who === "平居" && x.status === "none"), "確認: 会社名・補足つきは読めた扱い。同名 (山田) は ambiguous、名字だけ (平居) は none のまま出る", who2);
+ok(!chk2.sender.unresolved.some((x) => x.sender.startsWith("横山")), "確認: 補足つきの送り主も読めた扱い", chk2.sender);
+const gaAll = await call(S, "genba_graph_all", {});
+ok(gaAll.nodes.find((n) => n.type === "contact" && n.name === "横山")?.role === "設計" && gaAll.nodes.find((n) => n.type === "contact" && n.name === "名取")?.role === "社内" && gaAll.nodes.filter((n) => n.type !== "contact").every((n) => !("role" in n) || n.role === undefined), "genba_graph_all: 人の点に role (社内など) が付く。現場・会社には付けない");
+
 // ───────────────────────── 11. ツール定義・手順書・既存ツールの形
 const defs = Object.fromEntries(tools(S).map((t) => [t.name, t]));
 ok(["genba_state_set", "genba_state_void", "genba_graph", "genba_graph_all", "genba_links_backfill"].every((n) => defs[n]), "ツールが載る: genba_state_set / genba_state_void / genba_graph / genba_graph_all (+ genba_links_backfill)");
