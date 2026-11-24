@@ -48,7 +48,7 @@ const appendRecordToSheet = async (r, o) => {
   if (sheetFail) return { tab, monthly: { ok: false, error: "boom", tab }, tx: { ok: true } };
   return { tab, monthly: { ok: true, tab }, tx: { ok: true } };
 };
-const dedupeSheets = async (o) => { dedupeCalls.push(o); return { applied: o.apply === true, extra_rows: 3, monthly: [{ tab: "2026-11", id: 5, rows: [4, 5, 6], count: 3 }], tx: [], checked: { tabs: 1, rows: 10 } }; };
+const dedupeSheets = async (o) => { dedupeCalls.push(o); return { applied: o.apply === true, extra_rows: 3, identical_extra_rows: 1, needs_review: { monthly_groups: 1, tx_groups: 0, cross_tab: 0 }, removed: { monthly: 1, tx: 0, skipped_changed: 0, capped: [], archived: 1 }, monthly: [{ tab: "2026-11", id: 5, rows: [4, 5, 6], count: 3, identical: false }], tx: [], cross_tab: [], checked: { tabs: 1, rows: 10 } }; };
 const syncSheets = async (rs, o) => { syncCalls.push({ ids: rs.map((r) => Number(r.id)), ...o }); return rs.map((r) => ({ id: Number(r.id), tab: r.date.slice(0, 7), monthly: o.dryRun ? "missing" : "appended", tx: "exists" })); };
 
 const BUCKET = "test-receipts", SECRET = "test-secret", PUBLIC = "https://api.example";
@@ -310,11 +310,61 @@ await db.query(`DELETE FROM records WHERE store IN ('連打 店', '別の店')`)
 
 // ───────── 12c. シートの重複整理ツール (探すだけが既定。消すのは apply=true)
 const dd0 = await call(S, "keihi_receipt_sheet_dedupe", {});
-ok(dedupeCalls.at(-1).apply === false && dd0.applied === false && dd0.extra_rows === 3 && /消していない/.test(dd0.note) && dd0.monthly[0].rows.join() === "4,5,6", "dedupe: 既定は探すだけ (apply=false)。消していないと明記して、重複の場所を返す", dd0);
+ok(dedupeCalls.at(-1).apply === false && dd0.applied === false && dd0.extra_rows === 3 && dd0.identical_extra_rows === 1 && dd0.needs_review.monthly_groups === 1 && /消していない/.test(dd0.note) && /確認が要る所 1 件/.test(dd0.note) && dd0.monthly[0].rows.join() === "4,5,6", "dedupe: 既定は探すだけ (apply=false)。消していないと明記して、確認が要る数と重複の場所を返す", dd0);
+ok(Array.isArray(dd0.db_duplicates) && dd0.auto_backfill?.status === "done", "dedupe: DB の重複 (db_duplicates) と、自動の整理の結果 (auto_backfill) も一緒に返る", { db: dd0.db_duplicates, auto: dd0.auto_backfill });
 const dd1 = await call(S, "keihi_receipt_sheet_dedupe", { month: "2026-11", apply: true });
-ok(dedupeCalls.at(-1).apply === true && dedupeCalls.at(-1).month === "2026-11" && dd1.applied === true, "dedupe: apply=true と month を渡して整理する");
+ok(dedupeCalls.at(-1).apply === true && dedupeCalls.at(-1).month === "2026-11" && dedupeCalls.at(-1).onlyIdentical === false && dd1.applied === true, "dedupe: apply=true と month を渡して整理する (中身が違う重複も、確認したあとなので対象)", dedupeCalls.at(-1));
+await call(S, "keihi_receipt_sheet_dedupe", { apply: true, only_identical: true });
+ok(dedupeCalls.at(-1).onlyIdentical === true, "dedupe: only_identical=true なら、中身が完全に同じ行だけ");
 await throws(() => call(S, "keihi_receipt_sheet_dedupe", { month: "11月" }), /YYYY-MM/, "dedupe: month の形が違えばエラー");
-ok(/人に見せて/.test(def.keihi_receipt_sheet_dedupe.description) && /apply=true/.test(def.keihi_receipt_sheet_dedupe.description) && /一番下/.test(def.keihi_receipt_sheet_dedupe.description) && /1 記録 = 1 行/.test(EXPENSE_INSTRUCTIONS.join("\n")), "dedupe の説明: まず探すだけ → 人に見せて OK → apply=true。どの行を残すか。手順書に「1 記録 = 1 行」");
+ok(/人に見せて/.test(def.keihi_receipt_sheet_dedupe.description) && /apply=true/.test(def.keihi_receipt_sheet_dedupe.description) && /一番下/.test(def.keihi_receipt_sheet_dedupe.description) && /重複削除ログ/.test(def.keihi_receipt_sheet_dedupe.description) && /完全に同じ/.test(def.keihi_receipt_sheet_dedupe.description) && /1 記録 = 1 行/.test(EXPENSE_INSTRUCTIONS.join("\n")) && /重複削除ログ/.test(EXPENSE_INSTRUCTIONS.join("\n")), "dedupe の説明: 自動で消すのは完全に同じ行だけ・ログに残す・まず探すだけ → 人に見せて OK → apply=true。どの行を残すか。手順書にも");
+
+// ───────── 12d. シートの重複の自動整理 (新しい版を最初に使ったとき 1 回だけ。中身が完全に同じ行だけ)
+const marker = async () => (await rows(`SELECT value, updated_at FROM genba_settings WHERE key='sheet_dedupe_v1'`))[0];
+const firstAuto = dedupeCalls[0];
+ok(firstAuto && firstAuto.apply === true && firstAuto.onlyIdentical === true && firstAuto.month === undefined, "最初のツール呼び出しで、自動の整理が 1 回走る (apply=true・onlyIdentical=true = 完全に同じ行だけ)", firstAuto);
+ok(dedupeCalls.filter((c) => c.onlyIdentical === true && c.apply === true && c.month === undefined).length === 2, "自動の整理は 1 回だけ (そのあとのツール呼び出しでは走らない。数えているのは、自動の 1 回 + only_identical を明示した上の 1 回)");
+const mk = (await marker()).value;
+ok(mk.status === "done" && mk.removed.monthly === 1 && mk.needs_review.monthly_groups === 1 && /重複削除ログ/.test(mk.note), "結果が印 (sheet_dedupe_v1) に残る (消した数・確認が要る数)", mk);
+// 失敗したときのやり直し (別のインスタンスで)
+const mkExpense = (dedupe) => createExpense({ getPool: () => pool, getStorage: () => storage, bucket: BUCKET, publicUrl: PUBLIC, secret: SECRET, findSites: (p, q, l) => genba.findSites(p, q, l), appendRecordToSheet, syncSheets, dedupeSheets: dedupe, today: () => clock });
+await db.query(`DELETE FROM genba_settings WHERE key='sheet_dedupe_v1'`);
+let tries = 0;
+const failing = mkExpense(async () => { tries++; throw new Error("sheets down"); });
+const callF = (name, args = {}) => failing.tools(S).find((x) => x.name === name).handler(args);
+await callF("keihi_sites");
+const mf = (await marker()).value;
+ok(tries === 1 && mf.status === "failed" && /sheets down/.test(mf.error) && mf.attempts === 1, "自動の整理が失敗したら、印は failed (ツール自体は動く)", mf);
+await callF("keihi_sites");
+ok(tries === 1, "failed のあと 3 分以内は、やり直さない (毎回シートを叩かない)");
+for (let n = 2; n <= 5; n++) {
+  await db.query(`UPDATE genba_settings SET updated_at = now() - interval '4 minutes' WHERE key='sheet_dedupe_v1'`);
+  const again = mkExpense(async () => { tries++; throw new Error("sheets down"); });
+  await again.tools(S).find((x) => x.name === "keihi_sites").handler({});
+}
+ok(tries === 4 && (await marker()).value.attempts === 4, "失敗は最大 4 回までやり直す (それ以上は、毎回シートを叩かない)", { tries, m: (await marker()).value });
+// 止まった (running のまま 3 分以上) 印は、次のリクエストが引き継ぐ
+await db.query(`UPDATE genba_settings SET value='{"status":"running","attempts":1}'::jsonb, updated_at = now() - interval '4 minutes' WHERE key='sheet_dedupe_v1'`);
+let taken = 0;
+await mkExpense(async () => { taken++; return { removed: { monthly: 0, tx: 0 }, extra_rows: 0, identical_extra_rows: 0, needs_review: { monthly_groups: 0, tx_groups: 0, cross_tab: 0 } }; }).tools(S).find((x) => x.name === "keihi_sites").handler({});
+ok(taken === 1 && (await marker()).value.status === "done", "止まった印 (running のまま 3 分以上) は、次のリクエストが引き継いで最後まで走る");
+await db.query(`UPDATE genba_settings SET value='{"status":"running","attempts":1}'::jsonb, updated_at = now() WHERE key='sheet_dedupe_v1'`);
+let dup = 0;
+await mkExpense(async () => { dup++; return {}; }).tools(S).find((x) => x.name === "keihi_sites").handler({});
+ok(dup === 0, "ほかのインスタンスが実行中 (3 分以内) なら、走らせない (同時に 2 つ走らない)");
+await db.query(`UPDATE genba_settings SET value='{"status":"done"}'::jsonb WHERE key='sheet_dedupe_v1'`);
+let afterDone = 0;
+await mkExpense(async () => { afterDone++; return {}; }).tools(S).find((x) => x.name === "keihi_sites").handler({});
+ok(afterDone === 0, "done の印があれば、新しいインスタンスも走らせない");
+
+// ───────── 12e. DB の重複の検出 (読むだけ)
+await db.query(`DELETE FROM records`);
+for (let i = 0; i < 3; i++) await db.query(`INSERT INTO records (date, store, total, category, work_type, payment, buyer, site, memo, image_url) VALUES ('2026-09-30','DB 重複 店',900,'材料費','木工','現金','小西','入谷','','gs://x/dbdup.jpg')`);
+await db.query(`INSERT INTO records (date, store, total, category, work_type, payment, buyer, site, memo, image_url) VALUES ('2026-09-30','DB 重複 店',901,'材料費','木工','現金','小西','入谷','','gs://x/dbdup.jpg')`);   // 同じ写真でも金額が違う = 別の領収書
+await db.query(`INSERT INTO records (date, store, total, category, work_type, payment, buyer, site, memo) VALUES ('2026-09-30','写真なし',5,'材料費','木工','現金','小西','入谷','')`);
+const ddb = await call(S, "keihi_receipt_sheet_dedupe", {});
+ok(ddb.db_duplicates.length === 1 && ddb.db_duplicates[0].count === 3 && ddb.db_duplicates[0].ids.length === 3 && ddb.db_duplicates[0].total === 900 && ddb.db_duplicates[0].store === "DB 重複 店", "db_duplicates: 同じ写真・日付・店舗・金額・購入者の記録が複数ある所だけ出る (金額が違う・写真なしは対象外)", ddb.db_duplicates);
+ok((await rows(`SELECT count(*)::int AS n FROM records`))[0].n === 5, "DB の記録は 1 件も消さない (読むだけ)");
 
 // ───────── 13. ツールの定義・説明文・手順書 (どの AI が読んでも同じように使える)
 const names = tl.map((t) => t.name);

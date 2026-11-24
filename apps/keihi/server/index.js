@@ -3508,23 +3508,38 @@ async function syncRecordsToSheets(rows, { dryRun = false } = {}) {
   }
   return out;
 }
-// 同じ記録の行が 2 つ以上ある所 (これまでの連打・再保存で増えた分) を探す。apply=true のときだけ、一番下 (最後に書かれた) の行を残して消す。
-// 消したあと、残した行を DB の今の内容に合わせる。探すだけなら 1 行も消さない
-async function dedupeRecordSheets({ month, apply = false } = {}) {
+// 同じ記録の行が 2 つ以上ある所 (これまでの連打・再保存で増えた分) を探す。apply=true のときだけ消す (探すだけなら 1 行も消さない)。
+//   onlyIdentical = true: 中身が完全に同じ行だけ消す (消しても情報が減らない。自動の整理はこれ)
+//   onlyIdentical = false: 中身が違う重複 (保存の合間に編集した古い版) も、一番下 (最後に書かれた = 一番新しい) の行を残して消す。購入日の月を直した古い行 (別の月のタブ) も
+// どの場合も、消す行は先に「重複削除ログ」タブにコピーする。消したあと、残した行を DB の今の内容に合わせる (onlyIdentical でないとき)
+async function dedupeRecordSheets({ month, apply = false, onlyIdentical = false } = {}) {
   const rsx = recordSheets();
-  const found = await rsx.findDuplicates({ month });
-  const extra = found.monthly.reduce((n, g) => n + g.count - 1, 0) + found.tx.reduce((n, g) => n + g.count - 1, 0);
-  if (!apply || !extra) return { applied: false, extra_rows: extra, ...found };
-  const removed = await rsx.removeDuplicates(found);
-  const ids = [...new Set([...found.monthly.map((g) => g.id), ...found.tx.map((g) => g.id)].filter((x) => x != null))];
+  const monthOf = async (ids) => {   // 記録の今の購入日の月 (DB)。月をまたぐ古い行のどちらを残すか決める
+    const { rows } = await getPool().query(`SELECT id, to_char(date, 'YYYY-MM') AS ym FROM records WHERE id = ANY($1::bigint[])`, [ids]);
+    return new Map(rows.map((r) => [Number(r.id), r.ym]));
+  };
+  const found = await rsx.findDuplicates({ month, monthOf });
+  const extraOf = (gs, only) => gs.filter((g) => !only || g.identical).reduce((n, g) => n + g.count - 1, 0);
+  const summary = {
+    extra_rows: extraOf(found.monthly) + extraOf(found.tx),                             // 重複で余っている行の数
+    identical_extra_rows: extraOf(found.monthly, true) + extraOf(found.tx, true),       // そのうち、中身が完全に同じ (消しても情報が減らない) 行
+    needs_review: { monthly_groups: found.monthly.filter((g) => !g.identical).length, tx_groups: found.tx.filter((g) => !g.identical).length, cross_tab: found.crossTab.length },
+  };
+  const LIMIT = 50, cut = (a) => a.slice(0, LIMIT);
+  const list = { monthly: cut(found.monthly), tx: cut(found.tx), cross_tab: cut(found.crossTab), truncated: [found.monthly, found.tx, found.crossTab].some((a) => a.length > LIMIT) || undefined, checked: found.checked };
+  if (!apply) return { applied: false, ...summary, ...list };
+  const removed = await rsx.removeDuplicates(found, { onlyIdentical });
   let refreshed = 0;
-  if (ids.length) {
-    const { rows } = await getPool().query(
-      `SELECT id, date::text AS date, store, total, category, work_type AS "workType", payment, buyer, site, memo, drive_url AS "driveUrl"
-         FROM records WHERE id = ANY($1::bigint[])`, [ids]);
-    for (const r of rows) { const u = await rsx.upsert(r); if ((u.monthly && u.monthly.ok) || (u.tx && u.tx.ok)) refreshed++; }
+  if (!onlyIdentical) {
+    const ids = [...new Set([...found.monthly.map((g) => g.id), ...found.tx.map((g) => g.id)].filter((x) => x != null))];
+    if (ids.length) {
+      const { rows } = await getPool().query(
+        `SELECT id, date::text AS date, store, total, category, work_type AS "workType", payment, buyer, site, memo, drive_url AS "driveUrl"
+           FROM records WHERE id = ANY($1::bigint[])`, [ids]);
+      for (const r of rows) { const u = await rsx.upsert(r); if ((u.monthly && u.monthly.ok) || (u.tx && u.tx.ok)) refreshed++; }
+    }
   }
-  return { applied: true, removed, refreshed, extra_rows: extra, monthly: found.monthly, tx: found.tx, checked: found.checked };
+  return { applied: true, mode: onlyIdentical ? "identical_only" : "all", removed, refreshed, ...summary, ...list };
 }
 
 // ───── 請求書 (seikyu) 用 Sheets append ─────

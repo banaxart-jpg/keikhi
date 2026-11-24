@@ -15,12 +15,14 @@ function fakeSheets() {
   const tabOf = (id, tab, range) => { const t = book(id).tabs.get(tab); if (!t) throw new Error(`Unable to parse range: ${range}`); return t; };
   const stats = { gets: 0, updates: 0, appends: 0, deletes: 0 };
   let failGet = null;   // 読み込みを失敗させる (一時的な障害の再現)
+  let failAppendTab = null;   // このタブへの追記を失敗させる
   const setCells = (t, p, values) => values.forEach((vals, i) => { const row = (t.rows[p.r1 - 1 + i] ||= []); vals.forEach((v, j) => { row[p.c1 + j] = v; }); });
   const api = {
     spreadsheets: {
       get: async ({ spreadsheetId }) => ({ data: { sheets: [...book(spreadsheetId).tabs].map(([title, t]) => ({ properties: { title, sheetId: t.sheetId } })) } }),
       batchUpdate: async ({ spreadsheetId, requestBody }) => {
         for (const rq of requestBody.requests) {
+          if (rq.addSheet) { addTab(spreadsheetId, rq.addSheet.properties.title); continue; }
           if (rq.deleteDimension) { stats.deletes++; const t = [...book(spreadsheetId).tabs.values()].find((x) => x.sheetId === rq.deleteDimension.range.sheetId); t.rows.splice(rq.deleteDimension.range.startIndex, 1); }
         }
         return {};
@@ -34,12 +36,12 @@ function fakeSheets() {
           return { data: { values: rows.map((r) => { const x = [...r]; while (x.length && (x[x.length - 1] === undefined || x[x.length - 1] === "")) x.pop(); return x; }) } };
         },
         update: async ({ spreadsheetId, range, requestBody }) => { stats.updates++; const p = parse(range); setCells(tabOf(spreadsheetId, p.tab, range), p, requestBody.values); return {}; },
-        append: async ({ spreadsheetId, range, requestBody }) => { stats.appends++; const p = parse(range); const t = tabOf(spreadsheetId, p.tab, range); for (const v of requestBody.values) t.rows.push([...v]); return {}; },
+        append: async ({ spreadsheetId, range, requestBody }) => { stats.appends++; const p = parse(range); if (failAppendTab && p.tab === failAppendTab) throw new Error("append failed");  const t = tabOf(spreadsheetId, p.tab, range); for (const v of requestBody.values) t.rows.push([...v]); return {}; },
         batchUpdate: async ({ spreadsheetId, requestBody }) => { stats.updates++; for (const d of requestBody.data) { const p = parse(d.range); setCells(tabOf(spreadsheetId, p.tab, d.range), p, d.values); } return {}; },
       },
     },
   };
-  return { api, addTab, tab: (id, title) => book(id).tabs.get(title), stats, failGet: (m) => { failGet = m; } };
+  return { api, addTab, tab: (id, title) => book(id).tabs.get(title), stats, failGet: (m) => { failGet = m; }, failAppend: (t) => { failAppendTab = t; } };
 }
 
 const MONTHLY = "MONTHLY", TX = "TX", TXTAB = "取引";
@@ -123,22 +125,82 @@ ok(re.tx.action === "appended" && txRows().filter((x) => x[12] === 1).length ===
 const st = await rs.status([rec({ id: 1 }), rec({ id: 999, store: "無い" }), rec({ id: 41, site: "" }), rec({ id: 20, driveUrl: drive })]);
 ok(st.get(1).monthly === "exists" && st.get(1).tx === "exists" && st.get(999).monthly === "missing" && st.get(999).tx === "missing" && st.get(41).monthly === "skipped" && st.get(20).monthly === "exists", "status: ある / 無い / 現場が空 (12 と 1 を取り違えない)", [...st]);
 
-// ───────── 11. 重複の行 (これまでに増えてしまった分) を探して、整理する
+// ───────── 11. 重複の行 (これまでに増えてしまった分) を探す
 const dupId = 50;
-for (let i = 0; i < 4; i++) { fs_.tab(MONTHLY, "2026-11").rows.push(monthlyRow(rec({ id: dupId, store: "連打 店", total: 5000, memo: `v${i}` }))); fs_.tab(TX, TXTAB).rows.push(txRow(txFields(rec({ id: dupId, store: "連打 店", total: 5000, memo: `v${i}` })))); }
-for (let i = 0; i < 2; i++) fs_.tab(MONTHLY, "2026-11").rows.push(monthlyRow(rec({ id: 51, store: "Drive 重複", total: 6000, driveUrl: "https://drive.google.com/file/d/DUP/view" })));
+const addMonthly = (o) => fs_.tab(MONTHLY, "2026-11").rows.push(monthlyRow(rec(o)));
+const addTx = (o) => fs_.tab(TX, TXTAB).rows.push(txRow(txFields(rec(o))));
+for (let i = 0; i < 4; i++) { addMonthly({ id: dupId, store: "連打 店", total: 5000, memo: `v${i}` }); addTx({ id: dupId, store: "連打 店", total: 5000, memo: `v${i}` }); }     // 中身が違う重複 (保存の合間に編集)
+for (let i = 0; i < 3; i++) { addMonthly({ id: 52, store: "同じ 店", total: 5200, memo: "m" }); addTx({ id: 52, store: "同じ 店", total: 5200, memo: "m" }); }                // 中身が完全に同じ重複
+for (let i = 0; i < 2; i++) addMonthly({ id: 51, store: "Drive 重複", total: 6000, driveUrl: "https://drive.google.com/file/d/DUP/view" });                                       // Drive の写真 (同じ URL・同じ中身)
+// 1 枚の Drive の写真に別々の領収書が 2 枚 (URL は同じ。店舗・金額が違う = 別の記録) → 重複ではない
+addMonthly({ id: 60, store: "1 枚に 2 枚 A", total: 100, driveUrl: "https://drive.google.com/file/d/SHARED/view" });
+addMonthly({ id: 61, store: "1 枚に 2 枚 B", total: 200, driveUrl: "https://drive.google.com/file/d/SHARED/view" });
 fs_.tab(TX, TXTAB).rows.push(["2026-11-01", "収入", "旅館", "", 9000, "宿の予約", "満竹華庵", "確定", "", "", "", "宿", "BK-1", "2026-11-01"], ["2026-11-01", "収入", "旅館", "", 9000, "宿の予約", "満竹華庵", "確定", "", "", "", "宿", "BK-1", "2026-11-01"]);   // 領収書以外 (宿) の同じ元 ID は触らない
 const found = await rs.findDuplicates();
-const gm = found.monthly.find((g) => g.id === dupId), gd = found.monthly.find((g) => g.drive === "https://drive.google.com/file/d/DUP/view"), gt = found.tx.find((g) => g.id === dupId);
-ok(gm && gm.count === 4 && gm.tab === "2026-11" && gm.rows.length === 4 && gm.sample.store === "連打 店" && gd && gd.count === 2 && gt && gt.count === 4 && found.tx.length === 1 && found.monthly.length === 2, "重複を探す: 月別 (ID・Drive の URL)・取引シートで、同じ記録の行が複数ある所だけ出る (宿など領収書以外は対象外)", found);
+const gm = found.monthly.find((g) => g.id === dupId), gs = found.monthly.find((g) => g.id === 52), gd = found.monthly.find((g) => g.drive === "https://drive.google.com/file/d/DUP/view");
+ok(gm && gm.count === 4 && gm.identical === false && gs && gs.count === 3 && gs.identical === true && gd && gd.count === 2 && gd.identical === true, "探す: 中身が違う重複 (identical: false) と、完全に同じ重複 (identical: true) が区別される", { gm, gs, gd });
+ok(!found.monthly.some((g) => String(g.drive || "").includes("SHARED")), "1 枚の Drive の写真に別々の領収書 (店舗・金額が違う) が写っているときは、URL が同じでも重複にしない");
+const gt = found.tx.find((g) => g.id === dupId), gts = found.tx.find((g) => g.id === 52);
+ok(gt && gt.count === 4 && gt.identical === false && gts && gts.count === 3 && gts.identical === true && found.tx.length === 2 && !found.tx.some((g) => g.id === "BK-1"), "取引シートも同じ (宿など領収書以外は対象外。登録日が違うだけの行は同じ中身とみなす)", found.tx);
 ok(found.checked.tabs >= 2 && found.checked.rows > 5, "確認した範囲 (タブ数・行数) も返る");
-const tabsBefore = monthlyRows().length, txBefore = txRows().length;
+const m0 = monthlyRows().length, t0b = txRows().length;
 const onlyOct = await rs.findDuplicates({ month: "2026-10" }); ok(onlyOct.monthly.length === 0 && onlyOct.checked.tabs === 1, "month で 1 つのタブだけ見られる");
-ok(monthlyRows().length === tabsBefore && txRows().length === txBefore, "探すだけでは 1 行も消さない");
-const gone = await rs.removeDuplicates(found);
-ok(gone.monthly === 4 && gone.tx === 3 && monthlyRows().filter((x) => x[3] === "連打 店").length === 1 && monthlyRows().find((x) => x[3] === "連打 店")[8] === "v3" && monthlyRows().filter((x) => x[3] === "Drive 重複").length === 1 && txRows().filter((x) => x[5] === "連打 店").length === 1 && txRows().find((x) => x[5] === "連打 店")[9] === "v3", "整理: 各グループで一番下 (最後に書かれた = 一番新しい) の行を残して、ほかを消す", { gone, m: monthlyRows().filter((x) => x[3] === "連打 店") });
-ok(txRows().filter((x) => x[11] === "宿").length === 2 && monthlyRows().length === tabsBefore - 4 && txRows().length === txBefore - 3, "宿の行・ほかの記録の行は 1 行も消えない (消えたのは重複ぶんだけ)");
-const again = await rs.findDuplicates(); ok(again.monthly.length === 0 && again.tx.length === 0, "整理のあとは、重複が 0");
+ok(monthlyRows().length === m0 && txRows().length === t0b && !fs_.tab(MONTHLY, "重複削除ログ"), "探すだけでは 1 行も消さない・ログのタブも作らない");
+
+// ───────── 12. 自動の整理 (onlyIdentical): 中身が完全に同じ行だけ消す。消す前にログへコピー
+const auto = await rs.removeDuplicates(found, { onlyIdentical: true, now: () => "2026-11-24T10:00:00Z" });
+ok(auto.monthly === 3 && auto.tx === 2 && auto.archived === 5 && auto.skipped_changed === 0 && auto.capped.length === 0, "自動の整理: 中身が完全に同じ重複だけ消す (月別 2 + 1 = 3 行・取引 2 行)", auto);
+ok(monthlyRows().filter((x) => x[3] === "同じ 店").length === 1 && monthlyRows().filter((x) => x[3] === "Drive 重複").length === 1 && monthlyRows().filter((x) => x[3] === "連打 店").length === 4 && txRows().filter((x) => x[5] === "同じ 店").length === 1 && txRows().filter((x) => x[5] === "連打 店").length === 4, "中身が違う重複 (連打 店) は、自動では 1 行も消さない");
+ok(monthlyRows().some((x) => x[3] === "1 枚に 2 枚 A") && monthlyRows().some((x) => x[3] === "1 枚に 2 枚 B") && txRows().filter((x) => x[11] === "宿").length === 2, "1 枚の写真に 2 枚の領収書・宿の行は消えない");
+const logM = fs_.tab(MONTHLY, "重複削除ログ"), logT = fs_.tab(TX, "重複削除ログ");
+ok(logM && logM.rows[0][0] === "削除した日時" && logM.rows.length === 1 + 3 && logM.rows[1][0] === "2026-11-24T10:00:00Z" && logM.rows[1][1] === "2026-11" && typeof logM.rows[1][2] === "number" && /同じ中身/.test(logM.rows[1][3]) && logM.rows.slice(1).some((r) => r.includes("同じ 店") && r.includes("5200")) && logM.rows.slice(1).some((r) => r.includes("Drive 重複")), "消した行は「重複削除ログ」タブに、日時・元のタブ・元の行・理由・残した行・中身つきで全部残る (月別)", logM.rows);
+ok(logT && logT.rows.length === 1 + 2 && logT.rows[1][1] === "取引" && logT.rows[1].length >= 5 + 16, "取引シートのログには、A〜P の全列が残る", logT?.rows[1]);
+
+// ───────── 13. 確認してからの整理: 中身が違う重複は一番下の行を残す。ログに残してから消す
+const found2 = await rs.findDuplicates();
+ok(found2.monthly.length === 1 && found2.monthly[0].id === dupId && found2.tx.length === 1, "自動の整理のあとに残るのは、中身が違う重複だけ (月別 1 グループ・取引 1 グループ)", found2);
+const full = await rs.removeDuplicates(found2, { now: () => "2026-11-24T10:05:00Z" });
+ok(full.monthly === 3 && full.tx === 3 && monthlyRows().filter((x) => x[3] === "連打 店").length === 1 && monthlyRows().find((x) => x[3] === "連打 店")[8] === "v3" && txRows().filter((x) => x[5] === "連打 店").length === 1 && txRows().find((x) => x[5] === "連打 店")[9] === "v3", "整理: 中身が違う重複は、一番下 (最後に書かれた = 一番新しい) の行を残して消す", { full });
+ok(fs_.tab(MONTHLY, "重複削除ログ").rows.filter((r) => r[3] && /古い版/.test(r[3])).length === 3 && fs_.tab(MONTHLY, "重複削除ログ").rows.some((r) => r[0] === "2026-11-24T10:05:00Z" && r.includes("v0")), "古い版の行も、消す前にログに中身つきで残る");
+const again = await rs.findDuplicates(); ok(again.monthly.length === 0 && again.tx.length === 0 && again.crossTab.length === 0, "整理のあとは、重複が 0");
+
+// ───────── 14. 安全装置
+// (a) ログにコピーできなかったら、消さない
+for (let i = 0; i < 2; i++) addMonthly({ id: 70, store: "ログ失敗 店", total: 700, memo: "m" });
+let f3 = await rs.findDuplicates({ month: "2026-11" });
+fs_.failAppend("重複削除ログ");
+await rs.removeDuplicates(f3, { onlyIdentical: true }).then(() => ok(false, "(a) ログに書けないとき、エラーになる"), (e) => ok(/append failed/.test(e.message) && monthlyRows().filter((x) => x[3] === "ログ失敗 店").length === 2, "ログにコピーできなかったら、消さずにエラーで止まる (行は 2 行のまま)", e.message));
+fs_.failAppend(null);
+// (b) 探したあと、消す前に行が変わっていたら、その行は消さない
+f3 = await rs.findDuplicates({ month: "2026-11" });
+const ri = fs_.tab(MONTHLY, "2026-11").rows.findIndex((r) => r[3] === "ログ失敗 店");
+fs_.tab(MONTHLY, "2026-11").rows[ri][8] = "人が書き換えた";
+const ch = await rs.removeDuplicates(f3, { onlyIdentical: true });
+ok(ch.skipped_changed === 1 && ch.monthly === 0 && monthlyRows().filter((x) => x[3] === "ログ失敗 店").length === 2, "探したあと・消す前に、その行が書き換えられていたら消さない (skipped_changed)", ch);
+// (c) 1 つのタブの半分以上を消す計画は止める
+const f4 = await rs.findDuplicates({ month: "2026-11" });
+fs_.tab(MONTHLY, "2026-11").rows[ri][8] = "m";
+const tabRows = monthlyRows().length;
+const many = { ...f4, monthly: [{ tab: "2026-11", id: 999, rows: Array.from({ length: tabRows }, (_, i) => i + 2), count: tabRows, identical: true, fps: Array.from({ length: tabRows }, (_, i) => `fp${i}`), sample: {} }], crossTab: [], tx: [] };
+const cap = await rs.removeDuplicates(many, { onlyIdentical: true });
+ok(cap.capped.length === 1 && cap.capped[0].tab === "2026-11" && cap.monthly === 0 && monthlyRows().length === tabRows, "1 つのタブの半分以上を消す計画は、何かおかしいので止める (capped)", cap);
+// (d) 取引シートのログの列・宿の行は変わらない (上で確認済み)
+
+// ───────── 15. 購入日の月を直した古い行 (別の月のタブにも同じ記録がある)
+const A = rec({ id: 80, date: "2026-10-31", store: "月違い 店", total: 800 }), B = rec({ id: 80, date: "2026-11-02", store: "月違い 店", total: 800 });
+fs_.addTab(MONTHLY, "2026-10", ["h"]);
+fs_.tab(MONTHLY, "2026-10").rows.push(monthlyRow(A));
+fs_.tab(MONTHLY, "2026-11").rows.push(monthlyRow(B));
+const f5 = await rs.findDuplicates({ monthOf: async (ids) => new Map(ids.map((i) => [i, "2026-11"])) });
+const ct = f5.crossTab.find((g) => g.id === 80);
+ok(ct && ct.tabs.join() === "2026-10,2026-11" && ct.keepTab === "2026-11", "同じ記録が別の月のタブにもある所を見つける (DB の今の月 = 2026-11 を残す)", f5.crossTab);
+const noAuto = await rs.removeDuplicates(f5, { onlyIdentical: true });
+ok(noAuto.monthly === 1 && monthlyRows("2026-10").some((x) => x[3] === "月違い 店") && monthlyRows("2026-11").filter((x) => x[3] === "ログ失敗 店").length === 1, "自動の整理 (onlyIdentical) は、同じ中身の重複 (ID 70 の残り 1 つ) だけ消して、月をまたぐ古い行は消さない", { noAuto, tab10: monthlyRows("2026-10") });
+const f5b = await rs.findDuplicates({ monthOf: async (ids) => new Map(ids.map((i) => [i, "2026-11"])) });   // 整理のあとは探し直す (古い計画では消さない)
+const cross = await rs.removeDuplicates(f5b);
+ok(cross.monthly === 1 && !monthlyRows("2026-10").some((x) => x[3] === "月違い 店") && monthlyRows("2026-11").some((x) => x[3] === "月違い 店") && fs_.tab(MONTHLY, "重複削除ログ").rows.some((r) => /購入日の月が変わる前/.test(r[3]) && r.includes("月違い 店")), "確認してからの整理では、前の月のタブの古い行を消して、今の月の行を残す (ログにも残る)", cross);
+const f6 = await rs.findDuplicates({ monthOf: async () => new Map() });
+ok(f6.crossTab.length === 0, "整理のあとは、月をまたぐ重複も 0");
 
 console.log(`\n${pass} PASS / ${fail} FAIL`);
 process.exit(fail ? 1 : 0);

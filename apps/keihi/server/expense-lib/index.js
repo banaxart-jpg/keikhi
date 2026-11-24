@@ -86,7 +86,7 @@ export const EXPENSE_INSTRUCTIONS = [
   "- 写真の渡し方 (領収書 1 枚 = 1 件につき 1 枚): 外に出られる環境なら keihi_receipt_upload_url(count=枚数) で URL をもらい、返ってきた curl で画像を PUT して photo_ref を receipts に入れる。外に出られない環境なら photo_base64 (1 枚数 MB まで。サーバーが縮小する) で直接渡す。写真なしでも登録はできるが、証憑なので付ける",
   "- 現場は表記ゆれを吸収する (「入谷」「共通」「会社」も可)。候補が複数・見つからないときはエラーで返るので、keihi_sites で一覧を見て人に聞く。購入者は呼び出したトークンの持ち主で自動で入る (自分で書かない)",
   "- 同じ日付・店舗・金額が既にあれば、入れずに duplicate: true と既存の id が返る (同じ領収書を 2 回貼られても 1 件)。別の買い物なら force=true",
-  "- 修正は keihi_receipt_update、削除は keihi_receipt_delete (人に確認してから confirm=true)。一覧・検索は keihi_receipt_list、集計は keihi_receipt_summary、写真は keihi_receipt_photo、CSV は keihi_receipt_export_csv、シートへの書き出し直しは keihi_receipt_sheet_sync、シートに同じ記録の行が重複しているときは keihi_receipt_sheet_dedupe (まず探すだけ → 人に見せて OK → apply=true)",
+  "- 修正は keihi_receipt_update、削除は keihi_receipt_delete (人に確認してから confirm=true)。一覧・検索は keihi_receipt_list、集計は keihi_receipt_summary、写真は keihi_receipt_photo、CSV は keihi_receipt_export_csv、シートへの書き出し直しは keihi_receipt_sheet_sync、シートに同じ記録の行が重複しているときは keihi_receipt_sheet_dedupe (中身が完全に同じ重複は自動で 1 回消してある。ほかは まず探すだけ → 人に見せて OK → apply=true。消す行は「重複削除ログ」タブに残る)",
   "- シートは 1 記録 = 1 行: 同じ記録を何度保存・編集しても行は増えない (記録の ID で今ある行を書き換える)",
   "- 現場の追加・編集は経費アプリでなく現場アプリ側 (genba_register)。keihi_sites は経費で選べる現場の一覧",
 ];
@@ -357,9 +357,64 @@ export function createExpense({
     ids: { type: "array", items: { type: "integer" }, description: "記録 ID で絞る" },
   };
 
+  // ───────── シートの重複の自動整理 (最初の 1 回だけ) ─────────
+  // これまでの連打・再保存で増えた「中身が完全に同じ行」だけを消す (消しても情報が減らない。消す行は先に「重複削除ログ」タブへコピー)。
+  // 中身が違う重複・月をまたぐ古い行は自動では消さず、keihi_receipt_sheet_dedupe で数と場所を見せて、確認してから消す。
+  // 新しい版を最初に使ったリクエストの中で走る (Cloud Run は CPU がリクエストの間だけなので、起動時の先読みでは走らせない)。
+  // 印 (genba_settings) は 複数のインスタンスが来ても 1 つだけが走るための鍵。実行中は 3 分止まっていたら次の人が引き継ぐ。失敗は最大 4 回まで
+  const AUTO_KEY = "sheet_dedupe_v1";
+  let autoDone = false, autoNext = 0, autoRunning = null;
+  async function autoMarker() {
+    try { const { rows } = await pool().query(`SELECT value, updated_at FROM genba_settings WHERE key=$1`, [AUTO_KEY]); return rows[0] ? { ...rows[0].value, updated_at: rows[0].updated_at } : null; } catch { return null; }
+  }
+  function warmSheets() {
+    if (!dedupeSheets || autoDone) return null;
+    if (autoRunning) return autoRunning;
+    if (Date.now() < autoNext) return null;
+    autoNext = Date.now() + 45000;                 // 終わるまでは 45 秒おきにだけ見直す
+    autoRunning = (async () => {
+      let claimed = false;
+      try {
+        const p = pool();
+        const { rows } = await p.query(
+          `INSERT INTO genba_settings (key, value, updated_by) VALUES ($1,'{"status":"running","attempts":1}'::jsonb,'system')
+           ON CONFLICT (key) DO UPDATE SET
+             value = jsonb_set(EXCLUDED.value, '{attempts}', to_jsonb(COALESCE((genba_settings.value->>'attempts')::int, 0) + 1)),
+             updated_by='system', updated_at=now()
+             WHERE genba_settings.value->>'status' IN ('running','failed')
+               AND genba_settings.updated_at < now() - interval '3 minutes'
+               AND COALESCE((genba_settings.value->>'attempts')::int, 0) < 4
+           RETURNING key`, [AUTO_KEY]);
+        if (!rows.length) { const m = await autoMarker(); if (m && m.status === "done") autoDone = true; return null; }
+        claimed = true;
+        const started = new Date().toISOString();
+        const out = await dedupeSheets({ apply: true, onlyIdentical: true });
+        const value = { status: "done", started_at: started, finished_at: new Date().toISOString(), removed: out.removed, extra_rows: out.extra_rows, identical_extra_rows: out.identical_extra_rows, needs_review: out.needs_review, note: "中身が完全に同じ重複だけ消した (消した行は「重複削除ログ」タブに残っている)。残りは keihi_receipt_sheet_dedupe で確認" };
+        await p.query(`UPDATE genba_settings SET value = $2::jsonb, updated_by='system', updated_at=now() WHERE key=$1`, [AUTO_KEY, JSON.stringify(value)]);
+        autoDone = true;
+        console.log(`[keihi] sheet dedupe (auto): 月別 ${out.removed.monthly} 行・取引 ${out.removed.tx} 行を消した / 確認が要る ${JSON.stringify(out.needs_review)}`);
+        return value;
+      } catch (e) {
+        console.warn("[keihi] sheet dedupe (auto)", e.message);
+        if (claimed) await pool().query(`UPDATE genba_settings SET value = jsonb_set(jsonb_set(value, '{status}', '"failed"'), '{error}', to_jsonb($2::text)), updated_at=now() WHERE key=$1`, [AUTO_KEY, String(e.message).slice(0, 300)]).catch(() => {});
+        return null;
+      } finally { autoRunning = null; }
+    })();
+    return autoRunning;
+  }
+  // 同じ写真・日付・店舗・金額・購入者の記録が DB に複数ある所 (読むだけ。消すなら keihi_receipt_delete を 1 件ずつ、人に確認して)
+  async function dbDuplicates() {
+    const { rows } = await pool().query(
+      `SELECT array_agg(id ORDER BY id) AS ids, COUNT(*)::int AS n, date::text AS date, store, total, buyer
+         FROM records WHERE image_url IS NOT NULL
+        GROUP BY image_url, date, store, total, buyer HAVING COUNT(*) > 1
+        ORDER BY n DESC, date DESC LIMIT 50`);
+    return rows.map((r) => ({ ids: (r.ids || []).map(Number), count: r.n, date: r.date, store: r.store, total: Number(r.total), buyer: r.buyer }));
+  }
+
   function tools(by = "小西") {
     const RO = { annotations: { readOnlyHint: true } };
-    return [
+    const list = [
       {
         name: "keihi_receipt_add",
         description: [
@@ -657,16 +712,22 @@ export function createExpense({
       {
         name: "keihi_receipt_sheet_dedupe",
         description: [
-          "スプレッドシート (経費記録の月別タブ・取引シート) に、同じ記録の行が重複して入ってしまっている所を探す (これまで、現場ボタンや保存の連打・再保存のたびに行が増えていた分)。同じ記録かどうかは、写真セルの ?view=ID (Drive の写真は Drive の URL) / 取引シートの元 ID で見る。宿など領収書以外の行は対象外。",
-          "既定は探すだけで 1 行も消さない (dry_run)。返り値の monthly / tx に、どのタブの何行目が重複かが出る。人に見せて OK をもらってから apply=true で呼ぶと、各記録で一番下 (最後に書かれた = 一番新しい) の行を残して、ほかの行を消す。消したあと、残した行は DB の今の内容に合わせる。取り消せないので、必ず先に探すだけで呼んで人に見せる。",
+          "スプレッドシート (経費記録の月別タブ・取引シート) に、同じ記録の行が重複して入ってしまっている所を探して、整理する (これまで、現場ボタンや保存の連打・再保存のたびに行が増えていた分)。同じ記録かどうかは、写真セルの ?view=ID (Drive の写真は Drive の URL + 購入日 + 店舗 + 金額。1 枚の写真に別々の領収書が写っているものは別の記録) / 取引シートの元 ID で見る。宿など領収書以外の行は対象外。",
+          "安全のために: ① 中身が完全に同じ行は、消しても情報が減らないので、新しい版を最初に使ったときに自動で 1 回だけ消してある (auto_backfill に結果が出る)。② 中身が違う重複 (保存の合間に編集した古い版)・購入日の月を直した古い行 (別の月のタブ) は、自動では消さない。③ 消す行は、必ず先に「重複削除ログ」タブ (月別タブのスプレッドシート・取引シートそれぞれの中) にコピーする (コピーに失敗したら消さない。ログから戻せる)。④ 消す直前に、その行がまだ探したときと同じ中身か読み直す (違えば消さない)。⑤ 1 つのタブの半分以上を消す計画は止める。",
+          "既定は探すだけで 1 行も消さない (dry_run)。返り値: extra_rows = 余っている行の数 / identical_extra_rows = そのうち中身が完全に同じ行 / needs_review = 確認が要る所 (monthly・tx = 中身が違う重複のグループ数、cross_tab = 月をまたぐ古い行) / monthly・tx・cross_tab = どのタブの何行目か / db_duplicates = DB に同じ記録が複数ある所 (読むだけ。消すなら keihi_receipt_delete を人に確認して 1 件ずつ)。",
+          "確認が要る所は、人に見せて OK をもらってから apply=true で呼ぶ: 中身が違う重複は一番下 (最後に書かれた = 一番新しい) の行を残して消し、月をまたぐ古い行は今の月のタブの行を残して消す。消したあと、残した行は DB の今の内容に合わせる。only_identical=true なら、中身が完全に同じ行だけ消す。",
           "month (YYYY-MM) で月別タブを 1 つに絞れる (省略 = 全部の月別タブ + 取引シート)。",
         ].join("\n"),
-        inputSchema: { type: "object", properties: { month: { type: "string", description: "YYYY-MM" }, apply: { type: "boolean", description: "人に確認したら true。省略 = 探すだけ" } } },
+        inputSchema: { type: "object", properties: { month: { type: "string", description: "YYYY-MM" }, apply: { type: "boolean", description: "人に確認したら true。省略 = 探すだけ" }, only_identical: { type: "boolean", description: "true = 中身が完全に同じ行だけ消す (apply のとき)" } } },
         handler: async (a) => {
           if (!dedupeSheets) throw new Error("シートの重複整理が設定されていない");
           if (a.month != null && !/^\d{4}-\d{2}$/.test(String(a.month))) throw new Error("month は YYYY-MM");
-          const out = await dedupeSheets({ month: a.month || undefined, apply: a.apply === true });
-          return a.apply === true ? out : { ...out, note: out.extra_rows ? "探しただけで、消していない。人に見せて OK をもらったら apply=true で呼ぶ" : "重複は無い" };
+          const apply = a.apply === true;
+          const out = await dedupeSheets({ month: a.month || undefined, apply, onlyIdentical: a.only_identical === true });
+          const review = out.needs_review ? out.needs_review.monthly_groups + out.needs_review.tx_groups + out.needs_review.cross_tab : 0;
+          const res = { ...out, db_duplicates: await dbDuplicates().catch(() => undefined), auto_backfill: await autoMarker() };
+          if (!apply) res.note = !out.extra_rows && !review ? "重複は無い" : `探しただけで、消していない。確認が要る所 ${review} 件。人に見せて OK をもらったら apply=true で呼ぶ (消す行は「重複削除ログ」タブに残る)`;
+          return res;
         },
       },
       {
@@ -682,6 +743,8 @@ export function createExpense({
         },
       },
     ];
+    // どのツールも、最初の呼び出しでシートの重複の自動整理 (1 回だけ。warmSheets) を先に済ませる
+    return list.map((t) => ({ ...t, handler: async (a) => { await warmSheets(); return t.handler(a); } }));
   }
 
   return {

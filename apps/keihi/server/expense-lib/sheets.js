@@ -100,7 +100,7 @@ export function createRecordSheets({
   async function readTx(sheets) {
     let v;
     try {
-      v = await sheets.spreadsheets.values.get({ spreadsheetId: txSheetId, range: `${txTab}!A2:M` });
+      v = await sheets.spreadsheets.values.get({ spreadsheetId: txSheetId, range: `${txTab}!A2:P` });
     } catch (e) {
       if (MISSING_TAB.test(String(e.message))) return [];
       throw e;
@@ -172,55 +172,140 @@ export function createRecordSheets({
   }
 
   // ───────── 同じ記録の行が 2 つ以上ある所を探す / 整理する ─────────
+  // 方針 (会計のシートの行を消すので、安全側に倒す):
+  //  ・同じ記録かどうか = 月別タブは 写真セルの ?view=ID (Drive の写真は「Drive の URL + 購入日 + 店舗 + 金額」。1 枚の写真に別々の領収書が写っているときは URL が同じでも別の記録) / 取引シートは ソース=領収書 + 元 ID
+  //  ・中身が完全に同じ行 (identical) は、消しても情報が 1 つも減らない → 自動の整理 (onlyIdentical) の対象
+  //  ・中身が違う行 (保存の合間に編集した = 古い版) は、確認してから消す (一番下 = 最後に書かれた = 一番新しい行を残す)
+  //  ・消す前に、消す行を全部「重複削除ログ」タブにコピーする (コピーに失敗したら消さない)。消す直前に、その行がまだ同じ中身か読み直す
+  //  ・1 つのタブの半分以上を消す計画になったら止める (何かおかしい)
+  const LOG_TAB = "重複削除ログ";
+  const LOG_HEADER = ["削除した日時", "元のタブ", "元の行", "理由", "残した行", "内容 (A 列から順に)"];
+  const norm = (c) => String(c ?? "").trim();
+  const fp = (cells, cols) => JSON.stringify(cols.map((i) => norm(cells[i])));
+  const MONTHLY_COLS = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
+  const TX_COLS = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 15];      // 登録日 (N 列) は比べない
+
   async function monthlyTabs(sheets) {
     const meta = await sheets.spreadsheets.get({ spreadsheetId: sheetId, fields: "sheets.properties" });
     return (meta.data.sheets || []).map((s) => s.properties.title).filter((t) => MONTHLY_TAB.test(t)).sort();
   }
-  // 返り値 { monthly: [{ tab, id | drive, rows: [行番号…], count, sample }], tx: [{ id, rows, count, sample }] }。読むだけ
-  async function findDuplicates({ month } = {}) {
+  // 返り値 { monthly: [{ tab, id | drive, rows, count, identical, sample }], crossTab: [{ id, tabs, keepTab? }], tx: [...], checked }。読むだけ
+  // monthOf = async (ids) => Map(記録 ID → "YYYY-MM") (DB の今の購入日の月)。あれば、同じ記録が別の月のタブにもある所 (購入日の月を直した古い行) を、今の月のタブだけ残す対象にする
+  async function findDuplicates({ month, monthOf } = {}) {
     const sheets = await getSheetsApi();
-    const out = { monthly: [], tx: [], checked: { tabs: 0, rows: 0 } };
+    const out = { monthly: [], crossTab: [], tx: [], checked: { tabs: 0, rows: 0 }, _rowCounts: {} };
     if (sheetId) {
       const tabs = month ? [month] : await monthlyTabs(sheets);
+      const where = new Map();    // 記録 ID → [{ tab, row }] (タブをまたぐ重複を見る)
       for (const tab of tabs) {
         const rows = await readMonthly(sheets, tab);
-        out.checked.tabs++; out.checked.rows += rows.length;
+        out.checked.tabs++; out.checked.rows += rows.length; out._rowCounts[tab] = rows.length;
         const groups = new Map();
         for (const x of rows) {
-          const key = x.id != null ? `id:${x.id}` : x.drive ? `drive:${x.drive}` : null;
+          const key = x.id != null ? `id:${x.id}` : x.drive ? `drive:${x.drive}|${norm(x.cells[0])}|${norm(x.cells[3])}|${norm(x.cells[4])}` : null;
           if (!key) continue;
           if (!groups.has(key)) groups.set(key, []);
           groups.get(key).push(x);
+          if (x.id != null) { if (!where.has(x.id)) where.set(x.id, []); where.get(x.id).push({ tab, row: x.row, fp: fp(x.cells, MONTHLY_COLS) }); }
         }
         for (const [key, list] of groups) {
           if (list.length < 2) continue;
           const c = list[list.length - 1].cells;
-          out.monthly.push({ tab, ...(key.startsWith("id:") ? { id: Number(key.slice(3)) } : { drive: key.slice(6) }), rows: list.map((x) => x.row), count: list.length, sample: { date: c[0], buyer: c[1], site: c[2], store: c[3], total: c[4] } });
+          out.monthly.push({
+            tab, ...(key.startsWith("id:") ? { id: Number(key.slice(3)) } : { drive: key.slice(6).split("|")[0] }),
+            rows: list.map((x) => x.row), count: list.length,
+            fps: list.map((x) => fp(x.cells, MONTHLY_COLS)),
+            identical: new Set(list.map((x) => fp(x.cells, MONTHLY_COLS))).size === 1,
+            sample: { date: c[0], buyer: c[1], site: c[2], store: c[3], total: c[4] },
+          });
+        }
+      }
+      const multi = [...where].filter(([, locs]) => new Set(locs.map((l) => l.tab)).size > 1);
+      if (multi.length) {
+        const months = monthOf ? await monthOf(multi.map(([id]) => id)) : new Map();
+        for (const [id, locs] of multi) {
+          const keepTab = months.get(id);
+          out.crossTab.push({ id, tabs: [...new Set(locs.map((l) => l.tab))], locations: locs, ...(keepTab && locs.some((l) => l.tab === keepTab) ? { keepTab } : {}) });
         }
       }
     }
     if (txSheetId) {
       const rows = await readTx(sheets);
-      out.checked.tx_rows = rows.length;
+      out.checked.tx_rows = rows.length; out._rowCounts[txTab] = rows.length;
       const groups = new Map();
       for (const x of rows) { const k = String(x.id); if (!groups.has(k)) groups.set(k, []); groups.get(k).push(x); }
       for (const [k, list] of groups) {
         if (list.length < 2) continue;
         const c = list[list.length - 1].cells;
-        out.tx.push({ id: Number(k), rows: list.map((x) => x.row), count: list.length, sample: { date: c[0], site: c[6], store: c[5], total: c[4] } });
+        out.tx.push({ id: Number(k), rows: list.map((x) => x.row), count: list.length, fps: list.map((x) => fp(x.cells, TX_COLS)), identical: new Set(list.map((x) => fp(x.cells, TX_COLS))).size === 1, sample: { date: c[0], site: c[6], store: c[5], total: c[4] } });
       }
     }
     return out;
   }
-  // 重複の行を消す: 各グループで**一番下の行 (最後に書かれた = 一番新しい内容) を残して**、ほかを消す。返り値 = 消した行数
-  async function removeDuplicates(found) {
-    let monthly = 0, tx = 0;
-    const byTab = new Map();
-    for (const g of found.monthly) { if (!byTab.has(g.tab)) byTab.set(g.tab, []); byTab.get(g.tab).push(...g.rows.slice(0, -1)); }
-    for (const [tab, rows] of byTab) monthly += await deleteRows(sheetId, tab, rows);
-    const txRows = found.tx.flatMap((g) => g.rows.slice(0, -1));
-    if (txRows.length) { tx = await deleteRows(txSheetId, txTab, txRows); onTxChanged(); }
-    return { monthly, tx };
+  const groupsToDelete = (found, onlyIdentical) => {
+    const plan = [];   // { spreadsheetId, tab, row, keep, reason, cols }
+    for (const g of found.monthly) {
+      if (onlyIdentical && !g.identical) continue;
+      const keep = g.rows[g.rows.length - 1], keepFp = g.fps[g.fps.length - 1];
+      g.rows.slice(0, -1).forEach((row, i) => plan.push({ spreadsheetId: sheetId, tab: g.tab, row, fp: g.fps[i], keep, keepFp, cols: MONTHLY_COLS, reason: g.identical ? "同じ中身の重複" : "古い版 (最後に書かれた行を残した)" }));
+    }
+    if (!onlyIdentical) {
+      for (const g of found.crossTab) {
+        if (!g.keepTab) continue;
+        for (const l of g.locations.filter((x) => x.tab !== g.keepTab)) plan.push({ spreadsheetId: sheetId, tab: l.tab, row: l.row, fp: l.fp, keep: null, cols: MONTHLY_COLS, reason: `購入日の月が変わる前の古い行 (今は ${g.keepTab} のタブ)` });
+      }
+    }
+    for (const g of found.tx) {
+      if (onlyIdentical && !g.identical) continue;
+      const keep = g.rows[g.rows.length - 1], keepFp = g.fps[g.fps.length - 1];
+      g.rows.slice(0, -1).forEach((row, i) => plan.push({ spreadsheetId: txSheetId, tab: txTab, row, fp: g.fps[i], keep, keepFp, cols: TX_COLS, reason: g.identical ? "同じ中身の重複" : "古い版 (最後に書かれた行を残した)" }));
+    }
+    return plan;
+  }
+  async function ensureLogTab(sheets, spreadsheetId) {
+    const meta = await sheets.spreadsheets.get({ spreadsheetId, fields: "sheets.properties" });
+    if ((meta.data.sheets || []).some((s) => s.properties && s.properties.title === LOG_TAB)) return;
+    await sheets.spreadsheets.batchUpdate({ spreadsheetId, requestBody: { requests: [{ addSheet: { properties: { title: LOG_TAB, gridProperties: { frozenRowCount: 1 } } } }] } });
+    await sheets.spreadsheets.values.update({ spreadsheetId, range: `${LOG_TAB}!A1`, valueInputOption: "RAW", requestBody: { values: [LOG_HEADER] } });
+  }
+  // 重複の行を消す。onlyIdentical = true なら中身が完全に同じ行だけ (自動の整理)。返り値 = 消した行数・止めた理由
+  async function removeDuplicates(found, { onlyIdentical = false, now = () => new Date().toISOString() } = {}) {
+    const sheets = await getSheetsApi();
+    const plan = groupsToDelete(found, onlyIdentical);
+    const result = { monthly: 0, tx: 0, skipped_changed: 0, capped: [], archived: 0 };
+    const bySheetTab = new Map();
+    for (const x of plan) { const k = `${x.spreadsheetId}|${x.tab}`; if (!bySheetTab.has(k)) bySheetTab.set(k, []); bySheetTab.get(k).push(x); }
+    for (const [, items] of bySheetTab) {
+      const { spreadsheetId, tab } = items[0];
+      const total = (found._rowCounts && found._rowCounts[tab]) || 0;
+      // 半分以上を消す計画は止める (何かおかしい)。行が少ないタブは割合で見られないので、5 行までは許す
+      if (total && items.length > Math.max(5, total / 2)) { result.capped.push({ tab, rows_to_delete: items.length, rows: total }); continue; }
+      // 消す直前に読み直して、まだ同じ中身の行だけを対象にする (読んだあとに行がずれていたら消さない)
+      const isTx = spreadsheetId === txSheetId && tab === txTab;
+      const fresh = isTx ? await readTx(sheets) : await readMonthly(sheets, tab);
+      const byRow = new Map(fresh.map((x) => [x.row, x]));
+      const cols = items[0].cols;
+      const sure = [];
+      for (const it of items) {
+        const nowRow = byRow.get(it.row), keepRow = it.keep != null ? byRow.get(it.keep) : null;
+        const same = nowRow && fp(nowRow.cells, cols) === it.fp;                                   // 消す行は、探したときと同じ中身か
+        const keepOk = it.keep == null || (keepRow && fp(keepRow.cells, cols) === it.keepFp);       // 残す行も、まだそこにあるか
+        if (!same || !keepOk) { result.skipped_changed++; continue; }
+        sure.push({ ...it, cells: nowRow.cells });
+      }
+      if (!sure.length) continue;
+      // 先に「重複削除ログ」にコピー。失敗したら消さない (throw)
+      await ensureLogTab(sheets, spreadsheetId);
+      const stamp = now();
+      await sheets.spreadsheets.values.append({
+        spreadsheetId, range: `${LOG_TAB}!A:F`, valueInputOption: "RAW", insertDataOption: "INSERT_ROWS",
+        requestBody: { values: sure.map((x) => [stamp, tab, x.row, x.reason, x.keep != null ? x.keep : "", ...x.cells.slice(0, isTx ? 16 : 10).map((c) => String(c ?? ""))]) },
+      });
+      result.archived += sure.length;
+      const n = await deleteRows(spreadsheetId, tab, sure.map((x) => x.row));
+      if (isTx) { result.tx += n; onTxChanged(); } else result.monthly += n;
+    }
+    return result;
   }
 
   return { upsert, status, findDuplicates, removeDuplicates, readMonthly, readTx };
