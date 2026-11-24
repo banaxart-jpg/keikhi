@@ -60,7 +60,7 @@
 | `genba_state_set(entity, kind, body, starts_on?, ends_on?, source_ref?)` / `genba_state_void(id)` | 【つながり】人・現場・会社の「今の状態」(不在 / 繁忙 / NG日 / 注意 / その他) を入れる・取り消す。ends_on を過ぎたものは返さない。電話や会話で「いつまで無理」が出たら入れる。例 `{"entity":"横山","kind":"繁忙","body":"今週は動けない","starts_on":"2026-11-24","ends_on":"2026-11-29"}` |
 | `genba_graph(query? / entity?, depth?, days?)` | 【つながり・読み取り専用】名前で引くと、今有効な状態 (`active_states`、一番上)・基本情報・つながっている未解決の記録 (`open_logs`)・直近の記録 (`recent_logs`)・一緒に出てくる人・現場・会社と件数 (`neighbors`、depth=2 で 2 段先) をまとめて返す。能力評価は含めない |
 | `genba_graph_all(days?, open_only?)` | 【つながり・読み取り専用】グラフ表示用。`nodes` (key / type / id / name / count / state) と `edges` (a / b / count) を 1 回で返す |
-| `genba_links_backfill(rerun?)` | 【つながり】既存の全ログへの自動リンクの結果 (人・現場ごとのリンク件数) を見る。`rerun=true` (小西のトークン) でかけ直す |
+| `genba_links_backfill(rerun?)` | 【つながり】既存の全ログへの自動リンクの結果 (人・現場ごとのリンク件数) と、`check` (記録の「書く人」who・送り主が連絡先に読めているか: 種類ごとのリンクの付き具合・読めなかった名前・同名で決められない名前) を見る。`rerun=true` (小西のトークン) でかけ直す |
 | `genba_judgment_add(category, situation, ai_prediction, ai_confidence, basis_ids?, site?, source_ref?, is_private?, auto_sent?, related_log_id?)` | 【判断ログ】小西の判断が要る場面を送る前に登録。返り値 `id` / `mode` (その種類の今のモード) / `similar` (同じ種類で似た過去の判断、答え済み、新しい順に最大 5 件)。同じ source_ref は `duplicate` |
 | `genba_judgment_resolve(id, decision, result, reason?)` | 【判断ログ】小西の答えを記録 (小西のトークンだけ)。result = 一致 / 部分一致 / 不一致。事後報告の種類で 不一致 → 自動で 確認あり に戻る (返り値 `demoted`) |
 | `genba_judgment_similar(query?, category?, site?, limit?)` | 【判断ログ】過去の判断の検索 (答え済み)。似ている度 × 新しさ の順。query 省略は新しい順 |
@@ -91,6 +91,7 @@
 - **能力評価は含めない**: `genba_graph` / `genba_graph_all` / `genba_status` の返り値に `abilities` は出ない (`genba_contact_find` は今まで通り)
 - **バックフィル**: 既存の全ログに自動リンクを `auto=true` で 1 度だけかける。**起動時の先読みでは走らせない** (Cloud Run は CPU がリクエストの間だけなので、背景で走らせると途中で止まる)。つながりを使う最初のリクエスト (`genba_graph*` / `genba_state_*` / `genba_contact_find` / `genba_status` / 記録の追加) の中で走る。印は `genba_settings` の `links_backfill_v1` (複数のインスタンスが来ても 1 つだけが走る)。実行中は更新時刻を進めていて、3 分止まっていたら次のリクエストが引き継ぐ (失敗の印も同じ。やり直しても同じリンクは 2 回入らない)。結果 (ログ数・新しく張った数・人・現場・会社ごとのリンク件数) は Cloud Logging と `genba_links_backfill` で見られる
 - **グラフ表示 (claude.ai の Artifact「現場つながりマップ」)**: ソースは `docs/genba-map-artifact.html` (Firebase では公開しない `docs/` に置く)。データは埋め込まず、`mcp` capability でコネクタ「自社MCP」の `genba_graph_all` / `genba_graph` (読み取り専用の 2 つだけを manifest に書く) をその場で呼ぶ。人 = 丸・現場 = 四角・会社 = ひし形、線の太さ = 一緒に出る記録の数 (d3 7.8.5 の force layout)。点を押すか検索するとその点と隣だけを強調して、右に 有効な状態 (一番上)・一緒に出る人と現場・つながる記録 (未解決が先)。エラーはコード別 (needs_reauth / server_not_connected / not_in_manifest / approval_required / server_unavailable / tool_error)。能力評価は出さない。ブラウザでの確認は `docs/genba-map-artifact.check/` (Chromium + 本物の形の返り値の代役。手順はファイル先頭)
+- **確認 (「書く人」が読めているか)**: `genba_links_backfill` の `check`、または `genba_audit(links_check=true)` (指定したときだけ返る。普段の点検には出さない)。`coverage` = 種類ごと (決定も) の記録数とリンクが付いた数、`who` / `sender` = 読めた件数と読めなかった名前 (`none` = 連絡先に無い名前 (AI・会社名・「現場」など。人でなければ正常) / `ambiguous` = 同じ名前が 2 人以上で決められない)、`ambiguous_names` = 本文の照合で結べない名前の一覧
 - **日付の差し替え (テスト用)**: `createGenba({ today: () => "2026-11-30" })`。状態の期限と期間の計算にだけ使う
 - テスト `genba-lib/links.test.mjs` (pglite。実行手順はファイル先頭)
 

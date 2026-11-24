@@ -99,6 +99,9 @@ export function createLinks(d) {
       names,
       nameOf: (type, id) => names.get(keyOf(type, id)) || null,
       lookupContact: (raw) => { const s = exactContact.get(normName(raw)); return s && s.size === 1 ? [...s][0] : null; },
+      // who / 送り主の 1 語が連絡先に当たるか: ok = 1 人に決まる / ambiguous = 同じ名前が 2 人以上 / none = 当たらない
+      nameStatus: (raw) => { const s = exactContact.get(normName(raw)); return !s ? "none" : s.size === 1 ? "ok" : "ambiguous"; },
+      ambiguousNames: () => [...exactContact].filter(([, ids]) => ids.size > 1).map(([key, ids]) => ({ name: key, contacts: [...ids].map((id) => names.get(keyOf("contact", id))) })),
       // 本文に名前が出てくる点 (さんの有無・かな/カナ・全角/半角は鍵の側で吸収済み)
       match(text) {
         const t = kanaFold(norm(text)), tc = normCompany(text), out = [];
@@ -479,20 +482,59 @@ export function createLinks(d) {
       },
       {
         name: "genba_links_backfill",
-        description: "つながりの自動リンクを、既に入っている全ログにかけた結果を見る・かけ直す (小西のトークンから)。rerun=true でもう一度かける (人が手で付けたリンクは残る。同じものは 2 回入らない)。返り値: 件数と、人・現場・会社ごとのリンク件数。初回は新しい版を最初に使ったときに自動で 1 回走る",
+        description: "つながりの自動リンクを、既に入っている全ログにかけた結果を見る・かけ直す (小西のトークンから)。rerun=true でもう一度かける (人が手で付けたリンクは残る。同じものは 2 回入らない)。返り値: 件数と、人・現場・会社ごとのリンク件数、check = 「書く人」(who・送り主) が連絡先に読めているかの確認 (種類ごとのリンクの付き具合・読めなかった名前・同名で決められない名前)。初回は新しい版を最初に使ったときに自動で 1 回走る",
         inputSchema: { type: "object", properties: { rerun: { type: "boolean", description: "true = 全ログにもう一度かける" } } },
         handler: async (a) => {
           await warm();
           const p = getPool();
           if (a.rerun === true) {
             if (by !== "小西") throw new Error("かけ直しは小西のトークンからだけ");
-            return runBackfill(p, by);
+            const done = await runBackfill(p, by);
+            return { ...done, check: await check(p) };
           }
           const { rows } = await p.query(`SELECT value FROM genba_settings WHERE key='links_backfill_v1'`);
-          return rows[0] ? rows[0].value : { status: "まだ走っていない", note: "rerun=true (小西のトークン) でかける" };
+          return rows[0] ? { ...rows[0].value, check: await check(p) } : { status: "まだ走っていない", note: "rerun=true (小西のトークン) でかける" };
         },
       },
     ];
+  }
+
+
+  // ── 確認: 記録の「書く人」(who = やった人・担当 / 送り主) が連絡先に読めているか。リンクの付き具合 (種類ごと。決定も) と、読めなかった名前 ──
+  const splitWho = (v) => String(v || "").split(/[,、/／・&＆\s]+/).filter(Boolean);
+  async function check(p) {
+    const m = await buildMatcher(p);
+    const [{ rows: logs }, { rows: cover }, { rows: mark }] = await Promise.all([
+      p.query(`SELECT kind, who, source FROM genba_log WHERE voided_at IS NULL`),
+      p.query(`SELECT l.kind, COUNT(*)::int AS logs, COUNT(*) FILTER (WHERE EXISTS (SELECT 1 FROM log_links k WHERE k.log_id = l.id))::int AS linked FROM genba_log l WHERE l.voided_at IS NULL GROUP BY l.kind ORDER BY l.kind`),
+      p.query(`SELECT value FROM genba_settings WHERE key=$1`, [BACKFILL_KEY]),
+    ]);
+    const who = new Map(), sender = new Map();
+    let whoLogs = 0, whoOk = 0, sendLogs = 0, sendOk = 0;
+    for (const r of logs) {
+      if (r.who) {
+        whoLogs++; let all = true;
+        for (const t of splitWho(r.who)) { const st = m.nameStatus(t); if (st !== "ok") { all = false; const k = `${t}|${st}`; who.set(k, (who.get(k) || 0) + 1); } }
+        if (all) whoOk++;
+      }
+      const src = r.source && typeof r.source === "object" ? r.source : null;
+      if (src && (src.sender || src.contact_id != null)) {
+        sendLogs++;
+        if (src.contact_id != null || m.lookupContact(src.sender)) sendOk++;
+        else { const k = String(src.sender); sender.set(k, (sender.get(k) || 0) + 1); }
+      }
+    }
+    const top = (map, n, fmt) => [...map].sort((a, b) => b[1] - a[1]).slice(0, n).map(([k, v]) => fmt(k, v));
+    const v = mark[0] ? mark[0].value : null;
+    const total = cover.reduce((a, c) => ({ logs: a.logs + c.logs, linked: a.linked + c.linked }), { logs: 0, linked: 0 });
+    return {
+      coverage: { ...total, by_kind: Object.fromEntries(cover.map((c) => [c.kind, { logs: c.logs, linked: c.linked }])) },
+      who: { logs: whoLogs, resolved: whoOk, unresolved: top(who, 25, (k, n) => { const [name, status] = k.split("|"); return { who: name, status, logs: n }; }) },
+      sender: { logs: sendLogs, resolved: sendOk, unresolved: top(sender, 15, (k, n) => ({ sender: k, logs: n })) },
+      ambiguous_names: m.ambiguousNames().slice(0, 20),
+      backfill: v ? { status: v.status, started_at: v.started_at, finished_at: v.finished_at, logs: v.logs, inserted: v.inserted, links_total: v.links_total, people: (v.people || []).slice(0, 20), sites: (v.sites || []).slice(0, 20), error: v.error } : null,
+      note: "who.unresolved: none = 連絡先に無い名前 (AI・会社・「現場」など。人でなければ正常) / ambiguous = 同じ名前が 2 人以上いて決められない。sender.unresolved = 送り主が連絡先に当たらない (contact_id も付いていない)",
+    };
   }
 
   // ── バックフィル: 既存の全ログに自動リンク (auto=true) を 1 度かけて、人・現場ごとのリンク件数を残す ──
@@ -573,5 +615,5 @@ export function createLinks(d) {
     "- 「〇〇さんの件、どうなってる？」「〇〇に関わる未解決は？」は genba_graph(query=名前)。つながっている未解決の記録 (open_logs・本文に名前が出るものも含む)・直近の記録・一緒に出てくる人と現場 (neighbors) が 1 回で出る。全体の見取り図は genba_graph_all (グラフ表示用)",
   ];
 
-  return { ensureSchema, maybeBackfill, link, relink, resolveManual, activeStates, decorateFind, statusExtras, tools, instructions, backfillRun };
+  return { ensureSchema, maybeBackfill, link, relink, resolveManual, activeStates, decorateFind, statusExtras, tools, instructions, backfillRun, check };
 }

@@ -306,6 +306,25 @@ g = mk(); cache = {};
 await find("横山");
 ok((await rows(`SELECT value->>'status' AS s FROM genba_settings WHERE key='links_backfill_v1'`))[0]?.s === "done", "つながりを使う最初のリクエスト (genba_contact_find) の中で走る");
 
+// ───────────────────────── 10b. 確認: 記録の「書く人」(who・送り主) が連絡先に読めているか
+await add({ site: "いちご", kind: "進捗", title: "AI が整理", body: "書類を整理した", who: "AI" });
+await add({ site: "いちご", kind: "進捗", title: "山田の件", body: "山田に連絡した", who: "山田" });
+await add({ site: "銀座博品館", kind: "進捗", title: "知らない人から連絡", body: "資料が届いた", source_ref: "LINE:rz:m9", source: { channel: "LINE", room: "rz", sender: "知らない人さん" } });
+await add({ site: "銀座博品館", kind: "決定", title: "看板は A 案", body: "横山さんと辰巳さんで A 案に決めた", topic: "看板", who: "名取" });
+g = mk(); cache = {};
+const chk = (await call(S, "genba_links_backfill", {})).check;
+ok(chk && chk.coverage.logs > 10 && chk.coverage.linked > 0 && chk.coverage.by_kind["決定"].logs >= 2 && chk.coverage.by_kind["決定"].linked === chk.coverage.by_kind["決定"].logs, "確認 (check): 種類ごとのリンクの付き具合。決定もすべてリンクが付いている", chk.coverage);
+const whoU = chk.who.unresolved;
+ok(whoU.some((x) => x.who === "AI" && x.status === "none") && whoU.some((x) => x.who === "山田" && x.status === "ambiguous") && !whoU.some((x) => x.who === "名取" || x.who === "横山"), "who: 連絡先に当たらない名前 (AI = none)・同名で決められない名前 (山田 = ambiguous) が出る。名取・横山は読めている", whoU);
+ok(chk.who.logs > chk.who.resolved && chk.who.resolved > 0, "who: 読めた件数 / 全部の件数", { logs: chk.who.logs, resolved: chk.who.resolved });
+ok(chk.sender.unresolved.some((x) => x.sender === "知らない人さん") && chk.sender.resolved >= 1 && chk.sender.logs > chk.sender.resolved, "送り主: 連絡先に当たらない送り主が出る (読めた件数も)", chk.sender);
+ok(chk.ambiguous_names.some((x) => x.name === "山田" && x.contacts.length === 2) && chk.ambiguous_names.some((x) => x.name === "オート"), "同名で決められない名前 (山田・同じ呼び名のオート) の一覧", chk.ambiguous_names);
+ok(chk.backfill?.status === "done" && Array.isArray(chk.backfill.people) && chk.backfill.people.length > 0, "バックフィルの結果 (人・現場ごとのリンク件数) も一緒に出る");
+const au3 = await call(S, "genba_audit", {});
+ok(!("links_check" in au3), "genba_audit は、指定しなければ今まで通り (つながりの確認は出さない)");
+const au4 = await call(S, "genba_audit", { links_check: true });
+ok(au4.links_check?.coverage?.by_kind?.["決定"] && au4.links_check.who && au4.summary !== undefined && "open_tasks" in au4, "genba_audit(links_check=true): つながりの確認が付く。元の項目はそのまま", Object.keys(au4));
+
 // ───────────────────────── 11. ツール定義・手順書・既存ツールの形
 const defs = Object.fromEntries(tools(S).map((t) => [t.name, t]));
 ok(["genba_state_set", "genba_state_void", "genba_graph", "genba_graph_all", "genba_links_backfill"].every((n) => defs[n]), "ツールが載る: genba_state_set / genba_state_void / genba_graph / genba_graph_all (+ genba_links_backfill)");

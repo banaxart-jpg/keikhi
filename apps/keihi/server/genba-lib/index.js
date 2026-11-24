@@ -2057,7 +2057,7 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
       {
         name: "genba_audit",
         description: "抜け漏れチェック。期限切れのタスク / 期限の無いタスク / 「返事待ち・確認中」と書いたのに次やることが無い行 / 日程があるのにカレンダー未登録の行 / 監視ジョブの停止 (genba_room_sync が 30 分以上来ていない) / 監視の目録で 雑談 扱いされた社外からの長文 (要確認) / 関係者から連絡が来ているのに触られていないタスク (動きがあるのに未更新) / 相手待ちの言葉が title に入った次やること / title が似ている未解決の組 / 24 時間以上 未回答 の判断ログ を機械的に洗い出す。監視ジョブは 1 時間に 1 回、会話の終わりにも 1 回呼んで、出たものを片付ける (タスクを立てる・カレンダーに入れて calendar_event を付ける・終わっていれば 解決)。site 省略で全現場",
-        inputSchema: { type: "object", properties: { site: { type: "string", description: "省略で全現場" }, days: { type: "number", description: "直近何日の行を見るか (既定 7)" } } },
+        inputSchema: { type: "object", properties: { site: { type: "string", description: "省略で全現場" }, days: { type: "number", description: "直近何日の行を見るか (既定 7)" }, links_check: { type: "boolean", description: "true = つながりの確認も返す (記録の「書く人」who・送り主が連絡先に読めているか、種類ごとのリンクの付き具合、バックフィルの結果)。既定 false (普段の点検には出さない)" } } },
         handler: async (a) => {
           await ensureSchema();
           const p = getPool();
@@ -2142,9 +2142,12 @@ export function createGenba({ getPool, createMcpHandler, getDriveApi, gcs = null
           }
           if (waitingAsTask.length) parts.push(`相手待ちが次やること ${waitingAsTask.length}`);
           if (similar.length) parts.push(`似たタスク ${similar.length} 組`);
+          let linksCheck;
+          if (a.links_check === true || a.links_check === "true") { try { linksCheck = await links.check(p); } catch (e) { linksCheck = { error: e.message }; } }
           return {
             today, days, site: site ? siteRow(site) : "*",
             monitor,
+            ...(linksCheck ? { links_check: linksCheck } : {}),
             seen_24h: Object.keys(seen24).length ? seen24 : undefined,
             chat_review: chatReview.length ? chatReview : undefined,
             stale_tasks: staleTasks.length ? staleTasks : undefined,
