@@ -174,11 +174,18 @@ select.edit-input { background: transparent url("data:image/svg+xml,%3Csvg xmlns
 .sw-amount { font-size: 34px; font-weight: 900; letter-spacing: -1px; line-height: 1; font-family: var(--mono); }
 .sw-store { font-size: 14px; color: var(--text2); margin-top: 4px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-family: var(--mono); }
 .sw-meta { font-size: 11px; color: var(--text3); margin-top: 4px; font-weight: 700; font-family: var(--mono); }
-.sw-sites { padding: 8px 16px 18px; background: #fff; display: flex; flex-wrap: wrap; gap: 10px 18px; max-height: 38vh; overflow-y: auto; border-top: 1px dashed var(--line); }
-.sw-site { padding: 6px 2px; border-radius: 3px; font-size: 14px; font-weight: 800; border: none; cursor: pointer; font-family: var(--mono); color: var(--ink); background: transparent; text-decoration: underline; text-underline-offset: 3px; transition: opacity 0.1s; }
+.sw-sites { padding: 4px 12px 18px; background: #fff; display: flex; flex-wrap: wrap; gap: 4px 8px; max-height: 38vh; overflow-y: auto; border-top: 1px dashed var(--line); }
+/* 現場ボタン: タップできる範囲を広げる (文字だけだと狭くて押し損ねる)。押した瞬間に黒スタンプにして、すぐ反応を見せる */
+.sw-site { padding: 10px 8px; min-height: 42px; border-radius: 3px; font-size: 14px; font-weight: 800; border: none; cursor: pointer; font-family: var(--mono); color: var(--ink); background: transparent; text-decoration: underline; text-underline-offset: 3px; transition: opacity 0.1s; touch-action: manipulation; }
 .sw-site.predicted { font-weight: 900; text-decoration-thickness: 2.5px; }
 .sw-site:active { opacity: 0.45; }
 .sw-site.danger { color: var(--err); }
+.sw-site.picked { background: var(--ink); color: #fff; text-decoration: none; opacity: 1; }
+.sw-site:disabled:not(.picked) { opacity: 0.3; }
+/* 現場の並び (よく使う順 / 登録順) の切り替え */
+.sw-order { flex: 1 0 100%; display: flex; justify-content: space-between; align-items: center; padding: 4px 8px 0; font-size: 11px; font-weight: 800; color: var(--text2); font-family: var(--mono); }
+.sw-order button { padding: 8px 2px; min-height: 36px; border: none; background: transparent; color: var(--ink); font: inherit; text-decoration: underline; text-underline-offset: 3px; cursor: pointer; touch-action: manipulation; }
+.sw-order button:active { opacity: 0.45; }
 .sw-hint { position: absolute; top: 14px; left: 50%; transform: translateX(-50%); font-size: 11px; color: var(--ink); letter-spacing: 0.1em; pointer-events: none; z-index: 5; font-weight: 900; padding: 6px 14px; border-radius: 3px; background: var(--paper); border: 1px solid var(--line); box-shadow: var(--paper-sh-sm); white-space: nowrap; font-family: var(--mono); }
 .sw-hint.skip { background: var(--bg2); color: var(--text2); }
 .sw-done { color: var(--text); font-size: 20px; font-weight: 900; text-align: center; padding: 80px 20px; font-family: var(--mono); }
@@ -622,10 +629,32 @@ function saveMySites(arr) {
     localStorage.setItem("keihi2_my_sites", JSON.stringify(map));
   } catch {}
 }
+// 現場ボタンの並び: 「よく使う順」(既定) か「登録順」(現場アプリに登録した順 = /api/sites の返す順)。選んだ並びは端末に覚える。
+// よく使う = 最近の記録ほど重く数えた点数 (購入日から 14 日で半分)。点数が同じ (まだ使っていない) 現場は登録順のまま後ろに並ぶ。
+// 現場の選択肢 (/genba/ の「完了」は後ろ) は、どちらの並びでも「進行中が先、完了は後ろ」を崩さない
+function getSiteOrder() { try { return localStorage.getItem("keihi2_site_order") === "registered" ? "registered" : "recent"; } catch { return "recent"; } }
+function setSiteOrder(v) { try { localStorage.setItem("keihi2_site_order", v); } catch {} }
+function siteUseScores() {
+  const now = Date.now(), HALF = 14 * 86400000, score = new Map();
+  for (const r of records) {
+    if (!r.site) continue;
+    const t = Date.parse(String(r.date || "").slice(0, 10) + "T12:00:00+09:00");
+    if (!Number.isFinite(t)) continue;
+    score.set(r.site, (score.get(r.site) || 0) + Math.pow(0.5, Math.max(0, now - t) / HALF));
+  }
+  return score;
+}
+function orderSites(list) {
+  if (getSiteOrder() === "registered") return list;
+  const score = siteUseScores();
+  return list.map((s, i) => ({ s, i, done: !!(s.doneAt || s.done) }))
+    .sort((a, b) => (a.done - b.done) || ((score.get(b.s.name) || 0) - (score.get(a.s.name) || 0)) || (a.i - b.i))
+    .map((x) => x.s);
+}
 // 表示する現場 (自分用 + 必要なら AI 推定の現場を上乗せ)
 function visibleSites(extra) {
   const my = getMySites();
-  let base = my.length === 0 ? sites : sites.filter((s) => my.includes(s.name));
+  let base = orderSites(my.length === 0 ? sites : sites.filter((s) => my.includes(s.name)));
   if (extra && !base.find((s) => s.name === extra)) {
     const found = sites.find((s) => s.name === extra);
     if (found) base = [found, ...base];
@@ -771,17 +800,35 @@ function createSwipeCard(r, isBack) {
   const predicted = getPredictedSite(r.id);
   const sitesRow = document.createElement("div");
   sitesRow.className = "sw-sites";
+  // 並び (よく使う順 / 登録順) の切り替え
+  const siteMode = getSiteOrder();
+  const orderRow = document.createElement("div");
+  orderRow.className = "sw-order";
+  const orderLabel = document.createElement("span");
+  orderLabel.textContent = siteMode === "recent" ? "現場: よく使う順" : "現場: 登録順";
+  const orderBtn = document.createElement("button");
+  orderBtn.type = "button";
+  orderBtn.textContent = siteMode === "recent" ? "登録順にする" : "よく使う順にする";
+  orderBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    setSiteOrder(siteMode === "recent" ? "registered" : "recent");
+    renderSwipe();
+  });
+  orderRow.append(orderLabel, orderBtn);
+  sitesRow.appendChild(orderRow);
   for (const s of visibleSites(predicted)) {
     const b = document.createElement("button");
     b.type = "button";
     b.className = "sw-site" + (s.name === predicted ? " predicted" : "");
     b.textContent = s.name + (s.name === predicted ? "  ✨" : "");
-    b.addEventListener("click", async (e) => {
+    b.addEventListener("click", (e) => {
       e.stopPropagation();
-      try {
-        await assignSite(r, s.name, currentPay);
-        swipeOutNext(card);
-      } catch (err) { toast("失敗: " + err.message, true); }
+      if (card.dataset.busy) return;     // 連打・別の現場の押し間違い直しで、2 回保存しない
+      card.dataset.busy = "1";
+      sitesRow.querySelectorAll("button").forEach((x) => { x.disabled = true; });
+      b.classList.add("picked");          // 押した瞬間に黒スタンプで反応を見せる
+      swipeOutNext(card);                 // 保存の完了は待たずに次へ (保存は裏で。失敗したら最後にもう一度出す)
+      saveAssignment(r, s.name, currentPay);
     });
     sitesRow.appendChild(b);
   }
@@ -907,6 +954,16 @@ function makeSortCard(r) {
   return wrap;
 }
 
+// 現場ボタンを押したあとの保存 (裏で動く)。保存できなかったら、そのカードを最後にもう一度出して、振り分けられないまま消えないようにする
+async function saveAssignment(r, siteName, payment) {
+  const ok = await assignSite(r, siteName, payment);
+  if (ok) return;
+  const wasDone = swipeIndex >= swipeQueue.length;
+  swipeQueue.push(r);
+  if (wasDone) renderSwipe();
+  else $("swipeProgress").textContent = `${Math.min(swipeIndex + 1, swipeQueue.length)} / ${swipeQueue.length}`;
+}
+// 返り値: 保存できたら true、失敗したら false (トーストは出す)
 async function assignSite(r, siteName, payment) {
   try {
     const pay = payment || r.payment || "現金";
@@ -925,7 +982,8 @@ async function assignSite(r, siteName, payment) {
     postToSheet({ ...updated, viewUrl }).catch(() => {});
     renderSort();
     refreshUnsortedCount();
-  } catch (e) { toast("更新失敗: " + e.message, true); }
+    return true;
+  } catch (e) { toast("更新失敗: " + e.message, true); return false; }
 }
 
 let lastDeleted = null;
@@ -1064,7 +1122,7 @@ function openEdit(r) {
   const none = document.createElement("option");
   none.value = ""; none.textContent = "（未設定）";
   sel.appendChild(none);
-  for (const s of sites) {
+  for (const s of orderSites(sites)) {   // 現場ボタンと同じ並び
     const opt = document.createElement("option");
     opt.value = s.name; opt.textContent = s.name;
     sel.appendChild(opt);
